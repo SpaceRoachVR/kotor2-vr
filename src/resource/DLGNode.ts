@@ -361,6 +361,12 @@ export class DLGNode {
           }
           return true;
         }
+        //A missing voice over resolves undefined here rather than throwing, so
+        //this path has to flag the error too. Without it nothing ever sets
+        //voiceOverComplete - there is no audioNode to fire onended and no
+        //error for update() to time out on - and the conversation hangs on
+        //this node forever.
+        this.checkList.voiceOverError = true;
         return false;
       }catch(e){
         this.checkList.voiceOverError = true;

@@ -293,7 +293,12 @@ export class CutsceneManager {
    * @param index - The index of the reply to select
    */
   static selectReplyAtIndex(index: number) {
-    const reply = this.currentReplies[index];
+    //Both reply listboxes and the Dialog1-9 hotkeys address the *displayed*
+    //list, and setReplies() filters continue-dialog nodes out of that list.
+    //Indexing currentReplies directly therefore picks the wrong reply - or
+    //none at all - as soon as a continue node sits among the replies.
+    const displayedReplies = (this.currentReplies || []).filter(r => !r.isContinueDialog());
+    const reply = displayedReplies[index];
     if(!reply){
       console.warn('CutsceneManager.selectReplyAtIndex: No reply found');
       return;
@@ -804,10 +809,14 @@ export class CutsceneManager {
   static updateCamera(delta: number = 0) {
     if (!this.dialog || this.cutsceneMode == CutsceneMode.BARK) return;
 
+    //These run every frame, so only touch the menus when their visibility
+    //actually needs to change. show()/hide() add and remove from scene_gui.
     if(this.dialog.getConversationType() == DLGConversationType.COMPUTER){
-      GameState.MenuManager.InGameComputer.show();
-      GameState.MenuManager.InGameComputerCam.hide();
-    }else{
+      if(!GameState.MenuManager.InGameComputer.bVisible){
+        GameState.MenuManager.InGameComputer.show();
+      }
+    }
+    if(GameState.MenuManager.InGameComputerCam.bVisible){
       GameState.MenuManager.InGameComputerCam.hide();
     }
 
@@ -817,7 +826,9 @@ export class CutsceneManager {
     }
 
     if (this.cameraState.mode == CameraMode.PLACEABLE) {
-      this.setPlaceableCamera(this.currentEntry.cameraAnimation > -1 ? this.currentEntry.cameraAnimation : this.currentEntry.cameraID);
+      if(this.currentEntry){
+        this.setPlaceableCamera(this.currentEntry.cameraAnimation > -1 ? this.currentEntry.cameraAnimation : this.currentEntry.cameraID);
+      }
       if(this.dialog.getConversationType() == DLGConversationType.COMPUTER){
         GameState.MenuManager.InGameComputer.hide();
         GameState.MenuManager.InGameComputerCam.show();
