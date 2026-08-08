@@ -5179,14 +5179,11 @@ NWScriptDefK2.Actions = {
     name: 'PlayMovie',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING, NWScriptDataType.INTEGER ],
-    action: async function(this: NWScriptInstance, args: [string, number]){
-      //Ported from the K1 definition, which was implemented while this one was
-      //left undefined. TSL scripts calling PlayMovie were silently doing
-      //nothing. args[1] is the skippable flag.
-      console.log('PlayMovie', args[0], args[1]);
-      GameState.SetEngineMode(EngineMode.MOVIE);
-      GameState.VideoManager.playMovie(args[0], !!args[1]);
-    }
+    //Inherits K1's implementation via the merge at the bottom of this file.
+    //Do not reimplement to pass args[1] as the skippable flag - its meaning is
+    //unverified, TSL passes 0 for the prologue crawl, and doing so makes that
+    //movie unskippable.
+    action: undefined
   },
   734: {
     comment: '734. SaveNPCState\nTells the party table to save the state of a party member NPC',
