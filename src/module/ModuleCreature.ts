@@ -778,8 +778,10 @@ export class ModuleCreature extends ModuleObject {
 
       //Loop through and update the effects
       if(this.deferEventUpdate){
-        for(let i = 0, len = this.effects.length; i < len; i++){
-          this.effects[i].update(delta);
+        //Length is re-read each pass because an effect can remove itself from
+        //the array while updating, which leaves a stale cached length behind.
+        for(let i = 0; i < this.effects.length; i++){
+          this.effects[i]?.update(delta);
         }
       }
 

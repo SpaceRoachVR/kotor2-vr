@@ -199,9 +199,9 @@ export class ModuleTrigger extends ModuleObject {
           this.trapModel = model;
           this.container.add(model);
           if(this.trapDetected){
-            this.model.playAnimation('detect', false);
+            this.trapModel.playAnimation('detect', false);
           }else{
-            this.model.playAnimation('default', false);
+            this.trapModel.playAnimation('default', false);
           }
         });
       });
@@ -251,9 +251,9 @@ export class ModuleTrigger extends ModuleObject {
     this.trapDetected = true;
 
     if(this.trapDetected){
-      this.model.playAnimation('detect', false);
+      this.trapModel?.playAnimation('detect', false);
     }else{
-      this.model.playAnimation('default', false);
+      this.trapModel?.playAnimation('default', false);
     }
   }
 
