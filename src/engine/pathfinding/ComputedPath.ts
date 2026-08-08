@@ -180,7 +180,11 @@ export class ComputedPath {
 
     let connectionIndexStart = (pointCount * 2);
 
-    if(!bufferSize){
+    //An empty path gives connectionCount = -1, making bufferSize negative. That is
+    //truthy, so a bare !bufferSize check falls through to new Array(negative) and
+    //throws RangeError. pop() empties the path on the final point, so this is hit
+    //every time a creature finishes walking a route.
+    if(bufferSize <= 0){
       this.helperMesh.visible = false;
       this.helperMesh.removeFromParent();
       return;

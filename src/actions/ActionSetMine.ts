@@ -44,6 +44,11 @@ export class ActionSetMine extends Action {
     this.oItem = this.getParameter<ModuleItem>(0);
     this.target = this.getParameter<ModuleObject>(1);
 
+    if(!this.target){
+      console.warn('ActionSetMine: target could not be resolved, aborting.');
+      return ActionStatus.FAILED;
+    }
+
     if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
       const distance = Utility.Distance2D(this.owner.position, this.target.position);
             
@@ -76,6 +81,21 @@ export class ActionSetMine extends Action {
       }
 
       if(this.oItem && !this.usedItem){
+        //parameter 0 is stored as a DWORD id and resolved back through
+        //ModuleObjectManager. If the id no longer maps to the ModuleItem it was set
+        //from, we get some other object here - one without an item property list.
+        if(!Array.isArray((this.oItem as any).properties)){
+          console.warn(
+            'ActionSetMine: parameter 0 did not resolve to a ModuleItem.',
+            'resolved=', this.oItem,
+            'id=', (this.oItem as any)?.id,
+            'objectType=', (this.oItem as any)?.objectType,
+            'tag=', (this.oItem as any)?.getTag ? (this.oItem as any).getTag() : '?'
+          );
+          this.usedItem = true;
+          return ActionStatus.FAILED;
+        }
+
         for(let i = 0, len = this.oItem.properties.length; i < len; i++){
           let property = this.oItem.properties[i];
           // if(!property.isUseable()){ continue; }
