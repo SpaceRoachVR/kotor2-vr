@@ -1,5 +1,6 @@
 import { ModuleObjectScript, ModuleObjectType } from "@/enums";
 import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
+import { EngineMode } from "@/enums/engine/EngineMode";
 import { NWScriptDataType } from "@/enums/nwscript/NWScriptDataType";
 import { GameState } from "@/GameState";
 import type { ModuleCreature, ModuleObject } from "@/module";
@@ -5178,7 +5179,14 @@ NWScriptDefK2.Actions = {
     name: 'PlayMovie',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: async function(this: NWScriptInstance, args: [string, number]){
+      //Ported from the K1 definition, which was implemented while this one was
+      //left undefined. TSL scripts calling PlayMovie were silently doing
+      //nothing. args[1] is the skippable flag.
+      console.log('PlayMovie', args[0], args[1]);
+      GameState.SetEngineMode(EngineMode.MOVIE);
+      GameState.VideoManager.playMovie(args[0], !!args[1]);
+    }
   },
   734: {
     comment: '734. SaveNPCState\nTells the party table to save the state of a party member NPC',

@@ -49,6 +49,16 @@ export class ActionDialogObject extends Action {
       this.validate_conversation_resref = true;
       if(conversation_resref){
         this.conversation = DLGObject.FromResRef(conversation_resref);
+        if(!this.conversation){
+          //FromResRef only consults the module resource cache, so an uncached
+          //dialogue resolves to undefined and the calls below silently fall
+          //back to the object's default conversation. That plays an entirely
+          //different scene with no indication anything went wrong.
+          console.warn(
+            `ActionDialogObject: could not resolve conversation '${conversation_resref}' - falling back to the default conversation of`,
+            this.owner?.getTag ? this.owner.getTag() : this.owner
+          );
+        }
       }
     }
 

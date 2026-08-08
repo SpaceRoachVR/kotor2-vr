@@ -289,7 +289,30 @@ export class DLGNode {
         this.checkList.voiceOverComplete = true;
       }
     }
-    return this.checkList.isComplete();
+    const complete = this.checkList.isComplete();
+
+    //A node whose checklist is never satisfied stalls the entire conversation
+    //silently - no error, no end, nothing on screen. Report the blocking flags
+    //once so the cause is visible instead of having to be inferred.
+    if(!complete && !this.checkList.alreadyAllowed && !this.checkList.stallReported && this.elapsed > 10000){
+      this.checkList.stallReported = true;
+      console.warn('DLGNode: node has not completed after 10s', {
+        text: this.getCompiledString(),
+        delay: this.delay,
+        elapsed: Math.round(this.elapsed),
+        voiceOverComplete: this.checkList.voiceOverComplete,
+        voiceOverError: this.checkList.voiceOverError,
+        fadeComplete: this.checkList.fadeComplete,
+        cameraAnimationComplete: this.checkList.cameraAnimationComplete,
+        isSkipped: this.checkList.isSkipped,
+        hasAnimatedCamera: !!this.dialog.animatedCamera,
+        cameraID: this.cameraID,
+        cameraAngle: this.cameraAngle,
+        fade: this.fade,
+      });
+    }
+
+    return complete;
   }
 
   setNodeDelay(delay: number = 0){
@@ -400,6 +423,7 @@ export class DLGNode {
       alreadyAllowed: false,
       fadeComplete: false,
       voiceOverError: false,
+      stallReported: false,
       isComplete: (): boolean => {
         if (this.checkList.alreadyAllowed || this.checkList.isSkipped) {
           return false;
