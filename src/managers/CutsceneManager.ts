@@ -77,7 +77,15 @@ export class CutsceneManager {
   }
 
   static startConversation(dialog: DLGObject, owner: ModuleObject, listener: ModuleObject = GameState.PartyManager.party[0]) {
-    console.log('CutsceneManager.startConversation', dialog, owner, listener);
+    //Name the actual dialogue file. Logging the object alone makes it
+    //impossible to tell which conversation is playing, which matters when the
+    //wrong one is selected - the symptom looks like a scripting bug.
+    console.log(
+      `CutsceneManager.startConversation dlg='${dialog?.resref ?? 'UNKNOWN'}'`,
+      `owner='${owner?.getTag ? owner.getTag() : '?'}'`,
+      `listener='${listener?.getTag ? listener.getTag() : '?'}'`,
+      dialog, owner, listener
+    );
     this.active = true;
     this.cameraState.currentCameraAnimation = undefined;
     this.owner = owner;

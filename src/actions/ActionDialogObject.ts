@@ -47,6 +47,15 @@ export class ActionDialogObject extends Action {
 
     if(!this.validate_conversation_resref){
       this.validate_conversation_resref = true;
+      //Record what the script actually asked for versus what the object would
+      //supply, so a wrong-conversation bug can be traced to the request rather
+      //than guessed at from the dialogue that ends up playing.
+      console.log(
+        `ActionDialogObject: requested='${conversation_resref || '(none)'}'`,
+        `ownerDefault='${(this.owner as any)?.conversation?.resref ?? '(none)'}'`,
+        `owner='${this.owner?.getTag ? this.owner.getTag() : '?'}'`,
+        `target='${this.target?.getTag ? this.target.getTag() : '?'}'`
+      );
       if(conversation_resref){
         this.conversation = DLGObject.FromResRef(conversation_resref);
         if(!this.conversation){
@@ -96,7 +105,14 @@ export class ActionDialogObject extends Action {
 
       this.owner.heardStrings = [];
       this.target.heardStrings = [];
-      const onDialog = BitWise.InstanceOfObject(this.target, ModuleObjectType.ModuleCreature) ? this.target.scripts[ModuleObjectScript.CreatureOnDialog] : undefined;
+      //Only route through the target's OnDialog script when the target is not
+      //the player. That script exists so a creature the player approaches can
+      //select its own conversation. When an NPC initiates on the player it
+      //must not run: the player's OnDialog is the party-member handler, which
+      //calls BeginConversation with no resref and therefore starts the
+      //*player's* own dialogue - silently replacing the NPC's scene.
+      const targetIsPlayer = !!this.target?.isPlayer;
+      const onDialog = (!targetIsPlayer && BitWise.InstanceOfObject(this.target, ModuleObjectType.ModuleCreature)) ? this.target.scripts[ModuleObjectScript.CreatureOnDialog] : undefined;
       if(onDialog){
         this.target.onDialog(this.owner, -1, this.conversation);
       }else{

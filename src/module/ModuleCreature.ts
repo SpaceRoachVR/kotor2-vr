@@ -416,6 +416,14 @@ export class ModuleCreature extends ModuleObject {
       return;
     }
 
+    //Creatures created outside the standard spawn helpers can end up with no
+    //room, and CollisionManager then rejects every step - the creature has no
+    //floor and no surrounding geometry is drawn. ModuleTrigger already
+    //resolves its room lazily for the same reason; do the same here.
+    if(!this.room){
+      this.getCurrentRoom();
+    }
+
     if(this.audioEmitter){
       this.audioEmitter.setPosition(this.position.x, this.position.y, this.position.z + 1.0);
       this.footstepEmitter.setPosition(this.position.x, this.position.y, this.position.z);
