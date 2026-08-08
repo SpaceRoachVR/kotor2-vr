@@ -93,12 +93,20 @@ export class GameFileSystem {
       
       if(!(output instanceof Uint8Array)) throw new Error('No output buffer supplied!');
 
-      const file = await handle.getFile();
-      if(!file) throw new Error('Failed to read file from handle!');
+      try{
+        const file = await handle.getFile();
+        if(!file) throw new Error('Failed to read file from handle!');
 
-      let blob = await file.slice(position, position + length);
-      let arrayBuffer = await blob.arrayBuffer();
-      output.set(new Uint8Array(arrayBuffer), offset);
+        let blob = await file.slice(position, position + length);
+        let arrayBuffer = await blob.arrayBuffer();
+        output.set(new Uint8Array(arrayBuffer), offset);
+      }catch(e: any){
+        //File System Access API DOMExceptions carry no path, which makes a
+        //failed read impossible to diagnose. Name the file and the range.
+        throw new Error(
+          `GameFileSystem.read: failed reading ${length} bytes at ${position} from '${handle.name}' - ${e?.name || 'Error'}: ${e?.message || e}`
+        );
+      }
       // output.copy(new Uint8Array(arrayBuffer));
     }
   }
@@ -128,10 +136,17 @@ export class GameFileSystem {
       });
     }else{
       const file = await this.open(filepath);
-      if(!file) throw new Error('Failed to read file');
-      
-      let handle = await file.getFile();
-      return new Uint8Array( await handle.arrayBuffer() );
+      if(!file) throw new Error(`Failed to read file '${filepath}'`);
+
+      try{
+        let handle = await file.getFile();
+        return new Uint8Array( await handle.arrayBuffer() );
+      }catch(e: any){
+        //As above - attach the path so the failure is diagnosable.
+        throw new Error(
+          `GameFileSystem.readFile: failed reading '${filepath}' - ${e?.name || 'Error'}: ${e?.message || e}`
+        );
+      }
     }
   }
 
