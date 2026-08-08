@@ -5717,21 +5717,36 @@ NWScriptDefK2.Actions = {
     name: 'IsMoviePlaying',
     type: NWScriptDataType.INTEGER,
     args: [],
-    action: undefined
+    action: function(this: NWScriptInstance, args: []){
+      return GameState.VideoManager.isPlaying ? NW_TRUE : NW_FALSE;
+    }
   },
   806: {
     comment: '806 QueueMovie',
     name: 'QueueMovie',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [string, number]){
+      //args[1] is the skippable flag. Queued movies do not play until
+      //PlayMovieQueue is called.
+      GameState.VideoManager.queueMovie(args[0], !!args[1]);
+    }
   },
   807: {
     comment: '807',
     name: 'PlayMovieQueue',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      //Mirrors the startup movie sequence: switch to MOVIE mode for the
+      //duration, then hand play mode back once the queue drains. Without the
+      //restore the engine would stay in MOVIE mode and the world would never
+      //resume.
+      GameState.SetEngineMode(EngineMode.MOVIE);
+      GameState.VideoManager.playMovieQueue( () => {
+        GameState.RestoreEnginePlayMode();
+      });
+    }
   },
   808: {
     comment: '808',
@@ -6154,7 +6169,10 @@ NWScriptDefK2.Actions = {
     name: 'SetDisableTransit',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      console.log('SetDisableTransit', !!args[0]);
+      GameState.disableTransit = !!args[0];
+    }
   },
   861: {
     comment: '861\n//RWT-OEI 09/09/04\nThis will set the specific input class.\nThe valid options are:\n0 - Normal PC control\n1 - Mini game control\n2 - GUI control\n3 - Dialog Control\n4 - Freelook control',

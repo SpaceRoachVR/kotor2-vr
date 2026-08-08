@@ -459,7 +459,13 @@ export class ModuleTrigger extends ModuleObject {
       }
     }else if(this.linkedToModule && (GameState.Mode != EngineMode.DIALOG)){
       if(object == GameState.getCurrentPlayer()){
-        GameState.LoadModule(this.linkedToModule.toLowerCase(), this.linkedTo.toLowerCase());
+        if(GameState.disableTransit){
+          //SetDisableTransit is active - a scripted sequence has locked area
+          //changes. Ignore the trigger rather than loading the next module.
+          console.log('ModuleTrigger: transit disabled, ignoring transition to', this.linkedToModule);
+        }else{
+          GameState.LoadModule(this.linkedToModule.toLowerCase(), this.linkedTo.toLowerCase());
+        }
       }
       return;
     }

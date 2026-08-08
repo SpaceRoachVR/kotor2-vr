@@ -861,6 +861,12 @@ export class ModuleDoor extends ModuleObject {
     if(!(object instanceof ModuleObject)) return;
     if(object != GameState.getCurrentPlayer()) return;
     if(this.getLinkedToModule() && !(GameState.Mode == EngineMode.DIALOG) && this.isOpen()){
+      if(GameState.disableTransit){
+        //SetDisableTransit is active - a scripted sequence has locked area
+        //changes. Leave the player where they are.
+        console.log('ModuleDoor: transit disabled, ignoring transition to', this.getLinkedToModule());
+        return;
+      }
       if(object.controlled){
         GameState.LoadModule(this.getLinkedToModule().toLowerCase(), this.getLinkedTo().toLowerCase());
       }else{

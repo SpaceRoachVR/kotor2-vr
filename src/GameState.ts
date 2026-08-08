@@ -188,6 +188,11 @@ export class GameState implements EngineContext {
   
   static Mode: EngineMode = EngineMode.GUI;
   static holdWorldFadeInForDialog = false;
+  //TSL's SetDisableTransit (opcode 860). Blocks player-initiated area
+  //transitions - transition triggers and transition doors - while a scripted
+  //sequence is in progress. Scripted transitions (StartNewModule), save
+  //loading and chargen deliberately bypass it.
+  static disableTransit = false;
   static autoRun = false;
   static AlphaTest = 0.5;
   static noClickTimer = 0;
@@ -1151,6 +1156,10 @@ export class GameState implements EngineContext {
     GameState.renderer.setClearColor(new THREE.Color(0, 0, 0));
     GameState.AlphaTest = 0;
     GameState.holdWorldFadeInForDialog = false;
+    //Clear on unload so a sequence that disables transit and never re-enables
+    //it - a real risk while TSL script coverage is incomplete - cannot leave
+    //the player permanently unable to change area.
+    GameState.disableTransit = false;
     const audioEngine = AudioEngine.GetAudioEngine();
     audioEngine.reset();
 
