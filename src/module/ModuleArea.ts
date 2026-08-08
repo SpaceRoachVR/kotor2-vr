@@ -833,6 +833,12 @@ export class ModuleArea extends ModuleObject {
       default:
         const player = GameState.getCurrentPlayer();
         if(!player){ return; }
+        //Bail before touching visibility if the player has no resolved room -
+        //spawned off the walkmesh, or mid-transition. Falling through hides
+        //every room and then returns, leaving nothing on screen but the player
+        //model itself. Keeping the previous frame's visibility is far better
+        //than blanking the world.
+        if(!player.room){ return; }
         //Check to see if the player has moved to a new room
         if(this.lastRoom && this.lastRoom == player.room){
           return;
@@ -848,10 +854,6 @@ export class ModuleArea extends ModuleObject {
         for(let i = 0; i < roomCount; i++){
           const room = this.rooms[i];
           room.hide();
-        }
-
-        if(!player.room){
-          return;
         }
 
         //Show the current room and all of it's linked rooms
