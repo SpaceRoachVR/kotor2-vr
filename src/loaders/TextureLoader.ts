@@ -31,6 +31,9 @@ export class TextureLoader {
   static lightmaps: any = {};
   static particles: any = {};
   static queue: ITextureLoaderQueuedRef[] = [];
+
+  /** Names already reported as unresolvable, so each is warned about only once. */
+  static MISSING_REPORTED = new Set<string>();
   static Anisotropy = 8;
   static loadInflight: Map<string, Promise<OdysseyTexture>> = new Map();
   static pendingSubscribers: Map<string, ITextureLoaderQueuedRef[]> = new Map();
@@ -308,6 +311,18 @@ export class TextureLoader {
           if(typeof tex.onLoad == 'function')
             tex.onLoad(texture, tex)
         }else{
+          //Neither the texture nor its fallback resolved. The material keeps
+          //map = null, which renders as solid white. Nothing was logged here, so
+          //missing textures showed up as unexplained white boxes on world
+          //surfaces and GUI icons alike. Name them once each.
+          if(!texture && !TextureLoader.MISSING_REPORTED.has(tex.name)){
+            TextureLoader.MISSING_REPORTED.add(tex.name);
+            console.warn(
+              `TextureLoader: '${tex.name}' failed to resolve`,
+              tex.fallback ? `(fallback '${tex.fallback}' also failed)` : '(no fallback)',
+              '- material will render white.'
+            );
+          }
           if(typeof tex.onLoad == 'function')
             tex.onLoad(texture, tex)
         }
