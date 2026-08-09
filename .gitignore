@@ -23,3 +23,8 @@ extensions/
 .vscode/mcp.json
 .vscode/chrome-debug-profile/
 exports/
+
+# probe output
+tools/xr-probe/result.json
+tools/xr-probe/results.jsonl
+

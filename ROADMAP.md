@@ -31,11 +31,31 @@ That reopens exactly what Electron was chosen to avoid: the File System Access
 API is slow here and throws `NotReadableError` on large reads. `src/server/` is
 IPC plumbing, not an asset server, so there is nothing to fall back on.
 
-- **Done when:** a module loads in Chrome from a cold start without a read
-  failure, at a load time that is not grossly worse than Electron's.
-- **Candidates:** serve the game directory over local HTTP; cache into OPFS on
-  first run; chunk the large reads that fail. Measure `dialog.tlk` specifically —
-  it is the known failure.
+**The approach is already de-risked.** `tools/asset-http/range-server-probe.js`
+serves the game directory over local HTTP with Range support, measured in Chrome:
+
+| Read | Result |
+|---|---|
+| `dialog.tlk` full 10 MB — the file that fails under File System Access | **60 ms, OK** |
+| `dialog.tlk` Range 0–4095 | 4 ms, 206 |
+| `data/models.bif` Range mid-file (866 MB file) | **5 ms**, 206 |
+| `chitin.key` full | 5 ms |
+
+60 ms against the 39 ms the same file takes from the shell. The slowness and the
+`NotReadableError` are properties of the File System Access API, not of browsers.
+
+This lines up well with the code: `GameFileSystem` is a single chokepoint that
+already branches ELECTRON/BROWSER on every method, and its core read is
+`read(handle, output, offset, length)` — random access, which maps directly onto
+HTTP Range. So this is a third backend behind an existing abstraction, not an
+engine change.
+
+- **Done when:** a module loads in Chrome from a cold start over HTTP with no read
+  failure, at a load time not grossly worse than Electron's.
+- **Shape:** add an HTTP backend to `src/utility/GameFileSystem.ts`; serve the game
+  directory from the dev server. No picker, no permission prompt, cacheable.
+- **Watch for:** `readdir` has no HTTP equivalent — it needs a generated manifest
+  or a directory-listing endpoint. `scripts/generate-manifest.js` already exists.
 - **Why it gates 0.1:** if assets cannot be read reliably in a browser, a stereo
   frametime number tells us nothing.
 
