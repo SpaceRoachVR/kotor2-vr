@@ -28,6 +28,11 @@ Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
   expose WebXR, so this stays out of the browser build.
 - **Already learned:** `EffectComposer` blits to the default framebuffer, not the
   XR one, so all post-processing must be re-plumbed for XR. Budget for it in Phase 2.
+- **Blocked on:** `isSessionSupported('immersive-vr')` is false on this machine
+  even with SteamVR up and the headset connected — and it reproduces in stock
+  Chrome, so it is not our code or Electron. Next thing to try is switching the
+  OpenXR runtime to VDXR in the Virtual Desktop Streamer. Full elimination table
+  in the spike doc.
 - **Done when:** frametimes captured in stereo on the 3060 over Virtual Desktop, at
   rest and while walking, with a written verdict on whether 72/90 Hz is reachable.
 - **Also record:** draw calls per frame, triangles, and renderer memory at load and
