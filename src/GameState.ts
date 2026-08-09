@@ -41,6 +41,7 @@ import { ConfigClient } from "@/utility/ConfigClient";
 import { FollowerCamera } from "@/engine/FollowerCamera";
 import { OdysseyShaderPass } from "@/shaders/pass/OdysseyShaderPass";
 import { ResourceLoader, TextureLoader } from "@/loaders";
+import { VRSpike } from "@/vr/VRSpike";
 
 //THREE.js imports
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer";
@@ -732,6 +733,17 @@ export class GameState implements EngineContext {
     GameState.renderPassGUI.needsSwap = false;
 
     /**
+     * Phase 0.1 stereo perf spike. Async and deliberately not awaited — it only
+     * promotes the GL context and adds a button, and nothing downstream depends
+     * on it. If there is no WebXR runtime it logs and does nothing.
+     */
+    VRSpike.install(GameState.renderer, GameState.scene, {
+      update: () => GameState.Update(),
+      getPlayerPosition: () => GameState.getCurrentPlayer()?.position ?? null,
+      getFacing: () => FollowerCamera.facing,
+    });
+
+    /**
      * Initialize the game controls
      */
     GameState.controls = new IngameControls(GameState.currentCamera, GameState.canvas);
@@ -1194,9 +1206,23 @@ export class GameState implements EngineContext {
 
   static forwardVector = new THREE.Vector3(0, 0, );
 
-  static Update(){
-    
+  /**
+   * Schedule the next frame.
+   *
+   * While a WebXR session is presenting, the headset owns the frame callback
+   * via `renderer.setAnimationLoop` and runs at its own refresh rate.
+   * requestAnimationFrame runs at the monitor's rate instead, so scheduling
+   * both would double-step the engine. VRSpike re-arms rAF when the session ends.
+   */
+  static scheduleNextFrame(){
+    if(VRSpike.isPresenting) return;
     requestAnimationFrame( GameState.Update );
+  }
+
+  static Update(){
+
+    GameState.scheduleNextFrame();
+    VRSpike.perf.tick();
 
     GameState.forwardVector.set(0, 0, -1);
 
@@ -1438,6 +1464,15 @@ export class GameState implements EngineContext {
   }
 
   static Render(delta: number = 0){
+    /**
+     * EffectComposer draws into its own render targets and blits to the default
+     * framebuffer, which is not the one XR presents. Bypass it while presenting.
+     */
+    if(VRSpike.isPresenting){
+      VRSpike.render(GameState.currentCamera);
+      return;
+    }
+
     GameState.renderPass.camera = GameState.currentCamera;
     GameState.renderPassAA.camera = GameState.currentCamera;
     GameState.bokehPass.camera = GameState.currentCamera;

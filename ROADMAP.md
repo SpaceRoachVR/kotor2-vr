@@ -20,8 +20,14 @@ the main thread, which stereo doubles.
 
 Nothing in Phases 2+ should start before this answers.
 
-### 0.1 — Stereo perf spike on `101PER` ▶ next
+### 0.1 — Stereo perf spike on `101PER` ◐ harness landed, awaiting measurement
 Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
+- **Harness:** `spike/stereo-perf` branch. `src/vr/VRSpike.ts` and
+  `src/vr/PerfSampler.ts`; run procedure and results table in
+  [PHASE0-STEREO-SPIKE.md](PHASE0-STEREO-SPIKE.md). Electron 41 does
+  expose WebXR, so this stays out of the browser build.
+- **Already learned:** `EffectComposer` blits to the default framebuffer, not the
+  XR one, so all post-processing must be re-plumbed for XR. Budget for it in Phase 2.
 - **Done when:** frametimes captured in stereo on the 3060 over Virtual Desktop, at
   rest and while walking, with a written verdict on whether 72/90 Hz is reachable.
 - **Also record:** draw calls per frame, triangles, and renderer memory at load and
