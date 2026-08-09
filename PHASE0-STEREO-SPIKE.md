@@ -33,82 +33,107 @@ Point 3 is a finding in its own right, independent of the perf numbers: **any
 post-processing this mod wants has to be re-plumbed for XR.** It is not free, and
 Phase 2 should budget for it.
 
+## FINDING: Electron cannot do WebXR. The VR build has to be a browser build.
+
+This is the most consequential thing Phase 0 has turned up so far, and it lands
+before any frametime was measured.
+
+**`immersive-vr` is unavailable in Electron and no flag fixes it.** Verified on
+2026-08-08 against a fully working runtime, with `tools/xr-probe`:
+
+| Runtime | `inline` | `immersive-vr` |
+|---|---|---|
+| Chrome 151, fresh profile | true | **true** |
+| Edge 151 | true | **true** |
+| Electron 41 (Chromium 146) | true | **false** |
+
+Electron stayed false under every one of `enable-features=OpenXR`,
+`force-webxr-runtime=openxr`, `disable-features=XRSandbox`, `disable-xr-sandbox`
+and `enable-features=WebXRInternals`. Process enumeration during the query shows
+Electron spawns only `network.mojom.NetworkService` — **the XR device service is
+never started at all**, and Chromium's verbose XR logging emits nothing.
+
+This is upstream and long-standing: [electron/electron#35011](https://github.com/electron/electron/issues/35011).
+Even custom Electron builds with `checkout_openxr=True` never read the OpenXR
+registry keys, while stock Chrome reads them the moment `isSessionSupported` is
+called. It is not a configuration problem on this machine and not something the
+mod can flag its way out of.
+
+`inline: true` in Electron is **not** evidence the backend works — inline sessions
+need no device and are supported even with no XR runtime whatsoever. Reading it
+that way cost an hour here; do not repeat it.
+
+### What this costs the project
+
+The workflow rule "run it in Electron, never the browser" holds for engine work
+but **cannot hold for VR work**. Phases 2 onward have to run in Chrome or Edge,
+which means the browser build, which reopens the problem Electron was chosen to
+avoid: the File System Access API is slow on this machine and throws
+`NotReadableError` on large reads (`dialog.tlk` failed there while reading in
+39 ms from the shell).
+
+`src/server/` is IPC plumbing, not an asset server, so there is no existing
+HTTP-serving path to fall back on.
+
+**This deserves its own Phase 0 task, ahead of 0.1**, because it gates the same
+go/no-go: if game assets cannot be read reliably in a browser, the stereo
+frametime number is irrelevant. Candidate approaches, roughly in order of
+promise: serve the game directory over local HTTP instead of File System Access;
+cache assets into OPFS on first run; or chunk the large reads that fail.
+
 ## Preconditions
 
-WebXR is present in Electron 41 — probed directly with `tools/xr-probe`,
-`navigator.xr` is a live `XRSystem`, `makeXRCompatible` exists, `inline` sessions
-are supported, ANGLE/D3D11 on the 3060. So the spike can run in Electron and
-avoid the browser build's `NotReadableError` on large reads.
-
-`tools/xr-probe` is a ~40-line Electron app that reports what the XR stack
-actually exposes. It takes Chromium switches as `--sw=key=value`, so a flag can
-be tested in seconds without touching the game build:
+`tools/xr-probe` is a small Electron app that reports what the XR stack actually
+exposes. It takes Chromium switches as `--sw=key=value`, so a flag can be tested
+in seconds without touching the game build:
 
 ```bash
 node_modules/electron/dist/electron.exe tools/xr-probe --sw=disable-features=XRSandbox
 ```
 
-## BLOCKER: no `immersive-vr` on this machine yet (2026-08-08)
+For browsers, `tools/xr-probe/browser-probe.js` serves the same check over
+localhost — a page cannot write `result.json` itself.
 
-The harness is finished and committed, but the measurement could not be taken.
-`isSessionSupported('immersive-vr')` returns **false** on this rig even with
-SteamVR fully up and the headset connected.
+**Start the browser after the VR runtime is up.** A Chromium process caches the
+"no XR device" answer from startup, so launching a new *window* in an
+already-running browser reports `immersive-vr: false` forever. That confound
+produced a wrong reading here twice before it was caught. Use a fresh profile:
 
-What was ruled out, by direct measurement rather than reasoning:
+```bash
+chrome.exe --user-data-dir=/tmp/xrtest --no-first-run http://localhost:8478/
+```
 
-| Hypothesis | Test | Result |
-|---|---|---|
-| Electron ships without an XR backend | probe `inline` in Electron vs Chrome | **ruled out** — both report `inline: true`, so the backend is present and working |
-| Something specific to our app or bundle | stock Chrome 151 on a localhost probe page | **ruled out** — Chrome reports `immersive-vr: false` identically |
-| VR runtime not running | `vrserver`, `vrcompositor`, `vrdashboard` + Virtual Desktop Streamer all up, HMD connected | **ruled out** |
-| Chromium needs a runtime flag | `enable-features=OpenXR`, `force-webxr-runtime=openxr`, `disable-features=XRSandbox`, `disable-xr-sandbox` | **no effect**, all four |
-| Broken OpenXR install | `HKLM\SOFTWARE\Khronos\OpenXR\1\ActiveRuntime` → SteamVR manifest and `vrclient_x64.dll` both exist | **ruled out** |
-| Chrome enterprise policy blocking VR | `Policies\Google\Chrome` under HKLM and HKCU | **absent** |
+## Runtime setup that works on this machine
 
-Chromium's verbose XR logging (`--vmodule=*xr*=3,*openxr*=3`) emits **nothing at
-all** — the XR device service never starts, so the failure is upstream of the
-OpenXR runtime rather than a rejection by it.
-
-### Most likely remaining cause, and the next thing to try
-
-The 64-bit active OpenXR runtime is **SteamVR**, while the 32-bit key points at
-**Virtual Desktop's** runtime — the two disagree:
+The OpenXR runtime is **VDXR**, Virtual Desktop's own, set from the Virtual
+Desktop Streamer window. It replaced SteamVR on both registry keys:
 
 ```
-HKLM\SOFTWARE\Khronos\OpenXR\1            → SteamVR\steamxr_win64.json
+HKLM\SOFTWARE\Khronos\OpenXR\1             → virtualdesktop-openxr.json
 HKLM\SOFTWARE\WOW6432Node\Khronos\OpenXR\1 → virtualdesktop-openxr-32.json
 ```
 
-Since the target path is Quest 3 over Virtual Desktop anyway, the thing to try is
-**VDXR, Virtual Desktop's own OpenXR runtime**, which bypasses SteamVR entirely
-and is the better-supported path for this exact setup. Flip it in the **Virtual
-Desktop Streamer** window (the "Use VDXR OpenXR runtime" / OpenXR runtime option
-on the Options tab), then re-run the probe.
+With VDXR active and the headset connected, Chrome and Edge both report
+`immersive-vr: true`. SteamVR does not need to be running.
 
-This was left for a human on purpose: it rewrites an `HKLM` registry value and is
-a system-wide setting affecting every OpenXR application on the machine, not just
-this project.
-
-Re-probe after changing it:
-
-```bash
-node_modules/electron/dist/electron.exe tools/xr-probe
-```
-
-It writes `tools/xr-probe/result.json`. Expect `"immersiveVR": true`. Until it does, the Enter VR button renders as
-"VR unavailable" and there is nothing to measure.
+An earlier reading of `false` under SteamVR was never conclusively attributed —
+by the time VDXR was in place the browser-caching confound was also in play, so
+whether SteamVR-as-runtime works here is untested. VDXR is the target path
+anyway, so it was not chased further.
 
 ## Procedure
+
+**Not runnable as written yet** — step 2 depends on the browser asset-loading
+problem above. Everything else is ready, and the mono baseline in step 3 can be
+collected in Electron today.
 
 ```bash
 npm run webpack:dev
 ```
 
-Then, with SteamVR running and the headset connected via Virtual Desktop:
-
-```bash
-npm run start
-```
+The mono baseline runs in Electron as usual (`npm run start`). The stereo half
+needs Chrome or Edge against the browser build, with the headset connected and
+the browser launched *after* the runtime is up, on a fresh profile.
 
 1. Load a save inside `101PER`. Do not click Enter VR at the main menu — measure
    the level, not an empty scene.

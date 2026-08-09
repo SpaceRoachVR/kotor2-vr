@@ -20,6 +20,25 @@ the main thread, which stereo doubles.
 
 Nothing in Phases 2+ should start before this answers.
 
+### 0.0 — Make the browser build load game assets reliably ▶ next
+**New, and ahead of 0.1.** Electron cannot do WebXR — `immersive-vr` is
+unavailable there and no flag changes it, the XR device service never spawns, and
+it is upstream and long-standing ([electron/electron#35011](https://github.com/electron/electron/issues/35011)).
+Chrome and Edge both work on this machine. So every phase from 2 on runs in a
+browser, and "run it in Electron, never the browser" holds for engine work only.
+
+That reopens exactly what Electron was chosen to avoid: the File System Access
+API is slow here and throws `NotReadableError` on large reads. `src/server/` is
+IPC plumbing, not an asset server, so there is nothing to fall back on.
+
+- **Done when:** a module loads in Chrome from a cold start without a read
+  failure, at a load time that is not grossly worse than Electron's.
+- **Candidates:** serve the game directory over local HTTP; cache into OPFS on
+  first run; chunk the large reads that fail. Measure `dialog.tlk` specifically —
+  it is the known failure.
+- **Why it gates 0.1:** if assets cannot be read reliably in a browser, a stereo
+  frametime number tells us nothing.
+
 ### 0.1 — Stereo perf spike on `101PER` ◐ harness landed, awaiting measurement
 Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
 - **Harness:** `spike/stereo-perf` branch. `src/vr/VRSpike.ts` and
@@ -28,11 +47,8 @@ Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
   expose WebXR, so this stays out of the browser build.
 - **Already learned:** `EffectComposer` blits to the default framebuffer, not the
   XR one, so all post-processing must be re-plumbed for XR. Budget for it in Phase 2.
-- **Blocked on:** `isSessionSupported('immersive-vr')` is false on this machine
-  even with SteamVR up and the headset connected — and it reproduces in stock
-  Chrome, so it is not our code or Electron. Next thing to try is switching the
-  OpenXR runtime to VDXR in the Virtual Desktop Streamer. Full elimination table
-  in the spike doc.
+- **Blocked on 0.0.** WebXR itself works on this rig now (VDXR runtime, Chrome and
+  Edge both report `immersive-vr: true`), but not in Electron — see 0.0.
 - **Done when:** frametimes captured in stereo on the 3060 over Virtual Desktop, at
   rest and while walking, with a written verdict on whether 72/90 Hz is reachable.
 - **Also record:** draw calls per frame, triangles, and renderer memory at load and
@@ -56,7 +72,8 @@ will drop frames in a headset.
 - **Suspects:** textures not disposed on `UnloadModule`, per-module listeners, the
   Bink worker.
 
-**Phase 0 exit:** a written go / no-go on stereo feasibility. If no-go, revisit the
+**Phase 0 exit:** a written go / no-go on stereo feasibility, which now also
+requires the browser build to be viable at all (0.0). If no-go, revisit the
 engine choice before spending further effort.
 
 ---

@@ -35,6 +35,11 @@ app.whenReady().then(async () => {
     result.switches = applied;
     result.electron = process.versions.electron;
     write(result);
+
+    // --hold=<ms> keeps the process alive so child processes can be inspected
+    // from outside while the XR query is in flight.
+    const hold = process.argv.find((a) => a.startsWith('--hold='));
+    if (hold) await new Promise((r) => setTimeout(r, parseInt(hold.slice(7), 10) || 0));
   } catch (e) {
     write({ fatal: String((e && e.stack) || e), switches: applied });
   }

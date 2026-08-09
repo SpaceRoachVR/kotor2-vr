@@ -1,0 +1,10 @@
+{
+  "hasNavigatorXR": true,
+  "immersiveVR": false,
+  "inline": true,
+  "xrError": null,
+  "switches": [
+    "enable-features=WebXRInternals"
+  ],
+  "electron": "41.1.1"
+}
