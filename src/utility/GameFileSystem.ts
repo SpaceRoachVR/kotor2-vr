@@ -3,9 +3,11 @@ import * as fs from "fs";
 import { ApplicationProfile } from "@/utility/ApplicationProfile";
 import { ApplicationEnvironment } from "@/enums/ApplicationEnvironment";
 import { IGameFileSystemReadDirOptions } from "@/interface/filesystem/IGameFileSystemReadDirOptions";
+import { GameFileSystemHttpHandle } from "@/utility/filesystem/GameFileSystemBackend";
+import { HttpGameFileSystemBackend } from "@/utility/filesystem/HttpGameFileSystemBackend";
 declare const dialog: any;
 
-const webHandleHasRemove = typeof (FileSystemFileHandle.prototype as any).remove === 'function'
+const webHandleHasRemove = typeof FileSystemFileHandle !== 'undefined' && typeof (FileSystemFileHandle.prototype as any).remove === 'function'
 
 const spleep = (time: number = 0) => {
   return new Promise( (resolve, reject) => {
@@ -36,6 +38,9 @@ const spleep = (time: number = 0) => {
  */
 export class GameFileSystem {
 
+  private static httpBackend: HttpGameFileSystemBackend | undefined;
+  private static httpBackendUrl = '';
+
   private static normalizePath(filepath: string){
     filepath = filepath.trim();
     filepath = filepath.replace(/^\/+/, '').replace(/\/+$/, '');
@@ -43,8 +48,24 @@ export class GameFileSystem {
     return filepath;
   }
 
+  private static get useHttp(): boolean {
+    return ApplicationProfile.usesHttpAssets;
+  }
+
+  private static getHttpBackend(): HttpGameFileSystemBackend {
+    if(!ApplicationProfile.assetBaseUrl){
+      throw new Error('HTTP game filesystem requested without an asset service URL');
+    }
+    if(!this.httpBackend || this.httpBackendUrl !== ApplicationProfile.assetBaseUrl){
+      this.httpBackend = new HttpGameFileSystemBackend({ assetBaseUrl: ApplicationProfile.assetBaseUrl });
+      this.httpBackendUrl = ApplicationProfile.assetBaseUrl;
+    }
+    return this.httpBackend;
+  }
+
   //filepath should be relative to the rootDirectoryPath or ApplicationProfile.directory
   static async open(filepath: string, mode: 'r'|'w' = 'r'): Promise<any> {
+    if(this.useHttp) return await this.getHttpBackend().open(filepath, mode);
     if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
       return new Promise<number>( (resolve, reject) => {
         fs.open(path.join(ApplicationProfile.directory, filepath), (err, fd) => {
@@ -77,7 +98,8 @@ export class GameFileSystem {
     }
   }
 
-  static async read(handle: FileSystemFileHandle|number, output: Uint8Array, offset: number, length: number, position: number){
+  static async read(handle: FileSystemFileHandle|number|GameFileSystemHttpHandle, output: Uint8Array, offset: number, length: number, position: number){
+    if(this.useHttp) return await this.getHttpBackend().read(handle as GameFileSystemHttpHandle, output, offset, length, position);
     if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
       return new Promise<Uint8Array>( (resolve, reject) => {
         fs.read(handle as number, output, offset, length, position, (err, bytes, buffer) => {
@@ -111,7 +133,8 @@ export class GameFileSystem {
     }
   }
 
-  static async close(handle: FileSystemFileHandle|number){
+  static async close(handle: FileSystemFileHandle|number|GameFileSystemHttpHandle){
+    if(this.useHttp) return await this.getHttpBackend().close(handle as GameFileSystemHttpHandle);
     if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
       return new Promise<void>( (resolve, reject) => {
         fs.close(handle as number, () => {
@@ -127,6 +150,7 @@ export class GameFileSystem {
   //filepath should be relative to the rootDirectoryPath or ApplicationProfile.directory
   static async readFile(filepath: string, options: any = {}): Promise<Uint8Array> {
     // console.log('readFile', filepath);
+    if(this.useHttp) return await this.getHttpBackend().readFile(filepath, options);
     if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
       return new Promise<Uint8Array>( (resolve, reject) => {
         fs.readFile(path.join(ApplicationProfile.directory, filepath), options, (err, buffer) => {
@@ -152,6 +176,7 @@ export class GameFileSystem {
 
   //filepath should be relative to the rootDirectoryPath or ApplicationProfile.directory
   static async writeFile(filepath: string, data: Uint8Array): Promise<boolean> {
+    if(this.useHttp) return await this.getHttpBackend().writeFile(filepath, data);
     return new Promise<boolean>( async (resolve, reject) => {
       if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
         fs.writeFile(path.join(ApplicationProfile.directory, filepath), data, (err) => {
@@ -190,7 +215,9 @@ export class GameFileSystem {
   static async readdir(
     dirpath: string, options: IGameFileSystemReadDirOptions = {}, files: any[] = []
   ): Promise<string[]> {
-    if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
+    if(this.useHttp){
+      return await this.getHttpBackend().readdir(dirpath, options, files);
+    }else if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
       return await this.readdir_fs(dirpath, options, files);
     }else{
       return await this.readdir_web(dirpath, options, files);
@@ -331,6 +358,7 @@ export class GameFileSystem {
   }
 
   static async mkdir(dirPath: string, opts: IGameFileSystemReadDirOptions = {}){
+    if(this.useHttp) return await this.getHttpBackend().mkdir(dirPath.trim(), opts);
     return new Promise<boolean>( async (resolve, reject) => {
       dirPath = dirPath.trim();
       if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
@@ -377,6 +405,7 @@ export class GameFileSystem {
   }
 
   static async rmdir(dirPath: string, opts: IGameFileSystemReadDirOptions = {}){
+    if(this.useHttp) return await this.getHttpBackend().rmdir(dirPath.trim(), opts);
     return new Promise<boolean>( async (resolve, reject) => {
       dirPath = dirPath.trim();
       if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
@@ -429,6 +458,7 @@ export class GameFileSystem {
   }
 
   static exists(dirOrFilePath: string): Promise<boolean> {
+    if(this.useHttp) return this.getHttpBackend().exists(dirOrFilePath);
     return new Promise<boolean>( async (resolve, reject) => {
       if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
         fs.stat(path.join(ApplicationProfile.directory, dirOrFilePath), (err, stats) => {
@@ -480,6 +510,13 @@ export class GameFileSystem {
   }
 
   static async unlink(handleOrPath: string|FileSystemFileHandle){
+    if(this.useHttp){
+      if(typeof handleOrPath !== 'string'){
+        throw new Error('unlink: supply a path string when assets are served over HTTP');
+      }
+      await this.getHttpBackend().unlink(handleOrPath);
+      return;
+    }
     if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
       return new Promise<void>( (resolve, reject) => {
         try{
@@ -644,6 +681,9 @@ export class GameFileSystem {
   }
 
   static async initializeGameDirectory(){
+    //Over HTTP the server already points at the game directory, so there is
+    //nothing to pick and no permission to request.
+    if(this.useHttp) return;
     if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
       ApplicationProfile.directory = ApplicationProfile.directory;
     }else{

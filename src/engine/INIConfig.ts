@@ -78,7 +78,7 @@ export class INIConfig {
   }
 
   async load(): Promise<void> {
-    if (ApplicationProfile.ENV === ApplicationEnvironment.ELECTRON) {
+    if (ApplicationProfile.ENV === ApplicationEnvironment.ELECTRON || ApplicationProfile.usesHttpAssets) {
       try {
         const buffer = await GameFileSystem.readFile(this.ini_path);
         const raw = new TextDecoder('utf-8').decode(buffer);
@@ -145,7 +145,7 @@ export class INIConfig {
   }
 
   async save(): Promise<void> {
-    if (ApplicationProfile.ENV === ApplicationEnvironment.ELECTRON) {
+    if (ApplicationProfile.ENV === ApplicationEnvironment.ELECTRON || ApplicationProfile.usesHttpAssets) {
       try {
         await GameFileSystem.writeFile(this.ini_path, new TextEncoder().encode(this.toString()));
       } catch (e) {
