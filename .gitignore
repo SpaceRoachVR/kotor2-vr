@@ -9,7 +9,7 @@ backup/
 .ds_store
 projects/
 Saves/
-tests/
+/tests/
 # src/**/*.js
 dist/
 debug.log
