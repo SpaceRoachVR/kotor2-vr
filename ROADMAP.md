@@ -4,8 +4,9 @@ Phase plan for turning [KotOR.js](https://github.com/KobaltBlu/KotOR.js) into a
 room-scale VR mod for KOTOR II. Design rationale lives in [DESIGN.md](DESIGN.md);
 engine knowledge lives in `.claude/skills/kotor2-vr/`.
 
-**Status: Phase 0.1 next.** The Phase 0.0 browser filesystem acceptance gate
-passed on 2026-08-11; stereo/device measurement still gates everything after it.
+**Status: Phase 0.1 remediation retest next.** The Phase 0.0 browser filesystem
+acceptance gate passed on 2026-08-11. The first headset run failed its rest gate;
+the dominant startup-memory cause is fixed and must now be retested at 72 Hz.
 
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
@@ -81,6 +82,18 @@ Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
   immersive WebXR; this measurement runs in Chrome/Edge through VDXR.
 - **Already learned:** `EffectComposer` blits to the default framebuffer, not the
   XR one, so all post-processing must be re-plumbed for XR. Budget for it in Phase 2.
+- **First device run (2026-08-11):** Quest 3/VDXR/Chrome on the RTX 3060 entered
+  immersive WebXR and tracked the headset, but the headset compositor became
+  unresponsive. A settled 15-second stereo-rest window at the runtime's 90 Hz
+  delivered p90 16.5 ms, p99 27.5 ms, and 19.8% of frames over the 13.89 ms
+  72 Hz budget. This is a measured failure, not a pass.
+- **Bounded remediation:** startup was eagerly copying all 1,823 TSLRCM Override
+  files (7.66 GiB) into the JS heap. Override now builds a path-only index and
+  lazily caches requested resources. Fresh Chrome evidence fell from 7.86 GiB
+  pre-menu heap to 118 MB at the menu and 889 MB in `101PER`; only 52 Override
+  resources were resident, and `.vis` left 13 of 66 rooms visible. Automated
+  tests and a fresh browser render pass; headset rest/walking and ten-minute
+  memory measurements remain required.
 - **Next after 0.0.** WebXR itself works on this rig now (VDXR runtime, Chrome and
   Edge both report `immersive-vr: true`), but not in Electron — see 0.0.
 - **Done when:** frametimes captured in stereo on the 3060 over Virtual Desktop, at

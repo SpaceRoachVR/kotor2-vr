@@ -181,6 +181,35 @@ are Y-up. If the world appears on its side, that is the line to look at.
 
 ## Record the verdict here
 
+### First device run and bounded remediation (2026-08-11)
+
+Quest 3 through VDXR successfully created an immersive session in installed
+Chrome and supplied head tracking, but the headset showed black and then reported
+that the page was not responding. The settled 15-second `stereo-rest` sample was:
+
+| Runtime | fps | p50 | p90 | p99 | % over 13.89 ms | draw calls | triangles | heap MB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Quest 3 / VDXR / Chrome / RTX 3060, 90 Hz delivery | 90.3 | 9.1 | 16.5 | 27.5 | 19.8% | 324 | 49,636 | 8,368.6 |
+
+This failed the 72 Hz floor at rest, before a walking window. Desktop diagnosis
+then found that `GameInitializer.LoadOverride()` eagerly cached all 1,823 files in
+the TSLRCM Override folder: 7.66 GiB of resource bytes were resident before the
+main menu, and V8 reported 7.86 GiB used heap.
+
+The bounded remediation replaced the byte preload with a validated path index and
+lazy per-resource reads. Fresh installed-Chrome evidence after rebuilding:
+
+- main-menu heap: 118.3 MB, with 1,823 indexed paths and zero cached Override files;
+- settled `101PER` heap: 888.9 MB, with 52 requested Override resources cached;
+- `.vis` evidence: 13 of 66 rooms visible at the accepted save position;
+- 30-second mono rest: 59.99 fps, p50 16.7 ms, p90 16.8 ms, p99 16.9 ms;
+- rendered browser screenshot visually confirmed the level and UI remained intact.
+
+The mono draw-call counter is not recorded here because the final EffectComposer
+blit overwrites `renderer.info`; XR bypasses the composer and reports the stereo
+world counters directly. The headset must be rerun at an explicitly selected
+72 Hz before either verdict below can be filled.
+
 | Window | fps | p50 | p90 | p99 | % over budget | draw calls | triangles | heap MB |
 |---|---|---|---|---|---|---|---|---|
 | mono-rest | | | | | | | | |

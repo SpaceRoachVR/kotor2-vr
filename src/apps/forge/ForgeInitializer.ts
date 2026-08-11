@@ -407,6 +407,7 @@ export class ForgeInitializer {
   static async LoadOverride(){
     KotOR.PerformanceMonitor.start('ForgeInitializer.LoadOverride');
     try{
+      await KotOR.ResourceLoader.InitOverrideCache();
       const files = await KotOR.GameFileSystem.readdir('Override', {recursive: false});
       const validOverrideFiles = files
         .map(f => {
@@ -416,11 +417,9 @@ export class ForgeInitializer {
         })
         .filter(({ resId }) => typeof resId !== 'undefined');
 
-      await Promise.all(validOverrideFiles.map(async ({ f, _parsed, resId }) => {
-        const buffer = await KotOR.GameFileSystem.readFile(f);
-        if(!buffer || !buffer.length) return;
-        KotOR.ResourceLoader.setCache(KotOR.CacheScope.OVERRIDE, resId, _parsed.name.toLocaleLowerCase(), buffer);
-      }));
+      validOverrideFiles.forEach(({ f, _parsed, resId }) => {
+        KotOR.ResourceLoader.setOverrideResource(resId, _parsed.name, f);
+      });
     }catch(e){
       console.warn('ForgeInitializer.LoadOverride: Failed to load override');
       console.error(e);
