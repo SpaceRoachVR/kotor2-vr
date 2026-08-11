@@ -4,9 +4,11 @@ Phase plan for turning [KotOR.js](https://github.com/KobaltBlu/KotOR.js) into a
 room-scale VR mod for KOTOR II. Design rationale lives in [DESIGN.md](DESIGN.md);
 engine knowledge lives in `.claude/skills/kotor2-vr/`.
 
-**Status: Phase 0.1 remediation retest next.** The Phase 0.0 browser filesystem
-acceptance gate passed on 2026-08-11. The first headset run failed its rest gate;
-the dominant startup-memory cause is fixed and must now be retested at 72 Hz.
+**Status: Phase 0 decision gate.** The Phase 0.0 browser filesystem gate passed
+on 2026-08-11. The bounded memory remediation fixed the black/unresponsive XR
+failure and the user reports the 90 Hz headset image looks excellent, but the
+instrumented walking window still misses the written native-frame threshold.
+Feature work remains paused pending the measured pivot decision.
 
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
@@ -94,6 +96,14 @@ Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
   resources were resident, and `.vis` left 13 of 66 rooms visible. Automated
   tests and a fresh browser render pass; headset rest/walking and ten-minute
   memory measurements remain required.
+- **Remediated device result:** the black/unresponsive failure is gone. The user
+  described the 90 Hz VDXR image as looking "amazing" and walked 85.55 metres
+  through four `101PER` rooms during a 182-sample traced window. The trace ended
+  at p90 16.6 ms, p99 16.8 ms, and 800 MB heap. That is a strong perceptual and
+  functional success, but p90 remains above the written 13.89 ms floor.
+- **Decision report:** [PHASE0-ENGINE-PIVOT-REPORT.md](PHASE0-ENGINE-PIVOT-REPORT.md)
+  records the evidence conflict, current no-go under the numeric gate, and the
+  recommended measurement-integrity audit before changing engines.
 - **Next after 0.0.** WebXR itself works on this rig now (VDXR runtime, Chrome and
   Edge both report `immersive-vr: true`), but not in Electron — see 0.0.
 - **Done when:** frametimes captured in stereo on the 3060 over Virtual Desktop, at

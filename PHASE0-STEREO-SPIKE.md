@@ -210,6 +210,36 @@ blit overwrites `renderer.info`; XR bypasses the composer and reports the stereo
 world counters directly. The headset must be rerun at an explicitly selected
 72 Hz before either verdict below can be filled.
 
+### Remediated headset confirmation (2026-08-11)
+
+Virtual Desktop exposed a fixed 90 Hz mode on this setup; there was no selectable
+72 Hz option. After the lazy Override fix, the user confirmed that `101PER` was
+visible, responsive, and looked "amazing" in the Quest 3. No black environment,
+page-unresponsive warning, session loss, or tracking loss recurred.
+
+The first walking interpretation used only equal start/end coordinates and was
+discarded after the user reported that they had walked a loop. The confirmation
+run sampled the creature position every 500 ms:
+
+- 182 position samples over 91.49 seconds;
+- 85.55 metres of accumulated movement and 9.94 metres maximum displacement;
+- rooms `101per2a`, `101perbc`, `101peray`, and `101peraq` traversed;
+- `.vis` culling remained active;
+- heap ended at 799.8 MB.
+
+| Window | p50 | p90 | p99 | max | % over budget | budget | draw calls | triangles | heap MB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| remediated stereo rest | 9.3 | 16.6 | 16.8 | 25.7 | 32.88% | 11.11 ms (90 Hz) | 384 | 55,470 | 823.1 |
+| remediated stereo walking, path-confirmed | 9.3 | 16.6 | 16.8 | 31.8 | 23.62% | 13.89 ms (72 Hz gate) | 386 | 55,790 | 799.8 |
+
+The user-observed result is a clear functional and perceptual success. Under the
+predeclared numeric rule, however, walking p90 exceeds 13.89 ms and the
+over-budget share exceeds 5%, so Phase 0 cannot be marked passed. The sampler
+also counted about 95 engine updates per second while Virtual Desktop reported
+90 Hz. That cadence mismatch must be instrumented at the XR-frame boundary
+before treating the current callback percentiles as a definitive engine-pivot
+signal. See `PHASE0-ENGINE-PIVOT-REPORT.md`.
+
 | Window | fps | p50 | p90 | p99 | % over budget | draw calls | triangles | heap MB |
 |---|---|---|---|---|---|---|---|---|
 | mono-rest | | | | | | | | |
