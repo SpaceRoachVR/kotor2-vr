@@ -65,8 +65,11 @@ engine change.
   not performance passes; matched Electron timing has not been recorded.
 - **Known follow-up:** the transition-time selectable-player exception is fixed;
   the final Chrome save-load and `101PER` → `102PER` run recorded zero console
-  errors. `GetRandomDestination` remains a repeated traced TSL NWScript warning
-  and must be implemented or proven non-blocking before performance capture.
+  errors. TSL opcode 815 (`GetRandomDestination`) is now implemented as a bounded
+  sampler over the creature's connected room walkmesh. A fresh installed-Chrome
+  transition to `102PER` exercised it 50 times for `g_assassindrd01`: every result
+  was finite and within the requested six-metre range, all 50 selected a new
+  destination, and no missing-action warning was emitted.
 - **Why it gates 0.1:** if assets cannot be read reliably in a browser, a stereo
   frametime number tells us nothing.
 

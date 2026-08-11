@@ -9,6 +9,7 @@ import { NW_FALSE, NW_TRUE } from "@/nwscript/NWScriptConstants";
 import { NWScriptDef } from "@/nwscript/NWScriptDef";
 import { NWScriptDefK1 } from "@/nwscript/NWScriptDefK1";
 import { NWScriptInstance } from "@/nwscript/NWScriptInstance";
+import { getRandomWalkableDestination } from "@/nwscript/actions/GetRandomDestination";
 
 /**
  * NWScriptDefK2 class.
@@ -5807,7 +5808,12 @@ NWScriptDefK2.Actions = {
     name: 'GetRandomDestination',
     type: NWScriptDataType.VECTOR,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleCreature, number]){
+      const creature = BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)
+        ? args[0]
+        : undefined;
+      return getRandomWalkableDestination(creature, args[1]);
+    }
   },
   816: {
     comment: '816\nDJS-OEI 3/25/2004\nReturns whether the given creature is currently in the\nrequested Lightsaber/Consular Form and can make use of\nits benefits. This function will perform trumping checks\nand lightsaber-wielding checks for those Forms that require\nthem.',

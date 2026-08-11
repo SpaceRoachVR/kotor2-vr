@@ -11,6 +11,7 @@ projects/
 Saves/
 /tests/
 /output/playwright/
+/.playwright-cli/
 # src/**/*.js
 dist/
 debug.log

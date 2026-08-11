@@ -123,17 +123,21 @@ anyway, so it was not chased further.
 
 ## Procedure
 
-**Not runnable as written yet** — step 2 depends on the browser asset-loading
-problem above. Everything else is ready, and the mono baseline in step 3 can be
-collected in Electron today.
+The browser asset gate is now complete. Build the current bundle, start the
+authenticated loopback service against the real KOTOR II installation, and open
+the printed one-time launch URL in a fresh Chrome process:
 
-```bash
+```powershell
 npm run webpack:dev
+node tools/asset-http/asset-server.js `
+  --game "D:\SteamLibrary\steamapps\common\Knights of the Old Republic II" `
+  --user "$env:LOCALAPPDATA\Kotor2VR"
 ```
 
-The mono baseline runs in Electron as usual (`npm run start`). The stereo half
-needs Chrome or Edge against the browser build, with the headset connected and
-the browser launched *after* the runtime is up, on a fresh profile.
+Use the same browser build for the matched mono and stereo windows so filesystem,
+bundle, and renderer conditions remain constant. The stereo half needs the
+headset connected, VDXR active, and Chrome launched *after* the runtime is up on
+a fresh profile.
 
 1. Load a save inside `101PER`. Do not click Enter VR at the main menu — measure
    the level, not an empty scene.
