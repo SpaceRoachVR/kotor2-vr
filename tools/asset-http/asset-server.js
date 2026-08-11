@@ -58,7 +58,7 @@ function parseAssetServerArguments(argumentsList, defaults = getDefaultOptions()
 function getDefaultOptions() {
   return {
     gameRoot: 'D:\\SteamLibrary\\steamapps\\common\\Knights of the Old Republic II',
-    userRoot: path.join(process.env.LOCALAPPDATA || process.cwd(), 'KOTOR2-VR'),
+    userRoot: path.join(process.env.LOCALAPPDATA || process.cwd(), 'Kotor2VR'),
     distRoot: path.join(__dirname, '..', '..', 'dist'),
     port: 8479,
   };

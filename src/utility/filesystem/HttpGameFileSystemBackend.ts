@@ -115,7 +115,14 @@ export class HttpGameFileSystemBackend implements GameFileSystemBackend {
     this.assetBaseUrl.search = '';
     this.assetBaseUrl.hash = '';
     this.origin = this.assetBaseUrl.origin;
-    this.fetchImplementation = options.fetch || fetch;
+    const fetchImplementation = options.fetch || globalThis.fetch;
+    if (typeof fetchImplementation !== 'function') {
+      throw new Error('HTTP game filesystem requires the Fetch API');
+    }
+    // Browser-native fetch is brand checked and throws "Illegal invocation"
+    // when retained as an instance property and called with this backend as
+    // its receiver. Bind it to the global object once at construction time.
+    this.fetchImplementation = fetchImplementation.bind(globalThis);
   }
 
   async open(filepath: string, mode: 'r' | 'w' = 'r'): Promise<GameFileSystemHttpHandle> {

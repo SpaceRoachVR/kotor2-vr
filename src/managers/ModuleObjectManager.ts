@@ -11,6 +11,7 @@ import type { Module, ModuleCreature, ModuleDoor, ModuleObject } from "@/module"
 import { PerceptionMask } from "@/enums/engine/PerceptionMask";
 import { GameState } from "@/GameState";
 import { ModuleTriggerType } from "@/enums/module/ModuleTriggerType";
+import { hasSelectablePlayerPosition } from "@/managers/selectable/SelectablePlayer";
 
 const UPDATE_SELECTABLE_OBJECTS_INTERVAL = 0.5;
 
@@ -818,8 +819,14 @@ export class ModuleObjectManager {
   static TickSelectableObjects(delta: number = 0){
     this.tUpdateSelectable -= delta;
     if(this.tUpdateSelectable <= 0){
+      const player = PartyManager.party[0];
+      if(!hasSelectablePlayerPosition(player)){
+        this.SetPlayerVisibleObjects([]);
+        this.tUpdateSelectable = UPDATE_SELECTABLE_OBJECTS_INTERVAL;
+        return;
+      }
       //Update the cache of selectable objects
-      GameState.ModuleObjectManager.GetSelectableObjectsInRange(PartyManager.party[0]);
+      GameState.ModuleObjectManager.GetSelectableObjectsInRange(player as ModuleObject);
       this.tUpdateSelectable = UPDATE_SELECTABLE_OBJECTS_INTERVAL;
     }
   }

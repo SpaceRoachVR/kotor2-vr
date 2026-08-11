@@ -64,6 +64,19 @@ describe('HTTP game filesystem mount routing', () => {
     );
   });
 
+  test('invokes fetch with the global receiver required by browser implementations', async () => {
+    let receiver: unknown;
+    const brandedFetch = function(this: unknown): Promise<Response> {
+      receiver = this;
+      if (this !== globalThis) throw new TypeError('Illegal invocation');
+      return Promise.resolve(response(200, 'ok'));
+    } as typeof fetch;
+    const backend = createBackend(brandedFetch);
+
+    await expect(backend.readFile('chitin.key')).resolves.toEqual(new Uint8Array([111, 107]));
+    expect(receiver).toBe(globalThis);
+  });
+
   test('names the requested path without leaking request details when a whole-file request fails', async () => {
     const fetchImplementation = jest.fn<typeof fetch>().mockRejectedValue(new Error('connection failed with token=secret'));
     const backend = createBackend(fetchImplementation);

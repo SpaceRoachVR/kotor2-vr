@@ -4,7 +4,8 @@ Phase plan for turning [KotOR.js](https://github.com/KobaltBlu/KotOR.js) into a
 room-scale VR mod for KOTOR II. Design rationale lives in [DESIGN.md](DESIGN.md);
 engine knowledge lives in `.claude/skills/kotor2-vr/`.
 
-**Status: Phase 1.** Phase 0 is next up and gates everything after it.
+**Status: Phase 0.1 next.** The Phase 0.0 browser filesystem acceptance gate
+passed on 2026-08-11; stereo/device measurement still gates everything after it.
 
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
@@ -20,7 +21,7 @@ the main thread, which stereo doubles.
 
 Nothing in Phases 2+ should start before this answers.
 
-### 0.0 — Make the browser build load game assets reliably ▶ next
+### 0.0 — Make the browser build load game assets reliably ✅ functional gate passed
 **New, and ahead of 0.1.** Electron cannot do WebXR — `immersive-vr` is
 unavailable there and no flag changes it, the XR device service never spawns, and
 it is upstream and long-standing ([electron/electron#35011](https://github.com/electron/electron/issues/35011)).
@@ -50,12 +51,22 @@ already branches ELECTRON/BROWSER on every method, and its core read is
 HTTP Range. So this is a third backend behind an existing abstraction, not an
 engine change.
 
-- **Done when:** a module loads in Chrome from a cold start over HTTP with no read
-  failure, at a load time not grossly worse than Electron's.
-- **Shape:** add an HTTP backend to `src/utility/GameFileSystem.ts`; serve the game
-  directory from the dev server. No picker, no permission prompt, cacheable.
-- **Watch for:** `readdir` has no HTTP equivalent — it needs a generated manifest
-  or a directory-listing endpoint. `scripts/generate-manifest.js` already exists.
+- **Accepted evidence (2026-08-11):** a fresh installed-Chrome profile authenticated
+  through `/launch`, initialized the TSL profile from the real KOTOR II install,
+  rendered `101PER`, wrote a complete save under the isolated user-data mount,
+  loaded that save back into `101PER`, and transitioned to `102PER`.
+- **Implementation:** `GameFileSystem` delegates HTTP work to a typed backend;
+  the loopback-only service exposes ranged, read-only retail assets plus a
+  separate writable `%LOCALAPPDATA%\Kotor2VR` mount. The service uses an
+  HttpOnly per-launch cookie, strict origin/path checks, and typed directory
+  listings. Root webpack bundles are authenticated and served with `no-store`.
+- **Observed timing:** the diagnostic `101PER` load took about 82 seconds and the
+  save reload/`102PER` transition about 62 seconds each. These are baselines,
+  not performance passes; matched Electron timing has not been recorded.
+- **Known follow-up:** the transition-time selectable-player exception is fixed;
+  the final Chrome save-load and `101PER` → `102PER` run recorded zero console
+  errors. `GetRandomDestination` remains a repeated traced TSL NWScript warning
+  and must be implemented or proven non-blocking before performance capture.
 - **Why it gates 0.1:** if assets cannot be read reliably in a browser, a stereo
   frametime number tells us nothing.
 
@@ -63,11 +74,11 @@ engine change.
 Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
 - **Harness:** `spike/stereo-perf` branch. `src/vr/VRSpike.ts` and
   `src/vr/PerfSampler.ts`; run procedure and results table in
-  [PHASE0-STEREO-SPIKE.md](PHASE0-STEREO-SPIKE.md). Electron 41 does
-  expose WebXR, so this stays out of the browser build.
+  [PHASE0-STEREO-SPIKE.md](PHASE0-STEREO-SPIKE.md). Electron does not expose
+  immersive WebXR; this measurement runs in Chrome/Edge through VDXR.
 - **Already learned:** `EffectComposer` blits to the default framebuffer, not the
   XR one, so all post-processing must be re-plumbed for XR. Budget for it in Phase 2.
-- **Blocked on 0.0.** WebXR itself works on this rig now (VDXR runtime, Chrome and
+- **Next after 0.0.** WebXR itself works on this rig now (VDXR runtime, Chrome and
   Edge both report `immersive-vr: true`), but not in Electron — see 0.0.
 - **Done when:** frametimes captured in stereo on the 3060 over Virtual Desktop, at
   rest and while walking, with a written verdict on whether 72/90 Hz is reachable.

@@ -30,6 +30,8 @@ describe('asset service', () => {
     fs.writeFileSync(path.join(assetRoot, 'chitin.key'), Buffer.from('0123456789'));
     fs.writeFileSync(path.join(assetRoot, 'data', 'models.bif'), Buffer.from('abcdefghij'));
     fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), '<!doctype html><title>KOTOR II VR</title>');
+    fs.writeFileSync(path.join(distRoot, 'KotOR.js'), 'globalThis.KotOR = {};');
+    fs.writeFileSync(path.join(distRoot, 'three.min.js'), 'globalThis.THREE = {};');
   });
 
   afterEach(async () => {
@@ -82,7 +84,7 @@ describe('asset service', () => {
     });
 
     expect(launch.status).toBe(302);
-    expect(launch.headers.get('location')).toBe('/game/index.html?assets=/assets');
+    expect(launch.headers.get('location')).toBe('/game/index.html?key=tsl&assets=/assets');
     expect(sessionCookie).toContain('HttpOnly');
     expect(sessionCookie).toContain('SameSite=Strict');
     expect(sessionCookie).toContain('Path=/');
@@ -336,6 +338,24 @@ describe('asset service', () => {
     expect(authorized.status).toBe(200);
     expect(await authorized.text()).toContain('KOTOR II VR');
     expect(unauthorized.status).toBe(401);
+  });
+
+  test('serves authenticated root-level runtime bundles from dist read-only', async () => {
+    await start();
+
+    const engineBundle = await request('/KotOR.js');
+    const threeBundle = await request('/three.min.js');
+    const writeAttempt = await request('/KotOR.js', { method: 'PUT', body: 'changed' });
+    const unauthorized = await fetch(`${service?.baseUrl}/KotOR.js`);
+
+    expect(engineBundle.status).toBe(200);
+    expect(await engineBundle.text()).toBe('globalThis.KotOR = {};');
+    expect(engineBundle.headers.get('cache-control')).toBe('no-store');
+    expect(threeBundle.status).toBe(200);
+    expect(await threeBundle.text()).toBe('globalThis.THREE = {};');
+    expect(writeAttempt.status).toBe(405);
+    expect(unauthorized.status).toBe(401);
+    expect(fs.readFileSync(path.join(distRoot, 'KotOR.js'), 'utf8')).toBe('globalThis.KotOR = {};');
   });
 
   test('supports idempotent start and close, then restarts on the same service instance', async () => {

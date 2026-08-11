@@ -144,10 +144,14 @@ class AssetService {
     }
 
     if (requestUrl.pathname.startsWith('/game/')) {
-      return this.handleReadOnlyFile(request, response, requestUrl.pathname.slice(1), this.distRoot);
+      return this.handleReadOnlyFile(request, response, requestUrl.pathname.slice(1), this.distRoot, 'no-store');
     }
 
-    return sendError(response, 404, 'not found');
+    // Webpack emits shared runtime bundles (for example KotOR.js and
+    // three.min.js) at the dist root while the game HTML lives under /game.
+    // Keep the fallback authenticated and read-only, and apply the same
+    // containment checks as every other static file route.
+    return this.handleReadOnlyFile(request, response, requestUrl.pathname.slice(1), this.distRoot, 'no-store');
   }
 
   handleLaunch(request, response, requestUrl) {
@@ -159,7 +163,7 @@ class AssetService {
 
     const encodedToken = encodeURIComponent(this.token);
     response.statusCode = 302;
-    response.setHeader('Location', '/game/index.html?assets=/assets');
+    response.setHeader('Location', '/game/index.html?key=tsl&assets=/assets');
     response.setHeader(
       'Set-Cookie',
       `${SESSION_COOKIE_NAME}=${encodedToken}; HttpOnly; SameSite=Strict; Path=/`
@@ -194,7 +198,7 @@ class AssetService {
     return sendJson(response, 200, { isDirectory: true, entries });
   }
 
-  handleReadOnlyFile(request, response, rawRelativePath, root) {
+  handleReadOnlyFile(request, response, rawRelativePath, root, cacheControl = 'private, max-age=3600') {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return sendMethodNotAllowed(response, ['GET', 'HEAD']);
     }
@@ -204,7 +208,7 @@ class AssetService {
     const resolved = resolveExistingPath(root, relative);
     if (!resolved) return sendError(response, 404, 'not found');
     if (resolved.stats.isDirectory()) return sendError(response, 404, 'not found');
-    return sendFile(request, response, resolved.path, resolved.stats, this.onBeforeFileOpen);
+    return sendFile(request, response, resolved.path, resolved.stats, this.onBeforeFileOpen, cacheControl);
   }
 
   async handleUserFile(request, response, rawRelativePath) {
@@ -492,7 +496,7 @@ function removeContainedUserPath(root, resolved) {
   }
 }
 
-function sendFile(request, response, filePath, validatedStats, onBeforeFileOpen) {
+function sendFile(request, response, filePath, validatedStats, onBeforeFileOpen, cacheControl = 'private, max-age=3600') {
   let fileDescriptor;
   let stream;
   try {
@@ -505,7 +509,7 @@ function sendFile(request, response, filePath, validatedStats, onBeforeFileOpen)
 
     const range = parseSingleRange(request.headers.range, openedStats.size);
     response.setHeader('Accept-Ranges', 'bytes');
-    response.setHeader('Cache-Control', 'private, max-age=3600');
+    response.setHeader('Cache-Control', cacheControl);
     response.setHeader('Content-Type', MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
 
     if (range) {
