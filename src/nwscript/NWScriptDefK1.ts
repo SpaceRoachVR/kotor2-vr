@@ -3145,7 +3145,7 @@ NWScriptDefK1.Actions = {
             plc.rotation.set(0, 0, args[2].getFacing());
 
             plc.loadModel().then( (model: OdysseyModel3D) => {
-              plc.loadWalkmesh(model.name).then((pwk: OdysseyWalkMesh) => {
+              plc.loadWalkmesh(model.name).then((pwk: OdysseyWalkMesh | undefined) => {
                 plc.model.userData.moduleObject = plc;
                 
                 model.hasCollision = true;
@@ -3154,11 +3154,11 @@ NWScriptDefK1.Actions = {
                 args[2].area.attachObject(plc);
 
                 try{
-                  if(pwk.mesh instanceof THREE.Object3D)
+                  if(pwk?.mesh instanceof THREE.Object3D) {
                     model.add(pwk.mesh);
-                    
-                  model.userData.walkmesh = pwk;
-                  GameState.walkmeshList.push(pwk.mesh);
+                    model.userData.walkmesh = pwk;
+                    GameState.walkmeshList.push(pwk.mesh);
+                  }
                 }catch(e){
                   console.error('Failed to add pwk', model.name, pwk);
                 }

@@ -668,7 +668,7 @@ export class ModulePlaceable extends ModuleObject {
     }
   }
 
-  async loadWalkmesh(resRef = ''): Promise<OdysseyWalkMesh> {
+  async loadWalkmesh(resRef = ''): Promise<OdysseyWalkMesh | undefined> {
     try{
       const buffer = await ResourceLoader.loadResource(ResourceTypes['pwk'], resRef);
       const walkmesh = new OdysseyWalkMesh(new BinaryReader(buffer));
@@ -679,13 +679,10 @@ export class ModulePlaceable extends ModuleObject {
 
       return walkmesh;
     }catch(e){
-      console.error(e);
-      const walkmesh = new OdysseyWalkMesh();
-      walkmesh.name = resRef;
-      walkmesh.moduleObject = this;
-      this.collisionManager.setWalkmesh(walkmesh);
-
-      return this.collisionManager.walkmesh;
+      // PWKs are optional. Several authored placeable models, including the
+      // prologue's p_kreiastunt body, intentionally have no collision mesh.
+      // Do not manufacture an empty walkmesh or report a missing retail asset.
+      return undefined;
     }
   }
 

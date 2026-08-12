@@ -1816,10 +1816,10 @@ export class ModuleArea extends ModuleObject {
       const model = await plc.loadModel();
       GameState.group.placeables.add( plc.container );
       const pwk = await plc.loadWalkmesh(model.name);
-      GameState.walkmeshList.push( pwk.mesh );
       plc.computeBoundingBox();
 
-      if(pwk.mesh instanceof THREE.Object3D){
+      if(pwk?.mesh instanceof THREE.Object3D){
+        GameState.walkmeshList.push(pwk.mesh);
         pwk.mat4.makeRotationFromEuler(plc.rotation);
         pwk.mat4.setPosition( plc.position.x, plc.position.y, plc.position.z + .01 );
         pwk.mesh.geometry.applyMatrix4(pwk.mat4);
