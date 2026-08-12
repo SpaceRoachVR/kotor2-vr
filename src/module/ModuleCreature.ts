@@ -24,6 +24,7 @@ import { TalentSpell } from "@/talents/TalentSpell";
 import { OdysseyModel3D, OdysseyObject3D } from "@/three/odyssey";
 import { OdysseyModel, OdysseyModelAnimation } from "@/odyssey";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
+import { CREATURE_EQUIPMENT_PERSISTENCE_SLOTS } from "@/module/creature/CreatureEquipmentPersistence";
 import { LIPObject } from "@/resource/LIPObject";
 import { Utility } from "@/utility/Utility";
 import { EngineMode } from "@/enums/engine/EngineMode";
@@ -4279,82 +4280,14 @@ export class ModuleCreature extends ModuleObject {
     //Equipment
     let equipItemList = gff.RootNode.addField( new GFFField(GFFDataType.LIST, 'Equip_ItemList') );
 
-    if(this.equipment.ARMOR){
-      let equipItem = this.equipment.ARMOR.save();
-      equipItem.setType(ModuleCreatureArmorSlot.ARMOR);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.ARMS){
-      let equipItem = this.equipment.ARMS.save();
-      equipItem.setType(ModuleCreatureArmorSlot.ARMS);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.BELT){
-      let equipItem = this.equipment.BELT.save();
-      equipItem.setType(ModuleCreatureArmorSlot.BELT);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.CLAW1){
-      let equipItem = this.equipment.CLAW1.save();
-      equipItem.setType(ModuleCreatureArmorSlot.CLAW1);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.CLAW2){
-      let equipItem = this.equipment.CLAW2.save();
-      equipItem.setType(ModuleCreatureArmorSlot.CLAW2);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.CLAW3){
-      let equipItem = this.equipment.CLAW3.save();
-      equipItem.setType(ModuleCreatureArmorSlot.CLAW3);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.HEAD){
-      let equipItem = this.equipment.HEAD.save();
-      equipItem.setType(ModuleCreatureArmorSlot.HEAD);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.HIDE){
-      let equipItem = this.equipment.HIDE.save();
-      equipItem.setType(ModuleCreatureArmorSlot.HIDE);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.IMPLANT){
-      let equipItem = this.equipment.IMPLANT.save();
-      equipItem.setType(ModuleCreatureArmorSlot.IMPLANT);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.LEFTARMBAND){
-      let equipItem = this.equipment.LEFTARMBAND.save();
-      equipItem.setType(ModuleCreatureArmorSlot.LEFTARMBAND);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.LEFTHAND){
-      let equipItem = this.equipment.LEFTHAND.save();
-      equipItem.setType(ModuleCreatureArmorSlot.LEFTHAND);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.RIGHTARMBAND){
-      let equipItem = this.equipment.RIGHTARMBAND.save();
-      equipItem.setType(ModuleCreatureArmorSlot.RIGHTARMBAND);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.RIGHTHAND){
-      let equipItem = this.equipment.RIGHTHAND.save();
-      equipItem.setType(ModuleCreatureArmorSlot.RIGHTHAND);
-      equipItemList.addChildStruct(equipItem)
+    for (const [equipmentKey, slot] of CREATURE_EQUIPMENT_PERSISTENCE_SLOTS) {
+      const item = this.equipment[equipmentKey];
+      if (!item) {
+        continue;
+      }
+      const itemStruct = item.save();
+      itemStruct.setType(slot);
+      equipItemList.addChildStruct(itemStruct);
     }
 
     gff.RootNode.addField( new GFFField(GFFDataType.DWORD, 'Experience') ).setValue(this.experience);
