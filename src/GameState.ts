@@ -42,7 +42,7 @@ import { FollowerCamera } from "@/engine/FollowerCamera";
 import { OdysseyShaderPass } from "@/shaders/pass/OdysseyShaderPass";
 import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
-import type { EngineFrameSource } from "@/vr/XRFrameCadence";
+import { EngineFrameSource, shouldProcessEngineFrame } from "@/vr/XRFrameCadence";
 
 //THREE.js imports
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer";
@@ -1116,6 +1116,10 @@ export class GameState implements EngineContext {
   }
 
   static RestoreEnginePlayMode(): void {
+    if (GameState.VideoManager.ownsMovieMode()) {
+      console.log('RestoreEnginePlayMode: deferred while movie playback owns engine mode');
+      return;
+    }
     if(GameState.module){
       if(GameState.module.area.miniGame){
         console.log('RestoreEnginePlayMode: MINIGAME');
@@ -1131,6 +1135,10 @@ export class GameState implements EngineContext {
   }
 
   static SetEngineMode(mode: EngineMode){
+    if (GameState.VideoManager.shouldDeferEngineModeChange(mode)) {
+      console.log('SetEngineMode: deferred while movie playback owns engine mode', mode);
+      return;
+    }
     if(GameState.Mode == mode){
       return;
     }
@@ -1235,7 +1243,9 @@ export class GameState implements EngineContext {
   static Update(timestamp: number = performance.now(), frameSource: EngineFrameSource = 'browser'){
 
     if(frameSource === 'browser') VRSpike.perf.recordBrowserCallback();
+    if(!shouldProcessEngineFrame(frameSource, VRSpike.isPresenting)) return;
     VRSpike.perf.recordEngineUpdate(frameSource, timestamp);
+    const simulationCpuStart = performance.now();
     GameState.scheduleNextFrame();
 
     GameState.forwardVector.set(0, 0, -1);
@@ -1304,7 +1314,13 @@ export class GameState implements EngineContext {
 
     AudioEngine.GetAudioEngine().update(delta, GameState.currentCamera.position, GameState.currentCamera.rotation, GameState.forwardVector);
 
+    const renderCpuStart = performance.now();
     GameState.Render(delta, timestamp);
+    const renderCpuEnd = performance.now();
+    VRSpike.perf.recordCpuFrame(
+      renderCpuStart - simulationCpuStart,
+      renderCpuEnd - renderCpuStart
+    );
 
     //NoClickTimer: Update
     if( ((GameState.Mode == EngineMode.MINIGAME || GameState.Mode == EngineMode.DIALOG) || (GameState.Mode == EngineMode.INGAME)) && GameState.State != EngineState.PAUSED){

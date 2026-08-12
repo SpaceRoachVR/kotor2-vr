@@ -1,7 +1,13 @@
 import * as THREE from "three";
 import { EngineFrameSource, XRFrameCadence, XRFrameCadenceReport } from "./XRFrameCadence";
 import { evaluateMemoryStability, MemoryStabilityResult } from "./MemoryStability";
-import { evaluateNative90Gate, Native90GateVerdict } from "./Native90Gate";
+import {
+  evaluateSustained50Gate,
+  SUSTAINED_VR_MINIMUM_FPS,
+  Sustained50GateVerdict,
+} from "./Sustained50Gate";
+
+const DEFAULT_XR_RUNTIME_HZ = 72;
 
 /**
  * Frametime and render-load sampler for the Phase 0.1 stereo perf spike.
@@ -30,6 +36,11 @@ export interface PerfWindowReport {
     p99: number;
     max: number;
   };
+  /** Main-thread CPU time split before and inside the renderer call. */
+  cpuMs: {
+    simulation: PerfPercentiles;
+    render: PerfPercentiles;
+  };
   /** Frames over the target budget, as a count and a share of the window. */
   overBudget: { budgetMs: number; frames: number; percent: number };
   /** THREE.WebGLRenderer.info at the end of the window. */
@@ -42,6 +53,14 @@ export interface PerfWindowReport {
   /** Stock WebXR does not expose compositor reprojection telemetry. */
   compositorTelemetry: 'unavailable' | 'not-applicable';
   world: PerfWorldReport | null;
+}
+
+export interface PerfPercentiles {
+  min: number;
+  p50: number;
+  p90: number;
+  p99: number;
+  max: number;
 }
 
 export interface PerfWorldSnapshot {
@@ -75,6 +94,18 @@ const round = (n: number, places = 2): number => {
   return Math.round(n * f) / f;
 };
 
+const summarize = (samples: number[]): PerfPercentiles => {
+  if (!samples.length) return { min: 0, p50: 0, p90: 0, p99: 0, max: 0 };
+  const sorted = [...samples].sort((a, b) => a - b);
+  return {
+    min: round(sorted[0]),
+    p50: round(percentile(sorted, 50)),
+    p90: round(percentile(sorted, 90)),
+    p99: round(percentile(sorted, 99)),
+    max: round(sorted[sorted.length - 1]),
+  };
+};
+
 export class PerfSampler {
   /**
    * Free-text tag for the current window. Set it from DevTools before a run:
@@ -82,8 +113,11 @@ export class PerfSampler {
    */
   label = 'unlabelled';
 
-  /** Locked continuation target: native 90 Hz on Quest 3 over VDXR. */
-  targetHz = 90;
+  /** User-approved continuation floor: sustained 50 FPS minimum. */
+  targetHz = SUSTAINED_VR_MINIMUM_FPS;
+
+  /** Actual refresh requested by the active XR runtime, used for cadence auditing. */
+  xrRuntimeHz = DEFAULT_XR_RUNTIME_HZ;
 
   /** Emit a report to the console every N seconds. 0 disables auto-reporting. */
   autoReportSec = 60;
@@ -93,6 +127,8 @@ export class PerfSampler {
 
   private renderer: THREE.WebGLRenderer | null = null;
   private frametimes: number[] = [];
+  private simulationCpuTimes: number[] = [];
+  private renderCpuTimes: number[] = [];
   private windowStart = 0;
   private lastFrame = 0;
   private running = false;
@@ -125,9 +161,11 @@ export class PerfSampler {
   start(label?: string): void {
     if (label) this.label = label;
     this.frametimes = [];
+    this.simulationCpuTimes = [];
+    this.renderCpuTimes = [];
     this.windowStart = this.now();
     this.lastFrame = this.windowStart;
-    this.cadence = new XRFrameCadence(this.targetHz);
+    this.cadence = new XRFrameCadence(this.xrRuntimeHz);
     this.cadence.start(this.windowStart);
     this.worldSamples = [];
     this.lastWorldSample = Number.NEGATIVE_INFINITY;
@@ -153,6 +191,15 @@ export class PerfSampler {
   recordXRRender(timestamp: number): void {
     if (!this.running) return;
     this.cadence?.recordXRRender(timestamp);
+  }
+
+  /** Record paired main-thread timings for one completed engine frame. */
+  recordCpuFrame(simulationMs: number, renderMs: number): void {
+    if (!this.running) return;
+    if (!Number.isFinite(simulationMs) || simulationMs < 0) return;
+    if (!Number.isFinite(renderMs) || renderMs < 0) return;
+    this.simulationCpuTimes.push(simulationMs);
+    this.renderCpuTimes.push(renderMs);
   }
 
   /** Call once per frame, before rendering. */
@@ -206,6 +253,10 @@ export class PerfSampler {
         p99: round(percentile(sorted, 99)),
         max: round(sorted[sorted.length - 1]),
       },
+      cpuMs: {
+        simulation: summarize(this.simulationCpuTimes),
+        render: summarize(this.renderCpuTimes),
+      },
       overBudget: {
         budgetMs: round(budgetMs),
         frames: over,
@@ -235,6 +286,7 @@ export class PerfSampler {
       `[PerfSampler] ${rpt.label} | ${rpt.presenting ? 'STEREO' : 'mono'} | ` +
         `${rpt.fps} fps | p50 ${rpt.frametimeMs.p50}ms p90 ${rpt.frametimeMs.p90}ms ` +
         `p99 ${rpt.frametimeMs.p99}ms | ` +
+        `CPU p90 sim ${rpt.cpuMs.simulation.p90}ms render ${rpt.cpuMs.render.p90}ms | ` +
         `${rpt.overBudget.percent}% over ${rpt.overBudget.budgetMs}ms | ` +
         `${rpt.render.calls} calls, ${rpt.render.triangles} tris | ` +
         `heap ${rpt.jsHeapMB}MB | ` +
@@ -271,7 +323,7 @@ export class PerfSampler {
    * walking window, post-warm memory windows, and separately observed
    * compositor evidence. Returns null until a walking report exists.
    */
-  native90Verdict(nativeCompositorEvidence: boolean | null): Native90GateVerdict | null {
+  sustained50Verdict(): Sustained50GateVerdict | null {
     const walkingReport = [...this.reports]
       .reverse()
       .find(
@@ -279,10 +331,9 @@ export class PerfSampler {
       );
     if (!walkingReport) return null;
 
-    return evaluateNative90Gate({
+    return evaluateSustained50Gate({
       report: walkingReport,
       memoryStability: this.memoryStability().status,
-      nativeCompositorEvidence,
     });
   }
 

@@ -167,23 +167,30 @@ export class VRSpike {
       VRSpike.session = session;
       session.addEventListener('end', VRSpike.onSessionEnd);
 
+      // Register directly with WebXR before the manager starts its session
+      // animation source. WebGLRenderer.setAnimationLoop() also starts a
+      // window.requestAnimationFrame loop; calling it after setSession() would
+      // drive the engine from both schedulers and render outside XRFrame.
+      VRSpike.renderer.xr.setAnimationLoop(VRSpike.frame);
       await VRSpike.renderer.xr.setSession(session as any);
 
       const btn = document.getElementById('vr-spike-button');
       if (btn) btn.textContent = 'Exit VR (spike)';
 
-      // Headset rate, not monitor rate. Native 90 Hz on VDXR is the locked
-      // continuation gate; read the runtime value and use 90 only as fallback.
+      // Keep the runtime cadence separate from the sustained-50 acceptance budget.
+      // A faster runtime must not silently tighten the project's minimum gate.
       const rate = (session as any).frameRate;
-      VRSpike.perf.targetHz = rate || 90;
+      VRSpike.perf.xrRuntimeHz = rate || VRSpike.perf.targetHz;
 
-      // WebXR now drives the loop. GameState.scheduleNextFrame() steps aside.
-      VRSpike.renderer.setAnimationLoop(VRSpike.frame);
       VRSpike.perf.beginXRSession();
       VRSpike.perf.start('stereo');
-      console.log(`[VRSpike] presenting at target ${VRSpike.perf.targetHz} Hz`);
+      console.log(
+        `[VRSpike] presenting at runtime ${VRSpike.perf.xrRuntimeHz} Hz; ` +
+        `acceptance minimum ${VRSpike.perf.targetHz} Hz`
+      );
     } catch (e) {
       console.error('[VRSpike] requestSession failed:', e);
+      VRSpike.renderer.xr.setAnimationLoop(null);
       VRSpike.session = null;
     }
   }
@@ -200,7 +207,7 @@ export class VRSpike {
     if (btn) btn.textContent = 'Enter VR (spike)';
 
     // Hand the loop back to requestAnimationFrame, exactly once.
-    VRSpike.renderer?.setAnimationLoop(null);
+    VRSpike.renderer?.xr.setAnimationLoop(null);
     const update = VRSpike.hooks?.update;
     if (update) requestAnimationFrame((timestamp) => update(timestamp, 'browser'));
     console.log('[VRSpike] session ended, back on requestAnimationFrame');
@@ -212,6 +219,7 @@ export class VRSpike {
    */
   private static frame = (timestamp: number, frame?: XRFrame): void => {
     VRSpike.perf.recordXRCallback(timestamp, !!frame);
+    if (!frame) return;
     VRSpike.hooks?.update(timestamp, 'xr');
   };
 

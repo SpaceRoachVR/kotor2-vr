@@ -58,6 +58,26 @@ describe('PerfSampler XR cadence integration', () => {
     expect(report?.compositorTelemetry).toBe('unavailable');
   });
 
+  test('reports validated simulation and render CPU percentiles independently', () => {
+    let now = 1500;
+    const sampler = new PerfSampler(() => now);
+    sampler.autoReportSec = 0;
+    sampler.attach(createRenderer() as any);
+    sampler.start('stereo-rest');
+
+    sampler.recordCpuFrame(4, 6);
+    sampler.recordCpuFrame(2, 8);
+    sampler.recordCpuFrame(Number.NaN, 3);
+    sampler.recordCpuFrame(-1, 3);
+    now += 12;
+    sampler.tick();
+
+    expect(sampler.report()?.cpuMs).toEqual({
+      simulation: { min: 2, p50: 2, p90: 4, p99: 4, max: 4 },
+      render: { min: 6, p50: 6, p90: 8, p99: 8, max: 8 },
+    });
+  });
+
   test('reports a rogue browser-driven update during an XR window', () => {
     let now = 2000;
     const sampler = new PerfSampler(() => now);
@@ -139,35 +159,39 @@ describe('PerfSampler XR cadence integration', () => {
     });
   });
 
-  test('exposes one native-90 verdict assembled from walking and memory windows', () => {
+  test('exposes one sustained-50 verdict assembled from walking and memory windows', () => {
     const sampler = new PerfSampler(() => 0);
     const report = {
       runId: 1,
       label: 'stereo-walking',
       presenting: true,
-      frames: 5400,
+      frames: 4320,
       durationSec: 60,
-      fps: 90,
-      frametimeMs: { min: 8, p50: 10, p90: 11, p99: 16, max: 20 },
-      overBudget: { budgetMs: 11.11, frames: 100, percent: 1.85 },
+      fps: 72,
+      frametimeMs: { min: 8, p50: 12, p90: 13, p99: 20, max: 21 },
+      cpuMs: {
+        simulation: { min: 1, p50: 2, p90: 3, p99: 4, max: 5 },
+        render: { min: 1, p50: 2, p90: 3, p99: 4, max: 5 },
+      },
+      overBudget: { budgetMs: 13.89, frames: 100, percent: 2.31 },
       render: { calls: 10, triangles: 20, points: 0, lines: 0 },
       memory: { geometries: 20, textures: 30, programs: 4 },
       jsHeapMB: 100,
       xrCadence: {
-        targetHz: 90,
-        budgetMs: 11.11,
+        targetHz: 72,
+        budgetMs: 13.89,
         durationSec: 60,
         callbacks: {
-          xr: 5400,
+          xr: 4320,
           browser: 0,
-          withXRFrame: 5400,
+          withXRFrame: 4320,
           duplicateTimestamps: 0,
           estimatedMissed: 0,
           perFrameMismatches: 0,
         },
-        engineUpdates: { xr: 5400, browser: 0, total: 5400 },
-        renders: 5400,
-        callbackIntervalMs: { min: 10, p50: 11.11, p90: 11.11, p99: 12, max: 12 },
+        engineUpdates: { xr: 4320, browser: 0, total: 4320 },
+        renders: 4320,
+        callbackIntervalMs: { min: 13, p50: 13.89, p90: 13.89, p99: 14, max: 14 },
         integrity: {
           oneUpdatePerXRFrame: true,
           oneRenderPerXRFrame: true,
@@ -202,13 +226,13 @@ describe('PerfSampler XR cadence integration', () => {
       });
     }
 
-    expect(sampler.native90Verdict(true)?.status).toBe('pass');
+    expect(sampler.sustained50Verdict()?.status).toBe('pass');
     expect(sampler.memoryStability().status).toBe('pass');
   });
 
-  test('does not manufacture a native-90 verdict without a walking report', () => {
+  test('does not manufacture a sustained-50 verdict without a walking report', () => {
     const sampler = new PerfSampler(() => 0);
-    expect(sampler.native90Verdict(true)).toBeNull();
+    expect(sampler.sustained50Verdict()).toBeNull();
   });
 
   test('does not reuse memory evidence from an earlier XR session', () => {
@@ -222,6 +246,10 @@ describe('PerfSampler XR cadence integration', () => {
       durationSec: 150,
       fps: 90,
       frametimeMs: { min: 8, p50: 10, p90: 11, p99: 16, max: 20 },
+      cpuMs: {
+        simulation: { min: 1, p50: 2, p90: 3, p99: 4, max: 5 },
+        render: { min: 1, p50: 2, p90: 3, p99: 4, max: 5 },
+      },
       overBudget: { budgetMs: 11.11, frames: 0, percent: 0 },
       render: { calls: 10, triangles: 20, points: 0, lines: 0 },
       memory: { geometries: 20, textures: 30, programs: 4 },

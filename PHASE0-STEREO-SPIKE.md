@@ -151,7 +151,7 @@ a fresh profile.
    what matters is the *ratio*, not the absolute figure.
 4. Click **Enter VR (spike)**. The sampler starts a `stereo` window automatically
    and picks up the headset's real refresh rate as the budget. Confirm the
-   runtime reports 90 Hz before interpreting the native-90 gate.
+   runtime reports its actual refresh separately from the sustained-50 gate.
 5. In DevTools, relabel as you go:
    ```js
    VRSpike.perf.start('stereo-rest')      // stand still, one minute
@@ -171,8 +171,7 @@ a fresh profile.
    combined verdict:
 
    ```js
-   VRSpike.perf.native90Verdict(true) // only after VDXR proves native delivery
-   VRSpike.perf.native90Verdict(null) // compositor evidence not yet available
+   VRSpike.perf.sustained50Verdict()
    ```
 
 Each report carries frametime min/p50/p90/p99/max, the share of frames over
@@ -195,7 +194,8 @@ evidence showing native rather than sustained synthetic delivery.
 VRSpike.yawOffset      // radians, if facing is rotated
 VRSpike.eyeHeight      // 1.75 m spike default; production uses calibration
 VRSpike.followCamera   // false = stand still and look around
-VRSpike.perf.targetHz  // must resolve to 90 for the locked continuation gate
+VRSpike.perf.targetHz     // locked acceptance minimum: 72
+VRSpike.perf.xrRuntimeHz  // actual XR runtime refresh, audited separately
 ```
 
 The Z-up conversion is `rig.rotation.x = π/2` — KOTOR's world is Z-up, WebXR poses
@@ -254,27 +254,57 @@ run sampled the creature position every 500 ms:
 | remediated stereo rest | 9.3 | 16.6 | 16.8 | 25.7 | 32.88% | 11.11 ms (90 Hz) | 384 | 55,470 | 823.1 |
 | remediated stereo walking, path-confirmed | 9.3 | 16.6 | 16.8 | 31.8 | 23.62% | 13.89 ms (72 Hz gate) | 386 | 55,790 | 799.8 |
 
-The user-observed result is a clear functional and perceptual success. Under the
-predeclared numeric rule, however, walking p90 exceeds 13.89 ms and the
-over-budget share exceeds 5%, so Phase 0 cannot be marked passed. The sampler
-also counted about 95 engine updates per second while Virtual Desktop reported
-90 Hz. That cadence mismatch must be instrumented at the XR-frame boundary
-before treating the current callback percentiles as a definitive engine-pivot
-signal. See `PHASE0-ENGINE-PIVOT-REPORT.md`.
+The user-observed result was a clear functional and perceptual success, but the
+sampler also counted about 95 engine updates per second while Virtual Desktop
+reported 90 Hz. The corrected-cadence section below supersedes those timing
+percentiles and resolves that mismatch before issuing the final no-go.
 
-| Window | fps | p50 | p90 | p99 | % over budget | draw calls | triangles | heap MB |
-|---|---|---|---|---|---|---|---|---|
-| mono-rest | | | | | | | | |
-| mono-walking | | | | | | | | |
-| stereo-rest | | | | | | | | |
-| stereo-walking | | | | | | | | |
-| stereo +10 min | | | | | | | | |
+### Corrected cadence and final Phase 0 result (2026-08-11)
 
-**Go / no-go on 72 Hz:**
+The earlier remediated headset percentiles above are not valid performance
+evidence. THREE r149 was driving the engine from both its desktop animation loop
+and its XR animation loop, which also caused framebuffer errors outside XR frame
+callbacks. The corrected implementation owns one XR loop, rejects callbacks
+without an `XRFrame`, and blocks an already-queued browser callback from updating
+or rendering while XR is presenting.
 
-**Go / no-go on 90 Hz:**
+The user confirmed that corrected `101PER` remained visible and head-tracked.
+The clean reports reconciled exactly one XR update and render per accepted frame:
 
-Notes:
+| Window | FPS | p50 | p90 | p99 | % over 13.89 ms | CPU p90 sim | CPU p90 render | draw calls | triangles | heap MB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| mono-rest | 60.00 | - | 18.2 | 19.9 | monitor-limited | - | - | - | - | 802.9 |
+| mono-walking | 59.94 | - | 18.2 | 20.2 | monitor-limited | - | - | - | - | 815.4 |
+| corrected XR full resolution | 31.96 | 29.5 | 32.7 | 63.1 | 99.95% | 0.3 | 4.7 | 192 | 42,606 | 853.8 |
+| bounded 0.7 scale + foveation | 33.01 | 28.6 | 32.0 | 62.7 | 99.95% | 0.3 | 4.1 | 164 | 38,624 | 855.4 |
+
+Clean partial XR windows reached 34.32-34.62 FPS with p90 31.4-31.7 ms.
+Reducing the XR render target to 0.7 and applying maximum foveation did not
+materially change the ceiling, so that quality reduction was reverted.
+
+**Historical native-72 result: NO-GO.** The corrected KOTOR result was roughly
+32-35 FPS. This remains useful diagnostic evidence and has not been relabeled.
+The later user-approved continuation floor is sustained 50 FPS, with 72 Hz as a
+stretch target.
+
+### Isolated renderer comparison (2026-08-11)
+
+A standalone benchmark removed KOTOR and then THREE from the stack. All three
+cases ran for 60 seconds in the same Chrome/VDXR session at a 4224 × 2304 XR
+target:
+
+| Case | FPS | p50 | p90 | p99 | GPU p90 |
+|---|---:|---:|---:|---:|---:|
+| Raw WebXR/WebGL2 | 34.96 | 27.8 | 31.1 | 46.7 | 0.06 |
+| THREE r149 | 34.70 | 27.8 | 31.0 | 46.9 | 0.09 |
+| THREE r185 | 34.72 | 27.8 | 31.0 | 46.8 | 0.09 |
+
+Raw WebXR therefore reproduces the half-rate ceiling with negligible GPU work.
+After Synchronous Spacewarp was disabled, the final 60-second raw-WebXR run
+delivered 51.82 FPS, p90 31.0 ms, p99 46.1 ms, and passed the revised sustained-
+50 gate. The result does not support a THREE upgrade or Odyssey renderer rewrite
+as the current performance fix. Phase 1 may proceed; the full VR stack must
+repeat the sustained-50 gate before the Peragus VR candidate.
 
 ## What this deliberately does not do
 

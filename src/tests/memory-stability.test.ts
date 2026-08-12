@@ -14,6 +14,10 @@ const memoryReport = (
   durationSec: 150,
   fps: 90,
   frametimeMs: { min: 8, p50: 10, p90: 11, p99: 14, max: 20 },
+  cpuMs: {
+    simulation: { min: 1, p50: 2, p90: 3, p99: 4, max: 5 },
+    render: { min: 1, p50: 2, p90: 3, p99: 4, max: 5 },
+  },
   overBudget: { budgetMs: 11.11, frames: 0, percent: 0 },
   render: { calls: 300, triangles: 50000, points: 0, lines: 0 },
   memory: { geometries, textures, programs: 10 },

@@ -4,12 +4,12 @@ Phase plan for turning [KotOR.js](https://github.com/KobaltBlu/KotOR.js) into a
 room-scale VR mod for KOTOR II. Design rationale lives in [DESIGN.md](DESIGN.md);
 engine knowledge lives in `.claude/skills/kotor2-vr/`.
 
-**Status: Phase 0 decision gate.** The Phase 0.0 browser filesystem gate passed
-on 2026-08-11. The bounded memory remediation fixed the black/unresponsive XR
-failure and the user reports the 90 Hz headset image looks excellent. The old
-sampler measured about 95 engine updates per second, however, so its frametime
-verdict is not trusted. The XR-boundary cadence audit is implemented and awaits
-one fresh headset run. Feature work remains paused pending that result.
+**Status: Phase 0 passed under the user-approved sustained-50 floor; Phase 1 is
+active.** With Virtual Desktop Synchronous Spacewarp disabled and the headset at
+72 Hz, a corrected 60-second raw-WebXR window delivered 51.82 FPS at a 4224 ×
+2304 XR target, p90 31.0 ms, p99 46.1 ms, and a PASS verdict. Runtime cadence is
+still reported separately and 72 Hz remains a stretch target. The older
+31.96-34.96 FPS VDXR evidence remains retained rather than rewritten.
 
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
@@ -77,7 +77,7 @@ engine change.
 - **Why it gates 0.1:** if assets cannot be read reliably in a browser, a stereo
   frametime number tells us nothing.
 
-### 0.1 — Stereo perf spike on `101PER` ◐ harness landed, awaiting measurement
+### 0.1 — Stereo perf spike on `101PER` ✅ measured; sustained-50 runtime gate passed
 Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
 - **Harness:** `spike/stereo-perf` branch. `src/vr/VRSpike.ts` and
   `src/vr/PerfSampler.ts`; run procedure and results table in
@@ -102,13 +102,28 @@ Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
   through four `101PER` rooms during a 182-sample traced window. The trace ended
   at p90 16.6 ms, p99 16.8 ms, and 800 MB heap. That is a strong perceptual and
   functional success, but p90 remains above the written 13.89 ms floor.
+- **Corrected cadence result:** the duplicate desktop/XR animation sources and
+  one queued browser callback were fixed. Clean headset reports are trustworthy
+  but deliver only 31.96-34.62 FPS, with p90 31.4-32.7 ms. CPU p90 is 0.3 ms for
+  simulation and 4.1-4.8 ms for renderer submission.
+- **Bounded optimization:** 0.7 XR framebuffer scale plus maximum foveation
+  produced 33.01 FPS and p90 32.0 ms, no material improvement, so it was reverted.
 - **Decision report:** [PHASE0-ENGINE-PIVOT-REPORT.md](PHASE0-ENGINE-PIVOT-REPORT.md)
-  records the evidence conflict, current no-go under the numeric gate, and the
-  recommended measurement-integrity audit before changing engines.
+  compares THREE restructuring, worker/offscreen, alternate WebXR engines, and
+  native OpenXR, and defines the recommended isolated renderer benchmark.
+- **Renderer isolation (2026-08-11):** raw WebXR reached 34.96 FPS, THREE r149
+  34.70 FPS, and THREE r185 34.72 FPS at an identical 4224 × 2304 XR target.
+  GPU p90 was 0.06-0.09 ms. The THREE upgrade path is rejected as the current
+  remedy; VDXR half-rate/spacewarp and Edge/SteamVR comparisons are next.
+- **Accepted continuation result (2026-08-11):** after Synchronous Spacewarp was
+  disabled and 72 Hz selected, the final corrected raw-WebXR window delivered
+  51.82 FPS for 60 seconds, p90 31.0 ms, p99 46.1 ms, and GPU p90 0.05 ms. The
+  user revised the hard floor to sustained 50 FPS and directed Phase 1 to begin.
 - **Next after 0.0.** WebXR itself works on this rig now (VDXR runtime, Chrome and
   Edge both report `immersive-vr: true`), but not in Electron — see 0.0.
-- **Done when:** frametimes captured in stereo on the 3060 over Virtual Desktop, at
-  rest and while walking, with a written verdict on whether 72/90 Hz is reachable.
+- **Done when:** frametimes are captured in stereo on the 3060 over Virtual
+  Desktop, the isolated runtime path sustains at least 50 FPS for 60 seconds,
+  and the written decision records runtime cadence separately.
 - **Also record:** draw calls per frame, triangles, and renderer memory at load and
   after ten minutes.
 - **Files:** renderer setup in `GameState.ts`, a throwaway spike branch is fine.
@@ -118,10 +133,11 @@ Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
   contain missed-frame estimates, visible/total rooms, and a 500 ms sampled
   player path. Stock WebXR does not expose compositor reprojection telemetry;
   native delivery must be corroborated with runtime evidence.
-- **Locked continuation gate:** native 90 Hz on Quest 3/VDXR/RTX 3060: walking
-  p90 at most 11.11 ms, p99 below 16.67 ms, no more than 5% over budget,
-  trustworthy one-update/one-render cadence, active room culling, stable memory,
-  and explicit evidence that delivery is not sustained synthetic/reprojected.
+- **Locked continuation gate:** sustained 50 FPS minimum on Quest 3/VDXR/RTX
+  3060, p90 at most 33.33 ms, p99 below 50 ms, trustworthy one-update/one-render
+  ownership for delivered XR frames, active room culling, and stable memory.
+  Runtime refresh and missed runtime frames remain diagnostic evidence rather
+  than blockers. The complete VR stack must rerun this floor before release.
 
 ### 0.2 — Confirm `.vis` room culling applies in stereo
 `ModuleArea.updateRoomVisibility()` drives room culling. If it is not applied per-eye

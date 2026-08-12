@@ -17,7 +17,9 @@
     "electron:icon": "npx --yes electron-icon-builder --input=src/assets/icon-256.png --output=src/assets/icons",
     "generate-manifest": "node scripts/generate-manifest.js",
     "typedoc": "typedoc --out ./wiki ./src/KotOR.ts",
-    "test": "jest --verbose --coverage --no-cache ./src/tests"
+    "test": "jest --verbose --coverage --no-cache ./src/tests",
+    "xr:benchmark:build": "node tools/xr-benchmark/build.js",
+    "xr:benchmark:check": "tsc --noEmit -p tools/xr-benchmark/tsconfig.json && node tools/xr-benchmark/build.js"
   },
   "author": "KobaltBlu",
   "license": "GPL-3.0",
@@ -71,6 +73,7 @@
     "scss-loader": "^0.0.1",
     "stream-browserify": "^3.0.0",
     "style-loader": "^4.0.0",
+    "three-current": "npm:three@^0.185.1",
     "ts-loader": "^9.5.4",
     "tsc-watch": "^7.2.0",
     "typedoc": "^0.28.15",

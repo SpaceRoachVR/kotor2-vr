@@ -1,60 +1,58 @@
 import type { PerfWindowReport } from './PerfSampler';
 
-export type Native90CheckName =
-  | 'targetRate'
+export const SUSTAINED_VR_MINIMUM_FPS = 50;
+export const SUSTAINED_VR_FRAME_BUDGET_MS = 20;
+export const SUSTAINED_VR_P90_LIMIT_MS = 33.33;
+export const SUSTAINED_VR_P99_LIMIT_MS = 50;
+
+export type Sustained50CheckName =
+  | 'minimumFps'
   | 'cadenceIntegrity'
   | 'walkingWindow'
   | 'pathConfirmed'
-  | 'noMissedCallbacks'
   | 'p90'
   | 'p99'
-  | 'overBudget'
   | 'roomCulling'
-  | 'memoryStability'
-  | 'nativeCompositor';
+  | 'memoryStability';
 
-export interface Native90GateEvidence {
+export interface Sustained50GateEvidence {
   report: PerfWindowReport;
   memoryStability: 'pass' | 'fail' | 'incomplete';
-  /** Null when the runtime/tooling did not expose native-vs-synthetic evidence. */
-  nativeCompositorEvidence: boolean | null;
 }
 
-export interface Native90GateVerdict {
+export interface Sustained50GateVerdict {
   status: 'pass' | 'fail' | 'incomplete';
-  checks: Record<Native90CheckName, boolean | null>;
-  failed: Native90CheckName[];
-  missing: Native90CheckName[];
+  checks: Record<Sustained50CheckName, boolean | null>;
+  failed: Sustained50CheckName[];
+  missing: Sustained50CheckName[];
 }
 
-const CHECK_ORDER: Native90CheckName[] = [
-  'targetRate',
+const CHECK_ORDER: Sustained50CheckName[] = [
+  'minimumFps',
   'cadenceIntegrity',
   'walkingWindow',
   'pathConfirmed',
-  'noMissedCallbacks',
   'p90',
   'p99',
-  'overBudget',
   'roomCulling',
   'memoryStability',
-  'nativeCompositor',
 ];
 
-/** Evaluate the locked Quest 3/VDXR/RTX 3060 native-90 continuation gate. */
-export function evaluateNative90Gate(evidence: Native90GateEvidence): Native90GateVerdict {
+/** Evaluate the user-approved sustained-50 continuation gate. */
+export function evaluateSustained50Gate(
+  evidence: Sustained50GateEvidence
+): Sustained50GateVerdict {
   const { report } = evidence;
   const cadence = report.xrCadence;
   const world = report.world;
-  const checks: Record<Native90CheckName, boolean | null> = {
-    targetRate:
-      report.presenting &&
-      cadence !== null &&
-      Math.abs(cadence.targetHz - 90) <= 0.5 &&
-      Math.abs(report.overBudget.budgetMs - 1000 / 90) <= 0.01,
+  const minimumWalkingFrames = Math.ceil(SUSTAINED_VR_MINIMUM_FPS * 60);
+  const checks: Record<Sustained50CheckName, boolean | null> = {
+    minimumFps: report.presenting && report.fps >= SUSTAINED_VR_MINIMUM_FPS,
     cadenceIntegrity: cadence?.integrity.trustworthy ?? false,
     walkingWindow:
-      report.label === 'stereo-walking' && report.durationSec >= 60 && report.frames >= 5130,
+      report.label === 'stereo-walking' &&
+      report.durationSec >= 60 &&
+      report.frames >= minimumWalkingFrames,
     pathConfirmed:
       world !== null &&
       world.module?.toUpperCase() === '101PER' &&
@@ -62,10 +60,8 @@ export function evaluateNative90Gate(evidence: Native90GateEvidence): Native90Ga
       world.path.distanceMetres >= 10 &&
       world.path.maxDisplacementMetres >= 2 &&
       world.path.roomsTraversed.length >= 2,
-    noMissedCallbacks: cadence !== null && cadence.callbacks.estimatedMissed === 0,
-    p90: report.frametimeMs.p90 <= 11.11,
-    p99: report.frametimeMs.p99 < 16.67,
-    overBudget: report.overBudget.percent <= 5,
+    p90: report.frametimeMs.p90 <= SUSTAINED_VR_P90_LIMIT_MS,
+    p99: report.frametimeMs.p99 < SUSTAINED_VR_P99_LIMIT_MS,
     roomCulling:
       world !== null &&
       world.roomsTotal > 0 &&
@@ -73,7 +69,6 @@ export function evaluateNative90Gate(evidence: Native90GateEvidence): Native90Ga
       world.roomsVisible < world.roomsTotal,
     memoryStability:
       evidence.memoryStability === 'incomplete' ? null : evidence.memoryStability === 'pass',
-    nativeCompositor: evidence.nativeCompositorEvidence,
   };
 
   const failed = CHECK_ORDER.filter((name) => checks[name] === false);

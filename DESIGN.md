@@ -16,7 +16,11 @@ The core bet: **the d20 ruleset and VR embodiment are not in conflict.** The 200
 Desktop/VDXR, with SteamVR/OpenXR profiles also required for v1. A standalone
 Quest port is not in scope.
 
-**Performance floor:** native 90 Hz on an RTX 3060 and Quest 3 over Virtual Desktop/VDXR (wireless). This is deliberately a strict mid-range target: the GPU pays for both the game and video encode, and sustained compositor reprojection is not the primary pass condition.
+**Performance floor:** sustained 50 FPS minimum on an RTX 3060 and Quest 3 over
+Virtual Desktop/VDXR (wireless), with 72 Hz retained as the stretch target. The
+continuation gate allows uneven runtime delivery up to p90 33.33 ms and p99 below
+50 ms. This is a user-approved comfort tradeoff; the GPU still pays for both the
+game and video encode.
 
 ---
 
@@ -117,7 +121,7 @@ Peragus is the first shippable thing. It's self-contained, geometry-light, and t
 
 **Modules:** `101PER`–`107PER` (7), `151HAR`–`154HAR` (4), `001EBO`–`007EBO` (7 files, one shared interior layout).
 
-**What Peragus proves:** locomotion and walkmesh coupling, the GUI re-host, dialogue with fades, geometry fixing at scale, party basics, and whether the engine can hold 90Hz in stereo on a 3060.
+**What Peragus proves:** locomotion and walkmesh coupling, the GUI re-host, dialogue with fades, geometry fixing at scale, party basics, and whether the complete VR stack can sustain the user-approved 50 FPS floor on a 3060. The runtime remains configured for 72 Hz as a stretch target.
 
 **What Peragus cannot prove:** the lightsaber. The Exile spends the entire prologue with a vibroblade and a blaster — you don't get a saber until after Telos. Saber combat, the swing tempo, and deflection get developed in a throwaway "dojo" test module that never ships, and won't be validated in a public build until the slice after this one.
 

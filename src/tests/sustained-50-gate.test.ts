@@ -1,34 +1,38 @@
 import { describe, expect, test } from '@jest/globals';
-import { evaluateNative90Gate } from '@/vr/Native90Gate';
+import { evaluateSustained50Gate } from '@/vr/Sustained50Gate';
 import type { PerfWindowReport } from '@/vr/PerfSampler';
 
 const passingReport = (): PerfWindowReport => ({
   runId: 1,
   label: 'stereo-walking',
   presenting: true,
-  frames: 5400,
+  frames: 3119,
   durationSec: 60,
-  fps: 90,
-  frametimeMs: { min: 8, p50: 10, p90: 11.11, p99: 16.66, max: 20 },
-  overBudget: { budgetMs: 11.11, frames: 270, percent: 5 },
+  fps: 51.98,
+  frametimeMs: { min: 5.8, p50: 15.8, p90: 31, p99: 46.4, max: 84.5 },
+  cpuMs: {
+    simulation: { min: 1, p50: 2, p90: 3, p99: 4, max: 5 },
+    render: { min: 1, p50: 2, p90: 3, p99: 4, max: 5 },
+  },
+  overBudget: { budgetMs: 20, frames: 747, percent: 23.95 },
   render: { calls: 380, triangles: 56000, points: 0, lines: 0 },
   memory: { geometries: 100, textures: 200, programs: 20 },
   jsHeapMB: 800,
   xrCadence: {
-    targetHz: 90,
-    budgetMs: 11.11,
+    targetHz: 72,
+    budgetMs: 13.89,
     durationSec: 60,
     callbacks: {
-      xr: 5400,
+      xr: 3119,
       browser: 0,
-      withXRFrame: 5400,
+      withXRFrame: 3119,
       duplicateTimestamps: 0,
-      estimatedMissed: 0,
+      estimatedMissed: 747,
       perFrameMismatches: 0,
     },
-    engineUpdates: { xr: 5400, browser: 0, total: 5400 },
-    renders: 5400,
-    callbackIntervalMs: { min: 10, p50: 11.11, p90: 11.11, p99: 11.11, max: 12 },
+    engineUpdates: { xr: 3119, browser: 0, total: 3119 },
+    renders: 3119,
+    callbackIntervalMs: { min: 5.8, p50: 15.8, p90: 31, p99: 46.4, max: 84.5 },
     integrity: {
       oneUpdatePerXRFrame: true,
       oneRenderPerXRFrame: true,
@@ -51,68 +55,51 @@ const passingReport = (): PerfWindowReport => ({
   },
 });
 
-describe('native 90 Hz gate', () => {
-  test('passes only when timing, cadence, culling, memory, and compositor evidence pass', () => {
-    const verdict = evaluateNative90Gate({
+describe('sustained 50 FPS gate', () => {
+  test('passes an uneven but sustained over-50 FPS window with valid cadence ownership', () => {
+    const verdict = evaluateSustained50Gate({
       report: passingReport(),
       memoryStability: 'pass',
-      nativeCompositorEvidence: true,
     });
 
     expect(verdict.status).toBe('pass');
     expect(verdict.checks).toEqual({
-      targetRate: true,
+      minimumFps: true,
       cadenceIntegrity: true,
       walkingWindow: true,
       pathConfirmed: true,
-      noMissedCallbacks: true,
       p90: true,
       p99: true,
-      overBudget: true,
       roomCulling: true,
       memoryStability: true,
-      nativeCompositor: true,
     });
   });
 
-  test('fails when a known native-frame requirement fails', () => {
+  test('fails when average delivery or cadence ownership fails', () => {
     const report = passingReport();
-    report.frametimeMs.p90 = 11.12;
+    report.fps = 49.99;
     report.xrCadence!.integrity.trustworthy = false;
 
-    const verdict = evaluateNative90Gate({
+    const verdict = evaluateSustained50Gate({
       report,
       memoryStability: 'pass',
-      nativeCompositorEvidence: true,
     });
 
     expect(verdict.status).toBe('fail');
-    expect(verdict.failed).toEqual(['cadenceIntegrity', 'p90']);
-  });
-
-  test('remains incomplete when stock WebXR cannot prove compositor behavior', () => {
-    const verdict = evaluateNative90Gate({
-      report: passingReport(),
-      memoryStability: 'pass',
-      nativeCompositorEvidence: null,
-    });
-
-    expect(verdict.status).toBe('incomplete');
-    expect(verdict.missing).toEqual(['nativeCompositor']);
+    expect(verdict.failed).toEqual(['minimumFps', 'cadenceIntegrity']);
   });
 
   test('fails a short stationary window even when scalar timing values pass', () => {
     const report = passingReport();
     report.durationSec = 1;
-    report.frames = 90;
+    report.frames = 52;
     report.world!.path.samples = 2;
     report.world!.path.distanceMetres = 0;
     report.world!.path.maxDisplacementMetres = 0;
 
-    const verdict = evaluateNative90Gate({
+    const verdict = evaluateSustained50Gate({
       report,
       memoryStability: 'pass',
-      nativeCompositorEvidence: true,
     });
 
     expect(verdict.status).toBe('fail');

@@ -1,7 +1,14 @@
-import { XRFrameCadence } from "@/vr/XRFrameCadence";
+import { shouldProcessEngineFrame, XRFrameCadence } from "@/vr/XRFrameCadence";
 import { describe, expect, test } from '@jest/globals';
 
 describe('XRFrameCadence', () => {
+  test('rejects stale desktop callbacks while XR owns the engine loop', () => {
+    expect(shouldProcessEngineFrame('browser', true)).toBe(false);
+    expect(shouldProcessEngineFrame('xr', true)).toBe(true);
+    expect(shouldProcessEngineFrame('browser', false)).toBe(true);
+    expect(shouldProcessEngineFrame('xr', false)).toBe(false);
+  });
+
   test('reports one update and render for each unique XR frame', () => {
     const cadence = new XRFrameCadence(90);
 

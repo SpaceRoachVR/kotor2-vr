@@ -1,5 +1,17 @@
 export type EngineFrameSource = 'browser' | 'xr';
 
+/**
+ * Only the scheduler that currently owns presentation may advance the engine.
+ * A browser rAF already queued before XR session startup can still fire once;
+ * rejecting it prevents a duplicate simulation and an out-of-frame XR draw.
+ */
+export function shouldProcessEngineFrame(
+  source: EngineFrameSource,
+  xrPresenting: boolean
+): boolean {
+  return xrPresenting ? source === 'xr' : source === 'browser';
+}
+
 export interface XRFrameCadenceReport {
   targetHz: number;
   budgetMs: number;
