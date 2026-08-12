@@ -12,6 +12,7 @@ import { PerceptionMask } from "@/enums/engine/PerceptionMask";
 import { GameState } from "@/GameState";
 import { ModuleTriggerType } from "@/enums/module/ModuleTriggerType";
 import { hasSelectablePlayerPosition } from "@/managers/selectable/SelectablePlayer";
+import { ensureObjectReference } from "@/managers/object-reference/EnsureObjectReference";
 
 const UPDATE_SELECTABLE_OBJECTS_INTERVAL = 0.5;
 
@@ -53,6 +54,21 @@ export class ModuleObjectManager {
 
   static GetNextObjectId(){
     return this.COUNT++;
+  }
+
+  /**
+   * Return a stable DWORD identity for an object reference used by an action.
+   * Inventory objects can outlive module registration resets, and imported
+   * objects can carry an ID already owned by another instance. Never overwrite
+   * that existing identity: allocate and register a fresh ID instead.
+   */
+  static EnsureObjectReference(object?: ModuleObject): number {
+    return ensureObjectReference({
+      object,
+      objectList: this.ObjectList,
+      nextId: () => this.GetNextObjectId(),
+      invalidId: ModuleObjectConstant.OBJECT_INVALID,
+    });
   }
 
   static ResetPlayerId(){
