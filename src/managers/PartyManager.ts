@@ -829,6 +829,7 @@ export class PartyManager {
         model.hasCollision = true;
         
         GameState.group.party.add( partyMember.container );
+        partyMember.getCurrentRoom();
         oldPC.destroy();
         partyMember.onSpawn();
       });
@@ -985,11 +986,13 @@ export class PartyManager {
         model.hasCollision = true;
         GameState.group.party.add( partyMember.container );
 
+        partyMember.getCurrentRoom();
         partyMember.onSpawn();
       }else{
         const spawn = PartyManager.GetSpawnLocation(currentSlot);
         currentSlot.position.copy(spawn.position);
         currentSlot.setFacing(spawn.getFacing(), true);
+        currentSlot.getCurrentRoom();
         //currentSlot.quaternion.setFromAxisAngle(new THREE.Vector3(0,0,1), -Math.atan2(0, 0));
       }
     }catch(e){
