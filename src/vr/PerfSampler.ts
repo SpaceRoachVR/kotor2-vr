@@ -1,4 +1,7 @@
 import * as THREE from "three";
+import { EngineFrameSource, XRFrameCadence, XRFrameCadenceReport } from "./XRFrameCadence";
+import { evaluateMemoryStability, MemoryStabilityResult } from "./MemoryStability";
+import { evaluateNative90Gate, Native90GateVerdict } from "./Native90Gate";
 
 /**
  * Frametime and render-load sampler for the Phase 0.1 stereo perf spike.
@@ -13,6 +16,8 @@ import * as THREE from "three";
  */
 
 export interface PerfWindowReport {
+  /** Monotonic identifier preventing evidence reuse across XR sessions. */
+  runId: number;
   label: string;
   presenting: boolean;
   frames: number;
@@ -32,6 +37,31 @@ export interface PerfWindowReport {
   memory: { geometries: number; textures: number; programs: number };
   /** V8 heap, in MB. Present in Electron/Chromium only. */
   jsHeapMB: number | null;
+  /** Independent reconciliation of XR callbacks, engine updates, and renders. */
+  xrCadence: XRFrameCadenceReport | null;
+  /** Stock WebXR does not expose compositor reprojection telemetry. */
+  compositorTelemetry: 'unavailable' | 'not-applicable';
+  world: PerfWorldReport | null;
+}
+
+export interface PerfWorldSnapshot {
+  module: string | null;
+  position: { x: number; y: number; z: number } | null;
+  room: string | null;
+  roomsVisible: number;
+  roomsTotal: number;
+}
+
+export interface PerfWorldReport {
+  module: string | null;
+  roomsVisible: number;
+  roomsTotal: number;
+  path: {
+    samples: number;
+    distanceMetres: number;
+    maxDisplacementMetres: number;
+    roomsTraversed: string[];
+  };
 }
 
 const percentile = (sorted: number[], p: number): number => {
@@ -52,11 +82,11 @@ export class PerfSampler {
    */
   label = 'unlabelled';
 
-  /** Target refresh. 72 for Quest over Virtual Desktop, 90 for a wired HMD. */
-  targetHz = 72;
+  /** Locked continuation target: native 90 Hz on Quest 3 over VDXR. */
+  targetHz = 90;
 
   /** Emit a report to the console every N seconds. 0 disables auto-reporting. */
-  autoReportSec = 30;
+  autoReportSec = 60;
 
   /** Every report produced this session, for a single dump at the end. */
   readonly reports: PerfWindowReport[] = [];
@@ -66,25 +96,70 @@ export class PerfSampler {
   private windowStart = 0;
   private lastFrame = 0;
   private running = false;
+  private cadence: XRFrameCadence | null = null;
+  private worldContext: (() => PerfWorldSnapshot) | null = null;
+  private worldSamples: Array<{
+    position: { x: number; y: number; z: number };
+    room: string | null;
+  }> = [];
+  private lastWorldSample = Number.NEGATIVE_INFINITY;
+  private currentRunId = 0;
+
+  constructor(private readonly now: () => number = () => performance.now()) {}
 
   attach(renderer: THREE.WebGLRenderer): void {
     this.renderer = renderer;
+  }
+
+  attachWorldContext(provider: () => PerfWorldSnapshot): void {
+    this.worldContext = provider;
+  }
+
+  /** Begin a distinct headset evidence run without discarding historical reports. */
+  beginXRSession(): number {
+    this.currentRunId++;
+    return this.currentRunId;
   }
 
   /** Discard the current window and start a fresh one. */
   start(label?: string): void {
     if (label) this.label = label;
     this.frametimes = [];
-    this.windowStart = performance.now();
+    this.windowStart = this.now();
     this.lastFrame = this.windowStart;
+    this.cadence = new XRFrameCadence(this.targetHz);
+    this.cadence.start(this.windowStart);
+    this.worldSamples = [];
+    this.lastWorldSample = Number.NEGATIVE_INFINITY;
     this.running = true;
     console.log(`[PerfSampler] window '${this.label}' started`);
+  }
+
+  recordXRCallback(timestamp: number, hasXRFrame: boolean): void {
+    if (!this.running) return;
+    this.cadence?.recordXRCallback(timestamp, hasXRFrame);
+  }
+
+  recordBrowserCallback(): void {
+    if (!this.running) return;
+    this.cadence?.recordBrowserCallback();
+  }
+
+  recordEngineUpdate(source: EngineFrameSource, timestamp: number): void {
+    if (!this.running) return;
+    this.cadence?.recordEngineUpdate(source, timestamp);
+  }
+
+  recordXRRender(timestamp: number): void {
+    if (!this.running) return;
+    this.cadence?.recordXRRender(timestamp);
   }
 
   /** Call once per frame, before rendering. */
   tick(): void {
     if (!this.running) return;
-    const now = performance.now();
+    const now = this.now();
+    this.sampleWorld(now);
     const dt = now - this.lastFrame;
     this.lastFrame = now;
 
@@ -108,14 +183,17 @@ export class PerfSampler {
     }
 
     const sorted = [...this.frametimes].sort((a, b) => a - b);
-    const durationSec = (performance.now() - this.windowStart) / 1000;
+    const reportTimestamp = this.now();
+    const durationSec = (reportTimestamp - this.windowStart) / 1000;
     const budgetMs = 1000 / this.targetHz;
     const over = sorted.filter((t) => t > budgetMs).length;
 
     const info = this.renderer.info;
     const heap = (performance as any).memory?.usedJSHeapSize ?? null;
+    const world = this.buildWorldReport();
 
     const rpt: PerfWindowReport = {
+      runId: this.currentRunId,
       label: this.label,
       presenting: !!this.renderer.xr?.isPresenting,
       frames: sorted.length,
@@ -145,15 +223,22 @@ export class PerfSampler {
         programs: info.programs?.length ?? 0,
       },
       jsHeapMB: heap === null ? null : round(heap / 1048576, 1),
+      xrCadence: this.renderer.xr?.isPresenting && this.cadence
+        ? this.cadence.report(reportTimestamp)
+        : null,
+      compositorTelemetry: this.renderer.xr?.isPresenting ? 'unavailable' : 'not-applicable',
+      world,
     };
 
     this.reports.push(rpt);
     console.log(
       `[PerfSampler] ${rpt.label} | ${rpt.presenting ? 'STEREO' : 'mono'} | ` +
-        `${rpt.fps} fps | p50 ${rpt.frametimeMs.p50}ms p99 ${rpt.frametimeMs.p99}ms | ` +
+        `${rpt.fps} fps | p50 ${rpt.frametimeMs.p50}ms p90 ${rpt.frametimeMs.p90}ms ` +
+        `p99 ${rpt.frametimeMs.p99}ms | ` +
         `${rpt.overBudget.percent}% over ${rpt.overBudget.budgetMs}ms | ` +
         `${rpt.render.calls} calls, ${rpt.render.triangles} tris | ` +
-        `heap ${rpt.jsHeapMB}MB`,
+        `heap ${rpt.jsHeapMB}MB | ` +
+        `cadence ${rpt.xrCadence?.integrity.trustworthy ? 'trustworthy' : 'not proven'}`,
       rpt
     );
     return rpt;
@@ -171,4 +256,77 @@ export class PerfSampler {
     console.log(json);
     return json;
   }
+
+  /** Evaluate the labelled post-warm memory windows captured this session. */
+  memoryStability(label = 'stereo-10min'): MemoryStabilityResult {
+    return evaluateMemoryStability(
+      this.reports.filter(
+        (report) => report.runId === this.currentRunId && report.label === label
+      )
+    );
+  }
+
+  /**
+   * Assemble the locked continuation-gate verdict from this session's latest
+   * walking window, post-warm memory windows, and separately observed
+   * compositor evidence. Returns null until a walking report exists.
+   */
+  native90Verdict(nativeCompositorEvidence: boolean | null): Native90GateVerdict | null {
+    const walkingReport = [...this.reports]
+      .reverse()
+      .find(
+        (report) => report.runId === this.currentRunId && report.label === 'stereo-walking'
+      );
+    if (!walkingReport) return null;
+
+    return evaluateNative90Gate({
+      report: walkingReport,
+      memoryStability: this.memoryStability().status,
+      nativeCompositorEvidence,
+    });
+  }
+
+  private sampleWorld(timestamp: number): void {
+    if (!this.worldContext || timestamp - this.lastWorldSample < 500) return;
+    const snapshot = this.worldContext();
+    if (!snapshot.position) return;
+    const { x, y, z } = snapshot.position;
+    if (![x, y, z].every(Number.isFinite)) return;
+
+    this.worldSamples.push({ position: { x, y, z }, room: snapshot.room });
+    this.lastWorldSample = timestamp;
+  }
+
+  private buildWorldReport(): PerfWorldReport | null {
+    if (!this.worldContext) return null;
+    const snapshot = this.worldContext();
+    let distanceMetres = 0;
+    let maxDisplacementMetres = 0;
+    const roomsTraversed: string[] = [];
+    const first = this.worldSamples[0]?.position;
+
+    for (let index = 0; index < this.worldSamples.length; index++) {
+      const sample = this.worldSamples[index];
+      if (sample.room && !roomsTraversed.includes(sample.room)) roomsTraversed.push(sample.room);
+      if (index > 0) distanceMetres += distance(sample.position, this.worldSamples[index - 1].position);
+      if (first) maxDisplacementMetres = Math.max(maxDisplacementMetres, distance(sample.position, first));
+    }
+
+    return {
+      module: snapshot.module,
+      roomsVisible: snapshot.roomsVisible,
+      roomsTotal: snapshot.roomsTotal,
+      path: {
+        samples: this.worldSamples.length,
+        distanceMetres: round(distanceMetres),
+        maxDisplacementMetres: round(maxDisplacementMetres),
+        roomsTraversed,
+      },
+    };
+  }
 }
+
+const distance = (
+  left: { x: number; y: number; z: number },
+  right: { x: number; y: number; z: number }
+): number => Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);

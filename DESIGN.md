@@ -12,9 +12,11 @@ KOTOR II is a turn-based d20 RPG with a floating third-person camera. This proje
 
 The core bet: **the d20 ruleset and VR embodiment are not in conflict.** The 2004 engine already runs a three-second combat round with an attack queue. In VR that round timer stops being an invisible accounting detail and becomes a *rhythm you can feel*. Your character sheet becomes something you hold in your hand.
 
-**Target platform:** SteamVR. A Meta Quest 3 standalone port is a possible future, not a current goal.
+**Target platform:** Windows desktop WebXR, primarily Quest 3 over Virtual
+Desktop/VDXR, with SteamVR/OpenXR profiles also required for v1. A standalone
+Quest port is not in scope.
 
-**Performance floor:** RTX 3060, Quest 3 over Virtual Desktop (wireless). This is deliberately a mid-range target — the mod should run on the hardware most people actually own, and wireless streaming is the honest test because the GPU pays for both the game and the video encode.
+**Performance floor:** native 90 Hz on an RTX 3060 and Quest 3 over Virtual Desktop/VDXR (wireless). This is deliberately a strict mid-range target: the GPU pays for both the game and video encode, and sustained compositor reprojection is not the primary pass condition.
 
 ---
 
@@ -68,7 +70,9 @@ Smooth locomotion and smooth turn are the defaults. Teleport, snap turn, and vig
 
 ### The player and the party
 
-Fixed canonical eye height, so hand-fixed level geometry has one target to be correct against.
+Humanoids use calibrated, avatar-relative eye height with small clamped scale and
+offset adjustments. T3-M4 uses a bespoke stabilized waist-height chassis view;
+tracked space is not aggressively scaled to droid proportions.
 
 **Full party swap, anywhere**, as in the original. This is expensive — every companion needs a VR rig, hand meshes, and an eye-height offset — and it's accepted as a cost. T3-M4 is genuinely bespoke: no arms, waist-height eyeline, radial-only input. Swapping is fade-to-black plus reorient.
 
@@ -84,7 +88,10 @@ Order-issuing stays, via the radial.
 
 ### Dialogue and cutscenes
 
-**Dialogue keeps the engine's camera cuts, with a fade to black between each one.** KOTOR II is roughly 60% conversation by playtime — routing all of it through a theater screen would turn the game into a visual novel with walking segments, and cutting the camera without a fade is nauseating. Fades preserve the original framing and direction while making the cuts survivable.
+**Dialogue defaults to a curved theater surface** showing the engine-authored
+camera, with reply and skill-check controls below it. A stabilized in-world mode
+is optional and fades between discontinuous camera cuts. The tracked head is
+never directly driven by an authored camera.
 
 **Pre-rendered movies reproject onto a curved theater screen.**
 

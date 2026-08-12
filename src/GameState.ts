@@ -42,6 +42,7 @@ import { FollowerCamera } from "@/engine/FollowerCamera";
 import { OdysseyShaderPass } from "@/shaders/pass/OdysseyShaderPass";
 import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
+import type { EngineFrameSource } from "@/vr/XRFrameCadence";
 
 //THREE.js imports
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer";
@@ -738,9 +739,21 @@ export class GameState implements EngineContext {
      * on it. If there is no WebXR runtime it logs and does nothing.
      */
     VRSpike.install(GameState.renderer, GameState.scene, {
-      update: () => GameState.Update(),
+      update: (timestamp, source) => GameState.Update(timestamp, source),
       getPlayerPosition: () => GameState.getCurrentPlayer()?.position ?? null,
       getFacing: () => FollowerCamera.facing,
+      getWorldContext: () => {
+        const area = GameState.module?.area;
+        const player = GameState.getCurrentPlayer();
+        const rooms = area?.rooms ?? [];
+        return {
+          module: GameState.module?.filename ?? area?.name ?? null,
+          position: player?.position ?? null,
+          room: player?.room?.roomName ?? null,
+          roomsVisible: rooms.filter((room) => !!room.model?.visible).length,
+          roomsTotal: rooms.length,
+        };
+      },
     });
 
     /**
@@ -1219,10 +1232,11 @@ export class GameState implements EngineContext {
     requestAnimationFrame( GameState.Update );
   }
 
-  static Update(){
+  static Update(timestamp: number = performance.now(), frameSource: EngineFrameSource = 'browser'){
 
+    if(frameSource === 'browser') VRSpike.perf.recordBrowserCallback();
+    VRSpike.perf.recordEngineUpdate(frameSource, timestamp);
     GameState.scheduleNextFrame();
-    VRSpike.perf.tick();
 
     GameState.forwardVector.set(0, 0, -1);
 
@@ -1290,7 +1304,7 @@ export class GameState implements EngineContext {
 
     AudioEngine.GetAudioEngine().update(delta, GameState.currentCamera.position, GameState.currentCamera.rotation, GameState.forwardVector);
 
-    GameState.Render(delta);
+    GameState.Render(delta, timestamp);
 
     //NoClickTimer: Update
     if( ((GameState.Mode == EngineMode.MINIGAME || GameState.Mode == EngineMode.DIALOG) || (GameState.Mode == EngineMode.INGAME)) && GameState.State != EngineState.PAUSED){
@@ -1304,6 +1318,9 @@ export class GameState implements EngineContext {
 
     GameState.stats.update();
     GameState.processEventListener('afterRender', [delta]);
+    // Roll performance windows only after the current XR frame has rendered,
+    // otherwise the render is incorrectly credited to the following window.
+    VRSpike.perf.tick();
   }
 
   static UpdateMovie(delta: number = 0){
@@ -1463,13 +1480,13 @@ export class GameState implements EngineContext {
     GameState.processEventListener('afterRender', [delta]);
   }
 
-  static Render(delta: number = 0){
+  static Render(delta: number = 0, frameTimestamp: number = performance.now()){
     /**
      * EffectComposer draws into its own render targets and blits to the default
      * framebuffer, which is not the one XR presents. Bypass it while presenting.
      */
     if(VRSpike.isPresenting){
-      VRSpike.render(GameState.currentCamera);
+      VRSpike.render(GameState.currentCamera, frameTimestamp);
       return;
     }
 

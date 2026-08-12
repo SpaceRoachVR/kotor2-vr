@@ -150,30 +150,52 @@ a fresh profile.
    loop of the level for a minute. The stereo numbers mean nothing without this —
    what matters is the *ratio*, not the absolute figure.
 4. Click **Enter VR (spike)**. The sampler starts a `stereo` window automatically
-   and picks up the headset's real refresh rate as the budget.
+   and picks up the headset's real refresh rate as the budget. Confirm the
+   runtime reports 90 Hz before interpreting the native-90 gate.
 5. In DevTools, relabel as you go:
    ```js
-   VRSpike.perf.label = 'stereo-rest'      // stand still, one minute
-   VRSpike.perf.label = 'stereo-walking'   // walk the same loop, one minute
+   VRSpike.perf.start('stereo-rest')      // stand still, one minute
+   VRSpike.perf.start('stereo-walking')   // walk the same loop, one minute
    ```
-6. Leave it running ten minutes, then:
+6. Start a post-warm ten-minute window, leave it running, then dump everything:
    ```js
-   VRSpike.perf.report()
+   VRSpike.perf.start('stereo-10min')
+   // leave running for at least ten minutes; 60-second reports are automatic
+   VRSpike.perf.memoryStability()
    VRSpike.perf.dump()      // JSON for every window this session
+   ```
+
+   Auto-reporting remains enabled during `stereo-10min`, producing enough
+   post-warm samples for the memory evaluator. After the walking and memory
+   windows are present, record compositor evidence separately and request the
+   combined verdict:
+
+   ```js
+   VRSpike.perf.native90Verdict(true) // only after VDXR proves native delivery
+   VRSpike.perf.native90Verdict(null) // compositor evidence not yet available
    ```
 
 Each report carries frametime min/p50/p90/p99/max, the share of frames over
 budget, `renderer.info` draw calls and triangles, geometry/texture/program counts,
-and JS heap in MB. **Percentiles, not averages** — a mean hides exactly the spikes
-that a wearer feels.
+JS heap in MB, XR callback/update/render reconciliation, missed-frame estimates,
+visible/total room counts, and a 500 ms player-position trace with accumulated
+distance, maximum displacement, and rooms traversed. **Percentiles, not
+averages** — a mean hides exactly the spikes that a wearer feels.
+
+The cadence report must say `trustworthy: true`: every unique `XRFrame` has one
+XR-sourced engine update and one XR render on that exact timestamp, no
+browser-sourced update occurs in the window, no callback is inferred missed,
+and every callback carries an `XRFrame` object. Stock WebXR reports
+compositor telemetry as unavailable; capture separate VDXR/Virtual Desktop
+evidence showing native rather than sustained synthetic delivery.
 
 ### Tunables, all live in DevTools, no rebuild
 
 ```js
 VRSpike.yawOffset      // radians, if facing is rotated
-VRSpike.eyeHeight      // 1.75 m, fixed and canonical by design decision
+VRSpike.eyeHeight      // 1.75 m spike default; production uses calibration
 VRSpike.followCamera   // false = stand still and look around
-VRSpike.perf.targetHz  // 72 for Virtual Desktop, 90 wired
+VRSpike.perf.targetHz  // must resolve to 90 for the locked continuation gate
 ```
 
 The Z-up conversion is `rig.rotation.x = π/2` — KOTOR's world is Z-up, WebXR poses

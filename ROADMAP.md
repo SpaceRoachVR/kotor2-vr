@@ -6,9 +6,10 @@ engine knowledge lives in `.claude/skills/kotor2-vr/`.
 
 **Status: Phase 0 decision gate.** The Phase 0.0 browser filesystem gate passed
 on 2026-08-11. The bounded memory remediation fixed the black/unresponsive XR
-failure and the user reports the 90 Hz headset image looks excellent, but the
-instrumented walking window still misses the written native-frame threshold.
-Feature work remains paused pending the measured pivot decision.
+failure and the user reports the 90 Hz headset image looks excellent. The old
+sampler measured about 95 engine updates per second, however, so its frametime
+verdict is not trusted. The XR-boundary cadence audit is implemented and awaits
+one fresh headset run. Feature work remains paused pending that result.
 
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
@@ -112,6 +113,15 @@ Enable WebXR on the THREE renderer, load Peragus `101PER`, and measure.
   after ten minutes.
 - **Files:** renderer setup in `GameState.ts`, a throwaway spike branch is fine.
 - **Note:** this is a measurement, not the VR layer. Do not build the rig here.
+- **Cadence audit harness:** XR timestamps now independently reconcile XR
+  callbacks, browser callbacks, engine updates, and XR renders. Reports also
+  contain missed-frame estimates, visible/total rooms, and a 500 ms sampled
+  player path. Stock WebXR does not expose compositor reprojection telemetry;
+  native delivery must be corroborated with runtime evidence.
+- **Locked continuation gate:** native 90 Hz on Quest 3/VDXR/RTX 3060: walking
+  p90 at most 11.11 ms, p99 below 16.67 ms, no more than 5% over budget,
+  trustworthy one-update/one-render cadence, active room culling, stable memory,
+  and explicit evidence that delivery is not sustained synthetic/reprojected.
 
 ### 0.2 — Confirm `.vis` room culling applies in stereo
 `ModuleArea.updateRoomVisibility()` drives room culling. If it is not applied per-eye

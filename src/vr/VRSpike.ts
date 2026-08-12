@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { PerfSampler } from "./PerfSampler";
+import { PerfSampler, PerfWorldSnapshot } from "./PerfSampler";
+import type { EngineFrameSource } from "./XRFrameCadence";
 
 /**
  * Phase 0.1 — stereo perf spike.
@@ -30,11 +31,13 @@ import { PerfSampler } from "./PerfSampler";
  */
 export interface VRSpikeHooks {
   /** The engine's frame function. WebXR calls this instead of rAF. */
-  update: () => void;
+  update: (timestamp: number, source: EngineFrameSource) => void;
   /** Player's feet in world space, or null before a module is loaded. */
   getPlayerPosition: () => THREE.Vector3 | null;
   /** Follower camera facing, radians about the world Z axis. */
   getFacing: () => number;
+  /** Current module, culling, and player path context for device evidence. */
+  getWorldContext: () => PerfWorldSnapshot;
 }
 
 export class VRSpike {
@@ -84,6 +87,7 @@ export class VRSpike {
     VRSpike.scene = scene;
     VRSpike.hooks = hooks;
     VRSpike.perf.attach(renderer);
+    VRSpike.perf.attachWorldContext(hooks.getWorldContext);
 
     (window as any).VRSpike = VRSpike;
 
@@ -168,13 +172,14 @@ export class VRSpike {
       const btn = document.getElementById('vr-spike-button');
       if (btn) btn.textContent = 'Exit VR (spike)';
 
-      // Headset rate, not monitor rate. 72 over Virtual Desktop is the floor
-      // the roadmap cares about; read the real value back where available.
+      // Headset rate, not monitor rate. Native 90 Hz on VDXR is the locked
+      // continuation gate; read the runtime value and use 90 only as fallback.
       const rate = (session as any).frameRate;
-      VRSpike.perf.targetHz = rate || 72;
+      VRSpike.perf.targetHz = rate || 90;
 
       // WebXR now drives the loop. GameState.scheduleNextFrame() steps aside.
       VRSpike.renderer.setAnimationLoop(VRSpike.frame);
+      VRSpike.perf.beginXRSession();
       VRSpike.perf.start('stereo');
       console.log(`[VRSpike] presenting at target ${VRSpike.perf.targetHz} Hz`);
     } catch (e) {
@@ -197,7 +202,7 @@ export class VRSpike {
     // Hand the loop back to requestAnimationFrame, exactly once.
     VRSpike.renderer?.setAnimationLoop(null);
     const update = VRSpike.hooks?.update;
-    if (update) requestAnimationFrame(() => update());
+    if (update) requestAnimationFrame((timestamp) => update(timestamp, 'browser'));
     console.log('[VRSpike] session ended, back on requestAnimationFrame');
   };
 
@@ -205,8 +210,9 @@ export class VRSpike {
    * The frame callback while presenting. WebXR supplies its own timestamp; the
    * engine reads THREE.Clock instead and does not need it.
    */
-  private static frame = (): void => {
-    VRSpike.hooks?.update();
+  private static frame = (timestamp: number, frame?: XRFrame): void => {
+    VRSpike.perf.recordXRCallback(timestamp, !!frame);
+    VRSpike.hooks?.update(timestamp, 'xr');
   };
 
   static get isPresenting(): boolean {
@@ -221,7 +227,7 @@ export class VRSpike {
    * and submit the world only. The GUI scene is deliberately absent: it is an
    * orthographic overlay with no meaning in a headset, and Phase 4 replaces it.
    */
-  static render(worldCamera: THREE.Camera): void {
+  static render(worldCamera: THREE.Camera, frameTimestamp: number): void {
     const renderer = VRSpike.renderer;
     const scene = VRSpike.scene;
     if (!renderer || !scene || !VRSpike.camera || !VRSpike.rig) return;
@@ -233,6 +239,7 @@ export class VRSpike {
     const prevAutoClear = renderer.autoClear;
     renderer.autoClear = true;
     renderer.render(scene, VRSpike.camera);
+    VRSpike.perf.recordXRRender(frameTimestamp);
     renderer.autoClear = prevAutoClear;
   }
 
