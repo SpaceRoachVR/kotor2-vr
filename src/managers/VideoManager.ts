@@ -4,6 +4,7 @@ import { GameState } from "@/GameState";
 import { EngineMode } from "@/enums/engine/EngineMode";
 import { AudioEngine } from "@/audio/AudioEngine";
 import { YUVFrame } from "@/video/binkvideo";
+import { MovieModeOwnership } from "@/managers/video/MovieModeOwnership";
 
 /**
  * VideoManager class.
@@ -40,7 +41,8 @@ export class VideoManager {
   private static videoWidth: number = 640;
   private static videoHeight: number = 480;
 
-  private static onQueueComplete?: Function;
+  private static onQueueComplete?: () => void | Promise<void>;
+  private static readonly modeOwnership = new MovieModeOwnership();
 
   /**
    * Create or reuse Three.js planes and material. Call before adding to scene.
@@ -207,7 +209,12 @@ export class VideoManager {
    * @param onComplete - Optional callback when video completes
    * @returns Promise that resolves when video starts playing
    */
-  static async playMovie(movieName: string, skipable: boolean = false, onComplete?: Function): Promise<void> {
+  static async playMovie(
+    movieName: string,
+    skipable: boolean = false,
+    onComplete?: () => void,
+    restoreEngineModeOnComplete: boolean = true,
+  ): Promise<void> {
     console.log('VideoManager.playMovie: Playing movie:', movieName);
     if (this.isPlaying) {
       console.warn('VideoManager.playMovie: A video is already playing');
@@ -238,7 +245,7 @@ export class VideoManager {
       this.isPlaying = true;
       await this.bikObject.play(movieName, () => {
         this.isPlaying = false;
-        this.onMovieComplete();
+        this.onMovieComplete(restoreEngineModeOnComplete);
         if (typeof onComplete === 'function') {
           onComplete();
         }
@@ -249,7 +256,7 @@ export class VideoManager {
 
     } catch (error) {
       console.error('VideoManager.playMovie: Failed to play movie:', error);
-      this.cleanup();
+      this.cleanup(restoreEngineModeOnComplete);
       throw error;
     }
   }
@@ -257,11 +264,11 @@ export class VideoManager {
   /**
    * Stop the currently playing video
    */
-  static stopMovie(): void {
+  static stopMovie(restoreEngineMode: boolean = true): void {
     if (this.bikObject) {
       this.bikObject.stop();
     }
-    this.cleanup();
+    this.cleanup(restoreEngineMode);
   }
 
   /**
@@ -271,7 +278,7 @@ export class VideoManager {
     if (!this.currentMovie?.skippable) {
       return;
     }
-    this.stopMovie();
+    this.stopMovie(false);
     this.playNextMovie();
   }
 
@@ -286,11 +293,20 @@ export class VideoManager {
   static async playNextMovie(): Promise<boolean> {
     if (this.movieQueue.length === 0){
       this.isPlaying = false;
-      if(typeof this.onQueueComplete === 'function'){
-        console.log('VideoManager.playNextMovie: Queue complete');
-        const onComplete = this.onQueueComplete;
-        this.onQueueComplete = undefined;
-        onComplete();
+      this.modeOwnership.endQueue();
+      const onComplete = this.onQueueComplete;
+      this.onQueueComplete = undefined;
+      try {
+        if (typeof onComplete === 'function') {
+          console.log('VideoManager.playNextMovie: Queue complete');
+          await onComplete();
+        }
+      } catch (error) {
+        console.error('VideoManager.playNextMovie: Queue completion failed:', error);
+      } finally {
+        if (GameState.Mode === EngineMode.MOVIE) {
+          GameState.RestoreEnginePlayMode();
+        }
       }
       return false;
     };
@@ -299,8 +315,8 @@ export class VideoManager {
     try {
       await this.playMovie(movie.name, movie.skippable, () => {
         console.log('VideoManager.playNextMovie: Movie completed:', movie);
-        this.playNextMovie();
-      });
+        void this.playNextMovie();
+      }, false);
     } catch (error) {
       console.error('VideoManager.playNextMovie: Failed to play movie:', error);
       return await this.playNextMovie();
@@ -308,21 +324,38 @@ export class VideoManager {
     return true;
   }
 
-  static async playMovieQueue( onComplete?: Function ): Promise<void> {
-    this.onQueueComplete = onComplete;
+  static async playMovieQueue(onComplete?: () => void | Promise<void>): Promise<void> {
     if (this.movieQueue.length === 0){
-      if(typeof this.onQueueComplete === 'function'){
+      if (typeof onComplete === 'function') {
         console.log('VideoManager.playNextMovie: Queue complete');
-        this.onQueueComplete();
-        this.onQueueComplete = undefined;
+        await onComplete();
       }
       return;
+    }
+    if (!this.modeOwnership.beginQueue()) {
+      throw new Error('VideoManager.playMovieQueue: A movie queue is already active');
+    }
+    this.onQueueComplete = onComplete;
+    if (GameState.Mode !== EngineMode.MOVIE) {
+      this.lastEngineMode = GameState.Mode;
+      GameState.SetEngineMode(EngineMode.MOVIE);
     }
     await this.playNextMovie();
   }
 
   static isMoviePlaying(): boolean {
     return this.isPlaying;
+  }
+
+  static ownsMovieMode(): boolean {
+    return this.modeOwnership.shouldDeferRestore(this.isPlaying);
+  }
+
+  static shouldDeferEngineModeChange(mode: EngineMode): boolean {
+    return this.modeOwnership.shouldDeferModeChange(
+      this.isPlaying,
+      mode === EngineMode.MOVIE,
+    );
   }
 
   /**
@@ -350,11 +383,11 @@ export class VideoManager {
     }
   }
 
-  private static onMovieComplete(): void {
-    this.cleanup();
+  private static onMovieComplete(restoreEngineMode: boolean): void {
+    this.cleanup(restoreEngineMode);
   }
 
-  private static cleanup(): void {
+  private static cleanup(restoreEngineMode: boolean = true): void {
     if (VideoManager.videoPlane?.parent) {
       VideoManager.videoPlane.parent.remove(VideoManager.videoPlane);
     }
@@ -372,7 +405,7 @@ export class VideoManager {
     this.currentMovie = null;
     this.isPlaying = false;
 
-    if (GameState.Mode === EngineMode.MOVIE) {
+    if (restoreEngineMode && GameState.Mode === EngineMode.MOVIE) {
       GameState.RestoreEnginePlayMode();
     }
   }
