@@ -19,6 +19,7 @@ import { resolveWallSoftBlockCorrection, VRWalkmeshQuery } from "./runtime/VRWal
 import { VRSnapTurnController } from "./runtime/VRSnapTurnController";
 import { VRTeleportController } from "./runtime/VRTeleportController";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
+import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
 import { VRHiltTimerHost } from "./runtime/VRHiltTimerHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
@@ -204,6 +205,9 @@ export class VRSpike {
   private static comfortVignetteHost: VRComfortVignetteHost | null = null;
   private static hiltTimerHost: VRHiltTimerHost | null = null;
   private static blasterLaserHost: VRBlasterLaserHost | null = null;
+  private static cutsceneFadeHost: VRCutsceneFadeHost | null = null;
+  private static readonly cutsceneFadeEnvelope = new VRCutsceneFadeEnvelope();
+  private static lastCutsceneCamera: THREE.Camera | null = null;
   private static previousXRInputTimestamp: number | null = null;
   private static locomotionInputErrorReported = false;
   private static trackedInputErrorReported = false;
@@ -499,6 +503,10 @@ export class VRSpike {
     VRSpike.hiltTimerHost = null;
     VRSpike.blasterLaserHost?.dispose();
     VRSpike.blasterLaserHost = null;
+    VRSpike.cutsceneFadeHost?.dispose();
+    VRSpike.cutsceneFadeHost = null;
+    VRSpike.cutsceneFadeEnvelope.reset();
+    VRSpike.lastCutsceneCamera = null;
 
     const btn = document.getElementById('vr-spike-button');
     if (btn) btn.textContent = 'Enter VR (spike)';
@@ -1270,6 +1278,11 @@ export class VRSpike {
       VRSpike.renderCutscene(worldCamera, frameTimestamp);
       return;
     }
+    // Not (or no longer) in a cutscene: the next one's first shot must not
+    // fade in against a stale camera reference from a previous, unrelated
+    // cutscene.
+    VRSpike.lastCutsceneCamera = null;
+    VRSpike.cutsceneFadeHost?.setOpacity(0);
 
     VRSpike.renderKeyboard();
     VRSpike.renderPanel();
@@ -1370,6 +1383,21 @@ export class VRSpike {
       VRSpike.reportMissingMovieRenderPrerequisite('cutscene', !!inputFrame);
       return;
     }
+
+    // Fade-to-black between authored camera cuts (ROADMAP 5.2): the theater
+    // reprojection swaps `worldCamera` instantly between shots, which reads
+    // as a jarring snap in a headset. `lastCutsceneCamera` starting null
+    // means the very first frame of a cutscene never fades — only an
+    // actual cut between two already-shown shots does.
+    if (VRSpike.lastCutsceneCamera !== null && VRSpike.lastCutsceneCamera !== worldCamera) {
+      VRSpike.cutsceneFadeEnvelope.trigger(frameTimestamp);
+    }
+    VRSpike.lastCutsceneCamera = worldCamera;
+    if (!VRSpike.cutsceneFadeHost) {
+      VRSpike.cutsceneFadeHost = new VRCutsceneFadeHost(VRSpike.camera);
+    }
+    VRSpike.cutsceneFadeHost.setOpacity(VRSpike.cutsceneFadeEnvelope.sample(frameTimestamp));
+
     try {
       if (!VRSpike.movieHost) {
         VRSpike.movieHost = new VRPanelHost(worldScene, { distanceMetres: 2.25, widthMetres: 2.4 });

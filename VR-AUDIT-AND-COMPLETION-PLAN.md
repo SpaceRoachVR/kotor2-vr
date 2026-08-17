@@ -327,9 +327,17 @@ actually worth building next given what scaffolding already exists.
    `VRRadialMenuController`'s own contract, and slotting settings in over one of the
    named panels felt like the wrong tradeoff versus a real follow-up. `ToggleLocomotionMode`
    itself is reachable (Stage 2.2); the other three settings are not yet.
-5. **5.2 — Fade-to-black between camera cuts.** The reprojection mechanism
-   (`renderCutscene`) is done; only the transition is missing. `VRPanelHost.present()`/
-   `clear()` already gate visibility — hook a fade in at that boundary.
+5. **5.2 — Fade-to-black between camera cuts: done.** Not hooked into
+   `VRPanelHost.present()`/`clear()` as originally sketched — those gate the theater
+   *panel's* visibility, not the authored shot within it, and stay open across an entire
+   cutscene. Instead: `renderCutscene` now compares `worldCamera` (the actual authored
+   per-shot camera passed in each frame) by identity against the previous frame's: a
+   change triggers `VRCutsceneFadeEnvelope`, a small pure triangular 0→1→0 opacity ramp
+   (~260ms, independently unit-tested), sampled into `VRCutsceneFadeHost` — an opaque
+   quad parented to the XR camera, the same pattern as the comfort vignette. The very
+   first shot of a cutscene (previous camera `null`) never fades; only an actual cut
+   between two already-shown shots does. State resets when the cutscene ends so the
+   next one's opening shot doesn't inherit a stale camera reference.
 6. Lower priority, do after the above: **4.2** physical inventory (beyond the generic
    panel reprojection), **4.5** a systematic `gui/` unreachable-control audit + TSL-vs-K1
    stub diff, **5.3** a comfort pass specifically over the prologue's scripted sequences.
