@@ -39,14 +39,14 @@ export class MenuSaveName extends GameMenu {
 
         this.close();
       });
-      this._button_b = this.BTN_OK;
+      this._button_a = this.BTN_OK;
 
       this.BTN_CANCEL.addEventListener('click', () => {
 
 
         this.close();
       });
-      this._button_a = this.BTN_CANCEL;
+      this._button_b = this.BTN_CANCEL;
       resolve();
     });
   }

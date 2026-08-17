@@ -217,7 +217,10 @@ export class VideoManager {
   ): Promise<void> {
     console.log('VideoManager.playMovie: Playing movie:', movieName);
     if (this.isPlaying) {
-      console.warn('VideoManager.playMovie: A video is already playing');
+      console.warn(
+        `VideoManager.playMovie: rejected request to play "${movieName}" — ` +
+        `isPlaying is stuck true, currentMovie is "${this.currentMovie?.name ?? '(none)'}"`
+      );
       return;
     }
 
@@ -345,6 +348,11 @@ export class VideoManager {
 
   static isMoviePlaying(): boolean {
     return this.isPlaying;
+  }
+
+  /** Whether the active movie may be skipped through its authored flow. */
+  static isCurrentMovieSkippable(): boolean {
+    return this.currentMovie?.skippable === true;
   }
 
   static ownsMovieMode(): boolean {

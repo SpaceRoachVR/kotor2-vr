@@ -19,7 +19,7 @@ import type { ActionMenuManager } from "@/engine/menu/ActionMenuManager";
 import type { ActionFactory } from "@/actions/ActionFactory";
 
 import { IngameControls } from "@/controls/IngameControls";
-// import { Mouse } from "@/controls/Mouse";
+import { Mouse } from "@/controls/Mouse";
 
 import { INIConfig } from "@/engine/INIConfig";
 
@@ -43,6 +43,17 @@ import { OdysseyShaderPass } from "@/shaders/pass/OdysseyShaderPass";
 import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
 import { EngineFrameSource, shouldProcessEngineFrame } from "@/vr/XRFrameCadence";
+import { CreatureLocomotionAdapter } from "@/vr/runtime/CreatureLocomotionAdapter";
+import { TURN_SPEED_FAST } from "@/engine/TurnSpeeds";
+import {
+  LegacyGUIVRPointerAdapter,
+  LegacyGUIVRPointerCoordinates,
+  LegacyGUIVRPointerControl,
+} from "@/vr/runtime/LegacyGUIVRPointerAdapter";
+import { VRContextActionPanelController } from "@/vr/runtime/VRContextActionPanelController";
+import { tryDirectVRWorldUse } from "@/vr/runtime/VRWorldUseAdapter";
+import type { EngineInteractableObject } from "@/vr/runtime/ModuleObjectInteractionTarget";
+import type { CombatWeaponMode } from "@/vr/runtime/XRTypes";
 
 //THREE.js imports
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer";
@@ -79,6 +90,171 @@ const namedGroup = (name: string = 'na'): THREE.Group => {
   group.name = name;
   return group;
 }
+
+const vrCreatureLocomotionAdapter = new CreatureLocomotionAdapter(TURN_SPEED_FAST);
+const vrContextActionPanelController = new VRContextActionPanelController({
+  triggerControllerAPress: () => GameState.MenuManager.InGameOverlay.triggerControllerAPress(),
+  triggerControllerBPress: () => GameState.MenuManager.InGameOverlay.triggerControllerBPress(),
+  triggerControllerXPress: () => GameState.MenuManager.InGameOverlay.triggerControllerXPress(),
+  triggerControllerYPress: () => GameState.MenuManager.InGameOverlay.triggerControllerYPress(),
+});
+let vrContextActionTarget: EngineInteractableObject | null = null;
+let vrRadialMenuPausedByVR = false;
+let vrCombatIssuedTargetId: number | null = null;
+
+function isVRCombatTarget(actor: ModuleCreature, candidate: ModuleObject | null | undefined): candidate is ModuleObject {
+  return !!candidate && candidate !== actor &&
+    typeof candidate.isDead === 'function' && !candidate.isDead() &&
+    typeof candidate.isHostile === 'function' && candidate.isHostile(actor);
+}
+
+/**
+ * Resolves VRSpike's live right-hand aim into the actual engine object, from
+ * the same set the engine already filters to range/LOS/usability
+ * (`playerSelectableObjects`). Combat and Force gesture targeting must use
+ * this, not `CursorManager.hoveredObject`/`selectedObject` — those are only
+ * ever written by flatscreen mouse handlers and freeze at whatever was last
+ * hovered before a WebXR session began.
+ */
+function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null {
+  if (aimedTargetId === null) return null;
+  return GameState.ModuleObjectManager.playerSelectableObjects.find(
+    (object) => object.id === aimedTargetId
+  ) ?? null;
+}
+
+interface VRActionMenuEntry {
+  readonly icon?: unknown;
+  readonly action?: { readonly type?: unknown };
+  readonly talent?: { readonly label?: unknown; readonly name?: unknown };
+  readonly item?: { getName?: () => unknown };
+}
+
+interface VRActionPanel {
+  readonly actions: readonly VRActionMenuEntry[];
+  selectedIndex: number;
+}
+
+function getVRActionLabel(entry: VRActionMenuEntry, target: ModuleObject | null): string {
+  const talentLabel = entry.talent?.label ?? entry.talent?.name;
+  if (typeof talentLabel === 'string' && talentLabel.trim()) return toPlayerFacingActionLabel(talentLabel);
+  const itemName = entry.item?.getName?.();
+  if (typeof itemName === 'string' && itemName.trim()) return toPlayerFacingActionLabel(itemName);
+  const icon = typeof entry.icon === 'string' ? entry.icon.toLowerCase() : '';
+  if (icon.includes('attack')) return (target?.objectType & ModuleObjectType.ModuleDoor) !== 0 ? 'Bash' : 'Attack';
+  if (icon.includes('security') || icon.includes('unlock')) return 'Security';
+  if (icon.includes('mine')) return 'Mine';
+  return 'Action';
+}
+
+function toPlayerFacingActionLabel(label: string): string {
+  const trimmed = label.trim();
+  if (!/^[A-Z0-9_]+$/.test(trimmed)) return trimmed;
+  return trimmed
+    .split('_')
+    .filter((part) => part !== 'ITEM' && part !== 'ACTION')
+    .map((part) => part.charAt(0) + part.slice(1).toLowerCase())
+    .join(' ') || 'Action';
+}
+
+function getVRActionIcon(entry: VRActionMenuEntry): string | undefined {
+  return typeof entry.icon === 'string' && entry.icon.trim() ? entry.icon : undefined;
+}
+
+function buildVRRadialItems(
+  panels: { readonly targetPanels: readonly VRActionPanel[]; readonly selfPanels: readonly VRActionPanel[] },
+  target: ModuleObject | null
+): readonly import('./vr/runtime/VRRadialMenuController').VRRadialMenuItem[] {
+  const candidates: Array<{
+    readonly entry: VRActionMenuEntry;
+    readonly activate: () => void;
+  }> = [];
+  panels.targetPanels.forEach((panel, panelIndex) => {
+    panel.actions.forEach((entry, actionIndex) => {
+      candidates.push({
+        entry,
+        activate: () => {
+          panel.selectedIndex = actionIndex;
+          GameState.ActionMenuManager.onTargetMenuAction(panelIndex);
+        },
+      });
+    });
+  });
+  // Self actions, including Force powers, are deliberately radial-only in VR.
+  panels.selfPanels.forEach((panel, panelIndex) => {
+    panel.actions.forEach((entry, actionIndex) => {
+      candidates.push({
+        entry,
+        activate: () => {
+          panel.selectedIndex = actionIndex;
+          GameState.ActionMenuManager.onSelfMenuAction(panelIndex);
+        },
+      });
+    });
+  });
+  const items = candidates.slice(0, 4).map(({ entry, activate }, index) => ({
+    id: `action-${index}`,
+    label: getVRActionLabel(entry, target),
+    icon: getVRActionIcon(entry),
+    activate,
+  }));
+  while (items.length < 4) {
+    items.push({ id: `unavailable-${items.length}`, label: 'No action', activate: (): void => {} });
+  }
+  return items;
+}
+
+function resolveVRCombatWeaponMode(actor: ModuleCreature): CombatWeaponMode {
+  switch (actor.getCombatAnimationWeaponType()) {
+    case 1:
+    case 2:
+      return 'melee-one-handed';
+    case 3:
+      return 'melee-double-bladed';
+    case 4:
+      return 'melee-dual-wield';
+    case 5:
+    case 6:
+    case 7:
+    case 9:
+      return 'blaster';
+    default:
+      return 'unarmed';
+  }
+}
+
+function findVRForceGestureSpell(actor: ModuleCreature, kind: 'push' | 'pull'): TalentSpell | null {
+  const keyword = kind.toLowerCase();
+  return actor.getSpells().find((spell) => {
+    const searchable = `${spell.label} ${spell.impactscript} ${spell.iconresref}`.toLowerCase();
+    return searchable.includes(keyword);
+  }) ?? null;
+}
+const vrLegacyGUIPointerAdapter = new LegacyGUIVRPointerAdapter({
+  getViewportSize: () => ({
+    width: GameState.ResolutionManager.getViewportWidth(),
+    height: GameState.ResolutionManager.getViewportHeight(),
+  }),
+  getControlsAtPointer: () => GameState.controls?.MenuGetActiveUIElements() ?? [],
+  setPointerVisible: (visible: boolean) => {
+    if (GameState.scene_cursor_holder) GameState.scene_cursor_holder.visible = visible;
+  },
+  applyPointerCoordinates: (coordinates: LegacyGUIVRPointerCoordinates) => {
+    Mouse.positionUI.copy(coordinates.ui);
+    Mouse.Vector.copy(coordinates.ui);
+    Mouse.positionViewport.copy(coordinates.viewport);
+    Mouse.positionWindow.copy(coordinates.viewport);
+    Mouse.position.copy(coordinates.normalized);
+  },
+  beforeControlActivation: (control: LegacyGUIVRPointerControl) => {
+    GameState.MenuManager.activeGUIElement = control as any;
+  },
+  afterControlActivation: (control: LegacyGUIVRPointerControl) => {
+    GameState.guiAudioEmitter?.playSoundFireAndForget('gui_click');
+    const menuName = (control as any).menu?.constructor?.name ?? 'UnknownMenu';
+    EventManager.FireEvent('menu.click', { name: control.name, menu: menuName });
+  },
+});
 
 export class GameState implements EngineContext {
 
@@ -742,6 +918,209 @@ export class GameState implements EngineContext {
       update: (timestamp, source) => GameState.Update(timestamp, source),
       getPlayerPosition: () => GameState.getCurrentPlayer()?.position ?? null,
       getFacing: () => FollowerCamera.facing,
+      getPlayerFacing: () => GameState.getCurrentPlayer()?.rotation.z ?? null,
+      getHeldVisuals: () => {
+        const player = GameState.getCurrentPlayer();
+        const left = player?.equipment.LEFTHAND?.model;
+        const right = player?.equipment.RIGHTHAND?.model;
+        return {
+          left: left instanceof THREE.Object3D ? left : null,
+          right: right instanceof THREE.Object3D ? right : null,
+        };
+      },
+      applyLocomotion: (locomotion) => {
+        if (GameState.State !== EngineState.RUNNING || GameState.Mode !== EngineMode.INGAME) return;
+        const player = GameState.getCurrentPlayer();
+        if (!player) return;
+        if (vrCreatureLocomotionAdapter.apply(player, locomotion)) {
+          GameState.scene_cursor_holder.visible = false;
+          FollowerCamera.clearFocusObject();
+        }
+      },
+      getInteractionContext: () => ({
+        actor: GameState.getCurrentPlayer() ?? null,
+        // The engine has already removed the player, unusable/open objects,
+        // out-of-range objects, and targets without line of sight.
+        targets: GameState.ModuleObjectManager.playerSelectableObjects,
+        onInteractionIntent: (intent) => {
+          const actor = GameState.getCurrentPlayer();
+          const target = GameState.ModuleObjectManager.playerSelectableObjects.find(
+            (object) => `module-object:${object.id}` === intent.targetId
+          );
+          if (!actor || !target) {
+            vrContextActionTarget = null;
+            vrContextActionPanelController.close();
+            return;
+          }
+
+          const directUseResult = tryDirectVRWorldUse(actor, target);
+          if (directUseResult.handled) {
+            vrContextActionTarget = null;
+            vrContextActionPanelController.close();
+            return { feedbackLabel: directUseResult.feedbackLabel };
+          }
+
+          GameState.ActionMenuManager.SetPC(actor);
+          GameState.ActionMenuManager.SetTarget(target);
+          GameState.ActionMenuManager.UpdateMenuActions();
+          if (GameState.ActionMenuManager.targetActionCount() > 0) {
+            vrContextActionTarget = target;
+            vrContextActionPanelController.open(intent.targetId);
+          } else {
+            vrContextActionTarget = null;
+            vrContextActionPanelController.close();
+          }
+        },
+      }),
+      getCombatContext: (aimedTargetId) => {
+        const actor = GameState.getCurrentPlayer();
+        if (!actor) return null;
+        const candidate = resolveVRAimedObject(aimedTargetId);
+        const target = isVRCombatTarget(actor, candidate) ? candidate : null;
+        return {
+          actorId: String(actor.id),
+          nominatedTargetId: target ? String(target.id) : null,
+          weaponMode: resolveVRCombatWeaponMode(actor),
+          onCombatSwing: (event) => {
+            // The controller layer can animate all physical swings, but never
+            // creates damage. Only a cadence-authorized event aimed at the
+            // current engine target enters the normal CombatRound pipeline.
+            if (!event.rollEligible || !target || event.nominatedTargetId !== String(target.id)) return;
+            actor.attackCreature(target);
+            vrCombatIssuedTargetId = target.id;
+          },
+          cancel: () => {
+            if (vrCombatIssuedTargetId === null) return;
+            actor.combatRound.clearActions();
+            vrCombatIssuedTargetId = null;
+          },
+        };
+      },
+      getForceContext: (aimedTargetId) => {
+        const actor = GameState.getCurrentPlayer();
+        if (!actor) return null;
+        const candidate = resolveVRAimedObject(aimedTargetId);
+        const target = isVRCombatTarget(actor, candidate) ? candidate : null;
+        return {
+          onForceGesture: (gesture) => {
+            if (!target) return;
+            const spell = findVRForceGestureSpell(actor, gesture.kind);
+            if (!spell) return;
+            spell.useTalentOnObject(target, actor);
+          },
+        };
+      },
+      getRadialMenuContext: (aimedTargetId) => {
+        const actor = GameState.getCurrentPlayer();
+        const target = resolveVRAimedObject(aimedTargetId);
+        if (actor && target && target !== actor) {
+          GameState.ActionMenuManager.SetPC(actor);
+          GameState.ActionMenuManager.SetTarget(target);
+          GameState.ActionMenuManager.UpdateMenuActions();
+        }
+        const panels = GameState.ActionMenuManager.ActionPanels;
+        return {
+          items: buildVRRadialItems(panels, target ?? null),
+          setPaused: (paused: boolean) => {
+          if (paused && GameState.State !== EngineState.PAUSED) {
+            GameState.State = EngineState.PAUSED;
+            vrRadialMenuPausedByVR = true;
+          } else if (!paused && vrRadialMenuPausedByVR) {
+            GameState.State = EngineState.RUNNING;
+            vrRadialMenuPausedByVR = false;
+          }
+        },
+        };
+      },
+      getPanelContext: () => {
+        const foregroundMenu = GameState.MenuManager.GetForegroundMenu();
+        let menu = foregroundMenu?.bVisible && foregroundMenu !== GameState.MenuManager.InGameOverlay
+          ? foregroundMenu
+          : null;
+        if (menu) {
+          vrContextActionTarget = null;
+          vrContextActionPanelController.close();
+        } else if (vrContextActionTarget) {
+          const targetId = `module-object:${vrContextActionTarget.id}`;
+          const targetIsAvailable = GameState.ModuleObjectManager.playerSelectableObjects.includes(
+            vrContextActionTarget as ModuleObject
+          );
+          menu = targetIsAvailable
+            ? vrContextActionPanelController.resolve(
+              targetId,
+              GameState.ActionMenuManager.targetActionCount() > 0
+            )
+            : null;
+          if (!menu) vrContextActionTarget = null;
+        }
+        return {
+          menu,
+          guiScene: GameState.scene_gui,
+          guiCamera: GameState.camera_gui,
+          viewportWidth: GameState.ResolutionManager.getViewportWidth(),
+          viewportHeight: GameState.ResolutionManager.getViewportHeight(),
+          pointerSink: vrLegacyGUIPointerAdapter,
+        };
+      },
+      getMovieContext: () => GameState.VideoManager.isMoviePlaying()
+        ? {
+          canSkip: GameState.VideoManager.isCurrentMovieSkippable(),
+          skip: () => GameState.VideoManager.skipMovie(),
+        }
+        : null,
+      getCutsceneContext: () => {
+        const currentEntry = GameState.CutsceneManager.currentEntry;
+        return GameState.CutsceneManager.active && !GameState.MenuManager.InGameComputer?.isVisible()
+          ? {
+            canSkip: currentEntry?.skippable === true,
+            skip: () => {
+              if (currentEntry) GameState.CutsceneManager.playerSkipEntry(currentEntry);
+            },
+            abort: () => {
+              // Mirrors flatscreen's unconditional DialogAbort
+              // (IngameControls.ts, KeyMapAction.DialogAbort) — the escape
+              // hatch VR had none of for an authored `NodeUnskippable` entry,
+              // which otherwise had no skip button and no way out. Only
+              // while there is no reply choice on screen: once
+              // repliesShown is true the panel owns input and the player
+              // should pick a reply, not have the whole conversation end
+              // under them.
+              if (currentEntry?.repliesShown) return;
+              GameState.CutsceneManager.endConversation(true);
+            },
+          }
+          : null;
+      },
+      getKeyboardContext: () => {
+        const control = GameState.MenuManager.activeGUIElement as {
+          editable?: unknown;
+          onKeyDown?: unknown;
+          menu?: { triggerControllerBPress?: () => void };
+        } | undefined;
+        return control?.editable === true && typeof control.onKeyDown === 'function'
+          ? {
+            onKeyDown: control.onKeyDown as (event: { readonly which: number; readonly shiftKey: boolean }) => void,
+            cancel: () => control.menu?.triggerControllerBPress?.(),
+          }
+          : null;
+      },
+      getWorldTargetIndicator: () => {
+        const hoveredObject = GameState.CursorManager.hoveredObject;
+        const selectedObject = GameState.CursorManager.selectedObject;
+        const object = hoveredObject ?? selectedObject;
+        const reticle = hoveredObject && GameState.CursorManager.reticle.visible
+          ? GameState.CursorManager.reticle
+          : selectedObject && GameState.CursorManager.reticle2.visible
+            ? GameState.CursorManager.reticle2
+            : null;
+        if (!object || !reticle) return null;
+        const position = reticle.getWorldPosition(new THREE.Vector3());
+        return {
+          id: String(object.id),
+          name: object.getName(),
+          position,
+        };
+      },
       getWorldContext: () => {
         const area = GameState.module?.area;
         const player = GameState.getCurrentPlayer();
@@ -1120,6 +1499,16 @@ export class GameState implements EngineContext {
       console.log('RestoreEnginePlayMode: deferred while movie playback owns engine mode');
       return;
     }
+    //A conversation can still be active when something else (e.g. a movie finishing,
+    //or an engine-mode flip during stunt-camera loading) calls this. Restoring straight
+    //to INGAME/GUI here abandons that conversation's camera/scene setup mid-flight -
+    //observed as a black screen that only cleared after a pause/unpause forced a
+    //re-evaluation. Restore to DIALOG instead so CutsceneManager.update() keeps running.
+    if(GameState.CutsceneManager.active){
+      console.log('RestoreEnginePlayMode: DIALOG (conversation still active)');
+      GameState.SetEngineMode(EngineMode.DIALOG);
+      return;
+    }
     if(GameState.module){
       if(GameState.module.area.miniGame){
         console.log('RestoreEnginePlayMode: MINIGAME');
@@ -1264,10 +1653,11 @@ export class GameState implements EngineContext {
     }
 
     GameState.controls.Update(delta);
-    GameState.scene_cursor_holder.visible = GameState.Mode != EngineMode.MOVIE && GameState.Mode != EngineMode.LEGAL;
+    VRSpike.traceStartupStage('controls-complete');
+    GameState.scene_cursor_holder.visible = !VRSpike.isPresenting && GameState.Mode != EngineMode.MOVIE && GameState.Mode != EngineMode.LEGAL;
     if(GameState.Mode == EngineMode.MOVIE || GameState.VideoManager.isMoviePlaying()){
       GameState.Mode = EngineMode.MOVIE;
-      GameState.UpdateMovie(delta);
+      GameState.UpdateMovie(delta, timestamp);
       return;
     }
 
@@ -1279,6 +1669,7 @@ export class GameState implements EngineContext {
     GameState.VideoEffectManager.Update(delta);
 
     GameState.MenuManager.Update(delta);
+    VRSpike.traceStartupStage('menus-complete');
     if(GameState.MenuManager.InGameAreaTransition)
       GameState.MenuManager.InGameAreaTransition.hide();
 
@@ -1311,11 +1702,15 @@ export class GameState implements EngineContext {
         GameState.UpdateFreeLook(delta);
         break;
     }
+    VRSpike.traceStartupStage('simulation-complete');
 
     AudioEngine.GetAudioEngine().update(delta, GameState.currentCamera.position, GameState.currentCamera.rotation, GameState.forwardVector);
+    VRSpike.traceStartupStage('audio-complete');
 
     const renderCpuStart = performance.now();
+    VRSpike.traceStartupStage('render-start');
     GameState.Render(delta, timestamp);
+    VRSpike.traceStartupStage('render-complete');
     const renderCpuEnd = performance.now();
     VRSpike.perf.recordCpuFrame(
       renderCpuStart - simulationCpuStart,
@@ -1337,10 +1732,22 @@ export class GameState implements EngineContext {
     // Roll performance windows only after the current XR frame has rendered,
     // otherwise the render is incorrectly credited to the following window.
     VRSpike.perf.tick();
+    VRSpike.completeStartupTrace();
   }
 
-  static UpdateMovie(delta: number = 0){
+  static UpdateMovie(delta: number = 0, frameTimestamp: number = performance.now()){
     GameState.VideoManager.update(delta);
+    if(VRSpike.isPresenting){
+      VRSpike.renderMovie(
+        GameState.scene_movie,
+        GameState.camera_gui,
+        GameState.ResolutionManager.getViewportWidth(),
+        GameState.ResolutionManager.getViewportHeight(),
+        frameTimestamp
+      );
+      GameState.processEventListener('afterRender', [delta]);
+      return;
+    }
     GameState.renderer.render(GameState.scene_movie, GameState.camera_gui);
     GameState.processEventListener('afterRender', [delta]);
   }

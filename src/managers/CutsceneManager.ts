@@ -223,8 +223,13 @@ export class CutsceneManager {
     entry.initProperties();
     const isComputerCameraEntry = this.dialog.getConversationType() == DLGConversationType.COMPUTER && entry.cameraAngle == DLGCameraAngle.ANGLE_PLACEABLE_CAMERA;
     this.state = ConversationState.LISTENING_TO_SPEAKER;
-    if (GameState.Mode != EngineMode.DIALOG)
+    if (GameState.Mode != EngineMode.DIALOG){
+      //Everything past this point (camera, video effect, replies, participant
+      //animations) gets skipped for this entry with no other trace - previously
+      //silent, which made a black-screen report impossible to confirm against a log.
+      console.warn('CutsceneManager.showEntry: engine mode is', GameState.Mode, 'not DIALOG - skipping camera/replies/animations for this entry', entry);
       return;
+    }
     GameState.VideoEffectManager.SetVideoEffect(entry.getVideoEffect());
     this.lastSpokenString = entry.getCompiledString();
     if(this.dialog.getConversationType() == DLGConversationType.COMPUTER){
@@ -313,8 +318,16 @@ export class CutsceneManager {
     }
 
     if(this.state != ConversationState.WAITING_FOR_PC_CHOICE){
-      console.warn('CutsceneManager.selectReplyAtIndex: Not in waiting for pc choice state');
-      return;
+      //The reply list is already populated and clickable as soon as the entry is shown,
+      //but selection only unlocks once the line has been skipped/finished (state flips to
+      //WAITING_FOR_PC_CHOICE inside showReplies(), triggered by playerSkipEntry()). A click
+      //here is a legitimate "I'm done listening, and I choose this" - skip first instead of
+      //silently dropping it. If the entry genuinely isn't skippable yet, this is a no-op and
+      //the click is correctly ignored.
+      this.playerSkipEntry(this.currentEntry);
+      if(this.state != ConversationState.WAITING_FOR_PC_CHOICE){
+        return;
+      }
     }
     this.onReplySelect(reply);
   }
@@ -1032,13 +1045,6 @@ export class CutsceneManager {
       this.cameraState.cameraAngle = DLGCameraAngle.ANGLE_SPEAKER;
       this.updateCameraAngleSpeaker();
       return;
-      const scaleFactor = adjustedDistance / behindDistance;
-      behindDistance = adjustedDistance;
-      leftDistance *= scaleFactor;
-      
-      cameraX = listenerCameraPosition.x + Math.cos(listenerRotation + Math.PI) * behindDistance + Math.cos(listenerRotation - HALF_PI) * leftDistance;
-      cameraY = listenerCameraPosition.y + Math.sin(listenerRotation + Math.PI) * behindDistance + Math.sin(listenerRotation - HALF_PI) * leftDistance;
-      cameraPosition.set(cameraX, cameraY, cameraZ);
     }
     
     // Set camera position and look at the midpoint between speaker and listener
@@ -1326,12 +1332,14 @@ export class CutsceneManager {
 
   static removeEventListener(type: string, listener: Function){
     let listeners = this.#eventListeners.get(type);
-    if(!listeners || listeners.indexOf(listener) !== -1){
+    if(!listeners){
       return;
     }
-    if(listeners){
-      listeners.splice(listeners.indexOf(listener), 1);
+    const index = listeners.indexOf(listener);
+    if(index === -1){
+      return;
     }
+    listeners.splice(index, 1);
   }
 
   static dispatchEvent(type: string, ...args: any[]){
