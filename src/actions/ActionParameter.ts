@@ -96,7 +96,15 @@ export class ActionParameter {
       return undefined;
     }
 
-    const type = struct.getFieldByLabel('Type').getValue();
+    //Some saved action-parameter structs (seen on at least one creature's stored
+    //ActionList) omit the 'Type' field entirely. getParameter() already tolerates an
+    //undefined parameter, so fail soft here per this function's own documented
+    //contract instead of throwing and aborting the whole creature's initProperties().
+    const typeField = struct.getFieldByLabel('Type');
+    if(!typeField){
+      return undefined;
+    }
+    const type = typeField.getValue();
     let value = undefined;
     switch(type){
       case ActionParameterType.INT:

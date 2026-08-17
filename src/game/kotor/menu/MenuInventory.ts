@@ -101,10 +101,10 @@ export class MenuInventory extends GameMenu {
     }
     this.LBL_VIT?.setText(currentPC.getHP() + '/' + currentPC.getMaxHP());
     this.LBL_DEF?.setText(currentPC.getAC());
-    if(this.LBL_PORT.getFillTextureName() != currentPC.getPortraitResRef()){
-      this.LBL_PORT.setFillTextureName(currentPC.getPortraitResRef());
+    if(this.LBL_PORT?.getFillTextureName() != currentPC.getPortraitResRef()){
+      this.LBL_PORT?.setFillTextureName(currentPC.getPortraitResRef());
     }
-    this.LBL_CREDITS_VALUE.setText(GameState.PartyManager.Gold);
+    this.LBL_CREDITS_VALUE?.setText(GameState.PartyManager.Gold);
   }
 
   updatePartyMemberButtons(){

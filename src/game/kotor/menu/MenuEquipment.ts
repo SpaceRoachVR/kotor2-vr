@@ -368,7 +368,12 @@ export class MenuEquipment extends GameMenu {
     const currentPC = GameState.PartyManager.party[0];
     if(!currentPC) return;
 
-    if (currentPC.getRace() == 6) {
+    //Every slot icon below used to be gated behind `currentPC.getRace() == 6` with an
+    //empty else - meaning nothing ever updated for any creature that didn't match that
+    //exact race value (this was true for the droid party member being tested against,
+    //and would be equally true for anyone else). No other code in this class gates on
+    //race this way; removed so slot icons refresh unconditionally.
+    {
       let implant = currentPC.GetItemInSlot(ModuleCreatureArmorSlot.IMPLANT);
       if (implant) {
         let icon = 'i' + implant.baseItem.itemClass + '_' + ('000' + implant.getModelVariation()).slice(-3);
@@ -451,8 +456,6 @@ export class MenuEquipment extends GameMenu {
       } else if (force || this.LBL_INV_WEAP_R.getFillTextureName() != 'iweap_r') {
         this.LBL_INV_WEAP_R.setFillTextureName('iweap_r');
       }
-    } else {
-
     }
   }
 

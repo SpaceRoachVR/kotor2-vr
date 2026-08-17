@@ -3,6 +3,7 @@ import { GameState } from "@/GameState";
 import type { LightManager } from "@/managers";
 import { OdysseyModel3D } from "@/three/odyssey";
 import type { GUIControl } from "@/gui/GUIControl";
+import { renderGuiSceneToTexture } from "@/gui/renderGuiSceneToTexture";
 
 /**
  * LBL_3DView class.
@@ -149,15 +150,15 @@ export class LBL_3DView {
       this.lightManager.update(delta, this.currentCamera);
     }
 
-    let oldClearColor = new THREE.Color()
-    GameState.renderer.getClearColor(oldClearColor);
-    //GameState.renderer.setClearColor(this.clearColor, 1);
-    GameState.renderer.setRenderTarget(this.texture);
-    GameState.renderer.clear();
-    GameState.renderer.render(this.scene, this.currentCamera);
+    renderGuiSceneToTexture(
+      GameState.renderer,
+      this.texture,
+      this.scene,
+      this.currentCamera,
+      this.clearColor,
+      1,
+    );
     (this.texture as any).needsUpdate = true;
-    GameState.renderer.setRenderTarget(null);
-    //GameState.renderer.setClearColor(oldClearColor, 1);
 
     if(this.control){
       let material = this.control.getFill().material;

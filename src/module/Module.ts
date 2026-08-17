@@ -545,10 +545,16 @@ export class Module {
       GameState.group.room_walkmeshes.remove(wlkmesh);
     }
 
-    if(GameState.PartyManager.Player){
-      GameState.PartyManager.Player.destroy();
-      GameState.PartyManager.Player = undefined;
-    }
+    //PartyManager.Player deliberately survives dispose(). This runs on every
+    //module-to-module transition (GameState.LoadModule calls it on the outgoing
+    //module before loading the next one), not just at game end. Destroying the
+    //player here - which also destroys their equipped inventory, per
+    //ModuleCreature.destroy() - left GameState.PartyManager.Player undefined
+    //by the time the next module's ModuleArea.loadPlayer() ran, so it always
+    //fell into the invented-placeholder-human branch instead of recognizing
+    //the real controlled character (e.g. T3-M4 during the prologue). The next
+    //module's loadPlayer() reloads the model and repositions the existing
+    //Player object; it does not need it destroyed first.
 
     //Clear emitters
     while (GameState.group.emitters.children.length){

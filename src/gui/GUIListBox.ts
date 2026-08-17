@@ -18,6 +18,7 @@ import {
   type GUIListItemCallbacks,
 } from "@/gui/listrow/defaultListRows";
 import { applyCustomProtoRowSkin } from "@/gui/listrow/applyProtoTemplateSkin";
+import { renderGuiSceneToTexture } from "@/gui/renderGuiSceneToTexture";
 
 /**
  * GUIListBox class.
@@ -344,20 +345,16 @@ export class GUIListBox extends GUIControl {
   }
 
   render(){
-    const oldClearColor = new THREE.Color();
-    this.menu.context.renderer.getClearColor(oldClearColor);
-    const oldClearAlpha =
-      typeof (this.menu.context.renderer as any).getClearAlpha === 'function'
-        ? (this.menu.context.renderer as any).getClearAlpha()
-        : 1;
-    this.menu.context.renderer.setClearColor(this.clearColor, 0);
-    this.menu.context.renderer.setRenderTarget(this.texture);
-    this.menu.context.renderer.clear(true, true, true);
-    this.menu.context.renderer.render(this.scene, this.camera);
+    renderGuiSceneToTexture(
+      this.menu.context.renderer,
+      this.texture,
+      this.scene,
+      this.camera,
+      this.clearColor,
+      0,
+    );
     (this.texture as any).needsUpdate = true;
-    this.menu.context.renderer.setRenderTarget(null);
     this.targetMaterial.needsUpdate = true;
-    this.menu.context.renderer.setClearColor(oldClearColor, oldClearAlpha);
   }
 
   calculatePosition(){

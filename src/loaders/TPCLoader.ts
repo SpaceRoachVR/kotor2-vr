@@ -8,6 +8,11 @@ import { OdysseyCompressedTexture } from "@/three/odyssey";
 import { IFindTPCResult } from "@/interface/graphics/IFindTPCResult";
 import { TextureLoaderState } from "@/loaders/TextureLoaderState";
 
+const GUI_TEXTURE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  border1: 'border1c',
+  border2: 'border2c',
+});
+
 /**
  * TPCLoader class.
  * 
@@ -24,12 +29,24 @@ export class TPCLoader {
   async findTPC( resRef: string ): Promise<IFindTPCResult> {
     resRef = resRef.toLocaleLowerCase();
   
-    let erfResource = ERFManager.ERFs.get('swpc_tex_gui').getResourceInfo(resRef, ResourceTypes['tpc']);
+    const guiPack = ERFManager.ERFs.get('swpc_tex_gui');
+    let erfResource = guiPack.getResourceInfo(resRef, ResourceTypes['tpc']);
     if(erfResource){
-      const buffer = await ERFManager.ERFs.get('swpc_tex_gui').getResourceBuffer(erfResource);
+      const buffer = await guiPack.getResourceBuffer(erfResource);
       return { pack: 0, buffer: buffer };
     }
-  
+
+    // These two GUI resources ship only under c-suffixed names in the retail TSL pack.
+    // Keep the mapping explicit so an unrelated texture cannot be silently substituted.
+    const guiAlias = GUI_TEXTURE_ALIASES[resRef];
+    if(guiAlias){
+      erfResource = guiPack.getResourceInfo(guiAlias, ResourceTypes['tpc']);
+      if(erfResource){
+        const buffer = await guiPack.getResourceBuffer(erfResource);
+        return { pack: 0, buffer: buffer };
+      }
+    }
+
     let activeTexturePack;
     switch(TextureLoaderState.TextureQuality){
       case 2:

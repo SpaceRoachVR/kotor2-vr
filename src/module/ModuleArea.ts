@@ -392,6 +392,12 @@ export class ModuleArea extends ModuleObject {
 
     while (GameState.PartyManager.party.length){
       const pm = GameState.PartyManager.party.shift();
+      if(pm === GameState.PartyManager.Player){
+        //The player object is reused across module transitions (see ModuleArea.loadPlayer),
+        //so only detach it from this area's scene graph instead of tearing down its state.
+        pm.container.removeFromParent();
+        continue;
+      }
       pm.destroy();
     }
 
@@ -399,53 +405,52 @@ export class ModuleArea extends ModuleObject {
   }
 
   update(delta: number = 0){
-    let roomCount = this.rooms.length;
-    let aoeCount = this.areaOfEffects.length;
-    let trigCount = this.triggers.length;
-    let encounterCount = this.encounters.length;
-    let creatureCount = this.creatures.length;
-    let placeableCount = this.placeables.length;
-    let doorCount = this.doors.length;
-    let partyCount = GameState.PartyManager.party.length;
+    //Bounds are re-checked live (not cached) and elements optionally-chained: any
+    //update() below can run a script that destroys another object of the same type
+    //(e.g. DestroyObject from a dialogue reply), which splices it out of these arrays
+    //mid-loop. A cached length then overruns the now-shorter array - confirmed via a
+    //real crash on this.placeables when that happened. Mirrors the existing
+    //defensive pattern already used below for spellInstances/textSprites.
 
     //update triggers
-    for(let i = 0; i < trigCount; i++){
-      this.triggers[i].update(delta);
+    for(let i = 0; i < this.triggers.length; i++){
+      this.triggers[i]?.update(delta);
     }
 
     //update encounters
-    for(let i = 0; i < encounterCount; i++){
-      this.encounters[i].update(delta);
+    for(let i = 0; i < this.encounters.length; i++){
+      this.encounters[i]?.update(delta);
     }
-    
+
     //update aoe
-    for(let i = 0; i < aoeCount; i++){
-      this.areaOfEffects[i].update(delta);
+    for(let i = 0; i < this.areaOfEffects.length; i++){
+      this.areaOfEffects[i]?.update(delta);
     }
 
     //update party
-    for(let i = 0; i < partyCount; i++){
-      GameState.PartyManager.party[i].update(delta);
+    for(let i = 0; i < GameState.PartyManager.party.length; i++){
+      GameState.PartyManager.party[i]?.update(delta);
     }
-    
+
     //update creatures
-    for(let i = 0; i < creatureCount; i++){
-      this.creatures[i].update(delta);
+    for(let i = 0; i < this.creatures.length; i++){
+      this.creatures[i]?.update(delta);
     }
-    
+
     //update placeables
-    for(let i = 0; i < placeableCount; i++){
-      this.placeables[i].update(delta);
+    for(let i = 0; i < this.placeables.length; i++){
+      this.placeables[i]?.update(delta);
     }
-    
+
     //update doors
-    for(let i = 0; i < doorCount; i++){
-      this.doors[i].update(delta);
+    for(let i = 0; i < this.doors.length; i++){
+      this.doors[i]?.update(delta);
     }
 
     //unset party controlled
-    for(let i = 0; i < partyCount; i++){
-      GameState.PartyManager.party[i].controlled = false;
+    for(let i = 0; i < GameState.PartyManager.party.length; i++){
+      const partyMember = GameState.PartyManager.party[i];
+      if(partyMember) partyMember.controlled = false;
     }
 
     if(GameState.Mode == EngineMode.MINIGAME){
@@ -453,8 +458,8 @@ export class ModuleArea extends ModuleObject {
     }
 
     //update rooms
-    for(let i = 0; i < roomCount; i++){
-      this.rooms[i].update(delta);
+    for(let i = 0; i < this.rooms.length; i++){
+      this.rooms[i]?.update(delta);
       // this.rooms[i].hide();
     }
 
@@ -1603,8 +1608,13 @@ export class ModuleArea extends ModuleObject {
       if(GameState.PartyManager.Player instanceof ModuleCreature){
         GameState.PartyManager.Player.npcId = -1;
 
+        //The player's `area` is normally refreshed once per frame by ModuleCreature.update(),
+        //which hasn't run yet in the new module. Set it now so the getCurrentRoom() call below
+        //searches this area's rooms instead of the just-disposed previous area's.
+        GameState.PartyManager.Player.area = this;
+
         if(!this.miniGame){
-          GameState.PartyManager.party[ GameState.PartyManager.GetCreatureStartingPartyIndex(GameState.currentLeader) ] = GameState.currentLeader;
+          GameState.PartyManager.party[ GameState.PartyManager.GetCreatureStartingPartyIndex(GameState.PartyManager.Player) ] = GameState.PartyManager.Player;
           GameState.group.party.add( GameState.PartyManager.Player.container );
         }
 

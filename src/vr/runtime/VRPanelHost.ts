@@ -16,7 +16,19 @@ const DEFAULT_OPTIONS: VRPanelHostOptions = {
 };
 
 const MAIN_MENU_RESREFS = new Set(['mainmenu8x6_p', 'mainmenu16x12']);
-const MAIN_MENU_VERTICAL_OFFSET_METRES = 0.9;
+/**
+ * The authored main-menu layouts (both 4:3) put their interactive content in
+ * the lower half of the canvas, so the panel is raised to bring that content
+ * to eye level. The offset is a quarter of the panel's height — the distance
+ * from the panel's centre to the centre of its lower half — which for the
+ * default 1.6m width at 4:3 is 0.3m.
+ *
+ * This was previously 0.9m, which put the whole panel above the player's
+ * eyeline in the headset. That value had been tuned against a rig whose
+ * height was derived from an arbitrary camera when no module was loaded;
+ * with the rig now anchored to the floor, the geometric derivation holds.
+ */
+const MAIN_MENU_VERTICAL_OFFSET_METRES = 0.3;
 
 /** Renders the authoritative legacy GUI scene onto a stable world-space panel. */
 export class VRPanelHost {

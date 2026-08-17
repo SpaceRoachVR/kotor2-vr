@@ -356,8 +356,28 @@ export class VRSpike {
     VRSpike.rig.add(VRSpike.camera);
     scene.add(VRSpike.rig);
 
-    const supported = await (navigator as any).xr.isSessionSupported('immersive-vr');
-    console.log(`[VRSpike] installed. immersive-vr supported: ${supported}`);
+    // WebXR talks to whichever OpenXR runtime is currently active, so a
+    // headset that works under one runtime and not another (reported for
+    // SteamVR vs VDXR) usually surfaces here rather than at requestSession.
+    // Report enough to tell a runtime/config problem from a real gap.
+    let supported = false;
+    try {
+      supported = await (navigator as any).xr.isSessionSupported('immersive-vr');
+      console.log(
+        `[VRSpike] installed. immersive-vr supported: ${supported}` +
+        ` (secureContext=${window.isSecureContext}, ua=${navigator.userAgent})`
+      );
+      if (!supported) {
+        console.warn(
+          '[VRSpike] the browser reports no immersive-vr support. This is usually the ' +
+          'active OpenXR runtime rather than the page: confirm the headset runtime ' +
+          '(SteamVR / Oculus / VDXR) is running AND set as the active OpenXR runtime, ' +
+          'then reload.'
+        );
+      }
+    } catch (error) {
+      console.error('[VRSpike] isSessionSupported threw — treating VR as unavailable', error);
+    }
     VRSpike.addButton(supported);
   }
 
@@ -470,7 +490,14 @@ export class VRSpike {
         `acceptance minimum ${VRSpike.perf.targetHz} Hz`
       );
     } catch (e) {
-      console.error('[VRSpike] requestSession failed:', e);
+      const error = e as { name?: string; message?: string };
+      console.error(
+        `[VRSpike] requestSession failed (${error?.name ?? 'unknown'}): ${error?.message ?? e}. ` +
+        'If the headset works under one OpenXR runtime but not another, check which runtime ' +
+        'is set active — the session request is plain immersive-vr with only local-floor / ' +
+        'bounded-floor as optional features, which every runtime supports.',
+        e
+      );
       VRSpike.renderer.xr.setAnimationLoop(null);
       VRSpike.session = null;
     }
@@ -1627,8 +1654,19 @@ export class VRSpike {
           `the elevated follower camera`
         );
       }
+      // Keep the camera's horizontal placement so the world view is roughly
+      // where the engine is looking, but put the rig's *floor* on the world
+      // floor rather than deriving it from the camera's height. There is no
+      // player to stand on and no guarantee `worldCamera` is the elevated
+      // follower camera — at the main menu it can be any authored camera —
+      // so subtracting eyeHeight from it produced an arbitrary rig height.
+      // Panels are placed relative to the head pose, so that arbitrary height
+      // is what made a menu already open at VR-entry hang above eye level and
+      // then stay there (panels world-lock to their first placement by
+      // design). Anchoring to the floor lets the headset's own local-floor
+      // tracking put the head at the player's real standing height.
       worldCamera.getWorldPosition(rig.position);
-      rig.position.z -= VRSpike.eyeHeight;
+      rig.position.z = 0;
     }
     rig.position.add(VRSpike.turnOriginOffset);
 

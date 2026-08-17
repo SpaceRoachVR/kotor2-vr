@@ -155,9 +155,9 @@ export class MenuJournal extends GameMenu {
   }
 
   UpdateLabels(){
-    this.BTN_SORT.setText(this.GetSortModeBTNLabel());
-    this.BTN_SWAPTEXT.setText(this.GetQuestModeBTNLabel());
-    this.LBL_TITLE.setText(this.GetMenuTitle());
+    this.BTN_SORT?.setText(this.GetSortModeBTNLabel());
+    this.BTN_SWAPTEXT?.setText(this.GetQuestModeBTNLabel());
+    this.LBL_TITLE?.setText(this.GetMenuTitle());
   }
 
   show() {

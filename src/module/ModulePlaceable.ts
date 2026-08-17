@@ -85,6 +85,12 @@ export class ModulePlaceable extends ModuleObject {
   y: number;
   z: number;
   defaultAnimPlayed: boolean;
+  //Static placeables skip per-frame animation ticking below as a perf optimization (most
+  //never animate), but that also meant their initial pose was never applied even once -
+  //they'd sit in raw bind/T-pose forever. This counts down a few ticks after spawn so the
+  //authored pose (e.g. a corpse prop's held animation) actually gets baked in once, then
+  //ticking stops again. See update().
+  staticPoseSettleTicksRemaining: number = 5;
   useable: any;
   isBodyBag: any;
   lightState: any;
@@ -182,8 +188,14 @@ export class ModulePlaceable extends ModuleObject {
   }
 
   update(delta = 0){
-    
+
     super.update(delta);
+
+    //super.update() can destroy this object mid-call via its deferred-destroy timer,
+    //which clears actionQueue/model - bail before touching either.
+    if(this.willDestroy || this.destroyed){
+      return;
+    }
 
     if(this.collisionManager.walkmesh && this.model){
       this.collisionManager.walkmesh.matrixWorld.copy(this.model.matrix);
@@ -198,8 +210,11 @@ export class ModulePlaceable extends ModuleObject {
         }
       }
 
-      if(this.model.visible && !this.static){
+      if(this.model.visible && (!this.static || this.staticPoseSettleTicksRemaining > 0)){
         this.model.update(delta);
+        if(this.static && this.staticPoseSettleTicksRemaining > 0){
+          this.staticPoseSettleTicksRemaining--;
+        }
       }
 
       this.audioEmitter.setPosition(this.position.x, this.position.y, this.position.z);
@@ -791,6 +806,9 @@ export class ModulePlaceable extends ModuleObject {
 
     if(this.template.RootNode.hasField('Locked'))
       this.locked = this.template.getFieldByLabel('Locked').getValue();
+
+    if(this.template.RootNode.hasField('Lockable'))
+      this.lockable = !!this.template.getFieldByLabel('Lockable').getValue();
 
     if(this.template.RootNode.hasField('Min1HP'))
       this.min1HP = this.template.getFieldByLabel('Min1HP').getValue();

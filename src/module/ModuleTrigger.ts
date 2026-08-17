@@ -323,9 +323,15 @@ export class ModuleTrigger extends ModuleObject {
   }
 
   update(delta = 0){
-    
+
     super.update(delta);
-    
+
+    //super.update() can destroy this object mid-call via its deferred-destroy timer,
+    //which clears actionQueue/model - bail before touching either.
+    if(this.willDestroy || this.destroyed){
+      return;
+    }
+
     if(!this.room) this.getCurrentRoom();
     try{
       if(!this.room.model.visible)

@@ -631,8 +631,15 @@ export class ModuleDoor extends ModuleObject {
   }
 
   update(delta = 0){
-    
+
     super.update(delta);
+
+    //super.update() can destroy this object mid-call via its deferred-destroy timer,
+    //which clears actionQueue/model - bail before touching either.
+    if(this.willDestroy || this.destroyed){
+      return;
+    }
+
     if(this.model instanceof OdysseyModel3D){
       this.model.update(delta);
       //this.box.setFromObject(this.model);
@@ -964,10 +971,24 @@ export class ModuleDoor extends ModuleObject {
           }
 
           resolve(this.model);
-        }).catch(() => {
+        }).catch((error) => {
+          // Silently resolving here leaves an invisible but still solid and
+          // still interactable door in the level, which is what "some doors
+          // do not render at all" looks like from inside the headset. Name
+          // the door and its model so the failure is traceable.
+          console.error(
+            `ModuleDoor.loadModel: failed to build model '${modelName}' for door ` +
+            `'${this.getTag()}' (${this.getName()}) — the door will be invisible`,
+            error
+          );
           resolve(this.model);
         });
-      }).catch(() => {
+      }).catch((error) => {
+        console.error(
+          `ModuleDoor.loadModel: failed to load MDL '${modelName}' for door ` +
+          `'${this.getTag()}' (${this.getName()}) — the door will be invisible`,
+          error
+        );
         resolve(this.model);
       });
     });
@@ -1095,6 +1116,9 @@ export class ModuleDoor extends ModuleObject {
 
     if(this.template.RootNode.hasField('Locked'))
       this.locked = this.template.getFieldByLabel('Locked').getValue();
+
+    if(this.template.RootNode.hasField('Lockable'))
+      this.lockable = !!this.template.getFieldByLabel('Lockable').getValue();
 
     if(this.template.RootNode.hasField('Min1HP'))
       this.min1HP = this.template.getFieldByLabel('Min1HP').getValue();

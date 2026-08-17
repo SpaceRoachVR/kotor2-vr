@@ -929,15 +929,20 @@ export class PartyManager {
    */
   static GetCreatureStartingPartyIndex(creature: ModuleCreature){
 
+    let index = PartyManager.party.length;
     if(PartyManager.PortraitOrder[0]?.toLowerCase() == creature.getPortraitResRef().toLowerCase()){
-      return 0
+      index = 0;
     }else if(PartyManager.PortraitOrder[1]?.toLowerCase() == creature.getPortraitResRef().toLowerCase()){
-      return 1;
+      index = 1;
     }else if(PartyManager.PortraitOrder[2]?.toLowerCase() == creature.getPortraitResRef().toLowerCase()){
-      return 2
+      index = 2;
     }
 
-    return PartyManager.party.length;
+    //PortraitOrder persists across module transitions but `party` is drained and rebuilt
+    //fresh by each area. A creature's remembered slot (e.g. index 1) can be ahead of how
+    //many members have been (re)added to party this transition, which would leave earlier
+    //slots as holes - clamp so a slot is only ever reused or appended, never skipped ahead.
+    return Math.min(index, PartyManager.party.length);
 
   }
 
@@ -949,13 +954,24 @@ export class PartyManager {
   static async LoadPartyMember(nIdx: number = 0){
     const npc = PartyManager.NPCS[PartyManager.CurrentMembers[nIdx].memberID];
     const template = npc.template;
-    template.RootNode.addField( new GFFField(GFFDataType.DWORD, 'ObjectId') ).setValue( GameState.ModuleObjectManager.GetNextPlayerId() );
-    const partyMember = new ModuleCreature(template);
 
     if(nIdx < 0 || nIdx > 1){
-      console.log('LoadPartyMember', 'Wrong index', nIdx, npc, partyMember);
+      console.log('LoadPartyMember', 'Wrong index', nIdx, npc);
       return;
     }
+
+    //The possessed party leader (PartyManager.Player) is loaded and positioned separately
+    //by ModuleArea.loadPlayer(), which persists the same creature instance across module
+    //transitions. If this roster slot's tag matches that already-loaded creature, it's the
+    //same character wearing the "current player" hat - creating a second instance from the
+    //template here would put a duplicate copy of them in the scene and in the party array.
+    const templateTag = template.RootNode.hasField('Tag') ? template.RootNode.getFieldByLabel('Tag').getValue() : '';
+    if(GameState.PartyManager.Player?.getTag?.().toLowerCase() == templateTag?.toLowerCase()){
+      return;
+    }
+
+    template.RootNode.addField( new GFFField(GFFDataType.DWORD, 'ObjectId') ).setValue( GameState.ModuleObjectManager.GetNextPlayerId() );
+    const partyMember = new ModuleCreature(template);
 
     let currentSlot: ModuleCreature;
 

@@ -16,6 +16,7 @@ import { SkillType } from "@/enums/nwscript/SkillType";
 import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 import { SignalEventType } from "@/enums/events/SignalEventType";
+import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 
 /**
  * ActionUnlockObject class.
@@ -51,6 +52,19 @@ export class ActionUnlockObject extends Action {
       return ActionStatus.FAILED;
 
     if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleDoor) || BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModulePlaceable)){
+      return ActionStatus.FAILED;
+    }
+
+    const lockTarget = this.target as ModuleObject & {
+      isLocked(): boolean;
+      lockable: boolean;
+      keyRequired: boolean;
+    };
+    if(!canAttemptSecurityUnlock({
+      locked: lockTarget.isLocked(),
+      lockable: lockTarget.lockable,
+      keyRequired: lockTarget.keyRequired,
+    })){
       return ActionStatus.FAILED;
     }
     

@@ -173,6 +173,14 @@ export class MenuInventory extends K1_MenuInventory {
     this.LB_ITEMS.setItems(inventory);
   }
 
+  //TSL's inventory_p.gui doesn't have LBL_PORT/LBL_VIT/LBL_DEF - the K1 base class's
+  //updateCharacterStats() (called from its show(), which we call via super.show() below)
+  //reaches for those and no-ops on TSL since they're undefined here. Override with what
+  //TSL's layout actually has.
+  updateCharacterStats(){
+    this.LBL_CREDITS_VALUE?.setText(GameState.PartyManager.Gold);
+  }
+
   show() {
     super.show();
     this.filter = InventoryFilter.ALL;
