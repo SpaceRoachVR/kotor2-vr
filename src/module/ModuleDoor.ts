@@ -921,7 +921,17 @@ export class ModuleDoor extends ModuleObject {
   }
 
   loadModel(): Promise<OdysseyModel3D> {
-    let modelName = this.getDoorAppearance().modelname.replace(/\0[\s\S]*$/g,'').toLowerCase();
+    const appearance = this.getDoorAppearance();
+    // An appearance row with no usable modelname resolves to an empty load
+    // rather than an error, so the door ends up invisible while still solid
+    // and still interactable. Name it here instead of leaving it silent.
+    if(!appearance || typeof appearance.modelname !== 'string' || !appearance.modelname.trim()){
+      console.error(
+        `ModuleDoor.loadModel: door '${this.getTag()}' (${this.getName()}) has no model name ` +
+        `in its appearance row (appearance=${this.appearance}) — the door will be invisible`
+      );
+    }
+    let modelName = (appearance?.modelname ?? '').replace(/\0[\s\S]*$/g,'').toLowerCase();
     return new Promise<OdysseyModel3D>( (resolve, reject) => {
       MDLLoader.loader.load(modelName).then((mdl: OdysseyModel) => {
         OdysseyModel3D.FromMDL(mdl, {
@@ -968,6 +978,23 @@ export class ModuleDoor extends ModuleObject {
             default:
               this.setOpenState(ModuleDoorOpenState.CLOSED);
             break;
+          }
+
+          // The model loaded, but "loaded" and "renders" are not the same
+          // thing: a door whose model carries no renderable mesh, or whose
+          // root comes back hidden, is exactly as invisible as one that
+          // failed outright — and until now, completely silent. Report which
+          // door it was so the next headset run names them.
+          let meshCount = 0;
+          this.model.traverse((node: THREE.Object3D) => {
+            if((node as { isMesh?: boolean }).isMesh) meshCount++;
+          });
+          if(!meshCount || !this.model.visible){
+            console.error(
+              `ModuleDoor.loadModel: door '${this.getTag()}' (${this.getName()}) built model ` +
+              `'${modelName}' with meshes=${meshCount} visible=${this.model.visible} ` +
+              `openState=${this.openState} — the door will not be seen`
+            );
           }
 
           resolve(this.model);

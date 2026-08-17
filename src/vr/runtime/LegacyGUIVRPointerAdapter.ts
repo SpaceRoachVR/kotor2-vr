@@ -91,7 +91,10 @@ export class LegacyGUIVRPointerAdapter implements VRPanelPointerSink {
   private static reportMiss(reason: string): void {
     if (LegacyGUIVRPointerAdapter.reportedMisses.has(reason)) return;
     LegacyGUIVRPointerAdapter.reportedMisses.add(reason);
-    console.warn(`[LegacyGUIVRPointerAdapter] panel activation did nothing: ${reason}`);
+    // console.error, not warn: this is reported from a headset where the only
+    // way it reaches anyone is a console log read afterwards, and default
+    // DevTools filtering hides warnings.
+    console.error(`[LegacyGUIVRPointerAdapter] panel activation did nothing: ${reason}`);
   }
 
   private static validateViewport(width: number, height: number): void {

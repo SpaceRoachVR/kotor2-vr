@@ -11,12 +11,14 @@ import { VRPanelHost } from "./runtime/VRPanelHost";
 import { VRPanelPointerHost } from "./runtime/VRPanelPointerHost";
 import { VRKeyboardHost } from "./runtime/VRKeyboardHost";
 import { VRKeyboardInputController } from "./runtime/VRKeyboardInputController";
+import { VR_KEYBOARD_DONE_KEY } from "./runtime/VRKeyboardLayout";
 import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatInputController";
 import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
 import { VRRadialMenuController, VRRadialMenuItem } from "./runtime/VRRadialMenuController";
 import { VRRadialMenuHost } from "./runtime/VRRadialMenuHost";
 import { resolveWallSoftBlockCorrection, VRWalkmeshQuery } from "./runtime/VRWallSoftBlock";
 import { getVRInteractionRange } from "./runtime/VRWorldUseAdapter";
+import { GamePad } from "@/controls/GamePad";
 import { VRSnapTurnController } from "./runtime/VRSnapTurnController";
 import { VRTeleportController } from "./runtime/VRTeleportController";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
@@ -264,6 +266,8 @@ export class VRSpike {
   private static keyboardCancelHeld = false;
   private static keyboardGrabHeld = false;
   private static keyboardWasActive = false;
+  /** Set by the keyboard's DONE key; cleared on grip or on leaving the screen. */
+  private static keyboardDismissed = false;
   private static movieHost: VRPanelHost | null = null;
   private static readonly movieOwner = {};
   private static readonly cutsceneOwner = {};
@@ -430,6 +434,10 @@ export class VRSpike {
         optionalFeatures: ['local-floor', 'bounded-floor'],
       });
       VRSpike.session = session;
+      // XR controllers are visible to the Gamepad API too. Silence the legacy
+      // pad bindings for the whole session so a VR press cannot also run the
+      // flatscreen keymap behind it (see GamePad.suppressed).
+      GamePad.suppressed = true;
       VRSpike.traceXRStartup = true;
       VRSpike.previousXRInputTimestamp = null;
       VRSpike.locomotionInputErrorReported = false;
@@ -522,6 +530,8 @@ export class VRSpike {
 
   private static finishSessionEnd = (): void => {
     VRSpike.perf.stop();
+    // Hand the flatscreen pad layer back now that VR no longer owns input.
+    GamePad.suppressed = false;
     VRSpike.session = null;
     VRSpike.xrFrameRenderTarget = null;
     VRSpike.previousXRInputTimestamp = null;
@@ -801,6 +811,9 @@ export class VRSpike {
       VRSpike.keyboardSelectHeld = false;
       VRSpike.keyboardCancelHeld = false;
       VRSpike.keyboardWasActive = false;
+      // Leaving the screen that owned the keyboard also retires its dismissal,
+      // so the next name-entry screen opens with a keyboard again.
+      VRSpike.keyboardDismissed = false;
       return false;
     }
     try {
@@ -820,17 +833,39 @@ export class VRSpike {
       const grabAction = actions.find((action) => action.action === SemanticXRAction.Grab && action.pressed);
       if (grabAction) {
         const hand = inputFrame.hands[grabAction.hand];
-        if (hand) VRSpike.keyboardHost.moveTo(hand.pose, inputFrame.head);
+        // Grabbing both repositions the keyboard and recalls a dismissed one,
+        // so finishing entry is never a one-way door if more typing is needed.
+        if (VRSpike.keyboardDismissed && !VRSpike.keyboardGrabHeld) VRSpike.keyboardDismissed = false;
+        if (hand && !VRSpike.keyboardDismissed) VRSpike.keyboardHost.moveTo(hand.pose, inputFrame.head);
       }
-      if (selectPressed && !VRSpike.keyboardSelectHeld && VRSpike.keyboardHost.isVisible) {
-        const rayPose = inputFrame.hands.right?.targetRayPose;
-        const key = rayPose ? VRSpike.keyboardHost.keyAtRay(rayPose) : null;
-        if (key) VRSpike.keyboardInputController.press(key, sink);
+      VRSpike.keyboardGrabHeld = !!grabAction;
+
+      if (VRSpike.keyboardDismissed) {
+        // Text entry is finished for now. Release the plane and the ray so the
+        // panel underneath — its Accept and Back buttons — becomes reachable.
+        VRSpike.keyboardHost.clear();
+        VRSpike.keyboardSelectHeld = selectPressed;
+        VRSpike.keyboardCancelHeld = cancelPressed;
+        return false;
+      }
+
+      // Track the aimed key every frame, not only on press: this is what draws
+      // the highlight and the on-plane cursor that make the keyboard aimable.
+      const rayPose = inputFrame.hands.right?.targetRayPose;
+      const aimedKey = rayPose && VRSpike.keyboardHost.isVisible
+        ? VRSpike.keyboardHost.keyAtRay(rayPose)
+        : null;
+      if (selectPressed && !VRSpike.keyboardSelectHeld && aimedKey) {
+        if (aimedKey === VR_KEYBOARD_DONE_KEY) {
+          VRSpike.keyboardDismissed = true;
+          VRSpike.keyboardHost.clear();
+        } else {
+          VRSpike.keyboardInputController.press(aimedKey, sink);
+        }
       }
       VRSpike.keyboardSelectHeld = selectPressed;
       if (cancelPressed && !VRSpike.keyboardCancelHeld) sink.cancel();
       VRSpike.keyboardCancelHeld = cancelPressed;
-      VRSpike.keyboardGrabHeld = !!grabAction;
     } catch (error) {
       VRSpike.keyboardHost?.clear();
       VRSpike.keyboardSelectHeld = false;

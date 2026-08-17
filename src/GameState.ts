@@ -184,6 +184,22 @@ function isWithinVRCombatRange(actor: ModuleCreature, target: ModuleObject): boo
   ) <= resolveVRCombatRange(actor);
 }
 
+/**
+ * One-shot-per-object route reporting for VR world interactions.
+ *
+ * These findings only ever arrive as a console log pasted back from a headset
+ * session, so this reports at `error` level: default DevTools filtering hides
+ * `warn` and `info`, which is why the previous round's diagnostics came back
+ * empty rather than informative.
+ */
+const reportedVRInteractionRoutes = new Set<number>();
+
+function reportVRInteractionRoute(targetId: number, detail: string): void {
+  if (reportedVRInteractionRoutes.has(targetId)) return;
+  reportedVRInteractionRoutes.add(targetId);
+  console.error(`[VR interaction route] target=${targetId} ${detail}`);
+}
+
 function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null {
   if (aimedTargetId === null) return null;
   return GameState.ModuleObjectManager.playerSelectableObjects.find(
@@ -1052,7 +1068,20 @@ export class GameState implements EngineContext {
           GameState.ActionMenuManager.SetPC(actor);
           GameState.ActionMenuManager.SetTarget(target);
           GameState.ActionMenuManager.UpdateMenuActions();
-          if (GameState.ActionMenuManager.targetActionCount() > 0) {
+          const actionCount = GameState.ActionMenuManager.targetActionCount();
+          // Every "I used it and nothing happened" report — locked doors and
+          // containers, the galaxy map console, the Peragus lift — ends here,
+          // and until now this branch was silent about which of its three
+          // outcomes it took. Report the route once per object so the next
+          // headset run distinguishes "direct-use ran and the engine declined"
+          // from "the panel opened empty" from "no actions were offered".
+          reportVRInteractionRoute(
+            target.id,
+            `type=${target.objectType} locked=${targetIsLocked} ` +
+            `directUseHandled=${directUseResult.handled} actions=${actionCount} ` +
+            `name='${target.getName?.() ?? ''}'`
+          );
+          if (actionCount > 0) {
             vrContextActionTarget = target;
             vrContextActionPanelController.open(intent.targetId);
           } else {
@@ -1137,7 +1166,11 @@ export class GameState implements EngineContext {
             { id: 'wrist:inventory', label: 'Inventory', icon: 'inv_bag01', activate: () => GameState.MenuManager.MenuInventory.open() },
             { id: 'wrist:character', label: 'Character', icon: 'iattackr', activate: () => GameState.MenuManager.MenuCharacter.open() },
             { id: 'wrist:settings', label: 'Comfort Settings', icon: 'iopts', activate: () => { vrComfortSettingsPanelOpen = true; } },
-            { id: 'wrist:galaxymap', label: 'Galaxy Map', icon: 'iplaneton', activate: () => GameState.MenuManager.MenuGalaxyMap.open() },
+            // No galaxy map here. The galaxy map is a place in the world — the
+            // Ebon Hawk's map console — and the authored menu depends on the
+            // state that using that console sets up. Summoning it from the
+            // wrist opened it out of context, where it rendered but nothing
+            // could be selected. Reaching it is the console's job.
           ],
           setPaused: (paused: boolean) => {
             if (paused && GameState.State !== EngineState.PAUSED) {

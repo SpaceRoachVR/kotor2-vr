@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { XRWorldPose } from './XRTypes';
-import { resolveVRKeyboardKeyAtUV, VR_KEYBOARD_LAYOUT } from './VRKeyboardLayout';
+import { resolveVRKeyboardKeyAtUV, VR_KEYBOARD_DONE_KEY, VR_KEYBOARD_LAYOUT } from './VRKeyboardLayout';
 
 /** A controller-ray-selectable keyboard surface for legacy editable labels. */
 export class VRKeyboardHost {
@@ -8,9 +8,14 @@ export class VRKeyboardHost {
   private readonly raycaster = new THREE.Raycaster();
   private readonly canvas: HTMLCanvasElement;
   private readonly texture: THREE.CanvasTexture;
+  private readonly cursor: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private positioned = false;
+  private highlightedKey: string | null = null;
 
   get isVisible(): boolean { return this.object.visible; }
+
+  /** The key currently under the aiming ray, for tests and callers. */
+  get hoveredKey(): string | null { return this.highlightedKey; }
 
   constructor(scene: THREE.Scene) {
     if (typeof document === 'undefined') throw new Error('VR keyboard requires a browser document');
@@ -27,6 +32,19 @@ export class VRKeyboardHost {
     this.object.visible = false;
     this.object.renderOrder = 1_000_003;
     scene.add(this.object);
+
+    // Typing on a plane you cannot aim at is guesswork. The highlighted key
+    // says which key would be pressed; this dot says exactly where the ray
+    // meets the plane, so near-misses at key borders are visible rather than
+    // felt only after the wrong letter appears.
+    this.cursor = new THREE.Mesh(
+      new THREE.CircleGeometry(0.012, 24),
+      new THREE.MeshBasicMaterial({ color: 0xfff2a8, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false })
+    );
+    this.cursor.name = 'Kotor2VR.KeyboardCursor';
+    this.cursor.visible = false;
+    this.cursor.renderOrder = 1_000_004;
+    scene.add(this.cursor);
   }
 
   present(head: XRWorldPose): void {
@@ -64,21 +82,58 @@ export class VRKeyboardHost {
     this.object.scale.set(1.15, 0.46, 1);
   }
 
-  clear(): void { this.object.visible = false; this.positioned = false; }
+  clear(): void {
+    this.object.visible = false;
+    this.positioned = false;
+    this.cursor.visible = false;
+    this.setHighlight(null);
+  }
 
+  /**
+   * Resolves the aimed key and, as a side effect, shows where the ray lands.
+   * One raycast drives both the returned key and the on-plane feedback so the
+   * highlight can never disagree with the key that a press would produce.
+   */
   keyAtRay(pose: XRWorldPose): string | null {
-    if (!this.object.visible) return null;
+    if (!this.object.visible) {
+      this.setHighlight(null);
+      this.cursor.visible = false;
+      return null;
+    }
     const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(pose.orientation).normalize();
     this.raycaster.set(pose.position, direction);
     // `present` and `moveTo` can change the plane after the scene's update
     // pass. Raycaster uses matrixWorld, so synchronize it before intersecting.
     this.object.updateWorldMatrix(true, false);
     const hit = this.raycaster.intersectObject(this.object, false)[0];
-    if (!hit?.uv) return null;
-    return resolveVRKeyboardKeyAtUV(hit.uv.x, hit.uv.y);
+    if (!hit?.uv) {
+      this.setHighlight(null);
+      this.cursor.visible = false;
+      return null;
+    }
+
+    // Lift the dot marginally off the plane along its own normal so it is not
+    // z-fighting with the keyboard texture it annotates.
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(this.object.quaternion);
+    this.cursor.position.copy(hit.point).addScaledVector(normal, 0.004);
+    this.cursor.quaternion.copy(this.object.quaternion);
+    this.cursor.visible = true;
+
+    const key = resolveVRKeyboardKeyAtUV(hit.uv.x, hit.uv.y);
+    this.setHighlight(key);
+    return key;
   }
 
-  dispose(): void { this.object.removeFromParent(); this.object.geometry.dispose(); this.object.material.dispose(); this.texture.dispose(); }
+  private setHighlight(key: string | null): void {
+    if (key === this.highlightedKey) return;
+    this.highlightedKey = key;
+    this.draw();
+  }
+
+  dispose(): void {
+    this.object.removeFromParent(); this.object.geometry.dispose(); this.object.material.dispose(); this.texture.dispose();
+    this.cursor.removeFromParent(); this.cursor.geometry.dispose(); this.cursor.material.dispose();
+  }
 
   private draw(): void {
     const context = this.canvas.getContext('2d');
@@ -90,9 +145,17 @@ export class VRKeyboardHost {
       const y = key.y * 120 + 5;
       const width = key.width * 120 - 10;
       const height = key.height * 120 - 10;
-      context.fillStyle = 'rgba(8, 48, 58, 0.96)'; context.fillRect(x, y, width, height);
-      context.strokeStyle = '#62e8ff'; context.lineWidth = 3; context.strokeRect(x, y, width, height);
-      context.fillStyle = '#f4feff'; context.fillText(key.label, x + width / 2, y + height / 2);
+      const aimed = key.value === this.highlightedKey;
+      const done = key.value === VR_KEYBOARD_DONE_KEY;
+      context.fillStyle = aimed
+        ? 'rgba(96, 232, 255, 0.92)'
+        : done ? 'rgba(14, 74, 52, 0.96)' : 'rgba(8, 48, 58, 0.96)';
+      context.fillRect(x, y, width, height);
+      context.strokeStyle = aimed ? '#ffffff' : done ? '#6dffb0' : '#62e8ff';
+      context.lineWidth = aimed ? 6 : 3;
+      context.strokeRect(x, y, width, height);
+      context.fillStyle = aimed ? '#02222b' : '#f4feff';
+      context.fillText(key.label, x + width / 2, y + height / 2);
     }
     this.texture.needsUpdate = true;
   }

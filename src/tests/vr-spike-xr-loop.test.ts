@@ -863,7 +863,9 @@ describe('VRSpike XR loop ownership', () => {
     const actor = { id: 7, clearAllActions: jest.fn() };
     const target = {
       id: 42,
-      position: new THREE.Vector3(0, 2, -1),
+      // Positioned so the object's tag — which sits a little above its origin
+      // when the engine reports no bounds — lands on the controller ray.
+      position: new THREE.Vector3(0, 2, -0.25),
       isUseable: () => true,
       onClick: jest.fn(),
     };

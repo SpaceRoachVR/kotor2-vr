@@ -2,6 +2,44 @@ import * as THREE from 'three';
 import { XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 /**
+ * Builds a render-only copy of an engine model for the hand anchor.
+ *
+ * `Object3D.clone()` cannot be used here. Three's `Object3D.copy` deep-copies
+ * `userData` with `JSON.parse(JSON.stringify(...))`, and every Odyssey node
+ * carries a `userData` graph that refers back to its own meshes — so cloning
+ * an equipped weapon threw `Converting circular structure to JSON` on the
+ * first XR frame that had anything in hand, taking the whole tracked-input
+ * update down with it.
+ *
+ * Only world-space geometry and materials matter for a held presentation
+ * model, so flatten the source's visible meshes into plain meshes that share
+ * (never copy) their geometry and material. Nothing engine-owned is mutated,
+ * and there is no `userData` to serialize.
+ */
+function createPresentationClone(source: THREE.Object3D): THREE.Object3D {
+  const root = new THREE.Group();
+  source.updateWorldMatrix(true, true);
+  const inverseSourceMatrix = new THREE.Matrix4().copy(source.matrixWorld).invert();
+
+  source.traverseVisible((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!(mesh as { isMesh?: boolean }).isMesh || !mesh.geometry || !mesh.material) return;
+    // Share the engine's geometry/material rather than copying them: this is a
+    // presentation-only mirror, so it must never own — or dispose — resources
+    // the module still renders with.
+    const copy = new THREE.Mesh(mesh.geometry, mesh.material);
+    copy.matrixAutoUpdate = false;
+    // Re-express each mesh relative to the source root so the flattened result
+    // keeps the original model's internal layout.
+    copy.matrix.multiplyMatrices(inverseSourceMatrix, mesh.matrixWorld);
+    copy.frustumCulled = false;
+    root.add(copy);
+  });
+
+  return root;
+}
+
+/**
  * Owns rig-relative hand visuals and controller-ray anchors.
  */
 export class XRControllerAnchorHost {
@@ -75,7 +113,7 @@ export class XRControllerAnchorHost {
       return;
     }
 
-    const visual = source.clone(true);
+    const visual = createPresentationClone(source);
     visual.name = `Kotor2VR.${hand}HeldItem`;
     visual.updateWorldMatrix(true, true);
     const size = new THREE.Box3().setFromObject(visual).getSize(new THREE.Vector3());

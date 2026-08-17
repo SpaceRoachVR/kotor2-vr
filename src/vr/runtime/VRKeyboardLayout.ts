@@ -23,9 +23,16 @@ export const VR_KEYBOARD_LAYOUT: readonly VRKeyboardKey[] = Object.freeze([
       height: 1,
     }));
   }),
-  { label: 'SPACE', value: 'SPACE', x: 1, y: 3, width: 5, height: 1 },
-  { label: 'BACK', value: 'BACKSPACE', x: 6.2, y: 3, width: 2.8, height: 1 },
+  { label: 'SPACE', value: 'SPACE', x: 0.4, y: 3, width: 4.4, height: 1 },
+  { label: 'BACK', value: 'BACKSPACE', x: 5, y: 3, width: 2.2, height: 1 },
+  // Without this the keyboard never goes away: it opens for any editable field
+  // on the foreground menu and owns the controller ray for as long as it is
+  // up, so the panel's own Accept/Back buttons underneath cannot be reached.
+  { label: 'DONE', value: 'DONE', x: 7.4, y: 3, width: 2.2, height: 1 },
 ]);
+
+/** Finishes text entry and hands the controller ray back to the panel. */
+export const VR_KEYBOARD_DONE_KEY = 'DONE';
 
 /** Maps a plane UV to one deliberately-sized virtual keyboard key. */
 export function resolveVRKeyboardKeyAtUV(u: number, v: number): string | null {

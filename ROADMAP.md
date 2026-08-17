@@ -334,6 +334,16 @@ Every button reachable in flatscreen needs a VR route.
   screens, or may need bespoke handling. Not chased down this pass.
 - **4.5** ☐ Audit `gui/` for anything still unreachable — check `game/tsl/` against
   `game/kotor/` for stubs while doing it. Not done.
+- **Found, not implemented:** `SemanticXRAction.Recenter`, `Pause`, `PartyCommand`, and
+  `ToggleWalkRun` are all bound to physical buttons in `XRInputRouter.ts` but never
+  consumed anywhere — the same "bound but dead" shape `ToggleLocomotionMode` was in
+  before Stage 2.2. `Recenter`'s math is knowable (there's already an unused `yawOffset`
+  field on `VRSpike` built for exactly this) but genuinely risky to get subtly wrong
+  without a headset to verify against — a bad recenter is a real comfort hazard, unlike
+  a UI bug. `Pause`/`PartyCommand` have no defined intent to build against, and
+  `ToggleWalkRun` has no underlying walk/run distinction anywhere in the movement system
+  to hook into (creature movement always applies full force). Left for a session with
+  device access rather than guessed at blind.
 
 ---
 

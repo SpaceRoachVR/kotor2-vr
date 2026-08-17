@@ -18,6 +18,8 @@ export interface EngineInteractableObject {
   readonly objectType?: number;
   readonly destroyed?: boolean;
   readonly willDestroy?: boolean;
+  /** Engine-maintained world bounds, used to sit the VR tag on the object. */
+  readonly box?: THREE.Box3;
   getName?(): string;
   isUseable(): boolean;
   onClick(callee: EngineInteractionActor): void;
@@ -35,8 +37,35 @@ export interface ModuleObjectInteractionTargetOptions {
 }
 
 const DEFAULT_RADIUS_METRES = 0.5;
-const DEFAULT_VERTICAL_OFFSET_METRES = 1;
+/**
+ * Fallback height above an object's origin for its VR tag, used only when the
+ * engine has no usable bounds for it. Objects sit on their origin, so a small
+ * lift keeps the tag off the floor without detaching it from the object.
+ *
+ * This was 1m, which put the tag a metre over every footlocker and computer
+ * console while KOTOR's own reticle stayed down on the object itself — two
+ * separate markers for one thing, with only the floating one selectable.
+ * Anything with real bounds now uses them instead (see `resolveTagHeight`).
+ */
+const DEFAULT_VERTICAL_OFFSET_METRES = 0.25;
 const DEFAULT_INTERACTION_RANGE_METRES = 2;
+
+/**
+ * Height above the object's origin at which its tag and selection point sit:
+ * the vertical centre of the object's own bounds, so a low crate tags low and
+ * a tall console tags at chest height — on the object either way.
+ */
+function resolveTagHeight(
+  object: EngineInteractableObject,
+  fallbackMetres: number
+): number {
+  const box = object.box;
+  if (!box || box.isEmpty()) return fallbackMetres;
+  const centreZ = (box.min.z + box.max.z) / 2;
+  if (!Number.isFinite(centreZ)) return fallbackMetres;
+  const height = centreZ - object.position.z;
+  return Number.isFinite(height) ? height : fallbackMetres;
+}
 
 /** Resolves a VR target without queuing the desktop walk-to interaction. */
 export function createModuleObjectInteractionTarget(
@@ -89,7 +118,9 @@ export function createModuleObjectInteractionTarget(
     radiusMetres,
     interactionModes: ['near-touch', 'ray'],
     getWorldPosition: (output: THREE.Vector3): THREE.Vector3 =>
-      output.copy(object.position).setZ(object.position.z + verticalOffsetMetres),
+      output.copy(object.position).setZ(
+        object.position.z + resolveTagHeight(object, verticalOffsetMetres)
+      ),
     isAvailable,
     activate: (context: InteractionActivationContext): void => {
       const actor = getActiveActor();
