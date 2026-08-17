@@ -15,6 +15,10 @@ import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatI
 import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
 import { VRRadialMenuController, VRRadialMenuItem } from "./runtime/VRRadialMenuController";
 import { VRRadialMenuHost } from "./runtime/VRRadialMenuHost";
+import { resolveWallSoftBlockCorrection, VRWalkmeshQuery } from "./runtime/VRWallSoftBlock";
+import { VRSnapTurnController } from "./runtime/VRSnapTurnController";
+import { VRTeleportController } from "./runtime/VRTeleportController";
+import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import {
   VRWorldTargetIndicator,
   VRWorldTargetLabelHost,
@@ -29,7 +33,7 @@ import {
   EngineInteractionActor,
   ModuleObjectInteractionTargetSet,
 } from "./runtime/ModuleObjectInteractionTarget";
-import { InteractionIntent, SemanticXRAction, XRInputFrame } from "./runtime/XRTypes";
+import { InteractionIntent, SemanticXRAction, VRComfortSettings, XRInputFrame } from "./runtime/XRTypes";
 import { PerfSampler, PerfWorldSnapshot } from "./PerfSampler";
 import type { EngineFrameSource } from "./XRFrameCadence";
 
@@ -60,11 +64,30 @@ import type { EngineFrameSource } from "./XRFrameCadence";
  * What the spike needs from the engine. Passed in rather than imported:
  * GameState already imports VRSpike, and importing it back would close a cycle.
  */
+const DEFAULT_COMFORT_SETTINGS: VRComfortSettings = {
+  locomotionMode: 'smooth',
+  turnMode: 'smooth',
+  snapTurnDegrees: 45,
+  vignetteEnabled: false,
+};
+
 export interface VRSpikeHooks {
   /** The engine's frame function. WebXR calls this instead of rAF. */
   update: (timestamp: number, source: EngineFrameSource) => void;
   /** Player's feet in world space, or null before a module is loaded. */
   getPlayerPosition: () => THREE.Vector3 | null;
+  /**
+   * The player's current room walkmesh, for the wall soft-block check —
+   * room-scale head tracking can cross a wall the joystick-driven avatar
+   * body never reached, since only the avatar's own movement is
+   * walkmesh-collision-checked. Null when no room/walkmesh is resolved yet.
+   */
+  getCurrentRoomWalkmesh?: () => VRWalkmeshQuery | null;
+  /** Comfort settings (ROADMAP 2.5/2.6): locomotion/turn mode and vignette. */
+  getComfortSettings?: () => VRComfortSettings;
+  setComfortSettings?: (patch: Partial<VRComfortSettings>) => void;
+  /** Instantly relocates the player, e.g. for a committed blink-teleport. */
+  teleportPlayer?: (point: THREE.Vector3) => void;
   /** Follower camera facing, radians about the world Z axis. */
   getFacing: () => number;
   /** Current module, culling, and player path context for device evidence. */
@@ -164,6 +187,10 @@ export class VRSpike {
   private static xrFrameRenderTarget: THREE.WebGLRenderTarget | null = null;
   private static readonly inputRouter = new XRInputRouter();
   private static readonly locomotionController = new LocomotionController();
+  private static readonly snapTurnController = new VRSnapTurnController();
+  private static readonly teleportController = new VRTeleportController();
+  private static locomotionModeToggleHeld = false;
+  private static comfortVignetteHost: VRComfortVignetteHost | null = null;
   private static previousXRInputTimestamp: number | null = null;
   private static locomotionInputErrorReported = false;
   private static trackedInputErrorReported = false;
@@ -364,6 +391,9 @@ export class VRSpike {
       VRSpike.interactionSystem.cancelTransientState();
       VRSpike.combatInputController.reset();
       VRSpike.forceGestureController.reset();
+      VRSpike.snapTurnController.reset();
+      VRSpike.teleportController.reset();
+      VRSpike.locomotionModeToggleHeld = false;
       VRSpike.panelInputController.cancel();
       VRSpike.panelHost?.clear();
       VRSpike.keyboardHost?.clear();
@@ -436,6 +466,9 @@ export class VRSpike {
     VRSpike.panelInputController.cancel();
     VRSpike.combatInputController.reset();
     VRSpike.forceGestureController.reset();
+    VRSpike.snapTurnController.reset();
+    VRSpike.teleportController.reset();
+    VRSpike.locomotionModeToggleHeld = false;
     VRSpike.panelHost?.clear();
     VRSpike.keyboardHost?.clear();
     VRSpike.movieHost?.clear();
@@ -443,6 +476,8 @@ export class VRSpike {
     VRSpike.radialPointerHost?.clear();
     VRSpike.worldTargetLabelHost?.clear();
     VRSpike.latestPanelPointerPosition = null;
+    VRSpike.comfortVignetteHost?.dispose();
+    VRSpike.comfortVignetteHost = null;
 
     const btn = document.getElementById('vr-spike-button');
     if (btn) btn.textContent = 'Enter VR (spike)';
@@ -928,13 +963,29 @@ export class VRSpike {
       if (!viewerPose) return;
       const routedActions = VRSpike.inputRouter.route(
         controllers,
-        new Set(['locomotion'])
+        // 'gameplay' is only needed here for ToggleLocomotionMode, which is
+        // bound in that context rather than 'locomotion'.
+        new Set(['locomotion', 'gameplay'])
       );
       const move = routedActions.find((action) => action.action === SemanticXRAction.Move);
       const turn = routedActions.find((action) => action.action === SemanticXRAction.Turn);
       if (!move?.axes) return;
 
-      const inputDirection = new THREE.Vector2(move.axes[0], -move.axes[1]);
+      const comfortSettings = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
+
+      const togglePressed = routedActions.some((action) =>
+        action.action === SemanticXRAction.ToggleLocomotionMode && action.pressed
+      );
+      if (togglePressed && !VRSpike.locomotionModeToggleHeld) {
+        VRSpike.hooks?.setComfortSettings?.({
+          locomotionMode: comfortSettings.locomotionMode === 'smooth' ? 'blink' : 'smooth',
+        });
+        VRSpike.teleportController.reset();
+      }
+      VRSpike.locomotionModeToggleHeld = togglePressed;
+
+      const rawMoveAxes = new THREE.Vector2(move.axes[0], -move.axes[1]);
+      const inputDirection = rawMoveAxes.clone();
       const inputMagnitude = Math.min(1, inputDirection.length());
       if (inputMagnitude > 0) inputDirection.divideScalar(inputMagnitude);
 
@@ -952,35 +1003,99 @@ export class VRSpike {
         : Math.min(0.1, Math.max(0, (timestamp - previousTimestamp) / 1000));
       VRSpike.previousXRInputTimestamp = timestamp;
 
+      // Match the legacy KOTOR camera convention: stick-right decreases
+      // world yaw and therefore turns the view and creature to the right.
+      const turnAxisValue = -(turn?.axes?.[0] ?? 0);
+      const useSnapTurn = comfortSettings.turnMode === 'snap';
+      const snapTurnDeltaRadians = useSnapTurn
+        ? VRSpike.snapTurnController.process(
+          turnAxisValue,
+          THREE.MathUtils.degToRad(comfortSettings.snapTurnDegrees)
+        )
+        : 0;
+
       const resolvedLocomotion = VRSpike.locomotionController.resolve(
         {
           direction: inputDirection,
           magnitude: inputMagnitude,
-          // Match the legacy KOTOR camera convention: stick-right decreases
-          // world yaw and therefore turns the view and creature to the right.
-          turn: -(turn?.axes?.[0] ?? 0),
-          mode: 'smooth',
+          turn: useSnapTurn ? 0 : turnAxisValue,
+          mode: comfortSettings.locomotionMode,
           referenceFrame: 'head',
         },
         headWorldOrientation,
         currentFacing,
         deltaSeconds
       );
-      VRSpike.applyTurnAroundHead(
-        resolvedLocomotion.turnDeltaRadians,
-        viewerPose.transform.position
-      );
-      VRSpike.turnYaw = Math.atan2(
-        Math.sin(VRSpike.turnYaw + resolvedLocomotion.turnDeltaRadians),
-        Math.cos(VRSpike.turnYaw + resolvedLocomotion.turnDeltaRadians)
-      );
-      applyLocomotion(resolvedLocomotion);
+      const turnDeltaRadians = useSnapTurn ? snapTurnDeltaRadians : resolvedLocomotion.turnDeltaRadians;
+      if (turnDeltaRadians !== 0) {
+        VRSpike.applyTurnAroundHead(turnDeltaRadians, viewerPose.transform.position);
+        VRSpike.turnYaw = Math.atan2(
+          Math.sin(VRSpike.turnYaw + turnDeltaRadians),
+          Math.cos(VRSpike.turnYaw + turnDeltaRadians)
+        );
+      }
+
+      if (comfortSettings.locomotionMode === 'blink') {
+        VRSpike.processTeleportLocomotion(rawMoveAxes, headWorldOrientation);
+        VRSpike.updateComfortVignette(0);
+      } else {
+        VRSpike.teleportController.reset();
+        applyLocomotion(resolvedLocomotion);
+        // Discrete comfort modes (snap turn) don't need the vignette — it's
+        // a mitigation for continuous vection, not instant reorientation.
+        VRSpike.updateComfortVignette(
+          comfortSettings.vignetteEnabled ? resolvedLocomotion.magnitude : 0
+        );
+      }
     } catch (error) {
       if (!VRSpike.locomotionInputErrorReported) {
         VRSpike.locomotionInputErrorReported = true;
         console.error('[VRSpike] controller locomotion input rejected', error);
       }
     }
+  }
+
+  private static updateComfortVignette(intensity: number): void {
+    if (!VRSpike.camera) return;
+    if (intensity <= 0 && !VRSpike.comfortVignetteHost) return;
+    if (!VRSpike.comfortVignetteHost) {
+      VRSpike.comfortVignetteHost = new VRComfortVignetteHost(VRSpike.camera);
+    }
+    VRSpike.comfortVignetteHost.setIntensity(intensity);
+  }
+
+  /**
+   * Blink-teleport (ROADMAP 2.5): the comfort alternative to smooth movement.
+   * Deflecting the offhand stick aims in that head-relative direction;
+   * releasing it commits a single instant relocation, clamped to the
+   * nearest walkable point on the player's current room walkmesh so a
+   * teleport can't land the player inside geometry or off the level.
+   */
+  private static processTeleportLocomotion(
+    rawMoveAxes: THREE.Vector2,
+    headWorldOrientation: THREE.Quaternion
+  ): void {
+    const result = VRSpike.teleportController.process(rawMoveAxes);
+    if (result.phase !== 'committed' || !result.direction) return;
+
+    const feet = VRSpike.hooks?.getPlayerPosition() ?? null;
+    const walkmesh = VRSpike.hooks?.getCurrentRoomWalkmesh?.() ?? null;
+    const teleportPlayer = VRSpike.hooks?.teleportPlayer;
+    if (!feet || !walkmesh || !teleportPlayer) return;
+
+    const headFacing = LocomotionController.worldOrientationToCreatureFacing(headWorldOrientation);
+    const worldDirection = result.direction
+      .clone()
+      .rotateAround(new THREE.Vector2(0, 0), headFacing);
+    const candidate = feet.clone().addScaledVector(
+      new THREE.Vector3(worldDirection.x, worldDirection.y, 0),
+      VRSpike.teleportController.maxDistanceMetres
+    );
+
+    const target = walkmesh.isPointWalkable(candidate)
+      ? candidate
+      : walkmesh.getNearestWalkablePoint(candidate);
+    teleportPlayer(target);
   }
 
   private static applyTurnAroundHead(
@@ -1314,6 +1429,20 @@ export class VRSpike {
       rig.position.z -= VRSpike.eyeHeight;
     }
     rig.position.add(VRSpike.turnOriginOffset);
+
+    // Soft-block on wall intrusion (ROADMAP 2.4): the joystick-driven avatar
+    // body is already walkmesh-collision-checked, but physical room-scale
+    // head tracking is layered on top of the rig placed above and isn't —
+    // the player's real footsteps can put their head past a wall the avatar
+    // never reached. Nudge the rig back by exactly the delta needed every
+    // frame; no fade, no hard stop, and it self-corrects as the player's
+    // physical position changes rather than accumulating state.
+    const headPosition = VRSpike.latestInputFrame?.head.position ?? null;
+    if (headPosition) {
+      const walkmesh = VRSpike.hooks?.getCurrentRoomWalkmesh?.() ?? null;
+      const correction = resolveWallSoftBlockCorrection(headPosition, walkmesh);
+      if (correction) rig.position.add(correction);
+    }
 
     // Rebuild the rotation each frame: Z-up conversion first, then yaw about
     // the world's up axis. Order matters — yaw is applied in world space.

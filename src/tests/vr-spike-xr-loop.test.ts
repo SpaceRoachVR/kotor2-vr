@@ -601,6 +601,135 @@ describe('VRSpike XR loop ownership', () => {
     expect((VRSpike as any).turnOriginOffset.y).toBeCloseTo(-Math.sin(expectedTurn));
   });
 
+  test('toggles the comfort locomotion mode on an offhand button press edge, once per press', () => {
+    const settingsPatches: Array<Record<string, unknown>> = [];
+    let locomotionMode: 'smooth' | 'blink' = 'smooth';
+    const referenceSpace = {} as XRReferenceSpace;
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const offhand = {
+      handedness: 'left',
+      profiles: ['oculus-touch-v3'],
+      gamepad: { buttons, axes: [0, 0, 0, 0] },
+    } as unknown as XRInputSource;
+    VRSpike.renderer = { xr: { getReferenceSpace: () => referenceSpace } } as never;
+    VRSpike.session = { inputSources: [offhand] } as unknown as XRSession;
+    VRSpike.rig = new THREE.Group();
+    XRCoordinateConverter.applyXRToGameBasis(VRSpike.rig);
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getPlayerFacing: () => 0,
+      applyLocomotion: () => undefined,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getComfortSettings: () => ({ locomotionMode, turnMode: 'smooth', snapTurnDegrees: 45, vignetteEnabled: false }),
+      setComfortSettings: (patch) => {
+        settingsPatches.push(patch);
+        if (patch.locomotionMode) locomotionMode = patch.locomotionMode;
+      },
+    };
+    const frame = {
+      getViewerPose: () => ({
+        transform: { orientation: { x: 0, y: 0, z: 0, w: 1 }, position: { x: 0, y: 0, z: 0 } },
+      }),
+    } as unknown as XRFrame;
+
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).processLocomotionInput(1000, frame);
+    (VRSpike as any).processLocomotionInput(1016, frame);
+
+    expect(settingsPatches).toEqual([{ locomotionMode: 'blink' }]);
+
+    buttons[0] = { pressed: false, touched: false, value: 0 };
+    (VRSpike as any).processLocomotionInput(1032, frame);
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).processLocomotionInput(1048, frame);
+
+    expect(settingsPatches).toEqual([{ locomotionMode: 'blink' }, { locomotionMode: 'smooth' }]);
+  });
+
+  test('snap turn applies one fixed increment per deflection instead of a continuous rotation', () => {
+    const referenceSpace = {} as XRReferenceSpace;
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const offhand = {
+      handedness: 'left', profiles: ['oculus-touch-v3'], gamepad: { buttons, axes: [0, 0, 0, 0] },
+    } as unknown as XRInputSource;
+    const dominant = {
+      handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { buttons, axes: [0, 0, 1, 0] },
+    } as unknown as XRInputSource;
+    VRSpike.renderer = { xr: { getReferenceSpace: () => referenceSpace } } as never;
+    VRSpike.session = { inputSources: [offhand, dominant] } as unknown as XRSession;
+    VRSpike.rig = new THREE.Group();
+    XRCoordinateConverter.applyXRToGameBasis(VRSpike.rig);
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getPlayerFacing: () => 0,
+      applyLocomotion: () => undefined,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getComfortSettings: () => ({ locomotionMode: 'smooth', turnMode: 'snap', snapTurnDegrees: 45, vignetteEnabled: false }),
+    };
+    const frame = {
+      getViewerPose: () => ({
+        transform: { orientation: { x: 0, y: 0, z: 0, w: 1 }, position: { x: 0, y: 0, z: 0 } },
+      }),
+    } as unknown as XRFrame;
+
+    (VRSpike as any).processLocomotionInput(1000, frame);
+    expect((VRSpike as any).turnYaw).toBeCloseTo(-THREE.MathUtils.degToRad(45));
+
+    // Held past engage without returning to center — must not fire again.
+    (VRSpike as any).processLocomotionInput(1016, frame);
+    expect((VRSpike as any).turnYaw).toBeCloseTo(-THREE.MathUtils.degToRad(45));
+  });
+
+  test('blink-teleport commits a walkmesh-clamped relocation on stick release', () => {
+    const referenceSpace = {} as XRReferenceSpace;
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const axes = [0, 0, 0, -1];
+    const offhand = {
+      handedness: 'left', profiles: ['oculus-touch-v3'], gamepad: { buttons, axes },
+    } as unknown as XRInputSource;
+    VRSpike.renderer = { xr: { getReferenceSpace: () => referenceSpace } } as never;
+    VRSpike.session = { inputSources: [offhand] } as unknown as XRSession;
+    VRSpike.rig = new THREE.Group();
+    XRCoordinateConverter.applyXRToGameBasis(VRSpike.rig);
+    const teleported: THREE.Vector3[] = [];
+    const nearestWalkablePoint = new THREE.Vector3(0, 3, 0);
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => new THREE.Vector3(0, 0, 0),
+      getFacing: () => 0,
+      getPlayerFacing: () => 0,
+      applyLocomotion: () => undefined,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getComfortSettings: () => ({ locomotionMode: 'blink', turnMode: 'smooth', snapTurnDegrees: 45, vignetteEnabled: false }),
+      getCurrentRoomWalkmesh: () => ({
+        isPointWalkable: () => false,
+        getNearestWalkablePoint: () => nearestWalkablePoint,
+      }),
+      teleportPlayer: (point) => teleported.push(point.clone()),
+    };
+    const frame = {
+      getViewerPose: () => ({
+        transform: { orientation: { x: 0, y: 0, z: 0, w: 1 }, position: { x: 0, y: 0, z: 0 } },
+      }),
+    } as unknown as XRFrame;
+
+    // Deflect forward to aim — no teleport yet.
+    (VRSpike as any).processLocomotionInput(1000, frame);
+    expect(teleported).toHaveLength(0);
+
+    // Release — commits, clamped to the mocked nearest walkable point since
+    // the raw candidate is reported unwalkable.
+    axes[3] = 0;
+    (VRSpike as any).processLocomotionInput(1016, frame);
+    expect(teleported).toHaveLength(1);
+    expect(teleported[0].x).toBeCloseTo(nearestWalkablePoint.x);
+    expect(teleported[0].y).toBeCloseTo(nearestWalkablePoint.y);
+  });
+
   test('updates 6DoF controller anchors and hides them when tracking is lost', () => {
     const referenceSpace = {} as XRReferenceSpace;
     const gripSpace = {} as XRSpace;

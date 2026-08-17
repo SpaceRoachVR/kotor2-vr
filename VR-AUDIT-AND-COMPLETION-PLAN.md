@@ -264,13 +264,32 @@ actually worth building next given what scaffolding already exists.
    blocks the Phase 2 exit criterion ("without falling through geometry or leaving
    walkable space"). Needs a rig-vs-walkmesh collision check pushing the rig back, no
    fade/hard stop per the original design note.
-2. **2.5/2.6 — Comfort options + settings surface.** Unusually cheap: `LocomotionMode`
-   already has a `'blink'` variant and `SemanticXRAction.ToggleLocomotionMode` is already
-   bound to a controller button (`XRTypes.ts:22`, `XRInputRouter.ts:72`) — but
-   `VRSpike.ts:894` hardcodes `mode: 'smooth'` and nothing reads the toggle. Implement
-   blink-teleport + snap-turn in `LocomotionController.ts`, wire the existing toggle, and
-   surface both plus a comfort vignette option through a bare-bones panel riding the
-   already-working `VRPanelHost`.
+2. **2.5/2.6 — Comfort options + settings surface. Mechanics done, UI surface deferred
+   to 2.4.** Implemented as small, independently-tested modules rather than folded into
+   `LocomotionController` (which stayed a pure continuous-smooth resolver):
+   - `VRSnapTurnController.ts` — discrete fixed-increment turn with a standard
+     engage/reset edge-detection gate, sharing state with nothing else.
+   - `VRTeleportController.ts` — aim-while-deflected, commit-on-release, same edge shape.
+     Landing point is clamped through `VRWallSoftBlock`'s `VRWalkmeshQuery` interface
+     (`isPointWalkable`/`getNearestWalkablePoint`) so a teleport can't land inside
+     geometry, reusing the same primitive 2.1 introduced. The actual relocation runs
+     through `ModuleObject.JumpToLocation` — the same primitive the engine's own
+     NWScript `JumpToLocation`/warp effects use — via a new `teleportPlayer` hook.
+   - `VRComfortVignetteHost.ts` — a radial-gradient quad parented to the XR camera
+     (so it needs no per-frame transform, only an opacity set), faded in by movement
+     magnitude while `vignetteEnabled` and in smooth-locomotion mode; off during the
+     discrete modes, which don't produce continuous vection.
+   - `GameState.ts` owns the persisted `VRComfortSettings` (`locomotionMode`, `turnMode`,
+     `snapTurnDegrees`, `vignetteEnabled`) behind `getComfortSettings`/`setComfortSettings`
+     hooks; `VRSpike.processLocomotionInput` branches on it every frame and wires the
+     already-bound `ToggleLocomotionMode` button (previously present but unread) to flip
+     `locomotionMode`.
+   - **Not done — a settings UI to reach `turnMode`/`snapTurnDegrees`/`vignetteEnabled`
+     (`ToggleLocomotionMode` is reachable now; the others aren't yet).** Building a second
+     bespoke panel now would duplicate the summon/host infrastructure 2.4 needs anyway —
+     consolidating there instead of shipping two.
+   - 6 new tests (unit + integration) covering toggle edge-detection, snap-turn firing
+     once per deflection, and teleport committing a walkmesh-clamped point.
 3. **3.5/3.6 — Diegetic hilt timer + blaster auto-deflection.** Both ride on state that
    already exists (`rollCooldownMilliseconds`/`nextRollAt` in `VRCombatInputController`).
    A world-space indicator following the same pattern as `VRWorldTargetLabelHost` closes

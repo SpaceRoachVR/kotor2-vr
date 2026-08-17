@@ -53,7 +53,8 @@ import {
 import { VRContextActionPanelController } from "@/vr/runtime/VRContextActionPanelController";
 import { tryDirectVRWorldUse } from "@/vr/runtime/VRWorldUseAdapter";
 import type { EngineInteractableObject } from "@/vr/runtime/ModuleObjectInteractionTarget";
-import type { CombatWeaponMode } from "@/vr/runtime/XRTypes";
+import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
+import EngineLocation from "@/engine/EngineLocation";
 
 //THREE.js imports
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer";
@@ -101,6 +102,19 @@ const vrContextActionPanelController = new VRContextActionPanelController({
 let vrContextActionTarget: EngineInteractableObject | null = null;
 let vrRadialMenuPausedByVR = false;
 let vrCombatIssuedTargetId: number | null = null;
+
+/**
+ * Persists across the VR session (ROADMAP 2.5/2.6). Smooth movement and
+ * smooth turn are the written default; teleport, snap turn, and the comfort
+ * vignette are opt-in alternatives a player switches on, not the other way
+ * around.
+ */
+const vrComfortSettings: VRComfortSettings = {
+  locomotionMode: 'smooth',
+  turnMode: 'smooth',
+  snapTurnDegrees: 45,
+  vignetteEnabled: false,
+};
 
 function isVRCombatTarget(actor: ModuleCreature, candidate: ModuleObject | null | undefined): candidate is ModuleObject {
   return !!candidate && candidate !== actor &&
@@ -936,6 +950,16 @@ export class GameState implements EngineContext {
           GameState.scene_cursor_holder.visible = false;
           FollowerCamera.clearFocusObject();
         }
+      },
+      getCurrentRoomWalkmesh: () => GameState.getCurrentPlayer()?.room?.collisionManager?.walkmesh ?? null,
+      getComfortSettings: () => ({ ...vrComfortSettings }),
+      setComfortSettings: (patch) => Object.assign(vrComfortSettings, patch),
+      teleportPlayer: (point) => {
+        const player = GameState.getCurrentPlayer();
+        if (!player) return;
+        const location = new EngineLocation(point.x, point.y, point.z, 0, 0, 0, GameState.module?.area);
+        location.setFacing(player.rotation.z);
+        player.JumpToLocation(location);
       },
       getInteractionContext: () => ({
         actor: GameState.getCurrentPlayer() ?? null,
