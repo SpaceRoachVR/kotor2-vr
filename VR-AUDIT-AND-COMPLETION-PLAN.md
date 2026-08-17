@@ -341,10 +341,15 @@ actually worth building next given what scaffolding already exists.
 6. Lower priority, do after the above: **4.2** physical inventory (beyond the generic
    panel reprojection), **4.5** a systematic `gui/` unreachable-control audit + TSL-vs-K1
    stub diff, **5.3** a comfort pass specifically over the prologue's scripted sequences.
-7. **Housekeeping:** `XRSessionController.ts` and `XRFrameCoordinator.ts` are fully built
-   and tested but unused — `VRSpike.ts` reimplements their responsibilities inline. Wire
-   them in to remove the duplication, or delete them; leaving both increases maintenance
-   risk with no benefit.
+7. **Housekeeping: done.** `XRSessionController.ts` and `XRFrameCoordinator.ts` were
+   fully built and tested but genuinely unused — confirmed zero references anywhere
+   outside their own definitions and their own test files. `VRSpike.ts`'s working,
+   extensively-tested inline session/frame handling is what's actually wired to
+   production, so swapping it for the unused classes this late would have been a risky
+   blind replacement of code that works for code that's never run for real. Deleted the
+   two files and their orphaned tests instead — safe, since nothing referenced them.
+   ROADMAP.md updated to reflect the actual Phase 2-5 state throughout this plan,
+   replacing the stale "Phase 1 active" status.
 
 Phases 6-8 (Peragus VR slice, full campaign, release) are correctly not started — they're
 gated behind the above and are session-sized in their own right. Not attempting them in

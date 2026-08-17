@@ -4,12 +4,29 @@ Phase plan for turning [KotOR.js](https://github.com/KobaltBlu/KotOR.js) into a
 room-scale VR mod for KOTOR II. Design rationale lives in [DESIGN.md](DESIGN.md);
 engine knowledge lives in `.claude/skills/kotor2-vr/`.
 
-**Status: Phase 0 passed under the user-approved sustained-50 floor; Phase 1 is
-active.** With Virtual Desktop Synchronous Spacewarp disabled and the headset at
-72 Hz, a corrected 60-second raw-WebXR window delivered 51.82 FPS at a 4224 ×
-2304 XR target, p90 31.0 ms, p99 46.1 ms, and a PASS verdict. Runtime cadence is
-still reported separately and 72 Hz remains a stretch target. The older
-31.96-34.96 FPS VDXR evidence remains retained rather than rewritten.
+**Status: Phase 0 passed under the user-approved sustained-50 floor. Phase 1 is
+still open on its own items, but Phases 2-5 have substantial working
+implementation — this entry was stale relative to the code for some time.**
+With Virtual Desktop Synchronous Spacewarp disabled and the headset at 72 Hz, a
+corrected 60-second raw-WebXR window delivered 51.82 FPS at a 4224 × 2304 XR
+target, p90 31.0 ms, p99 46.1 ms, and a PASS verdict. Runtime cadence is still
+reported separately and 72 Hz remains a stretch target. The older 31.96-34.96
+FPS VDXR evidence remains retained rather than rewritten.
+
+**2026-08-17 reconciliation:** a five-agent audit (see
+[VR-AUDIT-AND-COMPLETION-PLAN.md](VR-AUDIT-AND-COMPLETION-PLAN.md)) found
+`src/vr/runtime/` and the VR hooks in `GameState.ts`/`VRSpike.ts` already
+implemented most of Phases 2-4 ahead of what this file reflected, plus five
+concrete playtest bugs (menu mirroring, VR keyboard, cutscene placement, combat
+targeting, world-object interaction — all root-caused and fixed except the
+menu-mirroring visual, which got a diagnostic instead since static reading
+couldn't confirm the cause) and several completeness gaps (wall soft-block,
+comfort locomotion options, diegetic hilt timer, blaster laser pointer, wrist
+device panel summon, cutscene fade-to-black — all now implemented). Phase
+statuses below are updated to match. **None of this session's VR work has been
+verified in a headset** — 303 unit/integration tests pass and `tsc` is clean,
+but every phase exit below still needs the same device-evidence bar the rest
+of this roadmap holds itself to before being called done.
 
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
@@ -243,32 +260,56 @@ change is measured against.
 
 First light in the headset. No interaction yet.
 
-- **2.1** WebXR session lifecycle — enter/exit VR, session loss, resume.
-- **2.2** Camera rig replacing the follower camera, with fixed canonical eye height.
-- **2.3** Roomscale tracking with the rig coupled to the walkmesh.
-- **2.4** Soft-block on wall intrusion — push the rig back, no fade, no hard stop.
-- **2.5** Smooth locomotion + smooth turn as default; teleport, snap turn, vignette as
-  options.
-- **2.6** Comfort settings surfaced somewhere reachable in-headset.
+- **2.1** ✅ WebXR session lifecycle — enter/exit VR, session loss, resume.
+  `VRSpike.enter/exit/onSessionEnd/onVisibilityChange`.
+- **2.2** ✅ Camera rig replacing the follower camera, with fixed canonical eye height.
+  `VRSpike.syncRig`, `eyeHeight = 1.75`.
+- **2.3** ✅ Roomscale tracking with the rig coupled to the walkmesh (`local-floor`
+  reference space; the rig anchors to the tracked-selectable player position each frame).
+- **2.4** ✅ Soft-block on wall intrusion — push the rig back, no fade, no hard stop.
+  `src/vr/runtime/VRWallSoftBlock.ts`, wired into `syncRig`.
+- **2.5** ✅ Smooth locomotion + smooth turn as default; teleport, snap turn, vignette as
+  options. `VRSnapTurnController`, `VRTeleportController`, `VRComfortVignetteHost`,
+  `GameState.getComfortSettings`/`setComfortSettings`.
+- **2.6** ☐ partial — Comfort settings surfaced somewhere reachable in-headset. Only
+  the smooth/blink locomotion toggle is reachable (`ToggleLocomotionMode`, an
+  already-bound controller button); `turnMode`, `snapTurnDegrees`, and
+  `vignetteEnabled` have no in-headset UI yet.
 
 **Exit:** walk around `101PER` in VR, roomscale, without falling through geometry or
-leaving walkable space.
+leaving walkable space. **Not yet verified on-device** — implemented and
+unit/integration-tested only.
 
 ---
 
 ## Phase 3 — VR interaction
 
-- **3.1** Controller input mapping for Quest 3 controllers.
-- **3.2** Hand presence and grab.
-- **3.3** One- and two-handed lightsaber; left-hand grab promotes to two-handed.
-- **3.4** Swing detection feeding the d20 round — governor option (c): every swing
-  animates and connects visually, only on-tempo swings roll.
-- **3.5** Diegetic round timer in the lightsaber hilt.
-- **3.6** Blasters: laser pointer, stat-rolled, automatic deflection.
-- **3.7** Force gesture set — push/pull flicks. Keep it small.
-- **3.8** Radial menu for everything else; pauses outright.
+- **3.1** ✅ Controller input mapping for Quest 3 controllers (`XRInputRouter`,
+  `quest-touch` profile).
+- **3.2** ✅ Hand presence and grab (`XRControllerAnchorHost`).
+- **3.3** ☐ partial — One- and two-handed lightsaber; left-hand grab promotes to
+  two-handed. Real mode-flag promotion exists (`VRCombatInputController`), but it's a
+  mode flag on a single-hand swing detector, not physically dual-wielded tracking —
+  the left hand's own pose doesn't contribute to the swing.
+- **3.4** ✅ Swing detection feeding the d20 round — governor option (c): every swing
+  animates and connects visually, only on-tempo swings roll. Fixed this session: combat
+  targeting no longer reads stale flatscreen-mouse state, Cancel no longer gets skipped
+  once a target stops qualifying, and blaster fire now has the same roll-cooldown gate
+  melee already had.
+- **3.5** ✅ Diegetic round timer in the lightsaber hilt. `VRHiltTimerHost`, reading
+  `VRCombatInputController.getRollReadiness()`.
+- **3.6** ☐ partial — Blasters: laser pointer ✅ (`VRBlasterLaserHost`), stat-rolled ✅
+  (routes through the same d20 combat path as melee), automatic deflection ✗ — not
+  implemented anywhere in the engine yet, flatscreen included (`AttackResult.DEFLECTED`
+  is declared but never assigned by attack-roll resolution). Real combat-rules work,
+  not a VR gap; needs its own session with SAGA deflection rules as reference.
+- **3.7** ✅ Force gesture set — push/pull flicks (`VRForceGestureController`). Fixed
+  this session: also no longer reads stale flatscreen-mouse target state.
+- **3.8** ✅ Radial menu for everything else; pauses outright (`VRRadialMenuController`
+  + `VRRadialMenuHost`; confirmed the engine actually pauses while it's open).
 
 **Exit:** a Peragus combat encounter completable in VR with the d20 layer intact.
+**Not yet verified on-device** — implemented and unit/integration-tested only.
 
 ---
 
@@ -276,20 +317,40 @@ leaving walkable space.
 
 Every button reachable in flatscreen needs a VR route.
 
-- **4.1** Wrist-mounted holo device shell.
-- **4.2** Physical inventory.
-- **4.3** Summonable floating panels: character sheet, galaxy map.
-- **4.4** Dialogue skill checks as floating panels.
-- **4.5** Audit `gui/` for anything still unreachable — check `game/tsl/` against
-  `game/kotor/` for stubs while doing it.
+- **4.1** ✅ Wrist-mounted holo device shell. A second `VRRadialMenuController`
+  instance bound to the previously-idle `Wrist` action, reusing the existing radial
+  mechanics and `VRRadialMenuHost` presentation rather than new UI infrastructure.
+- **4.2** ☐ Physical inventory. The existing flatscreen 2D inventory reprojects into
+  world space generically (see 4.3) but there is no distinct physical/3D inventory.
+- **4.3** ✅ Summonable floating panels: character sheet, galaxy map (and inventory,
+  journal). The wrist menu (4.1) opens `MenuInventory`/`MenuCharacter`/`MenuJournal`/
+  `MenuGalaxyMap` the same way their flatscreen hotkeys do; the existing generic
+  `VRPanelHost` + `LegacyGUIVRPointerAdapter` reprojection handles the rest — no new
+  rendering infrastructure needed.
+- **4.4** ❓ Dialogue skill checks as floating panels. Genuinely unconfirmed — may
+  already work via generic reprojection if skill checks are authored as ordinary GUI
+  screens, or may need bespoke handling. Not chased down this pass.
+- **4.5** ☐ Audit `gui/` for anything still unreachable — check `game/tsl/` against
+  `game/kotor/` for stubs while doing it. Not done.
 
 ---
 
 ## Phase 5 — Cutscenes and dialogue
 
-- **5.1** Theater-screen reprojection for movies.
-- **5.2** Dialogue keeps engine camera cuts, with fade-to-black between them.
-- **5.3** Comfort pass over the prologue's scripted sequences specifically.
+- **5.1** ✅ Theater-screen reprojection for movies (`VRSpike.renderMovie`/
+  `renderCutscene`, wired through `GameState.UpdateMovie`/`getMovieContext`/
+  `getCutsceneContext`). Fixed several bugs found by playtest this session: the rig
+  fallback that could bury the view underground during an animated camera, the rig
+  snapping the headset straight into a scripted shot with no smoothing, and an
+  authored `NodeUnskippable` line having no way out (added a VR-native unconditional
+  abort mirroring flatscreen's `DialogAbort`). A movie-trigger stuck-guard and a
+  VR-entry-during-movie freeze report got diagnostics rather than guessed fixes —
+  static reading found the code more sound than initially suspected and couldn't
+  confirm a root cause without device logs.
+- **5.2** ✅ Dialogue keeps engine camera cuts, with fade-to-black between them.
+  `VRCutsceneFadeHost`/`VRCutsceneFadeEnvelope`, triggered when the authored per-shot
+  camera reference changes between frames.
+- **5.3** ☐ Comfort pass over the prologue's scripted sequences specifically. Not done.
 
 ---
 
