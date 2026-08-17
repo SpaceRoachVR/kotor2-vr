@@ -33,6 +33,7 @@ import { ActionType } from "@/enums/actions/ActionType";
 import { ActionParameterType } from "@/enums/actions/ActionParameterType";
 import EngineLocation from "@/engine/EngineLocation";
 import { AttackResult } from "@/enums/combat/AttackResult";
+import { CombatFeatType } from "@/enums/combat/CombatFeatType";
 // import { ICombatAction } from "@/interface/combat/ICombatAction";
 import { DLGObject } from "@/resource/DLGObject";
 import { ITwoDAAnimation } from "@/interface/twoDA/ITwoDAAnimation";
@@ -1689,59 +1690,31 @@ export class ModuleCreature extends ModuleObject {
   }
 
   getCombatAnimationAttackType(): string {
-    let weapon = this.equipment.RIGHTHAND;
-    let weaponType = 0;
-    //let weaponWield = this.getCombatAnimationWeaponType();
-
+    //The animation key is melee ('m') vs. ranged ('b'), which is a property of how the
+    //weapon is WIELDED (WeaponWield), not its damage TYPE (WeaponType, e.g. piercing vs.
+    //bludgeoning). Using WeaponType here previously matched by damage-type coincidence
+    //and returned undefined for any weapon (e.g. droid blasters) whose damage type wasn't
+    //exactly 1 or 4 - silently dropping the whole attack animation (and its sound, since
+    //sound is driven by animation events).
     if(this.equipment.RIGHTHAND){
-      weaponType = (this.equipment.RIGHTHAND.getWeaponType());
-
-      switch(weaponType){
-        case 4:
+      switch(this.equipment.RIGHTHAND.getWeaponWield()){
+        case WeaponWield.STUN_BATON:
+        case WeaponWield.ONE_HANDED_SWORD:
+        case WeaponWield.TWO_HANDED_SWORD:
+          return 'm';
+        case WeaponWield.BLASTER_PISTOL:
+        case WeaponWield.BLASTER_RIFLE:
+        case WeaponWield.BLASTER_HEAVY:
           return 'b';
-        case 1:
-          return 'm';
-        break;
-      }
-
-    }else if(this.equipment.CLAW1){
-      weaponType = (this.equipment.CLAW1.getWeaponType());
-
-      switch(weaponType){
-        case 1:
-        case 3:
-        case 4:
+        default:
           return 'm';
       }
-    }else if(this.equipment.CLAW2){
-      weaponType = (this.equipment.CLAW2.getWeaponType());
-
-      switch(weaponType){
-        case 1:
-        case 3:
-        case 4:
-          return 'm';
-      }
-    }else if(this.equipment.CLAW3){
-      weaponType = (this.equipment.CLAW3.getWeaponType());
-
-      switch(weaponType){
-        case 1:
-        case 3:
-        case 4:
-          return 'm';
-      }
+    }else if(this.equipment.CLAW1 || this.equipment.CLAW2 || this.equipment.CLAW3){
+      //Natural claw weapons are always melee.
+      return 'm';
     }else{
       return 'g';
     }
-
-    /*if(weaponWield == 0)//this.isSimpleCreature())
-      return 'm';
-
-    if(weaponWield == 5 || weaponWield == 6 || weaponWield == 7 || weaponWield == 8 || weaponWield == 9){
-      return 'b';
-    }
-    return 'c';*/
   }
 
   //Return the WeaponType ID for the current equipped items
@@ -2638,6 +2611,59 @@ export class ModuleCreature extends ModuleObject {
     return baseac + classBonus + armorAC + dexBonus;
   }
 
+  /**
+   * Blaster bolt deflection (Jedi Defense feat line). Per the feat
+   * descriptions and NWScriptDef comments for opcodes 469/470: a lightsaber
+   * in the main hand plus the Jedi Defense feat lets a creature attempt an
+   * opposed roll against an incoming ranged attack; Advanced/Master Jedi
+   * Defense give +3/+6 (replacing the prior tier, not stacking), the
+   * Weapon Master "Deflect" feat adds floor((level + 1) / 2), and
+   * EffectBlasterDeflectionIncrease/Decrease apply their stored intList[0]
+   * on top. Returns null when the creature cannot attempt deflection at all
+   * (no feat, or no lightsaber equipped in the main hand).
+   */
+  getBlasterDeflectionBonus(): number | null {
+    if(!this.getHasFeat(CombatFeatType.JEDI_DEFENSE)) return null;
+    if(!this.equipment.RIGHTHAND?.isLightsaber()) return null;
+
+    let bonus = 0;
+    if(this.getHasFeat(CombatFeatType.MASTER_JEDI_DEFENSE)){
+      bonus = 6;
+    }else if(this.getHasFeat(CombatFeatType.ADVANCED_JEDI_DEFENSE)){
+      bonus = 3;
+    }
+
+    if(this.getHasFeat(CombatFeatType.DEFLECT)){
+      const totalLevel = this.classes.reduce((sum, creatureClass) => sum + creatureClass.level, 0);
+      bonus += Math.floor((totalLevel + 1) / 2);
+    }
+
+    for(let i = 0, len = this.effects.length; i < len; i++){
+      const effect = this.effects[i];
+      if(effect.type == GameEffectType.EffectBlasterDeflectionIncrease){
+        bonus += (effect.getInt(0) || 0);
+      }else if(effect.type == GameEffectType.EffectBlasterDeflectionDecrease){
+        bonus -= (effect.getInt(0) || 0);
+      }
+    }
+
+    return bonus;
+  }
+
+  /**
+   * EffectAssuredDeflection (opcode 252): deflects every incoming ranged
+   * attack with no opposed roll. `intList[0]` is an optional flag for
+   * whether the deflected bolt reflects back at the attacker for damage.
+   */
+  hasAssuredDeflection(): boolean {
+    return this.hasEffect(GameEffectType.EffectAssuredDeflection);
+  }
+
+  assuredDeflectionReflectsDamage(): boolean {
+    const effect = this.getEffect(GameEffectType.EffectAssuredDeflection);
+    return !!effect && (effect.getInt(0) || 0) !== 0;
+  }
+
   getSTR(calculateBonuses = true){
     if(!calculateBonuses){
       return this.str;
@@ -3361,13 +3387,17 @@ export class ModuleCreature extends ModuleObject {
       case ModuleCreatureArmorSlot.RIGHTHAND:
         this.equipment.RIGHTHAND = item;
         await item.loadModel();
-        if(item.model instanceof OdysseyModel3D)
+        //Droid bodies have no rhand/lhand attachment node (they're not humanoid), so
+        //this threw for any droid equipping a weapon - the equipment reference above
+        //had already been assigned, but the throw prevented the caller's promise from
+        //ever resolving, which is why the UI never refreshed to show it as equipped.
+        if(item.model instanceof OdysseyModel3D && this.model?.rhand)
           this.model.rhand.add(item.model);
       break;
       case ModuleCreatureArmorSlot.LEFTHAND:
         this.equipment.LEFTHAND = item;
         await item.loadModel();
-        if(item.model instanceof OdysseyModel3D)
+        if(item.model instanceof OdysseyModel3D && this.model?.lhand)
           this.model.lhand.add(item.model);
       break;
       case ModuleCreatureArmorSlot.RIGHTHAND2:
@@ -3375,6 +3405,25 @@ export class ModuleCreature extends ModuleObject {
       break;
       case ModuleCreatureArmorSlot.LEFTHAND2:
         this.equipment.LEFTHAND2 = item;
+      break;
+      case ModuleCreatureArmorSlot.HEAD:
+        this.equipment.HEAD = item;
+        await this.loadModel();
+      break;
+      case ModuleCreatureArmorSlot.ARMS:
+        this.equipment.ARMS = item;
+      break;
+      case ModuleCreatureArmorSlot.LEFTARMBAND:
+        this.equipment.LEFTARMBAND = item;
+      break;
+      case ModuleCreatureArmorSlot.RIGHTARMBAND:
+        this.equipment.RIGHTARMBAND = item;
+      break;
+      case ModuleCreatureArmorSlot.IMPLANT:
+        this.equipment.IMPLANT = item;
+      break;
+      case ModuleCreatureArmorSlot.BELT:
+        this.equipment.BELT = item;
       break;
       case ModuleCreatureArmorSlot.CLAW1:
         this.equipment.CLAW1 = item;

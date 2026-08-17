@@ -165,6 +165,11 @@ export class ModuleItem extends ModuleObject {
     return this.baseItem.rangedWeapon;
   }
 
+  /** Base items 8/9/10 are the lightsaber variants — the same discriminator `getAttackBonus()` already uses for Weapon Focus: Lightsaber. */
+  isLightsaber(){
+    return this.baseItemId == 8 || this.baseItemId == 9 || this.baseItemId == 10;
+  }
+
   isStolen(){
     return this.stolen;
   }
@@ -577,6 +582,11 @@ export class ModuleItem extends ModuleObject {
    * @param powered - Whether the weapon should be powered
    */
   setPowered(powered: boolean){
+    //weaponPowered() can fire on an equipped item whose model hasn't finished loading
+    //yet (or has none) - this threw uncaught every frame once triggered, which is why
+    //it read as a freeze rather than a one-off error.
+    if(!(this.model instanceof OdysseyModel3D)){ return; }
+
     const currentAnimL = this.model.animationManager.currentAnimation || this.model.odysseyAnimationMap.get('off');
     if(!currentAnimL){ return; }
 

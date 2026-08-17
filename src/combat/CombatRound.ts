@@ -18,6 +18,7 @@ import { DiceType } from "@/enums/combat/DiceType";
 import { TextSprite3D } from "@/engine/TextSprite3D";
 import { BitWise } from "@/utility/BitWise";
 import { CombatAttackData } from "@/combat/CombatAttackData";
+import { resolveBlasterDeflection } from "@/combat/resolveBlasterDeflection";
 import type { CombatRoundAction } from "@/combat/CombatRoundAction";
 import { GameState } from "@/GameState";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
@@ -578,11 +579,15 @@ export class CombatRound {
     const hasAssuredHit = creature.hasEffect(GameEffectType.EffectAssuredHit);
     const attack = this.attackList[this.currentAttack];
     if(hasAssuredHit || isCritical || attackRoll > combatAction.target.getAC()){
-      combatAction.attackResult = (!hasAssuredHit && isCritical) ? AttackResult.CRITICAL_HIT : AttackResult.HIT_SUCCESSFUL;
-      attack.reactObject = combatAction.target;
-      attack.attackWeapon = weapon;
-      attack.attackResult = combatAction.attackResult;
-      attack.calculateDamage(creature, !hasAssuredHit && isCritical, combatAction.feat);
+      if(this.tryBlasterDeflection(creature, weapon, attackRoll, combatAction, attack)){
+        combatAction.attackResult = AttackResult.DEFLECTED;
+      }else{
+        combatAction.attackResult = (!hasAssuredHit && isCritical) ? AttackResult.CRITICAL_HIT : AttackResult.HIT_SUCCESSFUL;
+        attack.reactObject = combatAction.target;
+        attack.attackWeapon = weapon;
+        attack.attackResult = combatAction.attackResult;
+        attack.calculateDamage(creature, !hasAssuredHit && isCritical, combatAction.feat);
+      }
     }else{
       combatAction.attackResult = AttackResult.MISS;
       attack.reactObject = combatAction.target;
@@ -594,6 +599,58 @@ export class CombatRound {
     this.logAttackResult(creature, weapon, combatAction, isCritical, hasAssuredHit);
 
     this.currentAttack++;
+  }
+
+  /**
+   * Blaster bolt deflection (Jedi Defense feat line). Per the feat
+   * descriptions (Jedi Defense/Advanced/Master +0/+3/+6) and the
+   * NWScriptDef comments for opcodes 469/470/252: a ranged attack that
+   * would otherwise hit a creature with a lightsaber and the Jedi Defense
+   * feat instead triggers an opposed roll — if the defender's roll beats
+   * the attack roll the bolt is deflected, and if it's beaten by 10 or
+   * more the bolt reflects back at the attacker for the same weapon
+   * damage. EffectAssuredDeflection skips the roll entirely.
+   * @returns true if the attack was deflected (converts what would have
+   * been a hit into AttackResult.DEFLECTED — the caller must not also
+   * apply hit damage)
+   */
+  private tryBlasterDeflection(
+    attacker: ModuleCreature,
+    weapon: ModuleItem | undefined,
+    attackRoll: number,
+    combatAction: CombatRoundAction,
+    attack: CombatAttackData
+  ): boolean {
+    if(!weapon || !weapon.isRangedWeapon()) return false;
+    const target = combatAction.target;
+    if(!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleCreature)) return false;
+    const defender = target as unknown as ModuleCreature;
+
+    const decision = resolveBlasterDeflection({
+      attackRoll,
+      assuredDeflection: defender.hasAssuredDeflection(),
+      assuredDeflectionReflects: defender.assuredDeflectionReflectsDamage(),
+      deflectionBonus: defender.getBlasterDeflectionBonus(),
+      rollD20: () => Dice.roll(1, DiceType.d20),
+    });
+    if(!decision.deflected) return false;
+
+    attack.attackWeapon = weapon;
+    attack.attackResult = AttackResult.DEFLECTED;
+    attack.reactObject = defender;
+
+    if(decision.reflect){
+      // The deflected bolt's damage is still the attacker's own weapon
+      // damage — only who it lands on changes. Swap reactObject to the
+      // attacker just for this calculation so the killing-blow check
+      // inside calculateDamage() compares against the right creature's HP.
+      attack.reactObject = attacker;
+      attack.calculateDamage(attacker, false, combatAction.feat);
+      attack.applyDamageEffectToCreature(defender, attacker);
+      attack.reactObject = defender;
+    }
+
+    return true;
   }
 
   /**
