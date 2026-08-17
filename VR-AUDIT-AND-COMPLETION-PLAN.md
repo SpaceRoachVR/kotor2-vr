@@ -308,12 +308,25 @@ actually worth building next given what scaffolding already exists.
    deflection roll (KOTOR/d20 SAGA rules — feats, DEX, weapon type) is a real combat-rules
    feature affecting the whole game, not a VR gap, and risks getting the ruleset wrong
    without dedicated reference and playtesting. Left undone rather than guessed at.
-4. **4.1/4.3/4.4 — Wrist device + purpose-built panels.** `VRPanelHost` +
-   `LegacyGUIVRPointerAdapter` already generically reproject any legacy menu (inventory,
-   character sheet, galaxy map) into world space with working pointer input — what's
-   missing is a deliberate summon UX. The `Wrist` semantic action is already bound to a
-   button and completely unused (`XRInputRouter.ts:67`); wire it to open a wrist-anchored
-   shell that launches these panels, which closes 4.1, 4.3, and most of 4.4 at once.
+4. **4.1/4.3 — Wrist device + purpose-built panel summon: done.** Rather than building a
+   new bespoke wrist UI, parameterized `VRRadialMenuController`'s trigger action
+   (constructor arg, default `Menu` preserved) so a second instance could bind to the
+   previously-idle `Wrist` action and reuse all the existing hold-aim-release mechanics
+   and `VRRadialMenuHost` presentation — whose own code comment already described it as
+   reproducing "the familiar wrist/device radial interaction." `getWristMenuContext`
+   (`GameState.ts`) exposes four items — Inventory, Character, Journal, Galaxy Map — each
+   just calling the same `.open()` the equivalent flatscreen hotkey already calls
+   (`MenuInventory`/`MenuCharacter`/`MenuJournal`/`MenuGalaxyMap`), which then reprojects
+   through the existing generic `VRPanelHost` path exactly like any other legacy menu —
+   no new rendering infrastructure needed, matching the audit's original read.
+   **4.4 dialogue skill checks:** still unconfirmed either way — genuinely ambiguous
+   whether this needs bespoke handling or is already covered by generic reprojection if
+   skill checks are authored as ordinary GUI screens; not chased further this pass.
+   **Not done: a settings surface for `turnMode`/`snapTurnDegrees`/`vignetteEnabled`**
+   (2.5/2.6's remaining gap) — the wrist menu's four items are fixed at exactly four by
+   `VRRadialMenuController`'s own contract, and slotting settings in over one of the
+   named panels felt like the wrong tradeoff versus a real follow-up. `ToggleLocomotionMode`
+   itself is reachable (Stage 2.2); the other three settings are not yet.
 5. **5.2 — Fade-to-black between camera cuts.** The reprojection mechanism
    (`renderCutscene`) is done; only the transition is missing. `VRPanelHost.present()`/
    `clear()` already gate visibility — hook a fade in at that boundary.

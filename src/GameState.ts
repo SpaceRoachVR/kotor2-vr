@@ -101,6 +101,7 @@ const vrContextActionPanelController = new VRContextActionPanelController({
 });
 let vrContextActionTarget: EngineInteractableObject | null = null;
 let vrRadialMenuPausedByVR = false;
+let vrWristMenuPausedByVR = false;
 let vrCombatIssuedTargetId: number | null = null;
 
 /**
@@ -1054,6 +1055,26 @@ export class GameState implements EngineContext {
             vrRadialMenuPausedByVR = false;
           }
         },
+        };
+      },
+      getWristMenuContext: () => {
+        if (GameState.State !== EngineState.RUNNING || GameState.Mode !== EngineMode.INGAME) return null;
+        return {
+          items: [
+            { id: 'wrist:inventory', label: 'Inventory', icon: 'inv_bag01', activate: () => GameState.MenuManager.MenuInventory.open() },
+            { id: 'wrist:character', label: 'Character', icon: 'iattackr', activate: () => GameState.MenuManager.MenuCharacter.open() },
+            { id: 'wrist:journal', label: 'Journal', icon: 'iquestitem', activate: () => GameState.MenuManager.MenuJournal.open() },
+            { id: 'wrist:galaxymap', label: 'Galaxy Map', icon: 'iplaneton', activate: () => GameState.MenuManager.MenuGalaxyMap.open() },
+          ],
+          setPaused: (paused: boolean) => {
+            if (paused && GameState.State !== EngineState.PAUSED) {
+              GameState.State = EngineState.PAUSED;
+              vrWristMenuPausedByVR = true;
+            } else if (!paused && vrWristMenuPausedByVR) {
+              GameState.State = EngineState.RUNNING;
+              vrWristMenuPausedByVR = false;
+            }
+          },
         };
       },
       getPanelContext: () => {

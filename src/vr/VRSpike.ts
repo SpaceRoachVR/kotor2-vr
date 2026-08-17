@@ -137,6 +137,15 @@ export interface VRSpikeHooks {
     readonly items: readonly VRRadialMenuItem[];
     setPaused(paused: boolean): void;
   } | null;
+  /**
+   * Wrist device (ROADMAP 4.1/4.3): summons full panels (inventory,
+   * character sheet, journal, galaxy map) rather than contextual target
+   * actions. Always four items, matching the shared radial menu contract.
+   */
+  getWristMenuContext?: () => {
+    readonly items: readonly VRRadialMenuItem[];
+    setPaused(paused: boolean): void;
+  } | null;
   /** Legacy GUI scene and the topmost menu that should own VR input. */
   getPanelContext?: () => {
     readonly menu: VRPanelMenuController | null;
@@ -224,6 +233,10 @@ export class VRSpike {
   private static readonly radialMenuController = new VRRadialMenuController();
   private static radialMenuHost: VRRadialMenuHost | null = null;
   private static radialPointerHost: VRPanelPointerHost | null = null;
+  /** Wrist device (ROADMAP 4.1/4.3): the same radial mechanics, Wrist-triggered, summoning full panels instead of contextual target actions. */
+  private static readonly wristMenuController = new VRRadialMenuController(SemanticXRAction.Wrist);
+  private static wristMenuHost: VRRadialMenuHost | null = null;
+  private static wristPointerHost: VRPanelPointerHost | null = null;
   private static keyboardSelectHeld = false;
   private static keyboardCancelHeld = false;
   private static keyboardGrabHeld = false;
@@ -518,8 +531,9 @@ export class VRSpike {
     const movieOwnsInput = VRSpike.processMovieInput();
     const keyboardOwnsInput = !movieOwnsInput && VRSpike.processKeyboardInput();
     const radialOwnsInput = !movieOwnsInput && !keyboardOwnsInput && VRSpike.processRadialMenuInput();
-    const panelOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && VRSpike.processPanelInput();
-    if (movieOwnsInput || keyboardOwnsInput || radialOwnsInput || panelOwnsInput) {
+    const wristOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && VRSpike.processWristMenuInput();
+    const panelOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && !wristOwnsInput && VRSpike.processPanelInput();
+    if (movieOwnsInput || keyboardOwnsInput || radialOwnsInput || wristOwnsInput || panelOwnsInput) {
       VRSpike.interactionTargetSet.clear();
       VRSpike.interactionSystem.cancelTransientState();
     } else {
@@ -975,6 +989,49 @@ export class VRSpike {
       VRSpike.radialMenuController.close();
       context.setPaused(false);
       console.error('[VRSpike] radial menu input rejected', error);
+      return false;
+    }
+  }
+
+  /** Wrist device (ROADMAP 4.1/4.3) — identical mechanics to the target radial menu, on its own trigger and instances so the two never collide. */
+  private static processWristMenuInput(): boolean {
+    const context = VRSpike.hooks?.getWristMenuContext?.() ?? null;
+    const session = VRSpike.session;
+    if (!context || !session) return false;
+    try {
+      const wasOpen = VRSpike.wristMenuController.isOpen;
+      const inputFrame = VRSpike.latestInputFrame;
+      const actions = VRSpike.inputRouter.route(
+        XRGamepadReader.read(Array.from(session.inputSources ?? [])),
+        new Set(['global', 'locomotion', 'ui'])
+      );
+      let pointerVector: { x: number; y: number } | null = null;
+      const offHand = inputFrame?.hands.left;
+      const dominantHand = inputFrame?.hands.right;
+      if (wasOpen && VRSpike.scene && inputFrame && offHand) {
+        if (!VRSpike.wristMenuHost) VRSpike.wristMenuHost = new VRRadialMenuHost(VRSpike.scene);
+        if (!VRSpike.wristPointerHost) VRSpike.wristPointerHost = new VRPanelPointerHost(VRSpike.scene);
+        VRSpike.wristMenuHost.present(offHand.pose, inputFrame.head, context.items, VRSpike.wristMenuController.selected);
+        const pointerHit = dominantHand
+          ? VRSpike.wristPointerHost.update(VRSpike.wristMenuHost.object, dominantHand.targetRayPose, 800, 800)
+          : null;
+        pointerVector = pointerHit?.guiPosition ?? null;
+      }
+      const ownsInput = VRSpike.wristMenuController.process(context.items, actions, pointerVector);
+      const isOpen = VRSpike.wristMenuController.isOpen;
+      if (isOpen && VRSpike.scene && inputFrame?.hands.left) {
+        if (!VRSpike.wristMenuHost) VRSpike.wristMenuHost = new VRRadialMenuHost(VRSpike.scene);
+        VRSpike.wristMenuHost.present(inputFrame.hands.left.pose, inputFrame.head, context.items, VRSpike.wristMenuController.selected);
+      } else {
+        VRSpike.wristMenuHost?.clear();
+        VRSpike.wristPointerHost?.clear();
+      }
+      if (wasOpen !== isOpen) context.setPaused(isOpen);
+      return ownsInput;
+    } catch (error) {
+      VRSpike.wristMenuController.close();
+      context.setPaused(false);
+      console.error('[VRSpike] wrist menu input rejected', error);
       return false;
     }
   }
