@@ -54,6 +54,7 @@ import { VRContextActionPanelController } from "@/vr/runtime/VRContextActionPane
 import { tryDirectVRWorldUse } from "@/vr/runtime/VRWorldUseAdapter";
 import type { EngineInteractableObject } from "@/vr/runtime/ModuleObjectInteractionTarget";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
+import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
 import EngineLocation from "@/engine/EngineLocation";
 
 //THREE.js imports
@@ -116,6 +117,8 @@ const vrComfortSettings: VRComfortSettings = {
   snapTurnDegrees: 45,
   vignetteEnabled: false,
 };
+let vrComfortSettingsPanelOpen = false;
+let vrComfortSettingsPausedByVR = false;
 
 function isVRCombatTarget(actor: ModuleCreature, candidate: ModuleObject | null | undefined): candidate is ModuleObject {
   return !!candidate && candidate !== actor &&
@@ -1063,7 +1066,7 @@ export class GameState implements EngineContext {
           items: [
             { id: 'wrist:inventory', label: 'Inventory', icon: 'inv_bag01', activate: () => GameState.MenuManager.MenuInventory.open() },
             { id: 'wrist:character', label: 'Character', icon: 'iattackr', activate: () => GameState.MenuManager.MenuCharacter.open() },
-            { id: 'wrist:journal', label: 'Journal', icon: 'iquestitem', activate: () => GameState.MenuManager.MenuJournal.open() },
+            { id: 'wrist:settings', label: 'Comfort Settings', icon: 'iopts', activate: () => { vrComfortSettingsPanelOpen = true; } },
             { id: 'wrist:galaxymap', label: 'Galaxy Map', icon: 'iplaneton', activate: () => GameState.MenuManager.MenuGalaxyMap.open() },
           ],
           setPaused: (paused: boolean) => {
@@ -1075,6 +1078,60 @@ export class GameState implements EngineContext {
               vrWristMenuPausedByVR = false;
             }
           },
+        };
+      },
+      getComfortSettingsPanelContext: () => {
+        if (!vrComfortSettingsPanelOpen) {
+          if (vrComfortSettingsPausedByVR) {
+            GameState.State = EngineState.RUNNING;
+            vrComfortSettingsPausedByVR = false;
+          }
+          return null;
+        }
+        if (GameState.State !== EngineState.PAUSED) {
+          GameState.State = EngineState.PAUSED;
+          vrComfortSettingsPausedByVR = true;
+        }
+        const rows: VRComfortSettingsRow[] = [
+          {
+            label: 'Movement',
+            value: vrComfortSettings.locomotionMode === 'smooth' ? 'Smooth' : 'Teleport',
+          },
+          {
+            label: 'Turning',
+            value: vrComfortSettings.turnMode === 'smooth' ? 'Smooth' : 'Snap',
+          },
+          {
+            label: 'Snap Turn Angle',
+            value: `${vrComfortSettings.snapTurnDegrees}°`,
+          },
+          {
+            label: 'Comfort Vignette',
+            value: vrComfortSettings.vignetteEnabled ? 'On' : 'Off',
+          },
+        ];
+        return {
+          rows,
+          activateRow: (index: number) => {
+            switch (index) {
+              case 0:
+                vrComfortSettings.locomotionMode = vrComfortSettings.locomotionMode === 'smooth' ? 'blink' : 'smooth';
+                break;
+              case 1:
+                vrComfortSettings.turnMode = vrComfortSettings.turnMode === 'smooth' ? 'snap' : 'smooth';
+                break;
+              case 2: {
+                const options = [30, 45, 60, 90] as const;
+                const currentIndex = options.indexOf(vrComfortSettings.snapTurnDegrees as typeof options[number]);
+                vrComfortSettings.snapTurnDegrees = options[(Math.max(0, currentIndex) + 1) % options.length];
+                break;
+              }
+              case 3:
+                vrComfortSettings.vignetteEnabled = !vrComfortSettings.vignetteEnabled;
+                break;
+            }
+          },
+          close: () => { vrComfortSettingsPanelOpen = false; },
         };
       },
       getPanelContext: () => {

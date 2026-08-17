@@ -314,7 +314,7 @@ actually worth building next given what scaffolding already exists.
    previously-idle `Wrist` action and reuse all the existing hold-aim-release mechanics
    and `VRRadialMenuHost` presentation — whose own code comment already described it as
    reproducing "the familiar wrist/device radial interaction." `getWristMenuContext`
-   (`GameState.ts`) exposes four items — Inventory, Character, Journal, Galaxy Map — each
+   (`GameState.ts`) exposes four items — Inventory, Character, Comfort Settings, Galaxy Map — each
    just calling the same `.open()` the equivalent flatscreen hotkey already calls
    (`MenuInventory`/`MenuCharacter`/`MenuJournal`/`MenuGalaxyMap`), which then reprojects
    through the existing generic `VRPanelHost` path exactly like any other legacy menu —

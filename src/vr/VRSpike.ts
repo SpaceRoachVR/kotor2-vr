@@ -20,6 +20,7 @@ import { VRSnapTurnController } from "./runtime/VRSnapTurnController";
 import { VRTeleportController } from "./runtime/VRTeleportController";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
+import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
 import { VRHiltTimerHost } from "./runtime/VRHiltTimerHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
@@ -140,12 +141,24 @@ export interface VRSpikeHooks {
   } | null;
   /**
    * Wrist device (ROADMAP 4.1/4.3): summons full panels (inventory,
-   * character sheet, journal, galaxy map) rather than contextual target
-   * actions. Always four items, matching the shared radial menu contract.
+   * character sheet, galaxy map) and the comfort settings panel rather
+   * than contextual target actions. Always four items, matching the
+   * shared radial menu contract.
    */
   getWristMenuContext?: () => {
     readonly items: readonly VRRadialMenuItem[];
     setPaused(paused: boolean): void;
+  } | null;
+  /**
+   * Comfort settings panel (ROADMAP 2.6) — the settings the
+   * ToggleLocomotionMode button alone doesn't reach: turn mode, snap-turn
+   * angle, and the comfort vignette. Opened from the wrist menu; always
+   * exactly four rows, matching `VRComfortSettingsHost`'s contract.
+   */
+  getComfortSettingsPanelContext?: () => {
+    readonly rows: readonly VRComfortSettingsRow[];
+    activateRow(index: number): void;
+    close(): void;
   } | null;
   /** Legacy GUI scene and the topmost menu that should own VR input. */
   getPanelContext?: () => {
@@ -241,6 +254,9 @@ export class VRSpike {
   private static readonly wristMenuController = new VRRadialMenuController(SemanticXRAction.Wrist);
   private static wristMenuHost: VRRadialMenuHost | null = null;
   private static wristPointerHost: VRPanelPointerHost | null = null;
+  private static comfortSettingsHost: VRComfortSettingsHost | null = null;
+  private static comfortSettingsSelectHeld = false;
+  private static comfortSettingsCancelHeld = false;
   private static keyboardSelectHeld = false;
   private static keyboardCancelHeld = false;
   private static keyboardGrabHeld = false;
@@ -540,8 +556,11 @@ export class VRSpike {
     const keyboardOwnsInput = !movieOwnsInput && VRSpike.processKeyboardInput();
     const radialOwnsInput = !movieOwnsInput && !keyboardOwnsInput && VRSpike.processRadialMenuInput();
     const wristOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && VRSpike.processWristMenuInput();
-    const panelOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && !wristOwnsInput && VRSpike.processPanelInput();
-    if (movieOwnsInput || keyboardOwnsInput || radialOwnsInput || wristOwnsInput || panelOwnsInput) {
+    const comfortSettingsOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && !wristOwnsInput &&
+      VRSpike.processComfortSettingsInput();
+    const panelOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && !wristOwnsInput &&
+      !comfortSettingsOwnsInput && VRSpike.processPanelInput();
+    if (movieOwnsInput || keyboardOwnsInput || radialOwnsInput || wristOwnsInput || comfortSettingsOwnsInput || panelOwnsInput) {
       VRSpike.interactionTargetSet.clear();
       VRSpike.interactionSystem.cancelTransientState();
     } else {
@@ -784,6 +803,49 @@ export class VRSpike {
       VRSpike.keyboardCancelHeld = false;
       VRSpike.keyboardGrabHeld = false;
       console.error('[VRSpike] virtual keyboard input rejected', error);
+    }
+    return true;
+  }
+
+  /** Comfort settings panel (ROADMAP 2.6), opened from the wrist menu. */
+  private static processComfortSettingsInput(): boolean {
+    const context = VRSpike.hooks?.getComfortSettingsPanelContext?.() ?? null;
+    const inputFrame = VRSpike.latestInputFrame;
+    const session = VRSpike.session;
+    const scene = VRSpike.scene;
+    if (!context || !inputFrame || !session || !scene) {
+      VRSpike.comfortSettingsHost?.clear();
+      VRSpike.comfortSettingsSelectHeld = false;
+      VRSpike.comfortSettingsCancelHeld = false;
+      return false;
+    }
+    try {
+      if (!VRSpike.comfortSettingsHost) VRSpike.comfortSettingsHost = new VRComfortSettingsHost(scene);
+      VRSpike.comfortSettingsHost.present(inputFrame.head, context.rows);
+
+      const actions = VRSpike.inputRouter.route(
+        XRGamepadReader.read(Array.from(session.inputSources ?? [])),
+        new Set(['ui', 'interaction'])
+      );
+      const selectPressed = actions.some((action) =>
+        (action.action === SemanticXRAction.Select || action.action === SemanticXRAction.Use) && action.pressed
+      );
+      const cancelPressed = actions.some((action) => action.action === SemanticXRAction.Cancel && action.pressed);
+
+      if (selectPressed && !VRSpike.comfortSettingsSelectHeld) {
+        const rayPose = inputFrame.hands.right?.targetRayPose;
+        const row = rayPose ? VRSpike.comfortSettingsHost.rowAtRay(rayPose) : null;
+        if (row !== null) context.activateRow(row);
+      }
+      VRSpike.comfortSettingsSelectHeld = selectPressed;
+
+      if (cancelPressed && !VRSpike.comfortSettingsCancelHeld) context.close();
+      VRSpike.comfortSettingsCancelHeld = cancelPressed;
+    } catch (error) {
+      VRSpike.comfortSettingsHost?.clear();
+      VRSpike.comfortSettingsSelectHeld = false;
+      VRSpike.comfortSettingsCancelHeld = false;
+      console.error('[VRSpike] comfort settings panel input rejected', error);
     }
     return true;
   }

@@ -271,10 +271,11 @@ First light in the headset. No interaction yet.
 - **2.5** ✅ Smooth locomotion + smooth turn as default; teleport, snap turn, vignette as
   options. `VRSnapTurnController`, `VRTeleportController`, `VRComfortVignetteHost`,
   `GameState.getComfortSettings`/`setComfortSettings`.
-- **2.6** ☐ partial — Comfort settings surfaced somewhere reachable in-headset. Only
-  the smooth/blink locomotion toggle is reachable (`ToggleLocomotionMode`, an
-  already-bound controller button); `turnMode`, `snapTurnDegrees`, and
-  `vignetteEnabled` have no in-headset UI yet.
+- **2.6** ✅ Comfort settings surfaced somewhere reachable in-headset. The smooth/blink
+  locomotion toggle was already reachable (`ToggleLocomotionMode`); `turnMode`,
+  `snapTurnDegrees`, and `vignetteEnabled` are now reachable through a "Comfort
+  Settings" item on the wrist menu (4.1), opening `VRComfortSettingsHost` — a
+  four-row cycle panel (point at a row, press Select to cycle its value).
 
 **Exit:** walk around `101PER` in VR, roomscale, without falling through geometry or
 leaving walkable space. **Not yet verified on-device** — implemented and
@@ -298,11 +299,11 @@ unit/integration-tested only.
   melee already had.
 - **3.5** ✅ Diegetic round timer in the lightsaber hilt. `VRHiltTimerHost`, reading
   `VRCombatInputController.getRollReadiness()`.
-- **3.6** ☐ partial — Blasters: laser pointer ✅ (`VRBlasterLaserHost`), stat-rolled ✅
-  (routes through the same d20 combat path as melee), automatic deflection ✗ — not
-  implemented anywhere in the engine yet, flatscreen included (`AttackResult.DEFLECTED`
-  is declared but never assigned by attack-roll resolution). Real combat-rules work,
-  not a VR gap; needs its own session with SAGA deflection rules as reference.
+- **3.6** ✅ Blasters: laser pointer (`VRBlasterLaserHost`), stat-rolled (routes through
+  the same d20 combat path as melee), and automatic deflection (`CombatRound.tryBlasterDeflection`
+  + `combat/resolveBlasterDeflection.ts`, verified against the KOTOR 2 wiki's Jedi
+  Defense feat pages and the engine's own NWScriptDef comments for opcodes 469/470/252 —
+  applies to flatscreen combat generally, not just VR).
 - **3.7** ✅ Force gesture set — push/pull flicks (`VRForceGestureController`). Fixed
   this session: also no longer reads stale flatscreen-mouse target state.
 - **3.8** ✅ Radial menu for everything else; pauses outright (`VRRadialMenuController`
@@ -322,11 +323,12 @@ Every button reachable in flatscreen needs a VR route.
   mechanics and `VRRadialMenuHost` presentation rather than new UI infrastructure.
 - **4.2** ☐ Physical inventory. The existing flatscreen 2D inventory reprojects into
   world space generically (see 4.3) but there is no distinct physical/3D inventory.
-- **4.3** ✅ Summonable floating panels: character sheet, galaxy map (and inventory,
-  journal). The wrist menu (4.1) opens `MenuInventory`/`MenuCharacter`/`MenuJournal`/
-  `MenuGalaxyMap` the same way their flatscreen hotkeys do; the existing generic
-  `VRPanelHost` + `LegacyGUIVRPointerAdapter` reprojection handles the rest — no new
-  rendering infrastructure needed.
+- **4.3** ✅ Summonable floating panels: character sheet, galaxy map (and inventory).
+  The wrist menu (4.1) opens `MenuInventory`/`MenuCharacter`/`MenuGalaxyMap` the same
+  way their flatscreen hotkeys do (the fourth wrist slot became "Comfort Settings" —
+  see 2.6 — rather than Journal, which wasn't itself a roadmap-named panel); the
+  existing generic `VRPanelHost` + `LegacyGUIVRPointerAdapter` reprojection handles the
+  rest — no new rendering infrastructure needed.
 - **4.4** ❓ Dialogue skill checks as floating panels. Genuinely unconfirmed — may
   already work via generic reprojection if skill checks are authored as ordinary GUI
   screens, or may need bespoke handling. Not chased down this pass.

@@ -601,6 +601,53 @@ describe('VRSpike XR loop ownership', () => {
     expect((VRSpike as any).turnOriginOffset.y).toBeCloseTo(-Math.sin(expectedTurn));
   });
 
+  test('activates the ray-hit comfort settings row on a select press edge, once per press', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const activatedRows: number[] = [];
+    let closed = false;
+    VRSpike.scene = new THREE.Scene();
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+      hands: { right: { targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() } } },
+    };
+    (VRSpike as any).comfortSettingsHost = {
+      clear: jest.fn(), present: jest.fn(), rowAtRay: jest.fn(() => 2),
+    };
+    const rows = [
+      { label: 'Movement', value: 'Smooth' },
+      { label: 'Turning', value: 'Smooth' },
+      { label: 'Snap Turn Angle', value: '45°' },
+      { label: 'Comfort Vignette', value: 'Off' },
+    ];
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getComfortSettingsPanelContext: () => ({
+        rows,
+        activateRow: (index: number) => activatedRows.push(index),
+        close: () => { closed = true; },
+      }),
+    };
+
+    (VRSpike as any).processComfortSettingsInput();
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).processComfortSettingsInput();
+    (VRSpike as any).processComfortSettingsInput();
+
+    expect(activatedRows).toEqual([2]);
+
+    buttons[0] = { pressed: false, touched: false, value: 0 };
+    buttons[5] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).processComfortSettingsInput();
+
+    expect(closed).toBe(true);
+  });
+
   test('toggles the comfort locomotion mode on an offhand button press edge, once per press', () => {
     const settingsPatches: Array<Record<string, unknown>> = [];
     let locomotionMode: 'smooth' | 'blink' = 'smooth';
