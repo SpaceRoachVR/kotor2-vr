@@ -134,6 +134,56 @@ function isVRCombatTarget(actor: ModuleCreature, candidate: ModuleObject | null 
  * ever written by flatscreen mouse handlers and freeze at whatever was last
  * hovered before a WebXR session began.
  */
+interface VRKeyboardCapableControl {
+  editable?: unknown;
+  onKeyDown: (event: { readonly which: number; readonly shiftKey: boolean }) => void;
+  children?: unknown;
+  menu?: { triggerControllerBPress?: () => void };
+}
+
+function isVRKeyboardCapableControl(control: unknown): control is VRKeyboardCapableControl {
+  const candidate = control as VRKeyboardCapableControl | null | undefined;
+  return !!candidate && candidate.editable === true && typeof candidate.onKeyDown === 'function';
+}
+
+/**
+ * Depth-first search for the foreground menu's editable text field. Used as
+ * the VR keyboard's focus fallback — see `getKeyboardContext` for why relying
+ * on `activeGUIElement` alone leaves character creation untypeable in VR.
+ */
+function findVREditableControl(menu: unknown): VRKeyboardCapableControl | null {
+  const root = (menu as { tGuiPanel?: unknown } | null | undefined)?.tGuiPanel;
+  if (!root) return null;
+  const queue: unknown[] = [root];
+  while (queue.length) {
+    const control = queue.shift();
+    if (isVRKeyboardCapableControl(control)) return control;
+    const children = (control as { children?: unknown } | null | undefined)?.children;
+    if (Array.isArray(children)) queue.push(...children);
+  }
+  return null;
+}
+
+/**
+ * The distance within which a VR attack may actually be issued. Deliberately
+ * identical to `ActionPhysicalAttacks.update()`'s own range check (2.0 melee /
+ * 15.0 ranged) — that action walks the actor toward anything further away and
+ * calls `resetExcitedDuration()` every frame while doing so, which in VR reads
+ * as being dragged across the map into walls with battle music that never
+ * stops. Refusing to nominate an out-of-range target keeps the engine out of
+ * that walk-to branch entirely rather than trying to interrupt it afterwards.
+ */
+function resolveVRCombatRange(actor: ModuleCreature): number {
+  return actor.isRangedEquipped() ? 15.0 : 2.0;
+}
+
+function isWithinVRCombatRange(actor: ModuleCreature, target: ModuleObject): boolean {
+  return Math.hypot(
+    actor.position.x - target.position.x,
+    actor.position.y - target.position.y
+  ) <= resolveVRCombatRange(actor);
+}
+
 function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null {
   if (aimedTargetId === null) return null;
   return GameState.ModuleObjectManager.playerSelectableObjects.find(
@@ -981,7 +1031,18 @@ export class GameState implements EngineContext {
             return;
           }
 
-          const directUseResult = tryDirectVRWorldUse(actor, target);
+          // A locked door or container must reach the contextual action panel,
+          // which already offers the authored Security / Security Tunneler /
+          // Bash options for exactly this case. Direct-use would otherwise
+          // swallow the interaction first — `use()` on a locked object just
+          // plays the locked sound — leaving VR with no way to open anything
+          // locked, which read in the headset as "defaults to bash or does
+          // nothing at all".
+          const lockable = target as unknown as { isLocked?: () => boolean };
+          const targetIsLocked = typeof lockable.isLocked === 'function' && lockable.isLocked();
+          const directUseResult = targetIsLocked
+            ? { handled: false as const, feedbackLabel: undefined }
+            : tryDirectVRWorldUse(actor, target);
           if (directUseResult.handled) {
             vrContextActionTarget = null;
             vrContextActionPanelController.close();
@@ -1004,11 +1065,14 @@ export class GameState implements EngineContext {
         const actor = GameState.getCurrentPlayer();
         if (!actor) return null;
         const candidate = resolveVRAimedObject(aimedTargetId);
-        const target = isVRCombatTarget(actor, candidate) ? candidate : null;
+        const target = isVRCombatTarget(actor, candidate) && isWithinVRCombatRange(actor, candidate)
+          ? candidate
+          : null;
         return {
           actorId: String(actor.id),
           nominatedTargetId: target ? String(target.id) : null,
           weaponMode: resolveVRCombatWeaponMode(actor),
+          inCombat: actor.combatData.combatState === true,
           onCombatSwing: (event) => {
             // The controller layer can animate all physical swings, but never
             // creates damage. Only a cadence-authorized event aimed at the
@@ -1019,7 +1083,13 @@ export class GameState implements EngineContext {
           },
           cancel: () => {
             if (vrCombatIssuedTargetId === null) return;
+            // Clearing the combat round alone leaves the queued ActionCombat /
+            // ActionPhysicalAttacks running, which re-arms excitedDuration every
+            // frame and keeps battle music going with no way out. Drop the
+            // queued actions and reset the engine's own combat state too.
             actor.combatRound.clearActions();
+            actor.clearAllActions(true);
+            actor.cancelCombat();
             vrCombatIssuedTargetId = null;
           },
         };
@@ -1194,14 +1264,21 @@ export class GameState implements EngineContext {
           : null;
       },
       getKeyboardContext: () => {
-        const control = GameState.MenuManager.activeGUIElement as {
-          editable?: unknown;
-          onKeyDown?: unknown;
-          menu?: { triggerControllerBPress?: () => void };
-        } | undefined;
-        return control?.editable === true && typeof control.onKeyDown === 'function'
+        // `activeGUIElement` is only ever set by clicking a control with a
+        // mouse (GUILabel.setEditable installs a *click* handler and nothing
+        // else). MenuSaveName papers over this by focusing its edit box in
+        // show(); CharGenName does not, so character creation's name field
+        // was never focused in VR and every keystroke was silently dropped.
+        // Fall back to the foreground menu's own editable field so the VR
+        // keyboard works on any name-entry screen without first demanding a
+        // precise pointer click on a small text box.
+        const activeControl = GameState.MenuManager.activeGUIElement as VRKeyboardCapableControl | undefined;
+        const control = isVRKeyboardCapableControl(activeControl)
+          ? activeControl
+          : findVREditableControl(GameState.MenuManager.GetForegroundMenu());
+        return control
           ? {
-            onKeyDown: control.onKeyDown as (event: { readonly which: number; readonly shiftKey: boolean }) => void,
+            onKeyDown: control.onKeyDown.bind(control) as (event: { readonly which: number; readonly shiftKey: boolean }) => void,
             cancel: () => control.menu?.triggerControllerBPress?.(),
           }
           : null;

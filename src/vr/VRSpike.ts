@@ -16,6 +16,7 @@ import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestu
 import { VRRadialMenuController, VRRadialMenuItem } from "./runtime/VRRadialMenuController";
 import { VRRadialMenuHost } from "./runtime/VRRadialMenuHost";
 import { resolveWallSoftBlockCorrection, VRWalkmeshQuery } from "./runtime/VRWallSoftBlock";
+import { getVRInteractionRange } from "./runtime/VRWorldUseAdapter";
 import { VRSnapTurnController } from "./runtime/VRSnapTurnController";
 import { VRTeleportController } from "./runtime/VRTeleportController";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
@@ -120,6 +121,8 @@ export interface VRSpikeHooks {
     readonly actorId: string;
     readonly nominatedTargetId: string | null;
     readonly weaponMode: import('./runtime/XRTypes').CombatWeaponMode;
+    /** True while the actor is in an actual engagement (drives the laser sight). */
+    readonly inCombat: boolean;
     onCombatSwing(event: VRCombatSwingEvent): void;
     cancel?(): void;
   } | null;
@@ -272,7 +275,11 @@ export class VRSpike {
   private static combatCancelHeld = false;
   private static readonly interactionTargetSet = new ModuleObjectInteractionTargetSet(
     VRSpike.interactionRegistry,
-    () => VRSpike.hooks?.getInteractionContext?.().actor ?? null
+    () => VRSpike.hooks?.getInteractionContext?.().actor ?? null,
+    {
+      getInteractionRangeMetres: (object) =>
+        getVRInteractionRange(object.objectType ?? 0),
+    }
   );
 
   /**
@@ -930,7 +937,7 @@ export class VRSpike {
       return;
     }
 
-    VRSpike.updateHiltTimer(context.weaponMode, timestamp);
+    VRSpike.updateHiltTimer(context.weaponMode, timestamp, context.inCombat);
 
     try {
       const actions = VRSpike.inputRouter.route(
@@ -972,21 +979,35 @@ export class VRSpike {
     }
   }
 
-  private static updateHiltTimer(weaponMode: CombatWeaponMode, timestamp: number): void {
-    const anchor = VRSpike.controllerAnchorHost?.getAnchor('right') ?? null;
-    if (!anchor || weaponMode === 'unarmed') {
+  private static updateHiltTimer(
+    weaponMode: CombatWeaponMode,
+    timestamp: number,
+    inCombat: boolean
+  ): void {
+    // The hilt timer is a diegetic ring on the weapon itself, so it belongs on
+    // the grip anchor. The blaster laser is an *aiming* line and must use the
+    // target-ray anchor instead — grip and target-ray orientations differ
+    // substantially (grip follows the handle, target ray follows where the
+    // controller points), and putting the laser on the grip is what made it
+    // visibly diverge from the correctly-aimed menu pointer.
+    const gripAnchor = VRSpike.controllerAnchorHost?.getAnchor('right') ?? null;
+    const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor('right') ?? null;
+    if (!gripAnchor || weaponMode === 'unarmed') {
       VRSpike.hiltTimerHost?.clear();
       VRSpike.blasterLaserHost?.clear();
       return;
     }
     if (!VRSpike.hiltTimerHost) {
-      VRSpike.hiltTimerHost = new VRHiltTimerHost(anchor);
+      VRSpike.hiltTimerHost = new VRHiltTimerHost(gripAnchor);
     }
     VRSpike.hiltTimerHost.present(VRSpike.combatInputController.getRollReadiness(timestamp));
 
-    if (weaponMode === 'blaster') {
+    // Only show the laser sight during an actual engagement — a permanent red
+    // line across the view while exploring is both noisy and misreads as the
+    // world-interaction pointer.
+    if (weaponMode === 'blaster' && inCombat && rayAnchor) {
       if (!VRSpike.blasterLaserHost) {
-        VRSpike.blasterLaserHost = new VRBlasterLaserHost(anchor);
+        VRSpike.blasterLaserHost = new VRBlasterLaserHost(rayAnchor);
       }
       VRSpike.blasterLaserHost.present();
     } else {

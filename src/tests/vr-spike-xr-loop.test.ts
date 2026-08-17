@@ -428,7 +428,7 @@ describe('VRSpike XR loop ownership', () => {
       getFacing: () => 0,
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
-        actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed',
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat: true,
         onCombatSwing: (event) => combatEvents.push(event),
       }),
     };
@@ -450,7 +450,8 @@ describe('VRSpike XR loop ownership', () => {
       getFacing: () => 0,
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
-        actorId: '7', nominatedTargetId: null, weaponMode: 'unarmed', onCombatSwing: () => undefined,
+        actorId: '7', nominatedTargetId: null, weaponMode: 'unarmed', inCombat: false,
+        onCombatSwing: () => undefined,
       }),
     };
 
@@ -475,7 +476,7 @@ describe('VRSpike XR loop ownership', () => {
       getFacing: () => 0,
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
-        actorId: '7', nominatedTargetId: '42', weaponMode: 'unarmed',
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'unarmed', inCombat: true,
         onCombatSwing: () => undefined, cancel: () => { cancelCount += 1; },
       }),
     };

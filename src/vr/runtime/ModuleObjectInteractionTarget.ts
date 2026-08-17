@@ -4,15 +4,18 @@ import {
   InteractionTarget,
   InteractionTargetRegistry,
 } from './InteractionTargetRegistry';
+import { resolveDisplayName } from './resolveDisplayName';
 
 export interface EngineInteractionActor {
   readonly id: number;
+  readonly position?: THREE.Vector3;
   clearAllActions(): void;
 }
 
 export interface EngineInteractableObject {
   readonly id: number;
   readonly position: THREE.Vector3;
+  readonly objectType?: number;
   readonly destroyed?: boolean;
   readonly willDestroy?: boolean;
   getName?(): string;
@@ -23,10 +26,17 @@ export interface EngineInteractableObject {
 export interface ModuleObjectInteractionTargetOptions {
   readonly radiusMetres?: number;
   readonly verticalOffsetMetres?: number;
+  /**
+   * Resolves how close the actor must be for this object to be interactable
+   * at all. Injected so the engine's own per-type use distances stay the
+   * single source of truth rather than being duplicated here.
+   */
+  readonly getInteractionRangeMetres?: (object: EngineInteractableObject) => number;
 }
 
 const DEFAULT_RADIUS_METRES = 0.5;
 const DEFAULT_VERTICAL_OFFSET_METRES = 1;
+const DEFAULT_INTERACTION_RANGE_METRES = 2;
 
 /** Resolves a VR target without queuing the desktop walk-to interaction. */
 export function createModuleObjectInteractionTarget(
@@ -45,13 +55,32 @@ export function createModuleObjectInteractionTarget(
     throw new RangeError('verticalOffsetMetres must be finite');
   }
 
+  const getInteractionRangeMetres = options.getInteractionRangeMetres;
+
   const isAvailable = (): boolean => {
     const actor = getActiveActor();
-    return actor !== null &&
-      actor.id !== object.id &&
-      !object.destroyed &&
-      !object.willDestroy &&
-      object.isUseable();
+    if (actor === null ||
+      actor.id === object.id ||
+      object.destroyed ||
+      object.willDestroy ||
+      !object.isUseable()) {
+      return false;
+    }
+    // Out-of-range objects are not merely un-activatable, they are not
+    // targets at all — no label, no reticle, no selection. Selecting a
+    // distant object in the original engine queues a walk-to-target action
+    // that drags the player across the level (and into walls) with no way to
+    // cancel, so VR refuses to nominate the target in the first place rather
+    // than trying to interrupt that walk afterwards.
+    if (actor.position) {
+      const rangeMetres = getInteractionRangeMetres?.(object) ?? DEFAULT_INTERACTION_RANGE_METRES;
+      const distanceMetres = Math.hypot(
+        actor.position.x - object.position.x,
+        actor.position.y - object.position.y
+      );
+      if (distanceMetres > rangeMetres) return false;
+    }
+    return true;
   };
 
   return {
@@ -78,7 +107,9 @@ export function createModuleObjectInteractionTarget(
 }
 
 function getInteractionLabel(object: EngineInteractableObject): string {
-  const name = typeof object.getName === 'function' ? object.getName().trim() : '';
+  const name = typeof object.getName === 'function'
+    ? resolveDisplayName(object.getName())
+    : '';
   return name ? `Use: ${name}` : 'Use';
 }
 
