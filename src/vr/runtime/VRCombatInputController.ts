@@ -51,6 +51,22 @@ export class VRCombatInputController {
     VRCombatInputController.validateConfiguration(this.configuration);
   }
 
+  /**
+   * Round-timer readiness for the diegetic hilt indicator (ROADMAP 3.5):
+   * 0 right after a roll-eligible swing/shot, 1 once the next one is
+   * eligible again. `timestamp` should be the same clock `process()` is
+   * driven with.
+   */
+  getRollReadiness(timestamp: number): number {
+    if (!Number.isFinite(timestamp)) {
+      throw new TypeError('timestamp must be finite');
+    }
+    if (this.nextRollAt === Number.NEGATIVE_INFINITY) return 1;
+    const remaining = this.nextRollAt - timestamp;
+    if (remaining <= 0) return 1;
+    return 1 - Math.min(1, remaining / this.configuration.rollCooldownMilliseconds);
+  }
+
   process(inputFrame: XRInputFrame, context: VRCombatInputContext): readonly VRCombatSwingEvent[] {
     VRCombatInputController.validateContext(context);
     if (context.weaponMode === 'blaster') return this.processBlaster(inputFrame, context);

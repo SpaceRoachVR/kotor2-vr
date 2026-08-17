@@ -59,6 +59,29 @@ describe('VRCombatInputController', () => {
     const thirdShot = controller.process(frame(2_100, 0), context('blaster', 2_100, false, true));
     expect(thirdShot).toEqual([expect.objectContaining({ weaponMode: 'blaster', rollEligible: true })]);
   });
+
+  test('reports roll readiness for the diegetic hilt timer', () => {
+    const controller = new VRCombatInputController({
+      minimumSwingSpeedMetresPerSecond: 0.8,
+      visualSwingCooldownMilliseconds: 100,
+      rollCooldownMilliseconds: 2_000,
+    });
+
+    // Never swung yet — ready.
+    expect(controller.getRollReadiness(0)).toBe(1);
+
+    controller.process(frame(0, 0), context('melee-one-handed', 0));
+    controller.process(frame(160, -0.3), context('melee-one-handed', 160));
+
+    expect(controller.getRollReadiness(160)).toBeCloseTo(0);
+    expect(controller.getRollReadiness(1_160)).toBeCloseTo(0.5);
+    expect(controller.getRollReadiness(2_160)).toBe(1);
+  });
+
+  test('rejects a non-finite readiness timestamp', () => {
+    const controller = new VRCombatInputController();
+    expect(() => controller.getRollReadiness(Number.NaN)).toThrow(TypeError);
+  });
 });
 
 function context(

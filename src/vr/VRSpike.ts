@@ -19,6 +19,8 @@ import { resolveWallSoftBlockCorrection, VRWalkmeshQuery } from "./runtime/VRWal
 import { VRSnapTurnController } from "./runtime/VRSnapTurnController";
 import { VRTeleportController } from "./runtime/VRTeleportController";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
+import { VRHiltTimerHost } from "./runtime/VRHiltTimerHost";
+import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
   VRWorldTargetIndicator,
   VRWorldTargetLabelHost,
@@ -33,7 +35,7 @@ import {
   EngineInteractionActor,
   ModuleObjectInteractionTargetSet,
 } from "./runtime/ModuleObjectInteractionTarget";
-import { InteractionIntent, SemanticXRAction, VRComfortSettings, XRInputFrame } from "./runtime/XRTypes";
+import { CombatWeaponMode, InteractionIntent, SemanticXRAction, VRComfortSettings, XRInputFrame } from "./runtime/XRTypes";
 import { PerfSampler, PerfWorldSnapshot } from "./PerfSampler";
 import type { EngineFrameSource } from "./XRFrameCadence";
 
@@ -191,6 +193,8 @@ export class VRSpike {
   private static readonly teleportController = new VRTeleportController();
   private static locomotionModeToggleHeld = false;
   private static comfortVignetteHost: VRComfortVignetteHost | null = null;
+  private static hiltTimerHost: VRHiltTimerHost | null = null;
+  private static blasterLaserHost: VRBlasterLaserHost | null = null;
   private static previousXRInputTimestamp: number | null = null;
   private static locomotionInputErrorReported = false;
   private static trackedInputErrorReported = false;
@@ -478,6 +482,10 @@ export class VRSpike {
     VRSpike.latestPanelPointerPosition = null;
     VRSpike.comfortVignetteHost?.dispose();
     VRSpike.comfortVignetteHost = null;
+    VRSpike.hiltTimerHost?.dispose();
+    VRSpike.hiltTimerHost = null;
+    VRSpike.blasterLaserHost?.dispose();
+    VRSpike.blasterLaserHost = null;
 
     const btn = document.getElementById('vr-spike-button');
     if (btn) btn.textContent = 'Enter VR (spike)';
@@ -828,13 +836,17 @@ export class VRSpike {
     const session = VRSpike.session;
     if (!inputFrame || !session) {
       VRSpike.combatCancelHeld = false;
+      VRSpike.hiltTimerHost?.clear();
       return;
     }
     const context = VRSpike.hooks?.getCombatContext?.(VRSpike.resolveAimedTargetId()) ?? null;
     if (!context) {
       VRSpike.combatCancelHeld = false;
+      VRSpike.hiltTimerHost?.clear();
       return;
     }
+
+    VRSpike.updateHiltTimer(context.weaponMode, timestamp);
 
     try {
       const actions = VRSpike.inputRouter.route(
@@ -873,6 +885,28 @@ export class VRSpike {
         VRSpike.combatInputErrorReported = true;
         console.error('[VRSpike] combat input rejected', error);
       }
+    }
+  }
+
+  private static updateHiltTimer(weaponMode: CombatWeaponMode, timestamp: number): void {
+    const anchor = VRSpike.controllerAnchorHost?.getAnchor('right') ?? null;
+    if (!anchor || weaponMode === 'unarmed') {
+      VRSpike.hiltTimerHost?.clear();
+      VRSpike.blasterLaserHost?.clear();
+      return;
+    }
+    if (!VRSpike.hiltTimerHost) {
+      VRSpike.hiltTimerHost = new VRHiltTimerHost(anchor);
+    }
+    VRSpike.hiltTimerHost.present(VRSpike.combatInputController.getRollReadiness(timestamp));
+
+    if (weaponMode === 'blaster') {
+      if (!VRSpike.blasterLaserHost) {
+        VRSpike.blasterLaserHost = new VRBlasterLaserHost(anchor);
+      }
+      VRSpike.blasterLaserHost.present();
+    } else {
+      VRSpike.blasterLaserHost?.clear();
     }
   }
 

@@ -290,10 +290,24 @@ actually worth building next given what scaffolding already exists.
      consolidating there instead of shipping two.
    - 6 new tests (unit + integration) covering toggle edge-detection, snap-turn firing
      once per deflection, and teleport committing a walkmesh-clamped point.
-3. **3.5/3.6 — Diegetic hilt timer + blaster auto-deflection.** Both ride on state that
-   already exists (`rollCooldownMilliseconds`/`nextRollAt` in `VRCombatInputController`).
-   A world-space indicator following the same pattern as `VRWorldTargetLabelHost` closes
-   3.5; an incoming-fire deflection check closes 3.6.
+3. **3.5 — Diegetic hilt timer: done.** `VRCombatInputController.getRollReadiness()`
+   exposes the existing `nextRollAt`/`rollCooldownMilliseconds` state as a 0-1 fraction;
+   `VRHiltTimerHost` draws it as a small ring on the weapon hilt itself (child of the
+   right-hand controller anchor, so it needs no per-frame transform), shown whenever a
+   weapon is equipped and hidden once ready with nothing to indicate.
+   **3.6 — Blaster laser pointer: done** (`VRBlasterLaserHost`, same hand-anchor pattern).
+   **3.6 — Automatic deflection: corrected finding, not implemented.** The original
+   completeness pass assumed deflection resolution already existed in the core combat
+   pipeline (`AttackResult.DEFLECTED`, `CombatAttackData.attackDeflected`,
+   `CombatRound.deflectArrow` all exist) and only needed VR presentation. A direct check
+   shows `AttackResult.DEFLECTED` is referenced exactly once anywhere in the codebase —
+   the message-formatting switch in `CombatRound.ts:783` — and is never actually assigned
+   by the attack-roll resolution logic. Deflection isn't a working mechanic in this engine
+   at all yet, on flatscreen or in VR; it's dead state and an unused enum case, the same
+   shape as the `ActionPickUpItem` stub found in Stage 1.1. Implementing the actual
+   deflection roll (KOTOR/d20 SAGA rules — feats, DEX, weapon type) is a real combat-rules
+   feature affecting the whole game, not a VR gap, and risks getting the ruleset wrong
+   without dedicated reference and playtesting. Left undone rather than guessed at.
 4. **4.1/4.3/4.4 — Wrist device + purpose-built panels.** `VRPanelHost` +
    `LegacyGUIVRPointerAdapter` already generically reproject any legacy menu (inventory,
    character sheet, galaxy map) into world space with working pointer input — what's
