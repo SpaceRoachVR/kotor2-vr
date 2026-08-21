@@ -83,6 +83,28 @@ export function validateVRRadialMenu(menu: VRRadialMenuDefinition): void {
     if (!Array.isArray(page.entries) || page.entries.length < 1 || page.entries.length > 8) {
       throw new RangeError(`page ${pagePosition} must contain between 1 and 8 entries`);
     }
+    const contentCount = page.entries.filter((entry: VRRadialMenuItem) => entry.kind === 'action' || entry.kind === 'submenu').length;
+    if (contentCount > 6) {
+      throw new RangeError(`page ${pagePosition} must contain at most 6 content items`);
+    }
+    const previousCount = page.entries.filter((entry: VRRadialMenuItem) => entry.kind === 'previous-page').length;
+    const nextCount = page.entries.filter((entry: VRRadialMenuItem) => entry.kind === 'next-page').length;
+    if (previousCount > 1 || nextCount > 1) {
+      throw new RangeError(`page ${pagePosition} contains duplicate navigation entries`);
+    }
+    if (pagePosition === 0 && previousCount !== 0) {
+      throw new RangeError('Previous is not allowed on page 0');
+    }
+    if (pagePosition > 0 && previousCount !== 1) {
+      throw new RangeError(`Previous is required on page ${pagePosition}`);
+    }
+    const isLastPage = pagePosition === menu.pages.length - 1;
+    if (isLastPage && nextCount !== 0) {
+      throw new RangeError(`Next is not allowed on last page ${pagePosition}`);
+    }
+    if (!isLastPage && nextCount !== 1) {
+      throw new RangeError(`Next is required on page ${pagePosition}`);
+    }
     page.entries.forEach((entry: VRRadialMenuItem, entryPosition: number) => {
       validateMenuItem(entry, pagePosition, entryPosition, contentIds);
     });

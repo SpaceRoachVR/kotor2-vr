@@ -4,6 +4,7 @@ import {
   validateVRRadialMenu,
   VRRadialActionItem,
   VRRadialMenuItem,
+  VRRadialPage,
 } from '@/vr/runtime/VRRadialMenuModel';
 
 const action = (id: string): VRRadialActionItem => ({
@@ -62,5 +63,34 @@ describe('validation edge cases', () => {
     const invalidSubmenu = { kind: 'submenu', id: 'sub', label: 'Sub', revalidate: () => true } as unknown as VRRadialMenuItem;
     expect(() => validateVRRadialMenu({ id: 'menu', title: 'Menu', pages: [{ index: 0, entries: [invalidSubmenu] }] }))
       .toThrow('callable buildMenu');
+  });
+
+  test('rejects a page with more than six content actions', () => {
+    const page = { index: 0, entries: Array.from({ length: 7 }, (_, index) => action(`a${index}`)) };
+    expect(() => validateVRRadialMenu({ id: 'menu', title: 'Menu', pages: [page] }))
+      .toThrow('at most 6 content items');
+  });
+
+  test('rejects duplicate navigation entries', () => {
+    const page = {
+      index: 0,
+      entries: [action('a'),
+        { kind: 'next-page', id: 'nav:next', label: 'Next' } as const,
+        { kind: 'next-page', id: 'nav:next', label: 'Next' } as const],
+    };
+    expect(() => validateVRRadialMenu({ id: 'menu', title: 'Menu', pages: [page] }))
+      .toThrow('duplicate navigation');
+  });
+
+  test('rejects Previous on page 0', () => {
+    const page = { index: 0, entries: [action('a'), { kind: 'previous-page', id: 'nav:previous', label: 'Previous' } as const] } as VRRadialPage;
+    expect(() => validateVRRadialMenu({ id: 'menu', title: 'Menu', pages: [page] }))
+      .toThrow('Previous is not allowed on page 0');
+  });
+
+  test('rejects Next on the last page', () => {
+    const page = { index: 0, entries: [action('a'), { kind: 'next-page', id: 'nav:next', label: 'Next' } as const] } as VRRadialPage;
+    expect(() => validateVRRadialMenu({ id: 'menu', title: 'Menu', pages: [page] }))
+      .toThrow('Next is not allowed on last page');
   });
 });
