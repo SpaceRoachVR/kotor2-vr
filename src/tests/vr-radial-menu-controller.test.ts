@@ -167,6 +167,19 @@ describe('VRRadialMenuController', () => {
     expect(controller.presentation?.menu.id).toBe('party');
   });
 
+  test('an invalid opening waits for X release before a valid menu can open', () => {
+    const controller = new VRRadialMenuController();
+    const validMenu = menuWithAction();
+    const invalidMenu = { id: '', title: 'invalid', pages: [] } as unknown as VRRadialMenuDefinition;
+
+    expect(controller.process(input({ menuPressed: true, openingMenu: invalidMenu }))).toContainEqual({ type: 'closed', reason: 'invalid' });
+    expect(controller.process(input({ menuPressed: true, openingMenu: validMenu }))).toEqual([]);
+    expect(controller.isOpen).toBe(false);
+    controller.process(input({ menuPressed: false }));
+
+    expect(controller.process(input({ menuPressed: true, openingMenu: validMenu }))).toContainEqual({ type: 'opened' });
+  });
+
   test('lifecycle close suppresses a held X until it is physically released', () => {
     const controller = new VRRadialMenuController();
     const menu = menuWithAction();

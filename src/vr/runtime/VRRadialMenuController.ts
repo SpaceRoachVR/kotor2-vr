@@ -105,8 +105,7 @@ export class VRRadialMenuController {
 
   private open(menu: VRRadialMenuDefinition | null, effects: VRRadialControllerEffect[]): void {
     if (!menu || !this.isValidMenu(menu)) {
-      this.resetClosedState();
-      effects.push({ type: 'closed', reason: 'invalid' });
+      this.closeInto(effects, 'invalid', true);
       effects.push({ type: 'negative-haptic', hand: 'left' });
       return;
     }
@@ -213,14 +212,6 @@ export class VRRadialMenuController {
     this.clearTouchOverlaps();
     this.state = menuPressed ? 'waiting-for-menu-release' : 'closed';
     effects.push({ type: 'closed', reason });
-  }
-
-  private resetClosedState(): void {
-    this.state = 'closed';
-    this.menu = null;
-    this.pageIndex = 0;
-    this.hoveredId = null;
-    this.clearTouchOverlaps();
   }
 
   private entryForIndex(index: number): VRRadialMenuItem | null {
