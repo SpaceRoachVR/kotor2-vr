@@ -5,6 +5,7 @@ import {
   VRWorldPromptAction,
   VRWorldPromptEntry,
   VRWorldPromptPage,
+  resolveValidVRWorldPromptPage,
 } from './VRWorldActionPromptModel';
 
 export interface VRWorldPromptPresentation {
@@ -57,7 +58,8 @@ export class VRWorldActionPromptController {
       throw new TypeError('world prompt actions must be an array');
     }
 
-    if (!isPresentableModel(model)) {
+    const firstPage = resolveValidVRWorldPromptPage(model, 0);
+    if (!model || !firstPage) {
       return this.close();
     }
 
@@ -66,10 +68,12 @@ export class VRWorldActionPromptController {
       this.model = model;
     } else {
       this.model = model;
-      if (!this.model.pages[this.pageIndex]) this.pageIndex = 0;
     }
 
-    const page = this.model.pages[this.pageIndex];
+    const page = this.pageIndex === 0
+      ? firstPage
+      : resolveValidVRWorldPromptPage(this.model, this.pageIndex);
+    if (!page) return this.close();
     this.hoveredId = resolveDisplayedHover(page, hoveredByHand);
 
     const nextPressed = resolveSelectPressed(actions);
@@ -125,13 +129,6 @@ export class VRWorldActionPromptController {
     this.pressed.left = false;
     this.pressed.right = false;
   }
-}
-
-function isPresentableModel(model: VRWorldActionPromptModel | null): model is VRWorldActionPromptModel {
-  if (!model || typeof model.id !== 'string' || model.id.trim().length === 0) return false;
-  if (!Array.isArray(model.pages) || model.pages.length === 0) return false;
-  return model.pages.every((page) =>
-    Boolean(page) && Array.isArray(page.entries) && page.entries.length > 0);
 }
 
 function resolveSelectPressed(actions: readonly RoutedXRAction[]): Record<XRHandRole, boolean> {

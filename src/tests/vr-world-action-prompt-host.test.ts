@@ -102,6 +102,26 @@ describe('VRWorldActionPromptHost', () => {
     expect(() => host.present(missingPage, headAt(new THREE.Vector3()), null)).not.toThrow();
     expect(host.object.visible).toBe(false);
   });
+
+  test.each([
+    'null-pages',
+    'null-entry',
+    'invalid-kind',
+    'duplicate-ids',
+    'malformed-callables',
+  ] as const)('fails closed for malformed prompt structure: %s', (malformation) => {
+    const host = createPromptHost();
+    const model = promptModel('door', [promptAction('use')], new THREE.Vector3());
+    host.present(presentation(model), headAt(new THREE.Vector3(0, -1, 1.7)), null);
+
+    expect(() => host.present(
+      malformedPresentation(model, malformation),
+      headAt(new THREE.Vector3(0, -1, 1.7)),
+      'use',
+    )).not.toThrow();
+    expect(host.object.visible).toBe(false);
+    expect(host.hoveredId).toBeNull();
+  });
 });
 
 function createPromptHost(): VRWorldActionPromptHost {
@@ -132,7 +152,7 @@ function promptAction(id: string): VRWorldPromptAction {
     label: id,
     icon: `icon-${id}`,
     revalidate: () => true,
-    activate: () => undefined,
+    activate: (): void => undefined,
   };
 }
 
@@ -202,4 +222,45 @@ function createCanvasContext(): CanvasRenderingContext2D {
     textAlign: 'start',
     textBaseline: 'alphabetic',
   } as unknown as CanvasRenderingContext2D;
+}
+
+type PromptMalformation =
+  | 'null-pages'
+  | 'null-entry'
+  | 'invalid-kind'
+  | 'duplicate-ids'
+  | 'malformed-callables';
+
+function malformedPresentation(
+  validModel: VRWorldActionPromptModel,
+  malformation: PromptMalformation,
+): VRWorldPromptPresentation {
+  const validAction = {
+    kind: 'action',
+    id: 'use',
+    label: 'Use',
+    revalidate: () => true,
+    activate: (): void => undefined,
+  };
+  const model = malformation === 'null-pages'
+    ? { ...validModel, pages: null }
+    : malformation === 'null-entry'
+      ? { ...validModel, pages: [{ index: 0, entries: [null] }] }
+      : malformation === 'invalid-kind'
+        ? { ...validModel, pages: [{ index: 0, entries: [{ ...validAction, kind: 'unsupported' }] }] }
+        : malformation === 'duplicate-ids'
+          ? { ...validModel, pages: [{ index: 0, entries: [validAction, { ...validAction }] }] }
+          : {
+              ...validModel,
+              pages: [{
+                index: 0,
+                entries: [{ ...validAction, revalidate: 'not-callable', activate: 'not-callable' }],
+              }],
+            };
+  return {
+    model,
+    pageIndex: 0,
+    page: Array.isArray(model.pages) ? model.pages[0] : undefined,
+    hoveredId: null,
+  } as unknown as VRWorldPromptPresentation;
 }

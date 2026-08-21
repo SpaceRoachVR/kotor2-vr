@@ -49,6 +49,52 @@ const MAXIMUM_HORIZONTAL_ANGLE_RADIANS = THREE.MathUtils.degToRad(55);
 const ACTIONS_PER_PAGE = 4;
 const MINIMUM_DIRECTION_LENGTH_SQUARED = 1e-10;
 
+/**
+ * Validates an untrusted immutable prompt snapshot and resolves its selected page.
+ * This never invokes action callbacks, so render/input boundaries can fail closed.
+ */
+export function resolveValidVRWorldPromptPage(
+  model: unknown,
+  selectedPageIndex: unknown,
+): VRWorldPromptPage | null {
+  if (!isRecord(model) ||
+    !isNonEmptyString(model.id) ||
+    !isNonEmptyString(model.name) ||
+    !(model.anchor instanceof THREE.Vector3) ||
+    !isFiniteVector3(model.anchor) ||
+    !Array.isArray(model.pages) ||
+    model.pages.length === 0 ||
+    !Number.isInteger(selectedPageIndex) ||
+    (selectedPageIndex as number) < 0 ||
+    (selectedPageIndex as number) >= model.pages.length) {
+    return null;
+  }
+
+  const actionIds = new Set<string>();
+  for (let pageIndex = 0; pageIndex < model.pages.length; pageIndex += 1) {
+    const page = model.pages[pageIndex];
+    if (!isRecord(page) || page.index !== pageIndex ||
+      !Array.isArray(page.entries) || page.entries.length === 0) {
+      return null;
+    }
+
+    const entryIds = new Set<string>();
+    let actionCount = 0;
+    for (const entry of page.entries) {
+      if (!isValidPromptEntry(entry) || entryIds.has(entry.id)) return null;
+      entryIds.add(entry.id);
+      if (entry.kind === 'action') {
+        if (actionIds.has(entry.id)) return null;
+        actionIds.add(entry.id);
+        actionCount += 1;
+      }
+    }
+    if (actionCount > ACTIONS_PER_PAGE) return null;
+  }
+
+  return model.pages[selectedPageIndex as number] as VRWorldPromptPage;
+}
+
 export function selectVRWorldPromptCandidate(
   candidates: readonly VRWorldPromptCandidate[],
   headPose: XRWorldPose,
@@ -183,14 +229,30 @@ function isValidCandidate(candidate: VRWorldPromptCandidate): boolean {
     typeof candidate.hasActions === 'boolean';
 }
 
-function isValidAction(action: VRWorldPromptAction): boolean {
-  return Boolean(action) &&
+function isValidAction(action: unknown): action is VRWorldPromptAction {
+  return isRecord(action) &&
     action.kind === 'action' &&
     isNonEmptyString(action.id) &&
     isNonEmptyString(action.label) &&
     (action.icon === undefined || isNonEmptyString(action.icon)) &&
     typeof action.revalidate === 'function' &&
     typeof action.activate === 'function';
+}
+
+function isValidPromptEntry(entry: unknown): entry is VRWorldPromptEntry {
+  if (!isRecord(entry) || !isNonEmptyString(entry.id) || !isNonEmptyString(entry.label)) {
+    return false;
+  }
+  if (entry.kind === 'action') {
+    return isValidAction(entry);
+  }
+  if (entry.kind === 'previous-page') {
+    return entry.id === 'prompt:previous' && entry.label === 'Previous';
+  }
+  if (entry.kind === 'next-page') {
+    return entry.id === 'prompt:next' && entry.label === 'Next';
+  }
+  return false;
 }
 
 function validateHeadPose(headPose: XRWorldPose): void {
@@ -217,4 +279,8 @@ function isFiniteQuaternion(quaternion: THREE.Quaternion): boolean {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

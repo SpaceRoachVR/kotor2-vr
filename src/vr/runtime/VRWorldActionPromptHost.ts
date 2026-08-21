@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { XRHandRole, XRWorldPose } from './XRTypes';
 import { VRPanelPointerHost } from './VRPanelPointerHost';
-import { VRWorldPromptEntry } from './VRWorldActionPromptModel';
+import {
+  VRWorldPromptEntry,
+  resolveValidVRWorldPromptPage,
+} from './VRWorldActionPromptModel';
 import { VRWorldPromptPresentation } from './VRWorldActionPromptController';
 
 export type { VRWorldPromptPresentation } from './VRWorldActionPromptController';
@@ -270,18 +273,9 @@ function createRenderKey(presentation: VRWorldPromptPresentation, hoveredId: str
 }
 
 function isValidPresentation(presentation: VRWorldPromptPresentation): boolean {
-  return Boolean(presentation) &&
-    Boolean(presentation.model) &&
-    typeof presentation.model.id === 'string' &&
-    presentation.model.id.trim().length > 0 &&
-    presentation.model.anchor instanceof THREE.Vector3 &&
-    isFiniteVector3(presentation.model.anchor) &&
-    Number.isInteger(presentation.pageIndex) &&
-    presentation.pageIndex >= 0 &&
-    Boolean(presentation.page) &&
-    presentation.model.pages[presentation.pageIndex] === presentation.page &&
-    Array.isArray(presentation.page.entries) &&
-    presentation.page.entries.length > 0;
+  if (!presentation || typeof presentation !== 'object') return false;
+  const page = resolveValidVRWorldPromptPage(presentation.model, presentation.pageIndex);
+  return page !== null && page === presentation.page;
 }
 
 function isFinitePose(pose: XRWorldPose): boolean {

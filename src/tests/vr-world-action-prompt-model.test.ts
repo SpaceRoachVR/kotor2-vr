@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { describe, expect, jest, test } from '@jest/globals';
 import {
+  VRWorldActionPromptModel,
   VRWorldPromptAction,
   VRWorldPromptCandidate,
   buildVRWorldPromptPages,
+  resolveValidVRWorldPromptPage,
   selectVRWorldPromptCandidate,
 } from '@/vr/runtime/VRWorldActionPromptModel';
 import { XRWorldPose } from '@/vr/runtime/XRTypes';
@@ -139,6 +141,94 @@ describe('buildVRWorldPromptPages', () => {
   });
 });
 
+describe('resolveValidVRWorldPromptPage', () => {
+  test('returns the selected page only when the entire prompt structure is valid', () => {
+    const model = promptModelForValidation();
+
+    expect(resolveValidVRWorldPromptPage(model, 0)).toBe(model.pages[0]);
+    expect(resolveValidVRWorldPromptPage(model, 1)).toBeNull();
+    expect(resolveValidVRWorldPromptPage(model, 0.5)).toBeNull();
+  });
+
+  test.each([
+    ['null pages', (model: VRWorldActionPromptModel) => ({ ...model, pages: null as unknown })],
+    ['null entry', (model: VRWorldActionPromptModel) => ({
+      ...model,
+      pages: [{ index: 0, entries: [null as unknown] }],
+    })],
+    ['invalid kind', (model: VRWorldActionPromptModel) => ({
+      ...model,
+      pages: [{ index: 0, entries: [{
+        kind: 'unsupported', id: 'use', label: 'Use', revalidate: () => true, activate: (): void => undefined,
+      }] }],
+    })],
+    ['duplicate IDs', (model: VRWorldActionPromptModel) => ({
+      ...model,
+      pages: [{ index: 0, entries: [model.pages[0].entries[0], model.pages[0].entries[0]] }],
+    })],
+    ['empty ID', (model: VRWorldActionPromptModel) => ({
+      ...model,
+      pages: [{ index: 0, entries: [{
+        kind: 'action', id: ' ', label: 'Use', revalidate: () => true, activate: (): void => undefined,
+      }] }],
+    })],
+    ['empty label', (model: VRWorldActionPromptModel) => ({
+      ...model,
+      pages: [{ index: 0, entries: [{
+        kind: 'action', id: 'use', label: ' ', revalidate: () => true, activate: (): void => undefined,
+      }] }],
+    })],
+    ['malformed revalidate callable', (model: VRWorldActionPromptModel) => ({
+      ...model,
+      pages: [{ index: 0, entries: [{
+        kind: 'action', id: 'use', label: 'Use', revalidate: 'invalid', activate: (): void => undefined,
+      }] }],
+    })],
+    ['malformed activate callable', (model: VRWorldActionPromptModel) => ({
+      ...model,
+      pages: [{ index: 0, entries: [{
+        kind: 'action', id: 'use', label: 'Use', revalidate: () => true, activate: 'invalid',
+      }] }],
+    })],
+  ])('rejects %s without invoking prompt behavior', (_label, mutate) => {
+    const model = promptModelForValidation();
+    const revalidate = jest.mocked((model.pages[0].entries[0] as VRWorldPromptAction).revalidate);
+    const activate = jest.mocked((model.pages[0].entries[0] as VRWorldPromptAction).activate);
+
+    expect(resolveValidVRWorldPromptPage(mutate(model), 0)).toBeNull();
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  test('rejects duplicate action IDs across pages while allowing canonical navigation IDs to repeat', () => {
+    const promptActions = actions(9);
+    const validModel = {
+      id: 'door',
+      name: 'Door',
+      anchor: new THREE.Vector3(0, 1, 1),
+      pages: buildVRWorldPromptPages(promptActions),
+    };
+    expect(resolveValidVRWorldPromptPage(validModel, 1)).toBe(validModel.pages[1]);
+    const duplicateAction = {
+      ...promptActions[4],
+      id: promptActions[0].id,
+    };
+    const malformedModel = {
+      ...validModel,
+      pages: [
+        validModel.pages[0],
+        {
+          ...validModel.pages[1],
+          entries: [validModel.pages[1].entries[0], duplicateAction, validModel.pages[1].entries[2]],
+        },
+        validModel.pages[2],
+      ],
+    };
+
+    expect(resolveValidVRWorldPromptPage(malformedModel, 1)).toBeNull();
+  });
+});
+
 function candidate(id: string, actorDistanceMetres: number, angleDegrees: number): VRWorldPromptCandidate {
   return {
     id,
@@ -177,4 +267,19 @@ function actions(count: number): VRWorldPromptAction[] {
     revalidate: () => true,
     activate: jest.fn(),
   }));
+}
+
+function promptModelForValidation(): VRWorldActionPromptModel {
+  return {
+    id: 'door',
+    name: 'Door',
+    anchor: new THREE.Vector3(0, 1, 1),
+    pages: buildVRWorldPromptPages([{
+      kind: 'action',
+      id: 'use',
+      label: 'Use',
+      revalidate: jest.fn(() => true),
+      activate: jest.fn(),
+    }]),
+  };
 }

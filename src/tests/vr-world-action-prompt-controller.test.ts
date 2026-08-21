@@ -116,6 +116,31 @@ describe('VRWorldActionPromptController', () => {
     expect(controller.process(malformed, {}, [])).toEqual([{ type: 'closed' }]);
     expect(controller.presentation).toBeNull();
   });
+
+  test.each([
+    'null-pages',
+    'null-entry',
+    'invalid-kind',
+    'duplicate-ids',
+    'malformed-callables',
+  ] as const)('fails closed without activation for malformed prompt structure: %s', (malformation) => {
+    const controller = new VRWorldActionPromptController();
+    const validModel = promptModel('door', [promptAction('use')]);
+    const activate = jest.fn();
+    controller.process(validModel, {}, []);
+    let effects: ReturnType<VRWorldActionPromptController['process']> = [];
+
+    expect(() => {
+      effects = controller.process(
+        malformedPromptModel(validModel, malformation, activate),
+        { right: 'use' },
+        [select('right', true)],
+      );
+    }).not.toThrow();
+    expect(effects).toEqual([{ type: 'closed' }]);
+    expect(activate).not.toHaveBeenCalled();
+    expect(controller.presentation).toBeNull();
+  });
 });
 
 function promptModel(id: string, actions: readonly VRWorldPromptAction[]): VRWorldActionPromptModel {
@@ -147,4 +172,41 @@ function select(hand: XRHandRole, pressed: boolean): RoutedXRAction {
     value: pressed ? 1 : 0,
     axes: null,
   };
+}
+
+type PromptMalformation =
+  | 'null-pages'
+  | 'null-entry'
+  | 'invalid-kind'
+  | 'duplicate-ids'
+  | 'malformed-callables';
+
+function malformedPromptModel(
+  validModel: VRWorldActionPromptModel,
+  malformation: PromptMalformation,
+  activate: jest.Mock,
+): VRWorldActionPromptModel {
+  const validAction = {
+    kind: 'action',
+    id: 'use',
+    label: 'Use',
+    revalidate: () => true,
+    activate,
+  };
+  const malformed = malformation === 'null-pages'
+    ? { ...validModel, pages: null }
+    : malformation === 'null-entry'
+      ? { ...validModel, pages: [{ index: 0, entries: [null] }] }
+      : malformation === 'invalid-kind'
+        ? { ...validModel, pages: [{ index: 0, entries: [{ ...validAction, kind: 'unsupported' }] }] }
+        : malformation === 'duplicate-ids'
+          ? { ...validModel, pages: [{ index: 0, entries: [validAction, { ...validAction }] }] }
+          : {
+              ...validModel,
+              pages: [{
+                index: 0,
+                entries: [{ ...validAction, revalidate: 'not-callable', activate: 'not-callable' }],
+              }],
+            };
+  return malformed as unknown as VRWorldActionPromptModel;
 }
