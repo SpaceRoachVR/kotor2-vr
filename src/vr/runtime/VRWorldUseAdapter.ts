@@ -20,8 +20,34 @@ export interface VRWorldUseOutcome {
   readonly feedbackLabel?: string;
 }
 
+export interface VRWorldUseActionDescriptor {
+  readonly id: string;
+  readonly label: string;
+  revalidate(): boolean;
+  activate(): VRWorldUseOutcome;
+}
+
 const PLACEABLE_USE_DISTANCE = 1.5;
 const DOOR_USE_DISTANCE = 2;
+
+/** Describes direct world use without invoking or queuing any engine action. */
+export function describeDirectVRWorldUse(
+  actor: VRWorldUseActor,
+  target: VRWorldUseTarget,
+  logger: Pick<Console, 'info' | 'error'> = console,
+): VRWorldUseActionDescriptor | null {
+  validateActor(actor);
+  validateTarget(target);
+  if (!isSupportedAndInRange(actor, target)) return null;
+
+  const name = resolveDisplayName(target.getName?.()) || 'Object';
+  return {
+    id: `direct-use:${target.id}`,
+    label: `Use: ${name}`,
+    revalidate: (): boolean => isSupportedAndInRange(actor, target),
+    activate: (): VRWorldUseOutcome => executeDirectVRWorldUse(actor, target, logger),
+  };
+}
 
 /**
  * Executes the engine's close-range `use` route without adding a desktop
@@ -38,6 +64,16 @@ export function tryDirectVRWorldUse(
   const allowedDistance = getUseDistance(target.objectType);
   if (allowedDistance === null) return { handled: false };
 
+  return executeDirectVRWorldUse(actor, target, logger);
+}
+
+function executeDirectVRWorldUse(
+  actor: VRWorldUseActor,
+  target: VRWorldUseTarget,
+  logger: Pick<Console, 'info' | 'error'>,
+): VRWorldUseOutcome {
+  const allowedDistance = getUseDistance(target.objectType);
+  if (allowedDistance === null) return { handled: false };
   const distance = distance2D(actor.position, target.position);
   const name = resolveDisplayName(target.getName?.()) || 'Object';
   const type = isDoor(target.objectType) ? 'door' : 'placeable';
@@ -54,6 +90,11 @@ export function tryDirectVRWorldUse(
     logger.error(`[VR interaction] target=${target.id} type=${type} route=direct-use result=error`, error);
     return { handled: true, feedbackLabel: `${name}: Unavailable` };
   }
+}
+
+function isSupportedAndInRange(actor: VRWorldUseActor, target: VRWorldUseTarget): boolean {
+  const allowedDistance = getUseDistance(target.objectType);
+  return allowedDistance !== null && distance2D(actor.position, target.position) <= allowedDistance;
 }
 
 function getUseDistance(objectType: number): number | null {

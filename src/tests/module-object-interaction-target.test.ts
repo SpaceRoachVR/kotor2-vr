@@ -6,9 +6,37 @@ import {
   EngineInteractableObject,
   ModuleObjectInteractionTargetSet,
   createModuleObjectInteractionTarget,
+  resolveVRInteractionAnchor,
 } from '@/vr/runtime/ModuleObjectInteractionTarget';
 
 describe('createModuleObjectInteractionTarget', () => {
+  test('exports the shared interaction anchor without mutating the object position', () => {
+    const object: EngineInteractableObject = {
+      ...interactable(42, new THREE.Vector3(1, 2, 3)),
+      box: new THREE.Box3(
+        new THREE.Vector3(0.5, 1.5, 3),
+        new THREE.Vector3(1.5, 2.5, 4),
+      ),
+    };
+    const output = new THREE.Vector3();
+
+    expect(resolveVRInteractionAnchor(object, output)).toBe(output);
+    expect(output.toArray()).toEqual([1, 2, 3.5]);
+    expect(object.position.toArray()).toEqual([1, 2, 3]);
+  });
+
+  test('uses a validated caller fallback when bounds are unusable', () => {
+    const object: EngineInteractableObject = {
+      ...interactable(42, new THREE.Vector3(1, 2, 3)),
+      box: new THREE.Box3(),
+    };
+
+    expect(resolveVRInteractionAnchor(object, new THREE.Vector3(), 0.4).toArray())
+      .toEqual([1, 2, 3.4]);
+    expect(() => resolveVRInteractionAnchor(object, new THREE.Vector3(), Number.NaN))
+      .toThrow('fallbackMetres must be finite');
+  });
+
   test('resolves live object position without queuing the desktop walk-to action', () => {
     const actor: EngineInteractionActor = {
       id: 7,

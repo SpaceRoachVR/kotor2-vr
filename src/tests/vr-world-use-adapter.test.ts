@@ -1,7 +1,49 @@
 import * as THREE from 'three';
 import { describe, expect, jest, test } from '@jest/globals';
 import { ModuleObjectType } from '@/enums/module/ModuleObjectType';
-import { tryDirectVRWorldUse } from '@/vr/runtime/VRWorldUseAdapter';
+import {
+  describeDirectVRWorldUse,
+  VRWorldUseActor,
+  VRWorldUseTarget,
+  tryDirectVRWorldUse,
+} from '@/vr/runtime/VRWorldUseAdapter';
+
+describe('describeDirectVRWorldUse', () => {
+  test('describes an in-range console without using it', () => {
+    const target = placeable('Galaxy Map', 1.5);
+
+    const descriptor = describeDirectVRWorldUse(actor(), target, quietLogger);
+
+    expect(descriptor).toEqual(expect.objectContaining({
+      id: 'direct-use:42',
+      label: 'Use: Galaxy Map',
+    }));
+    expect(target.use).not.toHaveBeenCalled();
+    expect(descriptor!.revalidate()).toBe(true);
+    expect(descriptor!.activate()).toEqual({
+      handled: true,
+      feedbackLabel: 'Use: Galaxy Map',
+    });
+    expect(target.use).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns null for unsupported or out-of-range direct-use targets', () => {
+    expect(describeDirectVRWorldUse(actor(), creature(), quietLogger)).toBeNull();
+    expect(describeDirectVRWorldUse(actor(), placeable('Far', 1.5001), quietLogger)).toBeNull();
+  });
+
+  test('revalidates the live range without mutating either engine object', () => {
+    const activeActor = actor();
+    const target = placeable('Console', 1);
+    const descriptor = describeDirectVRWorldUse(activeActor, target, quietLogger)!;
+
+    target.position.set(1.5001, 0, 0);
+
+    expect(descriptor.revalidate()).toBe(false);
+    expect(target.use).not.toHaveBeenCalled();
+    expect(activeActor.position.toArray()).toEqual([0, 0, 0]);
+  });
+});
 
 describe('tryDirectVRWorldUse', () => {
   test.each([
@@ -58,3 +100,27 @@ describe('tryDirectVRWorldUse', () => {
 });
 
 const quietLogger = { info: (): void => undefined, error: (): void => undefined };
+
+function actor(): VRWorldUseActor {
+  return { id: 7, position: new THREE.Vector3() };
+}
+
+function placeable(name: string, distance: number): VRWorldUseTarget & { use: jest.Mock } {
+  return {
+    id: 42,
+    objectType: ModuleObjectType.ModulePlaceable,
+    position: new THREE.Vector3(distance, 0, 0),
+    getName: () => name,
+    use: jest.fn(),
+  };
+}
+
+function creature(): VRWorldUseTarget & { use: jest.Mock } {
+  return {
+    id: 43,
+    objectType: ModuleObjectType.ModuleCreature,
+    position: new THREE.Vector3(),
+    getName: () => 'Creature',
+    use: jest.fn(),
+  };
+}
