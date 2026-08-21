@@ -87,6 +87,20 @@ const DEFAULT_COMFORT_SETTINGS: VRComfortSettings = {
   vignetteEnabled: false,
 };
 
+interface VRMovieInputContext {
+  readonly canSkip: boolean;
+  skip(): void;
+}
+
+interface VRCutsceneInputContext extends VRMovieInputContext {
+  abort?(): void;
+}
+
+interface VRMovieInputContexts {
+  readonly movie: VRMovieInputContext | null;
+  readonly cutscene: VRCutsceneInputContext | null;
+}
+
 export interface VRSpikeHooks {
   /** The engine's frame function. WebXR calls this instead of rAF. */
   update: (timestamp: number, source: EngineFrameSource) => void;
@@ -175,21 +189,14 @@ export interface VRSpikeHooks {
     readonly pointerSink: VRPanelPointerSink;
   };
   /** Current engine movie and its authoritative skip capability. */
-  getMovieContext?: () => {
-    readonly canSkip: boolean;
-    skip: () => void;
-  } | null;
+  getMovieContext?: () => VRMovieInputContext | null;
   /**
    * Active engine-authored dialogue/cutscene camera and its current skip
    * rule. `abort` mirrors flatscreen's unconditional DialogAbort — it must
    * work even when `canSkip` is false (an authored `NodeUnskippable` entry),
    * which is exactly the case VR previously had no escape from.
    */
-  getCutsceneContext?: () => {
-    readonly canSkip: boolean;
-    skip: () => void;
-    abort?: () => void;
-  } | null;
+  getCutsceneContext?: () => VRCutsceneInputContext | null;
   /** Currently focused editable legacy control, if any. */
   getKeyboardContext?: () => {
     onKeyDown(event: { readonly which: number; readonly shiftKey: boolean }): void;
@@ -284,6 +291,7 @@ export class VRSpike {
   private static interactionPreviewIndicator: VRWorldTargetIndicator | null = null;
   private static latestPanelPointerPosition: THREE.Vector2 | null = null;
   private static movieCancelHeld = false;
+  private static movieOrCutsceneActiveLastFrame = false;
   private static combatCancelHeld = false;
   private static readonly interactionTargetSet = new ModuleObjectInteractionTargetSet(
     VRSpike.interactionRegistry,
@@ -462,6 +470,7 @@ export class VRSpike {
       VRSpike.latestXRFrame = null;
       VRSpike.latestXRFrameTimestamp = 0;
       VRSpike.movieCancelHeld = false;
+      VRSpike.movieOrCutsceneActiveLastFrame = false;
       VRSpike.keyboardSelectHeld = false;
       VRSpike.keyboardCancelHeld = false;
       VRSpike.keyboardGrabHeld = false;
@@ -551,6 +560,7 @@ export class VRSpike {
     VRSpike.latestXRFrame = null;
     VRSpike.latestXRFrameTimestamp = 0;
     VRSpike.movieCancelHeld = false;
+    VRSpike.movieOrCutsceneActiveLastFrame = false;
     VRSpike.keyboardSelectHeld = false;
     VRSpike.keyboardCancelHeld = false;
     VRSpike.keyboardWasActive = false;
@@ -622,8 +632,26 @@ export class VRSpike {
         console.error('[VRSpike] world module lifecycle rejected', error);
       }
     }
-    const movieOwnsInput = VRSpike.processMovieInput();
-    const authoredCutsceneActive = VRSpike.hooks?.getCutsceneContext?.() != null;
+    const movieInputContexts = VRSpike.resolveMovieInputContexts();
+    const movieOrCutsceneActive = movieInputContexts.movie !== null ||
+      movieInputContexts.cutscene !== null;
+    const movieOrCutsceneEntered = movieOrCutsceneActive &&
+      !VRSpike.movieOrCutsceneActiveLastFrame;
+    VRSpike.movieOrCutsceneActiveLastFrame = movieOrCutsceneActive;
+    const lifecycleSuspendsGameplayInput = moduleTransitioned || movieOrCutsceneActive;
+
+    // Lifecycle teardown and edge capture must precede authored callbacks.
+    // A skip/abort callback may synchronously end dialogue; dispatching first
+    // could therefore erase the context and let the same physical press fall
+    // through to the still-open wheel later in this frame.
+    if (moduleTransitioned || movieOrCutsceneEntered) {
+      VRSpike.captureMovieInputLatch();
+    }
+    if (lifecycleSuspendsGameplayInput) {
+      VRSpike.suspendTransientGameplayInputForLifecycle();
+    }
+
+    const movieOwnsInput = VRSpike.processMovieInput(movieInputContexts);
     const keyboardOwnsInput = !movieOwnsInput && VRSpike.processKeyboardInput();
     const comfortSettingsOwnsInput = !movieOwnsInput && !keyboardOwnsInput &&
       VRSpike.processComfortSettingsInput();
@@ -631,8 +659,7 @@ export class VRSpike {
       !comfortSettingsOwnsInput && VRSpike.processPanelInput();
     const foregroundSurfaceOwnsInput = movieOwnsInput || keyboardOwnsInput ||
       comfortSettingsOwnsInput || panelOwnsInput;
-    const lifecycleSuspendsGameplayInput = moduleTransitioned || authoredCutsceneActive;
-    if (foregroundSurfaceOwnsInput || lifecycleSuspendsGameplayInput) {
+    if (foregroundSurfaceOwnsInput && !lifecycleSuspendsGameplayInput) {
       VRSpike.suspendTransientGameplayInputForLifecycle();
     }
     const radialOwnsInput = !foregroundSurfaceOwnsInput && !lifecycleSuspendsGameplayInput &&
@@ -796,10 +823,20 @@ export class VRSpike {
     }
   }
 
+  private static resolveMovieInputContexts(): VRMovieInputContexts {
+    const movie = VRSpike.hooks?.getMovieContext?.() ?? null;
+    return {
+      movie,
+      cutscene: movie ? null : VRSpike.hooks?.getCutsceneContext?.() ?? null,
+    };
+  }
+
   /** Keeps movie playback authoritative while allowing the original skip rule. */
-  private static processMovieInput(): boolean {
-    const movieContext = VRSpike.hooks?.getMovieContext?.() ?? null;
-    const cutsceneContext = movieContext ? null : VRSpike.hooks?.getCutsceneContext?.() ?? null;
+  private static processMovieInput(
+    contexts: VRMovieInputContexts = VRSpike.resolveMovieInputContexts(),
+  ): boolean {
+    const movieContext = contexts.movie;
+    const cutsceneContext = contexts.cutscene;
     const context = movieContext ?? cutsceneContext;
     if (!context) {
       VRSpike.movieCancelHeld = false;
@@ -810,15 +847,7 @@ export class VRSpike {
     const session = VRSpike.session;
     if (!session) return true;
     try {
-      const actions = VRSpike.inputRouter.route(
-        XRGamepadReader.read(Array.from(session.inputSources ?? [])),
-        new Set(['ui', 'gameplay'])
-      );
-      const skipPressed = actions.some((action) =>
-        (action.action === SemanticXRAction.Cancel ||
-          action.action === SemanticXRAction.Select ||
-          action.action === SemanticXRAction.Use) && action.pressed
-      );
+      const skipPressed = VRSpike.readMovieInputPressed(session);
       if (skipPressed && !VRSpike.movieCancelHeld) {
         if (context.canSkip) {
           context.skip();
@@ -827,7 +856,7 @@ export class VRSpike {
           // flatscreen also has an unconditional abort (DialogAbort) that
           // works even on a `NodeUnskippable` entry. VR previously had no
           // equivalent, so an unskippable line was a permanent dead end.
-          (context as { abort?: () => void }).abort?.();
+          (context as VRCutsceneInputContext).abort?.();
         }
       }
       VRSpike.movieCancelHeld = skipPressed;
@@ -842,6 +871,30 @@ export class VRSpike {
     // its current authored line may be skipped; once replies are available the
     // normal static panel receives the controller ray again.
     return movieContext !== null || cutsceneContext?.canSkip === true;
+  }
+
+  private static readMovieInputPressed(session: XRSession): boolean {
+    const actions = VRSpike.inputRouter.route(
+      XRGamepadReader.read(Array.from(session.inputSources ?? [])),
+      new Set(['ui', 'gameplay']),
+    );
+    return actions.some((action) =>
+      (action.action === SemanticXRAction.Cancel ||
+        action.action === SemanticXRAction.Select ||
+        action.action === SemanticXRAction.Use) && action.pressed
+    );
+  }
+
+  /** Captures movie/dialogue controls without invoking authored callbacks. */
+  private static captureMovieInputLatch(): void {
+    const session = VRSpike.session;
+    if (!session) return;
+    try {
+      VRSpike.movieCancelHeld = VRSpike.readMovieInputPressed(session);
+    } catch {
+      // Preserve the prior latch on malformed optional input. Treating an
+      // unreadable controller as released could manufacture a transition edge.
+    }
   }
 
   private static processKeyboardInput(): boolean {

@@ -79,6 +79,7 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).worldPromptModule = null;
     (VRSpike as any).worldPromptModuleInitialized = false;
     (VRSpike as any).worldPromptSelectHeld = { left: false, right: false };
+    (VRSpike as any).movieOrCutsceneActiveLastFrame = false;
     (VRSpike as any).interactionAimedTargetId = null;
 
     restoreGlobal('document', originalDocument);
@@ -1442,19 +1443,38 @@ describe('VRSpike XR loop ownership', () => {
     expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
   });
 
-  test('dialogue or cutscene entry closes an open wheel before a stale ray trigger can activate it', () => {
+  test.each([
+    { label: 'skippable dialogue', canSkip: true, expectedDispatch: 'skip' as const },
+    { label: 'unskippable dialogue', canSkip: false, expectedDispatch: 'abort' as const },
+  ])('$label entry latches held input before dispatch and requires a fresh press', ({
+    canSkip,
+    expectedDispatch,
+  }) => {
     const activate = jest.fn();
     const input = installRadialInput();
     let cutsceneActive = false;
+    let skipCount = 0;
+    let abortCount = 0;
     const host = installRadialHost({
       rayHit: { kind: 'entry', index: 0 },
       touchHit: () => null,
     });
     const createActionWheel = jest.fn(() => actionWheel(activate));
+    const cutsceneContext = {
+      canSkip,
+      skip: (): void => {
+        skipCount += 1;
+        cutsceneActive = false;
+      },
+      abort: (): void => {
+        abortCount += 1;
+        cutsceneActive = false;
+      },
+    };
     VRSpike.hooks = basicHooks({
       createActionWheel,
       getCutsceneContext: () => cutsceneActive
-        ? { canSkip: false, skip: jest.fn(), abort: jest.fn() }
+        ? cutsceneContext
         : null,
     });
     jest.spyOn(VRSpike as any, 'updateTrackedInput').mockImplementation(() => undefined);
@@ -1465,27 +1485,45 @@ describe('VRSpike XR loop ownership', () => {
     host.clear.mockClear();
 
     cutsceneActive = true;
+    // The wheel confirm and dialogue Select are both already down on the
+    // transition frame. A real dialogue callback ends the context
+    // synchronously, which used to let the same frame fall through to the
+    // still-open wheel after skip/abort mutated engine state.
     input.leftButtons[0] = pressedButton();
+    input.rightButtons[0] = pressedButton();
     (VRSpike as any).frame(1_016, {} as XRFrame);
     (VRSpike as any).frame(1_032, {} as XRFrame);
 
+    expect(skipCount).toBe(0);
+    expect(abortCount).toBe(0);
+    expect(cutsceneActive).toBe(true);
     expect((VRSpike as any).radialMenuController.isOpen).toBe(false);
     expect(activate).not.toHaveBeenCalled();
     expect(host.clear).toHaveBeenCalled();
     expect(createActionWheel).toHaveBeenCalledTimes(1);
     expect((VRSpike as any).worldPromptSelectHeld.left).toBe(true);
 
-    // Releasing while authored dialogue owns input rearms the next fresh X
-    // press without carrying the old trigger edge or ray hit across the entry.
+    // Only a physical release rearms dialogue input. The release itself does
+    // not dispatch and the stale wheel hit remains retired.
     input.leftButtons[4] = releasedButton();
     input.leftButtons[0] = releasedButton();
+    input.rightButtons[0] = releasedButton();
     (VRSpike as any).frame(1_048, {} as XRFrame);
+    expect(skipCount).toBe(0);
+    expect(abortCount).toBe(0);
+    expect(activate).not.toHaveBeenCalled();
     expect((VRSpike as any).worldPromptSelectHeld.left).toBe(false);
-    cutsceneActive = false;
-    input.leftButtons[4] = pressedButton();
+
+    // A genuinely fresh dialogue Select may now use the surviving authored
+    // context; its synchronous close still cannot revive the retired wheel.
+    input.rightButtons[0] = pressedButton();
     (VRSpike as any).frame(1_064, {} as XRFrame);
-    expect(createActionWheel).toHaveBeenCalledTimes(2);
-    expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
+    (VRSpike as any).frame(1_080, {} as XRFrame);
+    expect(skipCount).toBe(expectedDispatch === 'skip' ? 1 : 0);
+    expect(abortCount).toBe(expectedDispatch === 'abort' ? 1 : 0);
+    expect(cutsceneActive).toBe(false);
+    expect(activate).not.toHaveBeenCalled();
+    expect(createActionWheel).toHaveBeenCalledTimes(1);
   });
 
   test.each(['tracking unavailable', 'session end'] as const)(

@@ -308,25 +308,22 @@ actually worth building next given what scaffolding already exists.
    deflection roll (KOTOR/d20 SAGA rules — feats, DEX, weapon type) is a real combat-rules
    feature affecting the whole game, not a VR gap, and risks getting the ruleset wrong
    without dedicated reference and playtesting. Left undone rather than guessed at.
-4. **4.1/4.3 — Wrist device + purpose-built panel summon: done.** Rather than building a
-   new bespoke wrist UI, parameterized `VRRadialMenuController`'s trigger action
-   (constructor arg, default `Menu` preserved) so a second instance could bind to the
-   previously-idle `Wrist` action and reuse all the existing hold-aim-release mechanics
-   and `VRRadialMenuHost` presentation — whose own code comment already described it as
-   reproducing "the familiar wrist/device radial interaction." `getWristMenuContext`
-   (`GameState.ts`) exposes four items — Inventory, Character, Comfort Settings, Galaxy Map — each
-   just calling the same `.open()` the equivalent flatscreen hotkey already calls
-   (`MenuInventory`/`MenuCharacter`/`MenuJournal`/`MenuGalaxyMap`), which then reprojects
-   through the existing generic `VRPanelHost` path exactly like any other legacy menu —
-   no new rendering infrastructure needed, matching the audit's original read.
+4. **4.1/4.3 — Superseded by the all-purpose action wheel: implemented; headset acceptance
+   remains open.** There is no second wrist controller, `Wrist` binding, or
+   `getWristMenuContext`. Left X opens one captured, world-fixed action wheel while held;
+   the game continues underneath it. The left controller ray hovers and left trigger
+   confirms; either tracked controller may touch an entry for immediate activation. Its
+   paged model contains the player, target, party, powers, utility, Inventory, Character,
+   and Comfort Settings routes. Opening an ordinary foreground menu from the wheel then
+   follows that menu's existing pause behavior; the wheel itself never pauses gameplay.
+   Galaxy Map is intentionally not a fixed wheel item: the nearby in-world console uses
+   the static world-action prompt and its existing direct-use route.
    **4.4 dialogue skill checks:** still unconfirmed either way — genuinely ambiguous
    whether this needs bespoke handling or is already covered by generic reprojection if
    skill checks are authored as ordinary GUI screens; not chased further this pass.
-   **Not done: a settings surface for `turnMode`/`snapTurnDegrees`/`vignetteEnabled`**
-   (2.5/2.6's remaining gap) — the wrist menu's four items are fixed at exactly four by
-   `VRRadialMenuController`'s own contract, and slotting settings in over one of the
-   named panels felt like the wrong tradeoff versus a real follow-up. `ToggleLocomotionMode`
-   itself is reachable (Stage 2.2); the other three settings are not yet.
+   The wheel's Comfort Settings route opens the dedicated four-row settings panel for
+   locomotion mode, turn mode, snap-turn angle, and vignette. Source/tests are complete,
+   but the wheel, prompt, and settings routes still require physical-headset acceptance.
 5. **5.2 — Fade-to-black between camera cuts: done.** Not hooked into
    `VRPanelHost.present()`/`clear()` as originally sketched — those gate the theater
    *panel's* visibility, not the authored shot within it, and stay open across an entire
