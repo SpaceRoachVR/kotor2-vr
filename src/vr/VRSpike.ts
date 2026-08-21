@@ -121,7 +121,7 @@ export interface VRSpikeHooks {
   getWorldActionPromptContext?: () => {
     readonly actor: EngineInteractionActor | null;
     readonly candidates: readonly VRWorldPromptCandidate[];
-    createPrompt(targetId: string): VRWorldActionPromptModel | null;
+    createPrompt(candidate: VRWorldPromptCandidate): VRWorldActionPromptModel | null;
   };
   /**
    * Current engine combat target and the authoritative d20 action bridge.
@@ -274,6 +274,8 @@ export class VRSpike {
   private static worldActionPromptHost: VRWorldActionPromptHost | null = null;
   private static worldActionPromptController = new VRWorldActionPromptController();
   private static worldPromptCandidateId: string | null = null;
+  private static worldPromptCandidateStateKey: string | null = null;
+  private static worldPromptModelResolved = false;
   private static worldPromptModel: VRWorldActionPromptModel | null = null;
   private static worldPromptModule: string | null = null;
   private static worldPromptModuleInitialized = false;
@@ -1004,15 +1006,17 @@ export class VRSpike {
         return false;
       }
 
-      const candidateChanged = selectedCandidate.id !== VRSpike.worldPromptCandidateId;
-      const modelInvalid = VRSpike.worldPromptModel !== null &&
-        !VRSpike.isWorldPromptModelCurrent(VRSpike.worldPromptModel);
-      if (candidateChanged || !VRSpike.worldPromptModel || modelInvalid) {
-        VRSpike.worldPromptModel = promptContext.createPrompt(selectedCandidate.id);
+      const candidateStateKey = VRSpike.getWorldPromptCandidateStateKey(selectedCandidate);
+      const candidateChanged = selectedCandidate.id !== VRSpike.worldPromptCandidateId ||
+        candidateStateKey !== VRSpike.worldPromptCandidateStateKey;
+      if (candidateChanged || !VRSpike.worldPromptModelResolved) {
+        VRSpike.worldPromptModel = promptContext.createPrompt(selectedCandidate);
+        VRSpike.worldPromptModelResolved = true;
       }
       VRSpike.worldPromptCandidateId = selectedCandidate.id;
+      VRSpike.worldPromptCandidateStateKey = candidateStateKey;
       if (!VRSpike.worldPromptModel) {
-        VRSpike.clearWorldActionPrompt(false);
+        VRSpike.hideWorldActionPromptPresentation();
         return false;
       }
 
@@ -1023,14 +1027,14 @@ export class VRSpike {
       };
       const host = VRSpike.getOrCreateWorldActionPromptHost();
       if (!host) {
-        VRSpike.clearWorldActionPrompt(false);
+        VRSpike.hideWorldActionPromptPresentation();
         return false;
       }
 
       VRSpike.worldActionPromptController.process(VRSpike.worldPromptModel, {}, []);
       const initialPresentation = VRSpike.worldActionPromptController.presentation;
       if (!initialPresentation) {
-        VRSpike.clearWorldActionPrompt(false);
+        VRSpike.hideWorldActionPromptPresentation();
         return false;
       }
       host.present(initialPresentation, inputFrame.head, null);
@@ -1148,6 +1152,7 @@ export class VRSpike {
       if (effect.type === 'closed') {
         VRSpike.clearWorldActionPrompt(false);
       } else if (effect.type === 'negative-haptic') {
+        VRSpike.clearWorldActionPrompt(false);
         void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 60, amplitude: 0.45 });
       } else if (effect.type === 'activate') {
         const action = effect.action;
@@ -1163,20 +1168,32 @@ export class VRSpike {
     }
   }
 
-  private static isWorldPromptModelCurrent(model: VRWorldActionPromptModel): boolean {
-    try {
-      const actions = model.pages.flatMap((page) =>
-        page.entries.filter((entry) => entry.kind === 'action')
-      );
-      return actions.length > 0 && actions.every((action) => action.revalidate() === true);
-    } catch {
-      return false;
-    }
+  private static getWorldPromptCandidateStateKey(candidate: VRWorldPromptCandidate): string {
+    return candidate.stateKey ?? JSON.stringify([
+      candidate.id,
+      candidate.name,
+      candidate.position.x,
+      candidate.position.y,
+      candidate.position.z,
+      candidate.actorDistanceMetres,
+      candidate.hasActions,
+      candidate.inRange,
+    ]);
+  }
+
+  /** Clears rendering/input ownership while retaining a resolved null model. */
+  private static hideWorldActionPromptPresentation(): void {
+    VRSpike.worldActionPromptController.process(null, {}, []);
+    VRSpike.interactionPreviewIndicator = null;
+    VRSpike.worldTargetLabelHost?.clear();
+    VRSpike.worldActionPromptHost?.clear();
   }
 
   private static clearWorldActionPrompt(disposeHost: boolean): void {
     VRSpike.worldActionPromptController.process(null, {}, []);
     VRSpike.worldPromptCandidateId = null;
+    VRSpike.worldPromptCandidateStateKey = null;
+    VRSpike.worldPromptModelResolved = false;
     VRSpike.worldPromptModel = null;
     VRSpike.interactionPreviewIndicator = null;
     VRSpike.worldTargetLabelHost?.clear();

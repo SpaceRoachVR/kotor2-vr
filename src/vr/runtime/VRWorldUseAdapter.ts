@@ -11,7 +11,15 @@ export interface VRWorldUseTarget {
   readonly id: number;
   readonly objectType: number;
   readonly position: THREE.Vector3;
+  readonly keyRequired?: unknown;
+  readonly plot?: unknown;
+  readonly scripts?: unknown;
+  readonly tag?: unknown;
+  readonly templateResRef?: unknown;
   getName?(): string;
+  getTag?(): string;
+  getTemplateResRef?(): string | null;
+  isLocked?(): boolean;
   use(actor: VRWorldUseActor): void;
 }
 
@@ -27,6 +35,15 @@ export interface VRWorldUseActionDescriptor {
   activate(): VRWorldUseOutcome;
 }
 
+export interface VRWorldUseSafetySource {
+  /** Authored target actions captured by the same refresh that builds the prompt. */
+  readonly authoredActionCount: number;
+  /** Re-resolves authored ownership at revalidation and execution boundaries. */
+  getLiveAuthoredActionCount(): number;
+}
+
+export type SafeDirectVRWorldUseClassification = 'ordinary' | 'ebon-hawk-galaxy-map';
+
 const PLACEABLE_USE_DISTANCE = 1.5;
 const DOOR_USE_DISTANCE = 2;
 
@@ -35,18 +52,69 @@ export function describeDirectVRWorldUse(
   actor: VRWorldUseActor,
   target: VRWorldUseTarget,
   logger: Pick<Console, 'info' | 'error'> = console,
+  safetySource: VRWorldUseSafetySource = {
+    authoredActionCount: 0,
+    getLiveAuthoredActionCount: () => 0,
+  },
 ): VRWorldUseActionDescriptor | null {
   validateActor(actor);
   validateTarget(target);
-  if (!isSupportedAndInRange(actor, target)) return null;
+  validateSafetySource(safetySource);
+  if (!isSupportedAndInRange(actor, target) ||
+    !isSafeDirectVRWorldUse(target, safetySource.authoredActionCount)) return null;
 
   const name = resolveDisplayName(target.getName?.()) || 'Object';
+  const remainsSafe = (): boolean => {
+    try {
+      return isSafeDirectVRWorldUse(target, safetySource.getLiveAuthoredActionCount());
+    } catch {
+      return false;
+    }
+  };
   return {
     id: `direct-use:${target.id}`,
     label: `Use: ${name}`,
-    revalidate: (): boolean => isSupportedAndInRange(actor, target),
-    activate: (): VRWorldUseOutcome => executeDirectVRWorldUse(actor, target, logger),
+    revalidate: (): boolean => isSupportedAndInRange(actor, target) && remainsSafe(),
+    activate: (): VRWorldUseOutcome => remainsSafe()
+      ? executeDirectVRWorldUse(actor, target, logger)
+      : { handled: false },
   };
+}
+
+/**
+ * Classifies the narrow set of targets that may use their existing engine
+ * `use()` route without stealing ownership from locks, story state, or an
+ * authored ActionMenu action.
+ */
+export function classifySafeDirectVRWorldUse(
+  target: VRWorldUseTarget,
+  authoredActionCount: number,
+): SafeDirectVRWorldUseClassification | null {
+  try {
+    if (!Number.isInteger(authoredActionCount) || authoredActionCount < 0) return null;
+    const supportedType = (target.objectType & (
+      ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable
+    )) !== 0;
+    if (!supportedType) return null;
+    if (authoredActionCount > 0 || typeof target.isLocked !== 'function' || target.isLocked()) {
+      return null;
+    }
+    if (!isExplicitFalseFlag(target.keyRequired)) return null;
+
+    if (isEbonHawkGalaxyMap(target)) return 'ebon-hawk-galaxy-map';
+
+    if (!isExplicitFalseFlag(target.plot) || hasStoryFailureScript(target.scripts)) return null;
+    return 'ordinary';
+  } catch {
+    return null;
+  }
+}
+
+export function isSafeDirectVRWorldUse(
+  target: VRWorldUseTarget,
+  authoredActionCount: number,
+): boolean {
+  return classifySafeDirectVRWorldUse(target, authoredActionCount) !== null;
 }
 
 /**
@@ -135,4 +203,44 @@ function validateTarget(target: VRWorldUseTarget): void {
     !(target.position instanceof THREE.Vector3) || typeof target.use !== 'function') {
     throw new TypeError('VR world-use target must expose id, objectType, position, and use');
   }
+}
+
+function validateSafetySource(source: VRWorldUseSafetySource): void {
+  if (!source || !Number.isInteger(source.authoredActionCount) || source.authoredActionCount < 0 ||
+    typeof source.getLiveAuthoredActionCount !== 'function') {
+    throw new TypeError('VR world-use safety source must expose authored action counts');
+  }
+}
+
+function isEbonHawkGalaxyMap(target: VRWorldUseTarget): boolean {
+  if ((target.objectType & ModuleObjectType.ModulePlaceable) === 0) return false;
+  const tag = readIdentity(target.getTag, target.tag, target);
+  const templateResRef = readIdentity(target.getTemplateResRef, target.templateResRef, target);
+  return tag === 'galaxymap' && templateResRef === 'invisible001';
+}
+
+function readIdentity(
+  getter: (() => unknown) | undefined,
+  property: unknown,
+  receiver: VRWorldUseTarget,
+): string {
+  const value = typeof getter === 'function' ? getter.call(receiver) : property;
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function hasStoryFailureScript(scripts: unknown): boolean {
+  if (!scripts || typeof scripts !== 'object') return false;
+  const entries = Object.entries(scripts as Readonly<Record<string, unknown>>);
+  return entries.some(([key, value]) => {
+    if (key.toLowerCase() !== 'onfailtoopen' || value == null) return false;
+    if (typeof value === 'object' && 'name' in value) {
+      const name = (value as { readonly name?: unknown }).name;
+      return typeof name === 'string' ? name.trim().length > 0 : Boolean(name);
+    }
+    return typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
+  });
+}
+
+function isExplicitFalseFlag(value: unknown): boolean {
+  return value === false || value === 0;
 }

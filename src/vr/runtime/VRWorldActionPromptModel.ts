@@ -8,6 +8,12 @@ export interface VRWorldPromptCandidate {
   readonly actorDistanceMetres: number;
   readonly hasActions: boolean;
   readonly inRange: boolean;
+  /**
+   * Cheap identity for every property that can change prompt availability.
+   * VRSpike uses it to retain the selected model without polling action
+   * closures on every XR frame.
+   */
+  readonly stateKey?: string;
 }
 
 export interface VRWorldPromptAction {
@@ -226,7 +232,8 @@ function isValidCandidate(candidate: VRWorldPromptCandidate): boolean {
     Number.isFinite(candidate.actorDistanceMetres) &&
     candidate.actorDistanceMetres >= 0 &&
     typeof candidate.inRange === 'boolean' &&
-    typeof candidate.hasActions === 'boolean';
+    typeof candidate.hasActions === 'boolean' &&
+    (candidate.stateKey === undefined || isNonEmptyString(candidate.stateKey));
 }
 
 function isValidAction(action: unknown): action is VRWorldPromptAction {

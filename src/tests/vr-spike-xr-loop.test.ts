@@ -10,7 +10,10 @@ import { EngineInteractableObject } from '@/vr/runtime/ModuleObjectInteractionTa
 import { VRRadialMenuController } from '@/vr/runtime/VRRadialMenuController';
 import { VRRadialMenuDefinition } from '@/vr/runtime/VRRadialMenuModel';
 import { VRWorldActionPromptController } from '@/vr/runtime/VRWorldActionPromptController';
-import { VRWorldActionPromptModel } from '@/vr/runtime/VRWorldActionPromptModel';
+import {
+  VRWorldActionPromptModel,
+  VRWorldPromptCandidate,
+} from '@/vr/runtime/VRWorldActionPromptModel';
 import { XRHandRole, XRWorldPose } from '@/vr/runtime/XRTypes';
 import { afterEach, beforeEach, describe, expect, jest, test } from "@jest/globals";
 
@@ -70,6 +73,8 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).worldActionPromptHost = null;
     (VRSpike as any).worldActionPromptController = new VRWorldActionPromptController();
     (VRSpike as any).worldPromptCandidateId = null;
+    (VRSpike as any).worldPromptCandidateStateKey = null;
+    (VRSpike as any).worldPromptModelResolved = false;
     (VRSpike as any).worldPromptModel = null;
     (VRSpike as any).worldPromptModule = null;
     (VRSpike as any).worldPromptModuleInitialized = false;
@@ -1106,6 +1111,7 @@ describe('VRSpike XR loop ownership', () => {
     candidates = [candidate];
     (VRSpike as any).processInteractionInput(1_080);
     actionAvailable = false;
+    candidates = [{ ...candidate, hasActions: false }];
     (VRSpike as any).processInteractionInput(1_096);
     expectPromptCleared(harness.host);
   });
@@ -1141,6 +1147,63 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).processInteractionInput(1_032);
     expect(createPrompt).toHaveBeenCalledTimes(2);
     expect((VRSpike as any).worldPromptCandidateId).toBe('module-object:42');
+  });
+
+  test('reuses a stable selected prompt model without polling every action', () => {
+    const candidate = { ...promptCandidate('module-object:42', 0, 2), stateKey: 'stable-v1' };
+    const revalidate = jest.fn(() => true);
+    const createPrompt = jest.fn(() => worldPromptModelForTarget(candidate.id, revalidate));
+    installWorldPromptHarness([candidate], createPrompt);
+    jest.spyOn((VRSpike as any).interactionSystem, 'preview').mockReturnValue(null);
+
+    (VRSpike as any).processInteractionInput(1_000);
+    (VRSpike as any).processInteractionInput(1_016);
+
+    expect(createPrompt).toHaveBeenCalledTimes(1);
+    expect(revalidate).not.toHaveBeenCalled();
+  });
+
+  test('rebuilds the selected prompt when its authored availability state changes', () => {
+    let stateKey = 'authored-v1';
+    const baseCandidate = promptCandidate('module-object:42', 0, 2);
+    const createPrompt = jest.fn(() => ({
+      ...worldPromptModelForTarget(baseCandidate.id),
+      id: `prompt:${stateKey}`,
+    }));
+    installWorldPromptHarness(
+      [{ ...baseCandidate, stateKey }],
+      createPrompt,
+      () => [{ ...baseCandidate, stateKey }],
+    );
+    jest.spyOn((VRSpike as any).interactionSystem, 'preview').mockReturnValue(null);
+
+    (VRSpike as any).processInteractionInput(1_000);
+    stateKey = 'authored-v2';
+    (VRSpike as any).processInteractionInput(1_016);
+
+    expect(createPrompt).toHaveBeenCalledTimes(2);
+    expect((VRSpike as any).worldPromptModel?.id).toBe('prompt:authored-v2');
+  });
+
+  test('rebuilds a moving target from one shared anchor so prompt and label stay aligned', () => {
+    let candidate = { ...promptCandidate('module-object:42', 0, 2), stateKey: 'anchor:0:2:1' };
+    const createPrompt = jest.fn(() => ({
+      ...worldPromptModelForTarget(candidate.id),
+      anchor: candidate.position,
+    }));
+    installWorldPromptHarness([candidate], createPrompt, () => [candidate]);
+    jest.spyOn((VRSpike as any).interactionSystem, 'preview').mockReturnValue(null);
+
+    (VRSpike as any).processInteractionInput(1_000);
+    candidate = {
+      ...promptCandidate('module-object:42', 0.25, 2),
+      stateKey: 'anchor:0.25:2:1',
+    };
+    (VRSpike as any).processInteractionInput(1_016);
+
+    expect(createPrompt).toHaveBeenCalledTimes(2);
+    expect((VRSpike as any).worldPromptModel?.anchor).toBe(candidate.position);
+    expect((VRSpike as any).interactionPreviewIndicator?.position).toBe(candidate.position);
   });
 
   test('opens the action wheel once from left X at the captured head pose without pausing', () => {
@@ -1427,6 +1490,8 @@ function installWorldPromptHarness(
   (VRSpike as any).worldActionPromptHost = host;
   (VRSpike as any).worldActionPromptController = new VRWorldActionPromptController();
   (VRSpike as any).worldPromptCandidateId = null;
+  (VRSpike as any).worldPromptCandidateStateKey = null;
+  (VRSpike as any).worldPromptModelResolved = false;
   (VRSpike as any).worldPromptModel = null;
   (VRSpike as any).worldPromptModule = null;
   (VRSpike as any).worldPromptModuleInitialized = false;
@@ -1436,7 +1501,7 @@ function installWorldPromptHarness(
     getWorldActionPromptContext: () => ({
       actor,
       candidates: getCandidates?.() ?? initialCandidates,
-      createPrompt,
+      createPrompt: (candidate: ReturnType<typeof promptCandidate>) => createPrompt(candidate.id),
     }),
     getWorldContext: () => ({
       module: getModule(),
@@ -1449,7 +1514,7 @@ function installWorldPromptHarness(
   return { host, eyeCamera };
 }
 
-function promptCandidate(id: string, x: number, y: number) {
+function promptCandidate(id: string, x: number, y: number): VRWorldPromptCandidate {
   return {
     id,
     name: id === 'module-object:1' ? 'Center' : 'Object',
@@ -1825,6 +1890,10 @@ describe('GameState proactive world-prompt assembly', () => {
       id: 14,
       name: 'Galaxy Map',
       objectType: harness.objectTypes.ModulePlaceable,
+      plot: true,
+      storyScript: true,
+      tag: 'Galaxymap',
+      templateResRef: 'invisible001',
     });
     harness.setTarget(galaxyMap, []);
 
@@ -1835,6 +1904,149 @@ describe('GameState proactive world-prompt assembly', () => {
     useAction.activate();
     expect(galaxyMap.use).toHaveBeenCalledTimes(1);
     expect(galaxyMap.use).toHaveBeenCalledWith(harness.actor);
+  });
+
+  test('fails a direct-use descriptor closed when an unlocked target becomes locked', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 15,
+      name: 'Changing Door',
+      objectType: harness.objectTypes.ModuleDoor,
+    });
+    harness.setTarget(door, []);
+    const [useAction] = flattenPromptActions(harness.buildPrompt('module-object:15'));
+
+    door.setLocked(true);
+
+    expect(useAction.revalidate()).toBe(false);
+    useAction.activate();
+    expect(door.use).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['key-required', { keyRequired: true }],
+    ['plot-owned', { plot: true }],
+    ['story-script-owned', { storyScript: true }],
+  ] as const)('does not add direct use for an unlocked %s object', (_reason, safetyState) => {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 16,
+      name: 'Authored Door',
+      objectType: harness.objectTypes.ModuleDoor,
+      ...safetyState,
+    });
+    harness.setTarget(door, []);
+
+    expect(harness.buildPrompt('module-object:16')).toBeNull();
+    expect(door.use).not.toHaveBeenCalled();
+  });
+
+  test('does not add direct use when an unlocked target already has an authored action', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const consoleTarget = harness.target({
+      id: 17,
+      name: 'Authored Console',
+      objectType: harness.objectTypes.ModulePlaceable,
+    });
+    harness.setTarget(consoleTarget, [harness.entry('iaction_sec')]);
+
+    expect(flattenPromptActions(harness.buildPrompt('module-object:17')).map((action) => action.label)).toEqual([
+      'Security',
+    ]);
+    expect(consoleTarget.use).not.toHaveBeenCalled();
+  });
+
+  test('fails a direct-use descriptor closed when authored ownership appears later', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const consoleTarget = harness.target({
+      id: 18,
+      name: 'Changing Console',
+      objectType: harness.objectTypes.ModulePlaceable,
+    });
+    harness.setTarget(consoleTarget, []);
+    const [useAction] = flattenPromptActions(harness.buildPrompt('module-object:18'));
+
+    harness.setTarget(consoleTarget, [harness.entry('iaction_sec')]);
+
+    expect(useAction.revalidate()).toBe(false);
+    useAction.activate();
+    expect(consoleTarget.use).not.toHaveBeenCalled();
+  });
+
+  test('enumerates candidates without building action models for unselected neighbors', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const centerDoor = harness.target({
+      id: 19,
+      name: 'Center Door',
+      objectType: harness.objectTypes.ModuleDoor,
+    });
+    const sideConsole = harness.target({
+      id: 20,
+      name: 'Side Console',
+      objectType: harness.objectTypes.ModulePlaceable,
+      x: 0.5,
+    });
+    harness.setTargets([centerDoor, sideConsole], []);
+
+    const candidates = harness.buildCandidates();
+
+    expect(candidates.map((candidate: any) => candidate.id)).toEqual([
+      'module-object:19',
+      'module-object:20',
+    ]);
+    expect(harness.actionMenuCalls()).toEqual({ setPC: 0, setTarget: 0, update: 0 });
+  });
+
+  test('changes candidate state when an authored inventory source identity changes', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 23,
+      name: 'Mineable Door',
+      objectType: harness.objectTypes.ModuleDoor,
+      locked: true,
+    });
+    harness.setTargets([door], []);
+    harness.setInventory([{ id: 101, baseItemId: 58, getIcon: () => 'mine_a' }]);
+    const [first] = harness.buildCandidates();
+
+    harness.setInventory([{ id: 102, baseItemId: 58, getIcon: () => 'mine_b' }]);
+    const [second] = harness.buildCandidates();
+
+    expect(second.stateKey).not.toBe(first.stateKey);
+    expect(harness.actionMenuCalls()).toEqual({ setPC: 0, setTarget: 0, update: 0 });
+  });
+
+  test.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ] as const)('omits a target whose shared anchor contains %s', (_label, invalidCoordinate) => {
+    const harness = createGameStateWorldPromptHarness();
+    const target = harness.target({
+      id: 21,
+      name: 'Invalid Anchor',
+      objectType: harness.objectTypes.ModulePlaceable,
+      x: invalidCoordinate,
+    });
+    harness.setTargets([target], []);
+
+    expect(harness.buildCandidates()).toEqual([]);
+    expect(harness.actionMenuCalls()).toEqual({ setPC: 0, setTarget: 0, update: 0 });
+  });
+
+  test('carries the exact finite candidate anchor snapshot into prompt creation', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const target = harness.target({
+      id: 22,
+      name: 'Shared Anchor',
+      objectType: harness.objectTypes.ModulePlaceable,
+    });
+    harness.setTargets([target], []);
+    const [candidate] = harness.buildCandidates();
+
+    const model = harness.buildPrompt(candidate);
+
+    expect(model).not.toBeNull();
+    expect((model as any).anchor).toBe(candidate.position);
   });
 });
 
@@ -1849,6 +2061,14 @@ interface GameStatePromptTestTarget {
   getName(): string;
   isUseable(): boolean;
   isLocked(): boolean;
+  setLocked(value: boolean): void;
+  readonly keyRequired: boolean;
+  readonly plot: boolean;
+  readonly scripts: Readonly<Record<string, unknown>>;
+  readonly tag: string;
+  readonly templateResRef: string;
+  getTag(): string;
+  getTemplateResRef(): string;
 }
 
 interface GameStatePromptTestAction {
@@ -1862,10 +2082,25 @@ interface GameStatePromptTestAction {
 function createGameStateWorldPromptHarness(): {
   readonly actor: { readonly id: number; readonly position: THREE.Vector3 };
   readonly objectTypes: { readonly ModuleDoor: number; readonly ModulePlaceable: number; readonly ModuleTrigger: number };
-  target(options: { readonly id: number; readonly name: string; readonly objectType: number; readonly locked?: boolean }): GameStatePromptTestTarget;
+  target(options: {
+    readonly id: number;
+    readonly name: string;
+    readonly objectType: number;
+    readonly locked?: boolean;
+    readonly keyRequired?: boolean;
+    readonly plot?: boolean;
+    readonly storyScript?: boolean;
+    readonly tag?: string;
+    readonly templateResRef?: string;
+    readonly x?: number;
+  }): GameStatePromptTestTarget;
   entry(icon: string, itemName?: string): Record<string, unknown>;
   setTarget(target: GameStatePromptTestTarget, actions: readonly Record<string, unknown>[]): void;
-  buildPrompt(targetId: string): unknown;
+  setTargets(targets: readonly GameStatePromptTestTarget[], actions: readonly Record<string, unknown>[]): void;
+  setInventory(items: readonly Record<string, unknown>[]): void;
+  buildCandidates(): readonly any[];
+  buildPrompt(target: unknown): any;
+  actionMenuCalls(): { readonly setPC: number; readonly setTarget: number; readonly update: number };
 } {
   const EmptyClass = class {};
   const mockNamedExports = (): object => new Proxy({}, { get: () => EmptyClass });
@@ -1904,9 +2139,20 @@ function createGameStateWorldPromptHarness(): {
     };
   });
 
-  const { GameState, buildVRWorldActionPrompt, THREE: engineThree } = loaded;
+  const {
+    GameState,
+    buildVRWorldActionPrompt,
+    buildVRWorldPromptCandidates,
+    THREE: engineThree,
+  } = loaded;
   const { ModuleObjectType } = require('@/enums/module/ModuleObjectType');
-  const actor = { id: 7, position: new engineThree.Vector3(0, 0, 0) };
+  let inventory: readonly Record<string, unknown>[] = [];
+  const actor = {
+    id: 7,
+    position: new engineThree.Vector3(0, 0, 0),
+    getSkillLevel: () => 1,
+    getInventory: () => inventory,
+  };
   const actionPanels = {
     targetPanels: [] as Array<{ actions: readonly Record<string, unknown>[]; selectedIndex: number }>,
     selfPanels: [] as Array<{ actions: readonly Record<string, unknown>[]; selectedIndex: number }>,
@@ -1926,18 +2172,40 @@ function createGameStateWorldPromptHarness(): {
   return {
     actor,
     objectTypes: ModuleObjectType,
-    target: ({ id, name, objectType, locked = false }) => ({
+    target: ({
       id,
+      name,
       objectType,
-      position: new engineThree.Vector3(0, 1, 0),
-      destroyed: false,
-      willDestroy: false,
-      use: jest.fn(),
-      onClick: jest.fn(),
-      getName: () => name,
-      isUseable: () => true,
-      isLocked: () => locked,
-    }),
+      locked = false,
+      keyRequired = false,
+      plot = false,
+      storyScript = false,
+      tag = '',
+      templateResRef = '',
+      x = 0,
+    }) => {
+      let currentLocked = locked;
+      return {
+        id,
+        objectType,
+        position: new engineThree.Vector3(x, 1, 0),
+        destroyed: false,
+        willDestroy: false,
+        keyRequired,
+        plot,
+        scripts: storyScript ? { OnFailToOpen: { name: 'a_compdlg' } } : {},
+        tag,
+        templateResRef,
+        use: jest.fn(),
+        onClick: jest.fn(),
+        getName: () => name,
+        getTag: () => tag,
+        getTemplateResRef: () => templateResRef,
+        isUseable: () => true,
+        isLocked: () => currentLocked,
+        setLocked: (value: boolean) => { currentLocked = value; },
+      };
+    },
     entry: (icon, itemName) => ({
       icon,
       action: { type: icon },
@@ -1947,7 +2215,21 @@ function createGameStateWorldPromptHarness(): {
       GameState.ModuleObjectManager.playerSelectableObjects = [target];
       actionPanels.targetPanels = [{ actions, selectedIndex: 0 }];
     },
-    buildPrompt: (targetId) => buildVRWorldActionPrompt(targetId),
+    setTargets: (targets, actions) => {
+      GameState.ModuleObjectManager.playerSelectableObjects = [...targets];
+      actionPanels.targetPanels = [{ actions, selectedIndex: 0 }];
+    },
+    setInventory: (items) => { inventory = items; },
+    buildCandidates: () => buildVRWorldPromptCandidates(
+      actor,
+      GameState.ModuleObjectManager.playerSelectableObjects,
+    ),
+    buildPrompt: (target) => buildVRWorldActionPrompt(target),
+    actionMenuCalls: () => ({
+      setPC: actionMenuManager.SetPC.mock.calls.length,
+      setTarget: actionMenuManager.SetTarget.mock.calls.length,
+      update: actionMenuManager.UpdateMenuActions.mock.calls.length,
+    }),
   };
 }
 

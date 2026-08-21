@@ -53,6 +53,7 @@ import {
 import {
   describeDirectVRWorldUse,
   getVRInteractionRange,
+  isSafeDirectVRWorldUse,
 } from "@/vr/runtime/VRWorldUseAdapter";
 import {
   EngineInteractableObject,
@@ -96,6 +97,8 @@ import { CopyShader } from "three/examples/jsm/shaders/CopyShader";
 import Stats from 'three/examples/jsm/libs/stats.module'
 // import { BitWise } from "@/utility/BitWise";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
+import { ModuleTriggerType } from "@/enums/module/ModuleTriggerType";
+import { SkillType } from "@/enums/nwscript/SkillType";
 import { AudioEmitterType } from "@/enums/audio/AudioEmitterType";
 // import { GUIControlTypeMask } from "@/enums/gui/GUIControlTypeMask";
 
@@ -274,42 +277,34 @@ const vrWorldPromptActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<
   onSelfMenuAction: (panelIndex) => GameState.ActionMenuManager.onSelfMenuAction(panelIndex),
 };
 
+const vrWorldPromptObjectIdentities = new WeakMap<object, number>();
+let nextVRWorldPromptObjectIdentity = 1;
+
 /**
- * Builds immutable, non-activating prompt candidates from the engine's live
- * LOS/usability list. ActionMenuManager may refresh its descriptive panels,
- * but no action, target use route, or queue is invoked here.
+ * Builds cheap, immutable prompt candidates from the engine's live
+ * LOS/usability list. Discovery never refreshes ActionMenuManager and never
+ * creates action closures; the winning candidate is resolved lazily.
  */
 export function buildVRWorldPromptCandidates(
   actor: ModuleCreature | null | undefined,
   objects: readonly ModuleObject[],
 ): readonly VRWorldPromptCandidate[] {
   if (!actor || !Array.isArray(objects)) return [];
+  const actorActionState = readVRWorldPromptActorActionState(actor);
   const candidates: VRWorldPromptCandidate[] = [];
   for (const target of objects) {
-    if (!isStructurallyValidVRWorldPromptTarget(actor, target)) continue;
-    try {
-      const actorDistanceMetres = distance2D(actor.position, target.position);
-      const inRange = actorDistanceMetres <= getVRInteractionRange(target.objectType);
-      const model = inRange ? buildVRWorldActionPromptFor(actor, target) : null;
-      candidates.push({
-        id: `module-object:${target.id}`,
-        name: resolveVRWorldPromptName(target),
-        position: resolveVRInteractionAnchor(target as EngineInteractableObject, new THREE.Vector3()),
-        actorDistanceMetres,
-        hasActions: model !== null,
-        inRange,
-      });
-    } catch {
-      // A malformed object that is being destroyed must not suppress every
-      // other usable object in the engine-maintained selectable list.
-    }
+    const candidate = describeVRWorldPromptCandidate(actor, target, actorActionState);
+    if (candidate) candidates.push(candidate);
   }
   return candidates;
 }
 
 /** Resolves and snapshots one exact live object for proactive prompt display. */
-export function buildVRWorldActionPrompt(targetId: string): VRWorldActionPromptModel | null {
-  const match = /^module-object:(\d+)$/.exec(targetId);
+export function buildVRWorldActionPrompt(
+  source: string | VRWorldPromptCandidate,
+): VRWorldActionPromptModel | null {
+  const targetId = typeof source === 'string' ? source : source?.id;
+  const match = typeof targetId === 'string' ? /^module-object:(\d+)$/.exec(targetId) : null;
   if (!match) return null;
   const actor = GameState.getCurrentPlayer() ?? null;
   if (!actor) return null;
@@ -317,24 +312,29 @@ export function buildVRWorldActionPrompt(targetId: string): VRWorldActionPromptM
   const target = GameState.ModuleObjectManager.playerSelectableObjects.find(
     (candidate) => candidate.id === numericTargetId,
   );
-  return target ? buildVRWorldActionPromptFor(actor, target) : null;
+  if (!target) return null;
+  const candidate = typeof source === 'string'
+    ? describeVRWorldPromptCandidate(actor, target)
+    : source;
+  return candidate ? buildVRWorldActionPromptFor(actor, target, candidate) : null;
 }
 
 function buildVRWorldActionPromptFor(
   actor: ModuleCreature,
   target: ModuleObject,
+  candidate: VRWorldPromptCandidate,
 ): VRWorldActionPromptModel | null {
-  if (!isLiveVRWorldPromptTarget(actor, target)) return null;
+  if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return null;
   try {
-    GameState.ActionMenuManager.SetPC(actor);
-    GameState.ActionMenuManager.SetTarget(target);
-    GameState.ActionMenuManager.UpdateMenuActions();
+    const panels = refreshVRWorldPromptPanels(actor, target);
+    if (!panels) return null;
+    const authoredActionCount = countVRWorldPromptTargetActions(panels.targetPanels);
     const authoredActions = snapshotVRActionMenuPanelEntries(
       {
         actor,
         target,
         kind: 'target',
-        panels: GameState.ActionMenuManager.ActionPanels.targetPanels as readonly VRActionMenuPanel[],
+        panels: panels.targetPanels,
       },
       vrWorldPromptActionMenuBridgeDependencies,
     ).map((descriptor): VRWorldPromptAction => ({
@@ -342,24 +342,31 @@ function buildVRWorldActionPromptFor(
       id: descriptor.id,
       label: descriptor.label,
       icon: descriptor.icon,
-      revalidate: () => isLiveVRWorldPromptTarget(actor, target) && descriptor.revalidate(),
+      revalidate: () => isLiveVRWorldPromptCandidate(actor, target, candidate) && descriptor.revalidate(),
       activate: () => {
-        if (!isLiveVRWorldPromptTarget(actor, target) || !descriptor.revalidate()) return;
+        if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return;
         descriptor.activate();
       },
     }));
 
     const actions = [...authoredActions];
-    if (!isVRWorldPromptTargetLocked(target) && isDirectVRWorldUseTarget(target)) {
-      const descriptor = describeDirectVRWorldUse(actor, target);
+    if (isDirectVRWorldUseTarget(target)) {
+      const descriptor = describeDirectVRWorldUse(actor, target, console, {
+        authoredActionCount,
+        getLiveAuthoredActionCount: () => {
+          if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return 1;
+          const livePanels = refreshVRWorldPromptPanels(actor, target);
+          return livePanels ? countVRWorldPromptTargetActions(livePanels.targetPanels) : 1;
+        },
+      });
       if (descriptor) {
         actions.push({
           kind: 'action',
           id: descriptor.id,
           label: descriptor.label,
-          revalidate: () => isLiveVRWorldPromptTarget(actor, target) && descriptor.revalidate(),
+          revalidate: () => isLiveVRWorldPromptCandidate(actor, target, candidate) && descriptor.revalidate(),
           activate: () => {
-            if (!isLiveVRWorldPromptTarget(actor, target) || !descriptor.revalidate()) return;
+            if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return;
             descriptor.activate();
           },
         });
@@ -368,11 +375,10 @@ function buildVRWorldActionPromptFor(
 
     const pages = buildVRWorldPromptPages(actions);
     if (pages.length === 0) return null;
-    const anchor = resolveVRInteractionAnchor(target as EngineInteractableObject, new THREE.Vector3());
     return {
-      id: `world-prompt:${target.id}:${actions.map((action) => action.id).join('|')}`,
-      name: resolveVRWorldPromptName(target),
-      anchor,
+      id: `world-prompt:${target.id}:${candidate.stateKey}:${actions.map((action) => action.id).join('|')}`,
+      name: candidate.name,
+      anchor: candidate.position,
       pages,
     };
   } catch {
@@ -387,6 +393,74 @@ function isLiveVRWorldPromptTarget(actor: ModuleCreature, target: ModuleObject):
     distance2D(actor.position, target.position) <= getVRInteractionRange(target.objectType);
 }
 
+function isLiveVRWorldPromptCandidate(
+  actor: ModuleCreature,
+  target: ModuleObject,
+  snapshot: VRWorldPromptCandidate,
+): boolean {
+  if (!isLiveVRWorldPromptTarget(actor, target)) return false;
+  const live = describeVRWorldPromptCandidate(actor, target);
+  return live !== null && live.id === snapshot.id && live.name === snapshot.name &&
+    live.stateKey === snapshot.stateKey && live.inRange === snapshot.inRange &&
+    live.hasActions === snapshot.hasActions && live.position.equals(snapshot.position);
+}
+
+function describeVRWorldPromptCandidate(
+  actor: ModuleCreature,
+  target: ModuleObject,
+  actorActionState: VRWorldPromptActorActionState = readVRWorldPromptActorActionState(actor),
+): VRWorldPromptCandidate | null {
+  if (!isStructurallyValidVRWorldPromptTarget(actor, target)) return null;
+  try {
+    const actorDistanceMetres = distance2D(actor.position, target.position);
+    if (!Number.isFinite(actorDistanceMetres)) return null;
+    const position = resolveVRInteractionAnchor(
+      target as EngineInteractableObject,
+      new THREE.Vector3(),
+    );
+    if (![position.x, position.y, position.z].every(Number.isFinite)) return null;
+    const inRange = actorDistanceMetres <= getVRInteractionRange(target.objectType);
+    const hasActions = hasPotentialVRWorldPromptActions(actorActionState, target);
+    const name = resolveVRWorldPromptName(target);
+    return {
+      id: `module-object:${target.id}`,
+      name,
+      position,
+      actorDistanceMetres,
+      hasActions,
+      inRange,
+      stateKey: buildVRWorldPromptStateKey(
+        actor,
+        actorActionState,
+        target,
+        name,
+        position,
+        hasActions,
+      ),
+    };
+  } catch {
+    // A malformed object that is being destroyed must not suppress every
+    // other usable object in the engine-maintained selectable list.
+    return null;
+  }
+}
+
+function refreshVRWorldPromptPanels(
+  actor: ModuleCreature,
+  target: ModuleObject,
+): VRActionMenuPanelLists | null {
+  if (!isLiveVRWorldPromptTarget(actor, target)) return null;
+  GameState.ActionMenuManager.SetPC(actor);
+  GameState.ActionMenuManager.SetTarget(target);
+  GameState.ActionMenuManager.UpdateMenuActions();
+  return GameState.ActionMenuManager.ActionPanels as VRActionMenuPanelLists;
+}
+
+function countVRWorldPromptTargetActions(panels: readonly VRActionMenuPanel[]): number {
+  return panels.reduce((count, panel) =>
+    count + (panel && Array.isArray(panel.actions) ? panel.actions.length : 0), 0);
+}
+
 function isStructurallyValidVRWorldPromptTarget(actor: ModuleCreature, target: ModuleObject): boolean {
   try {
     const supportedType = (target.objectType & (
@@ -396,7 +470,11 @@ function isStructurallyValidVRWorldPromptTarget(actor: ModuleCreature, target: M
     )) !== 0;
     return !!target && target !== actor && supportedType &&
       Number.isInteger(target.id) && target.id >= 0 &&
-      target.position instanceof THREE.Vector3 && Number.isInteger(target.objectType) &&
+      target.position instanceof THREE.Vector3 &&
+      [target.position.x, target.position.y, target.position.z].every(Number.isFinite) &&
+      actor.position instanceof THREE.Vector3 &&
+      [actor.position.x, actor.position.y, actor.position.z].every(Number.isFinite) &&
+      Number.isInteger(target.objectType) &&
       target.destroyed !== true && target.willDestroy !== true &&
       typeof target.isUseable === 'function' && target.isUseable();
   } catch {
@@ -404,16 +482,213 @@ function isStructurallyValidVRWorldPromptTarget(actor: ModuleCreature, target: M
   }
 }
 
-function isVRWorldPromptTargetLocked(target: ModuleObject): boolean {
-  const lockable = target as ModuleObject & { isLocked?: () => boolean };
-  return typeof lockable.isLocked === 'function' && lockable.isLocked() === true;
-}
-
 function isDirectVRWorldUseTarget(target: ModuleObject): target is ModuleObject & {
   use(actor: ModuleCreature): void;
 } {
   const supportedType = (target.objectType & (ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable)) !== 0;
   return supportedType && typeof (target as unknown as { use?: unknown }).use === 'function';
+}
+
+interface VRWorldPromptActorActionState {
+  readonly securitySkill: number;
+  readonly securityActionIcon: string;
+  readonly demolitionsSkill: number;
+  readonly mineCount: number;
+  readonly securityTunnelerCount: number;
+  readonly authoredInventorySourceKey: string;
+}
+
+function hasPotentialVRWorldPromptActions(
+  actorState: VRWorldPromptActorActionState,
+  target: ModuleObject,
+): boolean {
+  if ((target.objectType & (ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable)) !== 0) {
+    const lockTarget = target as ModuleObject & {
+      isLocked?: () => boolean;
+      lockable?: unknown;
+      keyRequired?: unknown;
+      notBlastable?: unknown;
+    };
+    if (typeof lockTarget.isLocked !== 'function') return false;
+    if (!lockTarget.isLocked()) {
+      return isDirectVRWorldUseTarget(target) && isSafeDirectVRWorldUse(target, 0);
+    }
+    if (!Boolean(lockTarget.notBlastable)) return true;
+    const securityAllowed = Boolean(lockTarget.lockable) && !Boolean(lockTarget.keyRequired);
+    return securityAllowed && (
+      actorState.securitySkill >= 1 || actorState.securityTunnelerCount > 0
+    );
+  }
+  if ((target.objectType & ModuleObjectType.ModuleTrigger) !== 0) {
+    const trigger = target as ModuleObject & { type?: unknown };
+    return trigger.type === ModuleTriggerType.TRAP &&
+      actorState.demolitionsSkill >= 1;
+  }
+  return false;
+}
+
+function buildVRWorldPromptStateKey(
+  actor: ModuleCreature,
+  actorState: VRWorldPromptActorActionState,
+  target: ModuleObject,
+  name: string,
+  anchor: THREE.Vector3,
+  hasActions: boolean,
+): string {
+  const state = target as ModuleObject & {
+    isLocked?: () => boolean;
+    lockable?: unknown;
+    keyRequired?: unknown;
+    plot?: unknown;
+    notBlastable?: unknown;
+    trapDisarmable?: unknown;
+    type?: unknown;
+    scripts?: unknown;
+    tag?: unknown;
+    templateResRef?: unknown;
+    getTag?: () => unknown;
+    getTemplateResRef?: () => unknown;
+  };
+  return JSON.stringify([
+    getVRWorldPromptObjectIdentity(actor),
+    getVRWorldPromptObjectIdentity(target),
+    target.id,
+    target.objectType,
+    name,
+    anchor.x,
+    anchor.y,
+    anchor.z,
+    hasActions,
+    readBooleanState(state.isLocked, state),
+    state.lockable,
+    state.keyRequired,
+    state.plot,
+    state.notBlastable,
+    state.type,
+    state.trapDisarmable,
+    readIdentityState(state.getTag, state.tag, state),
+    readIdentityState(state.getTemplateResRef, state.templateResRef, state),
+    readScriptIdentityState(state.scripts),
+    actorState.securitySkill,
+    actorState.securityActionIcon,
+    actorState.demolitionsSkill,
+    actorState.mineCount,
+    actorState.securityTunnelerCount,
+    actorState.authoredInventorySourceKey,
+  ]);
+}
+
+function getVRWorldPromptObjectIdentity(value: object): number {
+  const existing = vrWorldPromptObjectIdentities.get(value);
+  if (existing !== undefined) return existing;
+  const identity = nextVRWorldPromptObjectIdentity;
+  nextVRWorldPromptObjectIdentity += 1;
+  vrWorldPromptObjectIdentities.set(value, identity);
+  return identity;
+}
+
+function readBooleanState(getter: (() => boolean) | undefined, receiver: object): boolean | null {
+  try {
+    return typeof getter === 'function' ? getter.call(receiver) === true : null;
+  } catch {
+    return null;
+  }
+}
+
+function readIdentityState(
+  getter: (() => unknown) | undefined,
+  property: unknown,
+  receiver: object,
+): string {
+  try {
+    const value = typeof getter === 'function' ? getter.call(receiver) : property;
+    return typeof value === 'string' ? value.trim().toLowerCase() : '';
+  } catch {
+    return '';
+  }
+}
+
+function readScriptIdentityState(scripts: unknown): string {
+  if (!scripts || typeof scripts !== 'object') return '';
+  return Object.entries(scripts as Readonly<Record<string, unknown>>)
+    .map(([key, value]) => {
+      const name = value && typeof value === 'object' && 'name' in value
+        ? (value as { readonly name?: unknown }).name
+        : value;
+      return `${key.toLowerCase()}:${typeof name === 'string' ? name.toLowerCase() : Boolean(name)}`;
+    })
+    .sort()
+    .join('|');
+}
+
+function readVRWorldPromptActorActionState(
+  actor: ModuleCreature,
+): VRWorldPromptActorActionState {
+  const securitySkill = readVRActorSkill(actor, SkillType.SECURITY);
+  const securityActionIcon = readVRActorSecurityActionIcon(actor);
+  const demolitionsSkill = readVRActorSkill(actor, SkillType.DEMOLITIONS);
+  try {
+    const inventory = actor.getInventory();
+    if (!Array.isArray(inventory)) {
+      return {
+        securitySkill,
+        securityActionIcon,
+        demolitionsSkill,
+        mineCount: 0,
+        securityTunnelerCount: 0,
+        authoredInventorySourceKey: '',
+      };
+    }
+    const authoredItems = inventory.filter((item) =>
+      item?.baseItemId === 58 || item?.baseItemId === 59
+    );
+    return {
+      securitySkill,
+      securityActionIcon,
+      demolitionsSkill,
+      mineCount: authoredItems.filter((item) => item.baseItemId === 58).length,
+      securityTunnelerCount: authoredItems.filter((item) => item.baseItemId === 59).length,
+      authoredInventorySourceKey: JSON.stringify(authoredItems.map((item) => [
+        getVRWorldPromptObjectIdentity(item),
+        item.id,
+        item.baseItemId,
+        readCallableString(item.getName, item),
+        readCallableString(item.getIcon, item),
+      ])),
+    };
+  } catch {
+    return {
+      securitySkill,
+      securityActionIcon,
+      demolitionsSkill,
+      mineCount: 0,
+      securityTunnelerCount: 0,
+      authoredInventorySourceKey: '',
+    };
+  }
+}
+
+function readVRActorSecurityActionIcon(actor: ModuleCreature): string {
+  const skill = actor.skills?.[SkillType.SECURITY];
+  return skill ? readCallableString(skill.getIcon, skill) : '';
+}
+
+function readVRActorSkill(actor: ModuleCreature, skill: SkillType): number {
+  try {
+    const value = actor.getSkillLevel(skill);
+    return Number.isFinite(value) ? value : -1;
+  } catch {
+    return -1;
+  }
+}
+
+function readCallableString(getter: (() => unknown) | undefined, receiver: object): string {
+  try {
+    const value = typeof getter === 'function' ? getter.call(receiver) : '';
+    return typeof value === 'string' ? value : '';
+  } catch {
+    return '';
+  }
 }
 
 function resolveVRWorldPromptName(target: ModuleObject): string {
@@ -1195,7 +1470,7 @@ export class GameState implements EngineContext {
             actor,
             GameState.ModuleObjectManager.playerSelectableObjects,
           ),
-          createPrompt: (targetId: string) => buildVRWorldActionPrompt(targetId),
+          createPrompt: (candidate: VRWorldPromptCandidate) => buildVRWorldActionPrompt(candidate),
         };
       },
       getCombatContext: (aimedTargetId) => {

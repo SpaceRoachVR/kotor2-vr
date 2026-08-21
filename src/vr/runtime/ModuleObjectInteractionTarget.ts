@@ -232,6 +232,9 @@ function validateEngineObject(object: EngineInteractableObject): void {
   if (!(object.position instanceof THREE.Vector3)) {
     throw new TypeError('engine interactable object position must be a THREE.Vector3');
   }
+  if (![object.position.x, object.position.y, object.position.z].every(Number.isFinite)) {
+    throw new RangeError('engine interactable object position must be finite');
+  }
   if (typeof object.isUseable !== 'function' || typeof object.onClick !== 'function') {
     throw new TypeError('engine interactable object must expose isUseable and onClick');
   }

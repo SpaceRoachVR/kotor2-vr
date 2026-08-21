@@ -147,6 +147,10 @@ function placeable(name: string, distance: number): VRWorldUseTarget & { use: je
     id: 42,
     objectType: ModuleObjectType.ModulePlaceable,
     position: new THREE.Vector3(distance, 0, 0),
+    keyRequired: 0,
+    plot: 0,
+    scripts: {},
+    isLocked: () => false,
     getName: () => name,
     use: jest.fn(),
   };
