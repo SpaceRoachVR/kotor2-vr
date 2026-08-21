@@ -50,6 +50,37 @@ describe('VRHapticFeedback', () => {
     expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
+  test('reports a missing actuator once per session and hand', async () => {
+    const logger = { warn: jest.fn() };
+    const feedback = new VRHapticFeedback(logger);
+    const missingSession = {
+      inputSources: [{ handedness: 'left', gamepad: { hapticActuators: [] } }],
+    } as unknown as XRSession;
+
+    await feedback.pulse(missingSession, 'left', { durationMs: 20, amplitude: 0.15 });
+    await feedback.pulse(missingSession, 'left', { durationMs: 20, amplitude: 0.15 });
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('left'),
+      expect.anything(),
+    );
+  });
+
+  test('reports an actuator returning false once per session and hand', async () => {
+    const logger = { warn: jest.fn() };
+    const feedback = new VRHapticFeedback(logger);
+    const falsePulse = jest.fn<(amplitude: number, duration: number) => Promise<boolean>>()
+      .mockResolvedValue(false);
+    const falseSession = session(falsePulse, jest.fn());
+
+    await feedback.pulse(falseSession, 'left', { durationMs: 20, amplitude: 0.15 });
+    await feedback.pulse(falseSession, 'left', { durationMs: 20, amplitude: 0.15 });
+
+    expect(falsePulse).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
   test('never rejects the frame caller when the optional logger also fails', async () => {
     const feedback = new VRHapticFeedback({
       warn: () => { throw new Error('logger unavailable'); },

@@ -133,6 +133,7 @@ function validateMenuItem(
   }
   assertNonEmptyString(entry.id, 'item id');
   assertNonEmptyString(entry.label, 'item label');
+  if (entry.icon !== undefined) assertNonEmptyString(entry.icon, 'item icon');
   if (contentIds.has(entry.id)) {
     throw new RangeError(`duplicate item id: ${entry.id}`);
   }

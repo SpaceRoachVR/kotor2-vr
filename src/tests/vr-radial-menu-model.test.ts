@@ -45,8 +45,11 @@ describe('validation edge cases', () => {
     [{ id: 'menu', title: 'Menu', pages: [ { index: 0, entries: [] } ] }, 'between 1 and 8'],
     [{ id: 'menu', title: 'Menu', pages: [ { index: 0, entries: [action('')] } ] }, 'item id'],
     [{ id: 'menu', title: 'Menu', pages: [ { index: 0, entries: [{ ...action('a'), label: ' ' }] } ] }, 'label'],
+    [{ id: 'menu', title: 'Menu', pages: [ { index: 0, entries: [{ ...action('a'), icon: ' ' }] } ] }, 'icon'],
+    [{ id: 'menu', title: 'Menu', pages: [ { index: 0, entries: [{ ...action('a'), icon: 42 }] } ] }, 'icon'],
   ])('rejects invalid menu %#', (menu, message) => {
-    expect(() => validateVRRadialMenu(menu)).toThrow(message);
+    expect(() => validateVRRadialMenu(menu as unknown as Parameters<typeof validateVRRadialMenu>[0]))
+      .toThrow(message);
   });
 
   test.each([0, 1.5, 7, Number.NaN])('rejects invalid contentPerPage %p', (size) => {

@@ -32,7 +32,44 @@ describe('VRWorldActionPromptController', () => {
     const model = promptModel('console', [use]);
 
     expect(controller.process(model, { right: 'use' }, [select('right', true)]))
-      .toEqual([{ type: 'activate', action: use, hand: 'right' }]);
+      .toEqual([
+        { type: 'hover-haptic', hand: 'right' },
+        { type: 'activate', action: use, hand: 'right' },
+      ]);
+  });
+
+  test('emits one hover haptic per hand only when that hand enters or changes entries', () => {
+    const controller = new VRWorldActionPromptController();
+    const model = promptModel('console', [promptAction('use'), promptAction('security')]);
+
+    expect(controller.process(model, { left: 'use' }, [])).toEqual([
+      { type: 'hover-haptic', hand: 'left' },
+    ]);
+    expect(controller.process(model, { left: 'use' }, [])).toEqual([]);
+    expect(controller.process(model, { left: 'security', right: 'use' }, [])).toEqual([
+      { type: 'hover-haptic', hand: 'left' },
+      { type: 'hover-haptic', hand: 'right' },
+    ]);
+    expect(controller.process(model, { left: 'security', right: 'use' }, [])).toEqual([]);
+  });
+
+  test('rearms hover haptics after hover loss, model replacement, and lifecycle loss', () => {
+    const controller = new VRWorldActionPromptController();
+    const first = promptModel('door', [promptAction('use')]);
+    const second = promptModel('console', [promptAction('use')]);
+
+    controller.process(first, { right: 'use' }, []);
+    controller.process(first, { right: null }, []);
+    expect(controller.process(first, { right: 'use' }, [])).toEqual([
+      { type: 'hover-haptic', hand: 'right' },
+    ]);
+    expect(controller.process(second, { right: 'use' }, [])).toEqual([
+      { type: 'hover-haptic', hand: 'right' },
+    ]);
+    controller.process(null, {}, []);
+    expect(controller.process(first, { right: 'use' }, [])).toEqual([
+      { type: 'hover-haptic', hand: 'right' },
+    ]);
   });
 
   test('resolves simultaneous press edges in stable left-before-right order', () => {
@@ -43,7 +80,11 @@ describe('VRWorldActionPromptController', () => {
       model,
       { left: 'security', right: 'bash' },
       [select('right', true), select('left', true)],
-    )).toEqual([{ type: 'activate', action: model.pages[0].entries[0], hand: 'left' }]);
+    )).toEqual([
+      { type: 'hover-haptic', hand: 'left' },
+      { type: 'hover-haptic', hand: 'right' },
+      { type: 'activate', action: model.pages[0].entries[0], hand: 'left' },
+    ]);
   });
 
   test('revalidates the nominated action and never substitutes another action when invalid', () => {
@@ -53,7 +94,10 @@ describe('VRWorldActionPromptController', () => {
     const model = promptModel('door', [security, bash]);
 
     expect(controller.process(model, { right: 'security' }, [select('right', true)]))
-      .toEqual([{ type: 'negative-haptic', hand: 'right' }]);
+      .toEqual([
+        { type: 'hover-haptic', hand: 'right' },
+        { type: 'negative-haptic', hand: 'right' },
+      ]);
     expect(security.activate).not.toHaveBeenCalled();
     expect(bash.activate).not.toHaveBeenCalled();
   });
@@ -75,12 +119,14 @@ describe('VRWorldActionPromptController', () => {
     const promptActions = Array.from({ length: 5 }, (_, index) => promptAction(`action-${index}`));
     const model = promptModel('door', promptActions);
 
-    expect(controller.process(model, { left: 'prompt:next' }, [select('left', true)])).toEqual([]);
+    expect(controller.process(model, { left: 'prompt:next' }, [select('left', true)]))
+      .toEqual([{ type: 'hover-haptic', hand: 'left' }]);
     expect(controller.presentation?.pageIndex).toBe(1);
     expect(promptActions.every((action) => jest.mocked(action.activate).mock.calls.length === 0)).toBe(true);
 
     controller.process(model, { left: 'prompt:next' }, [select('left', false)]);
-    expect(controller.process(model, { left: 'prompt:previous' }, [select('left', true)])).toEqual([]);
+    expect(controller.process(model, { left: 'prompt:previous' }, [select('left', true)]))
+      .toEqual([{ type: 'hover-haptic', hand: 'left' }]);
     expect(controller.presentation?.pageIndex).toBe(0);
     expect(promptActions.every((action) => jest.mocked(action.activate).mock.calls.length === 0)).toBe(true);
   });

@@ -31,11 +31,17 @@ export class VRHapticFeedback {
       const source = Array.from(session.inputSources ?? [])
         .find((candidate) => candidate.handedness === hand);
       const actuator = (source?.gamepad as HapticGamepad | undefined)?.hapticActuators?.[0];
-      if (!actuator || typeof actuator.pulse !== 'function') return;
+      if (!actuator || typeof actuator.pulse !== 'function') {
+        this.reportFailureOnce(session, hand, new Error('haptic actuator is unavailable'));
+        return;
+      }
 
       const amplitude = clampFinite(pattern.amplitude, 0, 1);
       const durationMs = clampFinite(pattern.durationMs, MIN_DURATION_MS, MAX_DURATION_MS);
-      await actuator.pulse(amplitude, durationMs);
+      const accepted = await actuator.pulse(amplitude, durationMs);
+      if (accepted !== true) {
+        this.reportFailureOnce(session, hand, new Error('haptic actuator declined the pulse'));
+      }
     } catch (error) {
       this.reportFailureOnce(session, hand, error);
     }

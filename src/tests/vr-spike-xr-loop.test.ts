@@ -74,7 +74,7 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).worldActionPromptController = new VRWorldActionPromptController();
     (VRSpike as any).worldPromptCandidateId = null;
     (VRSpike as any).worldPromptCandidateStateKey = null;
-    (VRSpike as any).worldPromptModelResolved = false;
+    (VRSpike as any).worldPromptModelResolver?.reset();
     (VRSpike as any).worldPromptModel = null;
     (VRSpike as any).worldPromptModule = null;
     (VRSpike as any).worldPromptModuleInitialized = false;
@@ -1029,13 +1029,17 @@ describe('VRSpike XR loop ownership', () => {
     } as never);
 
     (VRSpike as any).processInteractionInput(1_000);
+    expect(pulse).toHaveBeenCalledWith(expect.anything(), 'right', { durationMs: 20, amplitude: 0.15 });
+    expect(pulse.mock.calls.filter(([, , pattern]) => pattern.durationMs === 20)).toHaveLength(1);
     buttons[0] = pressedButton();
     (VRSpike as any).processInteractionInput(1_016);
+    expect(pulse.mock.calls.filter(([, , pattern]) => pattern.durationMs === 20)).toHaveLength(1);
     (VRSpike as any).processInteractionInput(1_032);
 
     expect(promptActivate).toHaveBeenCalledTimes(1);
     expect(genericActivation).not.toHaveBeenCalled();
     expect(target.onClick).not.toHaveBeenCalled();
+    expect(pulse.mock.calls.filter(([, , pattern]) => pattern.durationMs === 20)).toHaveLength(2);
     expect(pulse).toHaveBeenCalledWith(expect.anything(), 'right', { durationMs: 35, amplitude: 0.35 });
     expect(promptHost.clear.mock.invocationCallOrder.some(
       (callOrder: number) => callOrder < promptActivate.mock.invocationCallOrder[0]
@@ -1162,6 +1166,35 @@ describe('VRSpike XR loop ownership', () => {
 
     expect(createPrompt).toHaveBeenCalledTimes(1);
     expect(revalidate).not.toHaveBeenCalled();
+  });
+
+  test('backs off a transient prompt-construction fault, reports its opening once, and recovers', () => {
+    const candidate = { ...promptCandidate('module-object:42', 0, 2), stateKey: 'transient:v1' };
+    const recoveredModel = worldPromptModelForTarget(candidate.id);
+    const createPrompt = jest.fn<() => VRWorldActionPromptModel | null>()
+      .mockImplementationOnce(() => { throw new Error('transient ActionMenu refresh'); })
+      .mockReturnValue(recoveredModel);
+    installWorldPromptHarness([candidate], createPrompt);
+    jest.spyOn((VRSpike as any).interactionSystem, 'preview').mockReturnValue(null);
+    const diagnostic = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    (VRSpike as any).processInteractionInput(1_000);
+    for (let stableFrame = 1; stableFrame < 30; stableFrame += 1) {
+      (VRSpike as any).processInteractionInput(1_000 + stableFrame * 16);
+    }
+    expect(createPrompt).toHaveBeenCalledTimes(1);
+    expect((VRSpike as any).worldPromptModel).toBeNull();
+
+    (VRSpike as any).processInteractionInput(1_480);
+    (VRSpike as any).processInteractionInput(1_496);
+
+    expect(createPrompt).toHaveBeenCalledTimes(2);
+    expect((VRSpike as any).worldPromptModel).toBe(recoveredModel);
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(diagnostic).toHaveBeenCalledWith(
+      expect.stringContaining("candidate='module-object:42'"),
+      expect.any(Error),
+    );
   });
 
   test('rebuilds the selected prompt when its authored availability state changes', () => {
@@ -1632,7 +1665,7 @@ function installWorldPromptHarness(
   (VRSpike as any).worldActionPromptController = new VRWorldActionPromptController();
   (VRSpike as any).worldPromptCandidateId = null;
   (VRSpike as any).worldPromptCandidateStateKey = null;
-  (VRSpike as any).worldPromptModelResolved = false;
+  (VRSpike as any).worldPromptModelResolver?.reset();
   (VRSpike as any).worldPromptModel = null;
   (VRSpike as any).worldPromptModule = null;
   (VRSpike as any).worldPromptModuleInitialized = false;
@@ -1981,6 +2014,20 @@ describe('GameState proactive world-prompt assembly', () => {
     expect(door.use).not.toHaveBeenCalled();
   });
 
+  test('propagates prompt construction faults instead of caching them as expected no-actions', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 24,
+      name: 'Transient Door',
+      objectType: harness.objectTypes.ModuleDoor,
+    });
+    harness.setTarget(door, []);
+    harness.setActionMenuFailure(new Error('transient ActionMenu refresh'));
+
+    expect(() => harness.buildPrompt('module-object:24')).toThrow('transient ActionMenu refresh');
+    expect(door.use).not.toHaveBeenCalled();
+  });
+
   test('uses authoritative authored actions for a locked door and omits direct Open', () => {
     const harness = createGameStateWorldPromptHarness();
     const door = harness.target({
@@ -2239,6 +2286,7 @@ function createGameStateWorldPromptHarness(): {
   setTarget(target: GameStatePromptTestTarget, actions: readonly Record<string, unknown>[]): void;
   setTargets(targets: readonly GameStatePromptTestTarget[], actions: readonly Record<string, unknown>[]): void;
   setInventory(items: readonly Record<string, unknown>[]): void;
+  setActionMenuFailure(error: Error | null): void;
   buildCandidates(): readonly any[];
   buildPrompt(target: unknown): any;
   actionMenuCalls(): { readonly setPC: number; readonly setTarget: number; readonly update: number };
@@ -2288,6 +2336,7 @@ function createGameStateWorldPromptHarness(): {
   } = loaded;
   const { ModuleObjectType } = require('@/enums/module/ModuleObjectType');
   let inventory: readonly Record<string, unknown>[] = [];
+  let actionMenuFailure: Error | null = null;
   const actor = {
     id: 7,
     position: new engineThree.Vector3(0, 0, 0),
@@ -2302,7 +2351,9 @@ function createGameStateWorldPromptHarness(): {
     ActionPanels: actionPanels,
     SetPC: jest.fn(),
     SetTarget: jest.fn(),
-    UpdateMenuActions: jest.fn(),
+    UpdateMenuActions: jest.fn(() => {
+      if (actionMenuFailure) throw actionMenuFailure;
+    }),
     onTargetMenuAction: jest.fn(),
     onSelfMenuAction: jest.fn(),
   };
@@ -2361,6 +2412,7 @@ function createGameStateWorldPromptHarness(): {
       actionPanels.targetPanels = [{ actions, selectedIndex: 0 }];
     },
     setInventory: (items) => { inventory = items; },
+    setActionMenuFailure: (error) => { actionMenuFailure = error; },
     buildCandidates: () => buildVRWorldPromptCandidates(
       actor,
       GameState.ModuleObjectManager.playerSelectableObjects,

@@ -39,6 +39,7 @@ import {
   VRWorldPromptCandidate,
   selectVRWorldPromptCandidate,
 } from "./runtime/VRWorldActionPromptModel";
+import { VRWorldPromptModelResolver } from "./runtime/VRWorldPromptModelResolver";
 import {
   VRPanelInputController,
   VRPanelMenuController,
@@ -282,7 +283,7 @@ export class VRSpike {
   private static worldActionPromptController = new VRWorldActionPromptController();
   private static worldPromptCandidateId: string | null = null;
   private static worldPromptCandidateStateKey: string | null = null;
-  private static worldPromptModelResolved = false;
+  private static worldPromptModelResolver = new VRWorldPromptModelResolver();
   private static worldPromptModel: VRWorldActionPromptModel | null = null;
   private static worldPromptModule: string | null = null;
   private static worldPromptModuleInitialized = false;
@@ -1060,12 +1061,13 @@ export class VRSpike {
       }
 
       const candidateStateKey = VRSpike.getWorldPromptCandidateStateKey(selectedCandidate);
-      const candidateChanged = selectedCandidate.id !== VRSpike.worldPromptCandidateId ||
-        candidateStateKey !== VRSpike.worldPromptCandidateStateKey;
-      if (candidateChanged || !VRSpike.worldPromptModelResolved) {
-        VRSpike.worldPromptModel = promptContext.createPrompt(selectedCandidate);
-        VRSpike.worldPromptModelResolved = true;
-      }
+      const resolution = VRSpike.worldPromptModelResolver.resolve(
+        { candidateId: selectedCandidate.id, openingKey: candidateStateKey },
+        () => promptContext.createPrompt(selectedCandidate),
+      );
+      VRSpike.worldPromptModel = resolution.status === 'success'
+        ? resolution.model
+        : null;
       VRSpike.worldPromptCandidateId = selectedCandidate.id;
       VRSpike.worldPromptCandidateStateKey = candidateStateKey;
       if (!VRSpike.worldPromptModel) {
@@ -1204,6 +1206,8 @@ export class VRSpike {
     for (const effect of effects) {
       if (effect.type === 'closed') {
         VRSpike.clearWorldActionPrompt(false);
+      } else if (effect.type === 'hover-haptic') {
+        void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 20, amplitude: 0.15 });
       } else if (effect.type === 'negative-haptic') {
         VRSpike.clearWorldActionPrompt(false);
         void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 60, amplitude: 0.45 });
@@ -1246,7 +1250,7 @@ export class VRSpike {
     VRSpike.worldActionPromptController.process(null, {}, []);
     VRSpike.worldPromptCandidateId = null;
     VRSpike.worldPromptCandidateStateKey = null;
-    VRSpike.worldPromptModelResolved = false;
+    VRSpike.worldPromptModelResolver.reset();
     VRSpike.worldPromptModel = null;
     VRSpike.interactionPreviewIndicator = null;
     VRSpike.worldTargetLabelHost?.clear();

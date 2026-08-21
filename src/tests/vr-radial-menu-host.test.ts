@@ -5,12 +5,19 @@ import {
   VRRadialIconLoader,
   VRRadialMenuHost,
 } from '@/vr/runtime/VRRadialMenuHost';
-import { VRRadialPresentation } from '@/vr/runtime/VRRadialMenuController';
+import {
+  VRRadialControllerInput,
+  VRRadialMenuController,
+  VRRadialPresentation,
+} from '@/vr/runtime/VRRadialMenuController';
 import {
   paginateVRRadialItems,
   VRRadialActionItem,
+  VRRadialContentItem,
   VRRadialMenuDefinition,
+  VRRadialSubmenuItem,
 } from '@/vr/runtime/VRRadialMenuModel';
+import { createVRRadialSectors } from '@/vr/runtime/VRRadialMenuLayout';
 import { XRWorldPose } from '@/vr/runtime/XRTypes';
 
 describe('VRRadialMenuHost', () => {
@@ -238,6 +245,108 @@ describe('VRRadialMenuHost', () => {
     expect(host.object.visible).toBe(false);
     host.dispose();
   });
+
+  test('keeps one physical touch latched while a stationary probe is reclassified across 7-to-2 pagination', () => {
+    const { host } = createHost();
+    const controller = new VRRadialMenuController();
+    const menuDefinition = menu(
+      'root',
+      Array.from({ length: 7 }, (_, index) => action(`action-${index}`, `Action ${index}`)),
+    );
+    const head = headPose();
+
+    controller.process(radialInput({ menuPressed: true, openingMenu: menuDefinition }));
+    host.present(requiredPresentation(controller), head);
+    const stationaryProbe = touchProbeAtSector(host, 7, 6);
+    const firstHit = host.resolveTouch(stationaryProbe);
+    expect(firstHit).toEqual({ kind: 'entry', index: 6 });
+
+    controller.process(radialInput({ menuPressed: true, touchHits: { right: firstHit } }));
+    expect(controller.presentation?.pageIndex).toBe(1);
+    host.present(requiredPresentation(controller), head);
+    const reclassifiedHit = host.resolveTouch(stationaryProbe);
+    expect(reclassifiedHit).toEqual({ kind: 'entry', index: 0 });
+
+    expect(controller.process(radialInput({
+      menuPressed: true,
+      touchHits: { right: reclassifiedHit },
+    }))).toEqual([]);
+    expect(controller.presentation?.pageIndex).toBe(1);
+
+    controller.process(radialInput({ menuPressed: true, touchHits: { right: null } }));
+    controller.process(radialInput({ menuPressed: true, touchHits: { right: reclassifiedHit } }));
+    expect(controller.presentation?.pageIndex).toBe(0);
+    host.dispose();
+  });
+
+  test('keeps a stationary parent-menu Party touch latched until the hand leaves the wheel', () => {
+    const { host } = createHost();
+    const controller = new VRRadialMenuController();
+    const partyMenu = menu('party', [action('atton', 'Atton'), action('kreia', 'Kreia')]);
+    const party: VRRadialSubmenuItem = {
+      kind: 'submenu',
+      id: 'submenu:party',
+      label: 'Party',
+      revalidate: () => true,
+      buildMenu: () => partyMenu,
+    };
+    const rootItems: VRRadialContentItem[] = [
+      ...Array.from({ length: 5 }, (_, index) => action(`action-${index}`, `Action ${index}`)),
+      party,
+    ];
+    const rootMenu = menuFromItems('root', rootItems);
+    const head = headPose();
+
+    controller.process(radialInput({ menuPressed: true, openingMenu: rootMenu }));
+    host.present(requiredPresentation(controller), head);
+    const stationaryProbe = touchProbeAtSector(host, 6, 5);
+    controller.process(radialInput({
+      menuPressed: true,
+      touchHits: { left: host.resolveTouch(stationaryProbe) },
+    }));
+    expect(controller.presentation?.menu.id).toBe('party');
+
+    host.present(requiredPresentation(controller), head);
+    const partyHit = host.resolveTouch(stationaryProbe);
+    expect(partyHit).toEqual({ kind: 'entry', index: 0 });
+    expect(controller.process(radialInput({
+      menuPressed: true,
+      touchHits: { left: partyHit },
+    }))).toEqual([]);
+    expect(controller.isOpen).toBe(true);
+    expect(controller.presentation?.menu.id).toBe('party');
+    host.dispose();
+  });
+
+  test('stops old simultaneous-hand touches after the first hand changes page topology', () => {
+    const { host } = createHost();
+    const controller = new VRRadialMenuController();
+    const menuDefinition = menu(
+      'root',
+      Array.from({ length: 7 }, (_, index) => action(`action-${index}`, `Action ${index}`)),
+    );
+    controller.process(radialInput({ menuPressed: true, openingMenu: menuDefinition }));
+    host.present(requiredPresentation(controller), headPose());
+    const leftNavigation = host.resolveTouch(touchProbeAtSector(host, 7, 6));
+    const rightOldAction = host.resolveTouch(touchProbeAtSector(host, 7, 0));
+
+    expect(controller.process(radialInput({
+      menuPressed: true,
+      touchHits: { left: leftNavigation, right: rightOldAction },
+    }))).toEqual([{ type: 'confirm-haptic', hand: 'left' }]);
+    expect(controller.presentation?.pageIndex).toBe(1);
+    expect(controller.isOpen).toBe(true);
+
+    host.present(requiredPresentation(controller), headPose());
+    const leftStillTouching = host.resolveTouch(touchProbeAtSector(host, 7, 6));
+    const rightStillTouching = host.resolveTouch(touchProbeAtSector(host, 7, 0));
+    expect(controller.process(radialInput({
+      menuPressed: true,
+      touchHits: { left: leftStillTouching, right: rightStillTouching },
+    }))).toEqual([]);
+    expect(controller.presentation?.pageIndex).toBe(1);
+    host.dispose();
+  });
 });
 
 function createHost(iconLoader: VRRadialIconLoader = { load: async () => null }): { host: VRRadialMenuHost; scene: THREE.Scene } {
@@ -263,7 +372,11 @@ function action(id: string, label: string, icon?: string): VRRadialActionItem {
 }
 
 function menu(id: string, actions: readonly VRRadialActionItem[]): VRRadialMenuDefinition {
-  return { id, title: 'Action Wheel', pages: paginateVRRadialItems(actions) };
+  return menuFromItems(id, actions);
+}
+
+function menuFromItems(id: string, items: readonly VRRadialContentItem[]): VRRadialMenuDefinition {
+  return { id, title: 'Action Wheel', pages: paginateVRRadialItems(items) };
 }
 
 function presentationFor(
@@ -281,6 +394,33 @@ function presentationFor(
 
 function headPose(): XRWorldPose {
   return pose(new THREE.Vector3(0, 0, 1.7), new THREE.Quaternion());
+}
+
+function radialInput(overrides: Partial<VRRadialControllerInput> = {}): VRRadialControllerInput {
+  return {
+    menuPressed: false,
+    selectPressed: false,
+    openingMenu: null,
+    rayHit: null,
+    touchHits: {},
+    ...overrides,
+  };
+}
+
+function requiredPresentation(controller: VRRadialMenuController): VRRadialPresentation {
+  const presentation = controller.presentation;
+  if (!presentation) throw new Error('expected an open radial presentation');
+  return presentation;
+}
+
+function touchProbeAtSector(host: VRRadialMenuHost, count: number, index: number): THREE.Vector3 {
+  const sector = createVRRadialSectors(count)[index];
+  const angle = (sector.startAngle + sector.endAngle) / 2;
+  return host.object.localToWorld(new THREE.Vector3(
+    Math.cos(angle) * 0.2,
+    Math.sin(angle) * 0.2,
+    0,
+  ));
 }
 
 function rayAtLocalPoint(host: VRRadialMenuHost, localPoint: THREE.Vector3): XRWorldPose {

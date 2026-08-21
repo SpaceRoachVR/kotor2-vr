@@ -24,6 +24,7 @@ export interface VRActionMenuBridgeDependencies<TActor extends object, TTarget e
   refreshPanels(actor: TActor, target: TTarget | null): VRActionMenuPanelLists | null;
   getPlayerFacingLabel(entry: VRActionMenuEntry, target: TTarget | null): string;
   getIcon(entry: VRActionMenuEntry): string | undefined;
+  readonly logger: Pick<Console, 'warn'>;
   onTargetMenuAction(panelIndex: number): void;
   onSelfMenuAction(panelIndex: number): void;
 }
@@ -39,6 +40,8 @@ interface RefreshedActionSource {
   readonly panel: VRActionMenuPanel;
   readonly actionIndex: number;
 }
+
+const reportedMalformedSources = new WeakMap<object, Set<string>>();
 
 /**
  * Converts an ActionMenuManager panel snapshot into engine-safe descriptors.
@@ -57,9 +60,15 @@ export function snapshotVRActionMenuPanelEntries<TActor extends object, TTarget 
   const actions: VRActionWheelEngineAction[] = [];
   snapshot.panels.forEach((panel, panelIndex) => {
     if (!panel || !Array.isArray(panel.actions)) return;
-    panel.actions.forEach((entry: VRActionMenuEntry) => {
-      const source = describeSource(snapshot.kind, panelIndex, entry, target, dependencies);
-      if (!source) return;
+    panel.actions.forEach((entry: VRActionMenuEntry, actionIndex: number) => {
+      const sourceIdentity = `${snapshot.kind}:${panelIndex}:${actionIndex}`;
+      let source: ReturnType<typeof describeSource>;
+      try {
+        source = describeSource(snapshot.kind, panelIndex, entry, target, dependencies);
+      } catch (error) {
+        reportMalformedSourceOnce(dependencies.logger, sourceIdentity, error);
+        return;
+      }
       actions.push({
         id: source.sourceKey,
         label: source.label,
@@ -128,18 +137,44 @@ function describeSource<TActor extends object, TTarget extends object>(
   target: TTarget | null,
   dependencies: VRActionMenuBridgeDependencies<TActor, TTarget>,
 ): { readonly sourceKey: string; readonly label: string; readonly icon?: string } | null {
-  if (!entry || typeof entry !== 'object') return null;
+  if (!entry || typeof entry !== 'object') {
+    throw new TypeError('ActionMenu entry must be an object');
+  }
+  const label = dependencies.getPlayerFacingLabel(entry, target);
+  if (typeof label !== 'string' || label.trim().length === 0) {
+    throw new TypeError('ActionMenu entry label must be a non-empty string');
+  }
+  const icon = dependencies.getIcon(entry);
+  if (icon !== undefined && (typeof icon !== 'string' || icon.trim().length === 0)) {
+    throw new TypeError('ActionMenu entry icon must be a non-empty string when present');
+  }
+  const sourceKey = createVRActionSourceKey(kind, panelIndex, {
+    action: entry.action,
+    talent: entry.talent,
+    item: entry.item,
+    icon: entry.icon,
+    playerFacingLabel: label,
+  });
+  return { sourceKey, label: label.trim(), ...(icon === undefined ? {} : { icon: icon.trim() }) };
+}
+
+function reportMalformedSourceOnce(
+  logger: Pick<Console, 'warn'>,
+  sourceIdentity: string,
+  error: unknown,
+): void {
+  if (!logger || typeof logger.warn !== 'function') return;
+  const loggerIdentity = logger as object;
+  let sources = reportedMalformedSources.get(loggerIdentity);
+  if (!sources) {
+    sources = new Set<string>();
+    reportedMalformedSources.set(loggerIdentity, sources);
+  }
+  if (sources.has(sourceIdentity)) return;
+  sources.add(sourceIdentity);
   try {
-    const label = dependencies.getPlayerFacingLabel(entry, target);
-    const sourceKey = createVRActionSourceKey(kind, panelIndex, {
-      action: entry.action,
-      talent: entry.talent,
-      item: entry.item,
-      icon: entry.icon,
-      playerFacingLabel: label,
-    });
-    return { sourceKey, label, icon: dependencies.getIcon(entry) };
+    logger.warn(`[VRActionMenuEngineBridge] malformed ActionMenu source=${sourceIdentity}; omitting entry`, error);
   } catch {
-    return null;
+    // Diagnostics must not make a malformed optional entry fatal.
   }
 }

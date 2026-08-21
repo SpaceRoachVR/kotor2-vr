@@ -49,7 +49,8 @@ export class VRRadialMenuController {
   private hoveredId: string | 'cancel' | null = null;
   private previousSelectPressed = false;
   private lastMenuPressed = false;
-  private readonly touchOverlapIds: Record<XRHandRole, string | null> = { left: null, right: null };
+  /** A touch stays latched for the entire physical hand contact, across topology changes. */
+  private readonly touchContacts: Record<XRHandRole, boolean> = { left: false, right: false };
 
   get isOpen(): boolean {
     return this.state === 'open';
@@ -133,13 +134,27 @@ export class VRRadialMenuController {
     touchHits: Readonly<Partial<Record<XRHandRole, VRRadialHit | null>>>,
     effects: VRRadialControllerEffect[],
   ): void {
+    const enteringContacts: Record<XRHandRole, boolean> = { left: false, right: false };
+    for (const hand of HAND_ORDER) {
+      const isTouching = (touchHits[hand] ?? null) !== null;
+      enteringContacts[hand] = isTouching && !this.touchContacts[hand];
+      this.touchContacts[hand] = isTouching;
+    }
+
     for (const hand of HAND_ORDER) {
       if (this.state !== 'open') return;
       const hit = touchHits[hand] ?? null;
-      const overlapId = this.overlapIdFor(hit);
-      if (overlapId === this.touchOverlapIds[hand]) continue;
-      this.touchOverlapIds[hand] = overlapId;
-      if (hit) this.resolveHit(hit, hand, effects);
+      if (!hit || !enteringContacts[hand]) continue;
+
+      const menuBeforeTouch = this.menu;
+      const pageBeforeTouch = this.pageIndex;
+      this.resolveHit(hit, hand, effects);
+      // Hits were computed against the old host geometry. Once a navigation
+      // or submenu touch changes topology, no other precomputed hand hit is
+      // safe to interpret until the host presents the replacement page.
+      if (this.state !== 'open' || this.menu !== menuBeforeTouch || this.pageIndex !== pageBeforeTouch) {
+        return;
+      }
     }
   }
 
@@ -238,16 +253,9 @@ export class VRRadialMenuController {
     return this.entryForIndex(hit.index)?.id ?? null;
   }
 
-  private overlapIdFor(hit: VRRadialHit | null): string | null {
-    if (!hit) return null;
-    if (hit.kind === 'center') return 'center';
-    if (hit.kind !== 'entry' || !this.entryForIndex(hit.index)) return null;
-    return `entry:${hit.index}`;
-  }
-
   private clearTouchOverlaps(): void {
-    this.touchOverlapIds.left = null;
-    this.touchOverlapIds.right = null;
+    this.touchContacts.left = false;
+    this.touchContacts.right = false;
   }
 
   private isValidMenu(menu: VRRadialMenuDefinition): boolean {

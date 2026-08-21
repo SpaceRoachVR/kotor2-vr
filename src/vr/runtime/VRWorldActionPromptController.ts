@@ -17,6 +17,7 @@ export interface VRWorldPromptPresentation {
 
 export type VRWorldPromptEffect =
   | { readonly type: 'closed' }
+  | { readonly type: 'hover-haptic'; readonly hand: XRHandRole }
   | { readonly type: 'negative-haptic'; readonly hand: XRHandRole }
   | { readonly type: 'activate'; readonly action: VRWorldPromptAction; readonly hand: XRHandRole };
 
@@ -32,6 +33,7 @@ export class VRWorldActionPromptController {
   private model: VRWorldActionPromptModel | null = null;
   private pageIndex = 0;
   private hoveredId: string | null = null;
+  private readonly hoveredByHand: Record<XRHandRole, string | null> = { left: null, right: null };
   private readonly pressed: Record<XRHandRole, boolean> = { left: false, right: false };
 
   get presentation(): VRWorldPromptPresentation | null {
@@ -74,7 +76,19 @@ export class VRWorldActionPromptController {
       ? firstPage
       : resolveValidVRWorldPromptPage(this.model, this.pageIndex);
     if (!page) return this.close();
-    this.hoveredId = resolveDisplayedHover(page, hoveredByHand);
+    const effects: VRWorldPromptEffect[] = [];
+    for (const hand of HAND_ORDER) {
+      if (!Object.prototype.hasOwnProperty.call(hoveredByHand, hand)) continue;
+      const nominatedId = normalizeHoveredId(hoveredByHand[hand]);
+      const nextHoveredId = nominatedId !== null && findEntry(page, nominatedId)
+        ? nominatedId
+        : null;
+      if (nextHoveredId !== this.hoveredByHand[hand] && nextHoveredId !== null) {
+        effects.push({ type: 'hover-haptic', hand });
+      }
+      this.hoveredByHand[hand] = nextHoveredId;
+    }
+    this.hoveredId = resolveDisplayedHover(page, this.hoveredByHand);
 
     const nextPressed = resolveSelectPressed(actions);
     const pressedEdges: Record<XRHandRole, boolean> = {
@@ -89,20 +103,20 @@ export class VRWorldActionPromptController {
       const hoveredId = normalizeHoveredId(hoveredByHand[hand]);
       const entry = hoveredId === null ? null : findEntry(page, hoveredId);
       if (!entry) continue;
-      return this.resolveEntry(entry, hand);
+      return [...effects, ...this.resolveEntry(entry, hand)];
     }
-    return [];
+    return effects;
   }
 
   private resolveEntry(entry: VRWorldPromptEntry, hand: XRHandRole): readonly VRWorldPromptEffect[] {
     if (entry.kind === 'previous-page') {
       if (this.pageIndex > 0) this.pageIndex -= 1;
-      this.hoveredId = null;
+      this.clearHoverState();
       return [];
     }
     if (entry.kind === 'next-page') {
       if (this.model && this.pageIndex + 1 < this.model.pages.length) this.pageIndex += 1;
-      this.hoveredId = null;
+      this.clearHoverState();
       return [];
     }
     if (entry.kind !== 'action') return [];
@@ -125,9 +139,15 @@ export class VRWorldActionPromptController {
 
   private resetState(): void {
     this.pageIndex = 0;
-    this.hoveredId = null;
+    this.clearHoverState();
     this.pressed.left = false;
     this.pressed.right = false;
+  }
+
+  private clearHoverState(): void {
+    this.hoveredId = null;
+    this.hoveredByHand.left = null;
+    this.hoveredByHand.right = null;
   }
 }
 

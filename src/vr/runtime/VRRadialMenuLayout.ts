@@ -30,6 +30,7 @@ const MINIMUM_ENTRY_COUNT = 1;
 const MAXIMUM_ENTRY_COUNT = 8;
 const MINIMUM_DIRECTION_LENGTH_SQUARED = 1e-12;
 const MATRIX_DETERMINANT_EPSILON = 1e-12;
+const TOUCH_DEPTH_EPSILON_METRES = 1e-7;
 
 /**
  * Builds clockwise sectors centered on the local positive-Y axis.  Sector
@@ -135,7 +136,7 @@ export function resolveVRRadialTouch(
   const localPoint = worldProbe.clone().applyMatrix4(inverseRootMatrix);
   validateFiniteVector3('local touch point', localPoint);
 
-  if (Math.abs(localPoint.z) > VR_RADIAL_LAYOUT.touchDepthMetres) {
+  if (Math.abs(localPoint.z) > VR_RADIAL_LAYOUT.touchDepthMetres + TOUCH_DEPTH_EPSILON_METRES) {
     return null;
   }
 

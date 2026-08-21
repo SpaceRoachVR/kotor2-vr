@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { TextureLoader } from '@/loaders/TextureLoader';
 import { XRWorldPose } from './XRTypes';
 import { VRRadialPresentation } from './VRRadialMenuController';
 import {
@@ -12,20 +11,21 @@ import {
   VRRadialSector,
 } from './VRRadialMenuLayout';
 import { VRRadialMenuItem } from './VRRadialMenuModel';
+import {
+  DEFAULT_VR_ACTION_ICON_FALLBACK_FACTORY,
+  DEFAULT_VR_ACTION_ICON_TEXTURE_LOADER,
+  resolveVRActionIcon,
+  VRActionIconTextureLoader,
+  VROwnedActionIconTextureCache,
+} from './VRActionIconTextureCache';
 
-export interface VRRadialIconLoader {
-  /** Returns a texture whose ownership transfers to the host. */
-  load(resref: string): Promise<THREE.Texture | null>;
-}
+export type VRRadialIconLoader = VRActionIconTextureLoader;
 
 type CanvasSurface = {
   readonly canvas: HTMLCanvasElement;
   readonly context: CanvasRenderingContext2D;
   readonly texture: THREE.CanvasTexture;
 };
-
-type FallbackIconCategory = 'attack' | 'force' | 'item' | 'inventory' | 'map' | 'party'
-  | 'previous' | 'next' | 'generic';
 
 const NORMAL_WEDGE_COLOR = 0x13252c;
 const NORMAL_BORDER_COLOR = 0x3d9fb5;
@@ -39,19 +39,8 @@ const HOVER_WEDGE_OPACITY = 0.96;
 const MENU_DISTANCE_METRES = 0.85;
 const MENU_DROP_METRES = 0.25;
 const POINTER_MAX_DISTANCE_METRES = 5;
-const MAX_ICON_CACHE_SIZE = 64;
 const RENDER_ORDER_BASE = 1_000_004;
 const HORIZONTAL_EPSILON = 1e-8;
-
-const DEFAULT_ICON_LOADER: VRRadialIconLoader = {
-  async load(resref: string): Promise<THREE.Texture | null> {
-    const sharedTexture = await TextureLoader.Load(resref);
-    if (!sharedTexture) return null;
-    const ownedTexture = sharedTexture.clone();
-    ownedTexture.needsUpdate = true;
-    return ownedTexture;
-  },
-};
 
 /**
  * World-fixed KOTOR-style radial wheel presentation. Geometry and hit
@@ -61,18 +50,12 @@ const DEFAULT_ICON_LOADER: VRRadialIconLoader = {
 export class VRRadialMenuHost {
   readonly object = new THREE.Group();
 
-  private readonly iconLoader: VRRadialIconLoader;
+  private readonly iconTextures: VROwnedActionIconTextureCache;
   private readonly pageGroup = new THREE.Group();
   private readonly wedgeById = new Map<string, THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial>>();
   private readonly iconMaterialById = new Map<string, THREE.MeshBasicMaterial>();
-  private readonly iconCache = new Map<string, THREE.Texture | null>();
-  private readonly iconLoads = new Map<string, Promise<THREE.Texture | null>>();
-  private readonly currentIconResrefs = new Set<string>();
-  private readonly missingIconWarnings = new Set<string>();
-  private readonly fallbackTextures = new Map<FallbackIconCategory, THREE.CanvasTexture>();
   private readonly ownedCanvasTextures = new Set<THREE.CanvasTexture>();
   private readonly pageCanvasTextures = new Set<THREE.CanvasTexture>();
-  private readonly disposedTextures = new WeakSet<THREE.Texture>();
   private readonly lastHorizontalForward = new THREE.Vector3(0, 1, 0);
   private readonly centerMaterial: THREE.MeshBasicMaterial;
   private readonly plaqueSurface: CanvasSurface;
@@ -88,12 +71,19 @@ export class VRRadialMenuHost {
   private presentationToken = 0;
   private disposed = false;
 
-  constructor(scene: THREE.Scene, iconLoader: VRRadialIconLoader = DEFAULT_ICON_LOADER) {
+  constructor(
+    scene: THREE.Scene,
+    iconLoader: VRRadialIconLoader = DEFAULT_VR_ACTION_ICON_TEXTURE_LOADER,
+  ) {
     if (!scene || typeof scene.add !== 'function') throw new TypeError('radial menu scene is required');
     if (!iconLoader || typeof iconLoader.load !== 'function') throw new TypeError('radial icon loader must provide load(resref)');
     if (typeof document === 'undefined') throw new Error('radial menu requires a browser document');
 
-    this.iconLoader = iconLoader;
+    this.iconTextures = new VROwnedActionIconTextureCache(
+      iconLoader,
+      DEFAULT_VR_ACTION_ICON_FALLBACK_FACTORY,
+      { capacity: 64, ownerLabel: 'VRRadialMenuHost' },
+    );
     this.object.name = 'Kotor2VR.RadialMenu';
     this.object.visible = false;
     this.pageGroup.name = 'Kotor2VR.RadialMenu.Page';
@@ -256,7 +246,7 @@ export class VRRadialMenuHost {
     this.currentMenuId = null;
     this.currentPageKey = null;
     this.currentEntries = [];
-    this.currentIconResrefs.clear();
+    this.iconTextures.setActiveDescriptors([]);
     this.object.visible = false;
     this.pointerLine.visible = false;
     this.collisionRing.visible = false;
@@ -268,7 +258,7 @@ export class VRRadialMenuHost {
     this.presentationToken += 1;
     this.disposed = true;
     this.currentEntries = [];
-    this.currentIconResrefs.clear();
+    this.iconTextures.setActiveDescriptors([]);
     this.object.visible = false;
     this.pointerLine.visible = false;
     this.collisionRing.visible = false;
@@ -279,15 +269,10 @@ export class VRRadialMenuHost {
     disposeRenderableResources(this.object);
     disposeRenderableResources(this.pointerLine);
 
-    for (const texture of this.ownedCanvasTextures) this.disposeTexture(texture);
+    for (const texture of this.ownedCanvasTextures) texture.dispose();
     this.ownedCanvasTextures.clear();
     this.pageCanvasTextures.clear();
-    this.fallbackTextures.clear();
-    for (const texture of this.iconCache.values()) {
-      if (texture) this.disposeTexture(texture);
-    }
-    this.iconCache.clear();
-    this.iconLoads.clear();
+    this.iconTextures.dispose();
   }
 
   getWedge(itemId: string): THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> {
@@ -329,7 +314,7 @@ export class VRRadialMenuHost {
     const token = this.presentationToken;
     this.disposePage();
     this.currentEntries = presentation.page.entries;
-    this.currentIconResrefs.clear();
+    this.iconTextures.setActiveDescriptors(this.currentEntries.map(resolveIconForEntry));
     const sectors = createVRRadialSectors(this.currentEntries.length);
 
     this.currentEntries.forEach((entry, index) => {
@@ -376,7 +361,7 @@ export class VRRadialMenuHost {
 
     const centerAngle = (sector.startAngle + sector.endAngle) / 2;
     const iconRadius = 0.225;
-    const iconMaterial = this.createCanvasMaterial(this.getFallbackTexture(categoryForEntry(entry)));
+    const iconMaterial = this.createCanvasMaterial(this.iconTextures.getFallback(resolveIconForEntry(entry)));
     const icon = new THREE.Mesh(new THREE.PlaneGeometry(0.064, 0.064), iconMaterial);
     icon.name = `Kotor2VR.RadialMenu.Icon.${entry.id}`;
     icon.position.set(Math.cos(centerAngle) * iconRadius, Math.sin(centerAngle) * iconRadius + 0.014, 0.004);
@@ -399,81 +384,19 @@ export class VRRadialMenuHost {
   }
 
   private beginIconLoad(entry: VRRadialMenuItem, token: number): void {
-    const entryIcon = iconForEntry(entry)?.trim();
-    if (!entryIcon) return;
-    const resref = entryIcon.toLowerCase();
-    this.currentIconResrefs.add(resref);
-    void this.loadIcon(resref).then((texture) => {
+    const descriptor = resolveIconForEntry(entry);
+    if (!descriptor.resref) return;
+    void this.iconTextures.load(descriptor).then((texture) => {
       if (this.disposed || token !== this.presentationToken) return;
       const currentEntry = this.currentEntries.find((candidate) => candidate.id === entry.id);
-      if (!currentEntry || iconForEntry(currentEntry)?.trim().toLowerCase() !== resref) return;
+      if (!currentEntry || resolveIconForEntry(currentEntry).resref !== descriptor.resref) return;
       const material = this.iconMaterialById.get(entry.id);
       if (!material) return;
-      material.map = texture ?? this.getFallbackTexture(categoryForEntry(currentEntry));
+      material.map = texture;
       material.needsUpdate = true;
+    }).catch(() => {
+      // Disposal may reject a late load; the host is already unable to present it.
     });
-  }
-
-  private loadIcon(resref: string): Promise<THREE.Texture | null> {
-    if (this.iconCache.has(resref)) {
-      const cached = this.iconCache.get(resref) ?? null;
-      this.iconCache.delete(resref);
-      this.iconCache.set(resref, cached);
-      return Promise.resolve(cached);
-    }
-    const inFlight = this.iconLoads.get(resref);
-    if (inFlight) return inFlight;
-
-    const load = Promise.resolve()
-      .then(() => this.iconLoader.load(resref))
-      .then((texture) => texture ?? null)
-      .catch((): null => null)
-      .then((texture) => {
-        if (this.disposed) {
-          if (texture) this.disposeTexture(texture);
-          return null;
-        }
-        this.rememberIcon(resref, texture);
-        if (!texture) this.warnMissingIcon(resref);
-        return texture;
-      })
-      .finally(() => {
-        this.iconLoads.delete(resref);
-      });
-    this.iconLoads.set(resref, load);
-    return load;
-  }
-
-  private rememberIcon(resref: string, texture: THREE.Texture | null): void {
-    this.iconCache.delete(resref);
-    this.iconCache.set(resref, texture);
-    while (this.iconCache.size > MAX_ICON_CACHE_SIZE) {
-      const evictionKey = this.findEvictionKey();
-      if (!evictionKey) break;
-      const evicted = this.iconCache.get(evictionKey) ?? null;
-      this.iconCache.delete(evictionKey);
-      if (evicted && !this.cacheContainsTexture(evicted)) this.disposeTexture(evicted);
-    }
-  }
-
-  private findEvictionKey(): string | null {
-    for (const key of this.iconCache.keys()) {
-      if (!this.currentIconResrefs.has(key)) return key;
-    }
-    return this.iconCache.keys().next().value ?? null;
-  }
-
-  private cacheContainsTexture(texture: THREE.Texture): boolean {
-    for (const candidate of this.iconCache.values()) {
-      if (candidate === texture) return true;
-    }
-    return false;
-  }
-
-  private warnMissingIcon(resref: string): void {
-    if (this.missingIconWarnings.has(resref)) return;
-    this.missingIconWarnings.add(resref);
-    console.warn(`[VRRadialMenuHost] Icon '${resref}' could not be loaded; using a category fallback.`);
   }
 
   private updateHover(presentation: VRRadialPresentation): void {
@@ -564,15 +487,6 @@ export class VRRadialMenuHost {
     return new THREE.Ray(origin, direction).intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(normal, point), new THREE.Vector3());
   }
 
-  private getFallbackTexture(category: FallbackIconCategory): THREE.CanvasTexture {
-    const cached = this.fallbackTextures.get(category);
-    if (cached) return cached;
-    const surface = this.createCanvasSurface(256, 256);
-    drawFallbackIcon(surface, category);
-    this.fallbackTextures.set(category, surface.texture);
-    return surface.texture;
-  }
-
   private createCanvasSurface(width: number, height: number, pageOwned = false): CanvasSurface {
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -604,18 +518,12 @@ export class VRRadialMenuHost {
       disposeRenderableResources(child);
     }
     for (const texture of this.pageCanvasTextures) {
-      this.disposeTexture(texture);
+      texture.dispose();
       this.ownedCanvasTextures.delete(texture);
     }
     this.pageCanvasTextures.clear();
     this.wedgeById.clear();
     this.iconMaterialById.clear();
-  }
-
-  private disposeTexture(texture: THREE.Texture): void {
-    if (this.disposedTextures.has(texture)) return;
-    this.disposedTextures.add(texture);
-    texture.dispose();
   }
 }
 
@@ -680,21 +588,17 @@ function appendArc(points: THREE.Vector3[], radius: number, start: number, end: 
   }
 }
 
-function categoryForEntry(entry: VRRadialMenuItem): FallbackIconCategory {
-  if (entry.kind === 'previous-page') return 'previous';
-  if (entry.kind === 'next-page') return 'next';
-  const identity = `${entry.id} ${entry.label} ${iconForEntry(entry) ?? ''}`.toLowerCase();
-  if (/attack|bash|blaster|weapon|saber/.test(identity)) return 'attack';
-  if (/force|power/.test(identity)) return 'force';
-  if (/medpac|item|stim|grenade|mine|recover|disarm/.test(identity)) return 'item';
-  if (/inventory/.test(identity)) return 'inventory';
-  if (/map/.test(identity)) return 'map';
-  if (/party|companion|leader/.test(identity)) return 'party';
-  return 'generic';
-}
-
 function iconForEntry(entry: VRRadialMenuItem): string | undefined {
   return entry.kind === 'action' || entry.kind === 'submenu' ? entry.icon : undefined;
+}
+
+function resolveIconForEntry(entry: VRRadialMenuItem) {
+  return resolveVRActionIcon({
+    kind: entry.kind,
+    id: entry.id,
+    label: entry.label,
+    icon: iconForEntry(entry),
+  });
 }
 
 function drawSliceLabel(surface: CanvasSurface, label: string): void {
@@ -721,82 +625,6 @@ function drawCancelSymbol(surface: CanvasSurface): void {
   context.moveTo(center - radius * 0.72, center - radius * 0.72);
   context.lineTo(center + radius * 0.72, center + radius * 0.72);
   context.stroke();
-  texture.needsUpdate = true;
-}
-
-function drawFallbackIcon(surface: CanvasSurface, category: FallbackIconCategory): void {
-  const { canvas, context, texture } = surface;
-  const size = canvas.width;
-  const center = size / 2;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = '#ffffff';
-  context.fillStyle = '#ffffff';
-  context.lineWidth = size * 0.055;
-  context.lineCap = 'round';
-  context.lineJoin = 'round';
-
-  if (category === 'attack') {
-    context.beginPath();
-    context.moveTo(size * 0.28, size * 0.22); context.lineTo(size * 0.72, size * 0.78);
-    context.moveTo(size * 0.72, size * 0.22); context.lineTo(size * 0.28, size * 0.78);
-    context.moveTo(size * 0.22, size * 0.68); context.lineTo(size * 0.38, size * 0.84);
-    context.moveTo(size * 0.78, size * 0.68); context.lineTo(size * 0.62, size * 0.84);
-    context.stroke();
-  } else if (category === 'force') {
-    context.beginPath();
-    for (let ray = 0; ray < 8; ray += 1) {
-      const angle = (ray / 8) * Math.PI * 2;
-      context.moveTo(center + Math.cos(angle) * size * 0.15, center + Math.sin(angle) * size * 0.15);
-      context.lineTo(center + Math.cos(angle) * size * 0.36, center + Math.sin(angle) * size * 0.36);
-    }
-    context.stroke();
-    context.beginPath(); context.arc(center, center, size * 0.11, 0, Math.PI * 2); context.fill();
-  } else if (category === 'item') {
-    context.strokeRect(size * 0.25, size * 0.22, size * 0.5, size * 0.58);
-    context.fillRect(size * 0.44, size * 0.32, size * 0.12, size * 0.38);
-    context.fillRect(size * 0.31, size * 0.45, size * 0.38, size * 0.12);
-  } else if (category === 'inventory') {
-    context.strokeRect(size * 0.22, size * 0.31, size * 0.56, size * 0.48);
-    context.beginPath();
-    context.moveTo(size * 0.36, size * 0.31); context.quadraticCurveTo(center, size * 0.08, size * 0.64, size * 0.31);
-    context.stroke();
-    context.fillRect(size * 0.46, size * 0.5, size * 0.08, size * 0.14);
-  } else if (category === 'map') {
-    context.beginPath();
-    context.moveTo(size * 0.2, size * 0.28); context.lineTo(size * 0.4, size * 0.2);
-    context.lineTo(size * 0.6, size * 0.3); context.lineTo(size * 0.8, size * 0.22);
-    context.lineTo(size * 0.8, size * 0.72); context.lineTo(size * 0.6, size * 0.8);
-    context.lineTo(size * 0.4, size * 0.7); context.lineTo(size * 0.2, size * 0.78);
-    context.closePath(); context.stroke();
-    context.beginPath(); context.moveTo(size * 0.4, size * 0.2); context.lineTo(size * 0.4, size * 0.7);
-    context.moveTo(size * 0.6, size * 0.3); context.lineTo(size * 0.6, size * 0.8); context.stroke();
-  } else if (category === 'party') {
-    context.beginPath();
-    context.arc(center, size * 0.36, size * 0.13, 0, Math.PI * 2);
-    context.arc(size * 0.29, size * 0.47, size * 0.1, 0, Math.PI * 2);
-    context.arc(size * 0.71, size * 0.47, size * 0.1, 0, Math.PI * 2);
-    context.fill();
-    context.beginPath();
-    context.arc(center, size * 0.78, size * 0.27, Math.PI, Math.PI * 2);
-    context.arc(size * 0.24, size * 0.76, size * 0.18, Math.PI, Math.PI * 2);
-    context.arc(size * 0.76, size * 0.76, size * 0.18, Math.PI, Math.PI * 2);
-    context.stroke();
-  } else if (category === 'previous' || category === 'next') {
-    const direction = category === 'previous' ? -1 : 1;
-    context.beginPath();
-    context.moveTo(center - direction * size * 0.25, center);
-    context.lineTo(center + direction * size * 0.18, center);
-    context.moveTo(center + direction * size * 0.02, center - size * 0.18);
-    context.lineTo(center + direction * size * 0.2, center);
-    context.lineTo(center + direction * size * 0.02, center + size * 0.18);
-    context.stroke();
-  } else {
-    context.beginPath();
-    context.moveTo(center, size * 0.19); context.lineTo(size * 0.81, center);
-    context.lineTo(center, size * 0.81); context.lineTo(size * 0.19, center);
-    context.closePath(); context.stroke();
-    context.beginPath(); context.arc(center, center, size * 0.07, 0, Math.PI * 2); context.fill();
-  }
   texture.needsUpdate = true;
 }
 

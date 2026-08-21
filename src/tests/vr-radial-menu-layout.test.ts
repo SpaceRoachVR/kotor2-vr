@@ -38,6 +38,28 @@ describe('VR radial menu layout', () => {
     expect(resolveVRRadialTouch(root, touchProbe, 6)?.hit).toEqual({ kind: 'entry', index: 0 });
   });
 
+  test.each([-0.06, 0.06])('includes the transformed exact %p metre touch-depth boundary', (depth) => {
+    const root = new THREE.Group();
+    root.position.set(1.25, -3.5, 0.75);
+    root.rotation.set(0.37, -0.21, 1.13);
+    root.scale.set(1.1, 0.9, 1.3);
+    root.updateWorldMatrix(true, true);
+    const probe = new THREE.Vector3(0, 0.2, depth).applyMatrix4(root.matrixWorld);
+
+    expect(resolveVRRadialTouch(root, probe, 6)?.hit).toEqual({ kind: 'entry', index: 0 });
+  });
+
+  test.each([-0.0601, 0.0601])('rejects a transformed touch meaningfully beyond the depth boundary at %p metres', (depth) => {
+    const root = new THREE.Group();
+    root.position.set(1.25, -3.5, 0.75);
+    root.rotation.set(0.37, -0.21, 1.13);
+    root.scale.set(1.1, 0.9, 1.3);
+    root.updateWorldMatrix(true, true);
+    const probe = new THREE.Vector3(0, 0.2, depth).applyMatrix4(root.matrixWorld);
+
+    expect(resolveVRRadialTouch(root, probe, 6)).toBeNull();
+  });
+
   test('rejects invalid counts and non-finite geometry inputs', () => {
     expect(() => createVRRadialSectors(0)).toThrow(RangeError);
     expect(() => createVRRadialSectors(9)).toThrow(RangeError);

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import {
   VRWorldActionPromptHost,
   VRWorldPromptPresentation,
@@ -10,6 +10,7 @@ import {
   buildVRWorldPromptPages,
 } from '@/vr/runtime/VRWorldActionPromptModel';
 import { XRHandRole, XRWorldPose } from '@/vr/runtime/XRTypes';
+import { VRActionIconTextureLoader } from '@/vr/runtime/VRActionIconTextureCache';
 
 describe('VRWorldActionPromptHost', () => {
   const originalDocument = globalThis.document;
@@ -53,6 +54,61 @@ describe('VRWorldActionPromptHost', () => {
     expect(host.hoveredId).toBe('security');
   });
 
+  test('loads a real normalized KOTOR action texture instead of a text abbreviation', async () => {
+    const texture = new THREE.Texture();
+    const dispose = jest.spyOn(texture, 'dispose');
+    const iconLoader: VRActionIconTextureLoader = {
+      load: jest.fn(async () => texture),
+    };
+    const host = createPromptHost(iconLoader);
+    const action = { ...promptAction('security'), icon: ' IAction_Sec ' };
+    const model = promptModel('door', [action], new THREE.Vector3(0, 1, 1));
+
+    host.present(presentation(model), headAt(new THREE.Vector3(0, 0, 1.7)), null);
+    await flushPromises();
+
+    expect(iconLoader.load).toHaveBeenCalledTimes(1);
+    expect(iconLoader.load).toHaveBeenCalledWith('iaction_sec');
+    expect(host.getIconMaterial('security').map).toBe(texture);
+    expect(host.object.getObjectByName('Kotor2VR.WorldActionPrompt.Icon.security')).toBeDefined();
+
+    host.dispose();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('guards against stale icon loads when a prompt entry is replaced', async () => {
+    const stale = deferred<THREE.Texture>();
+    const staleTexture = new THREE.Texture();
+    const replacementTexture = new THREE.Texture();
+    const staleDispose = jest.spyOn(staleTexture, 'dispose');
+    const replacementDispose = jest.spyOn(replacementTexture, 'dispose');
+    const iconLoader: VRActionIconTextureLoader = {
+      load: jest.fn((resref: string) => resref === 'old_icon'
+        ? stale.promise
+        : Promise.resolve(replacementTexture)),
+    };
+    const host = createPromptHost(iconLoader);
+    const oldModel = promptModel('door', [
+      { ...promptAction('security'), icon: 'old_icon' },
+    ], new THREE.Vector3(0, 1, 1));
+    const replacementModel = promptModel('door', [
+      { ...promptAction('security'), icon: 'new_icon' },
+    ], new THREE.Vector3(0, 1, 1));
+
+    host.present(presentation(oldModel), headAt(new THREE.Vector3(0, 0, 1.7)), null);
+    host.present(presentation(replacementModel), headAt(new THREE.Vector3(0, 0, 1.7)), null);
+    await flushPromises();
+    expect(host.getIconMaterial('security').map).toBe(replacementTexture);
+
+    stale.resolve(staleTexture);
+    await flushPromises();
+    expect(host.getIconMaterial('security').map).toBe(replacementTexture);
+
+    host.dispose();
+    expect(staleDispose).toHaveBeenCalledTimes(1);
+    expect(replacementDispose).toHaveBeenCalledTimes(1);
+  });
+
   test('maps only present compact navigation controls and never exposes empty action slots', () => {
     const host = createPromptHost();
     const actions = Array.from({ length: 5 }, (_, index) => promptAction(`action-${index}`));
@@ -66,6 +122,25 @@ describe('VRWorldActionPromptHost', () => {
     expect(host.resolveRay('right', rayAtNavigationRegion(host, 'previous'))).toBe('prompt:previous');
     expect(host.resolveRay('right', rayAtActionRegion(host, 1))).toBeNull();
     expect(host.resolveRay('right', rayAtNavigationRegion(host, 'next'))).toBeNull();
+  });
+
+  test('maps the exact right UV edge to the final region while rejecting coordinates just outside', () => {
+    const host = createPromptHost();
+    const actions = Array.from({ length: 5 }, (_, index) => promptAction(`action-${index}`));
+    const model = promptModel('door', actions, new THREE.Vector3(0, 1, 1));
+    host.present(presentation(model, 0), headAt(new THREE.Vector3(0, 0, 1.7)), null);
+    const rightPointer = (host as unknown as {
+      pointers: Record<XRHandRole, { update: (target: unknown, pose: unknown, width: number, height: number) => unknown }>;
+    }).pointers.right;
+    const update = rightPointer.update;
+    const pointerPose = rayAtNavigationRegion(host, 'next');
+
+    rightPointer.update = () => ({ guiPosition: new THREE.Vector2(512, 0) });
+    expect(host.resolveRay('right', pointerPose)).toBe('prompt:next');
+    rightPointer.update = () => ({ guiPosition: new THREE.Vector2(512.001, 0) });
+    expect(host.resolveRay('right', pointerPose)).toBeNull();
+    rightPointer.update = update;
+    host.dispose();
   });
 
   test('clears both hand pointers and releases owned resources safely', () => {
@@ -124,8 +199,8 @@ describe('VRWorldActionPromptHost', () => {
   });
 });
 
-function createPromptHost(): VRWorldActionPromptHost {
-  return new VRWorldActionPromptHost(new THREE.Scene());
+function createPromptHost(iconLoader?: VRActionIconTextureLoader): VRWorldActionPromptHost {
+  return new VRWorldActionPromptHost(new THREE.Scene(), iconLoader);
 }
 
 function presentation(model: VRWorldActionPromptModel, pageIndex = 0): VRWorldPromptPresentation {
@@ -150,7 +225,6 @@ function promptAction(id: string): VRWorldPromptAction {
     kind: 'action',
     id,
     label: id,
-    icon: `icon-${id}`,
     revalidate: () => true,
     activate: (): void => undefined,
   };
@@ -214,14 +288,35 @@ function createCanvasContext(): CanvasRenderingContext2D {
     beginPath: (): void => undefined,
     moveTo: (): void => undefined,
     lineTo: (): void => undefined,
+    quadraticCurveTo: (): void => undefined,
+    closePath: (): void => undefined,
+    arc: (): void => undefined,
     stroke: (): void => undefined,
+    fill: (): void => undefined,
     fillStyle: '',
     strokeStyle: '',
     lineWidth: 1,
+    lineCap: 'butt',
+    lineJoin: 'miter',
     font: '',
     textAlign: 'start',
     textBaseline: 'alphabetic',
   } as unknown as CanvasRenderingContext2D;
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver;
+  });
+  return { promise, resolve };
+}
+
+async function flushPromises(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 type PromptMalformation =

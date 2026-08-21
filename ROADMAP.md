@@ -25,7 +25,8 @@ comfort locomotion options, diegetic hilt timer, blaster laser pointer, the
 all-purpose action wheel and its Comfort Settings panel route, cutscene
 fade-to-black — all now implemented). Phase
 statuses below are updated to match. **None of this session's VR work has been
-verified in a headset** — 303 unit/integration tests pass and `tsc` is clean,
+verified in a headset** — the automated unit/integration suite and configured
+TypeScript project pass,
 but every phase exit below still needs the same device-evidence bar the rest
 of this roadmap holds itself to before being called done.
 

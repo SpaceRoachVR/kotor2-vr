@@ -1,4 +1,4 @@
-import { expect, test } from '@jest/globals';
+import { expect, jest, test } from '@jest/globals';
 import {
   snapshotVRActionMenuPanelEntries,
   VRActionMenuBridgeDependencies,
@@ -29,6 +29,7 @@ interface BridgeHarness {
   readonly refreshTargets: Array<TestTarget | null>;
   readonly targetDispatches: number[];
   readonly selfDispatches: number[];
+  readonly logger: { readonly warn: jest.Mock };
 }
 
 function entry(type: number, label: string): TestEntry {
@@ -62,6 +63,7 @@ function harness(actor: TestActor, refreshedPanels: VRActionMenuPanelLists): Bri
     refreshTargets: [] as Array<TestTarget | null>,
     targetDispatches: [] as number[],
     selfDispatches: [] as number[],
+    logger: { warn: jest.fn() },
   };
   return Object.assign(state, {
     dependencies: {
@@ -77,6 +79,7 @@ function harness(actor: TestActor, refreshedPanels: VRActionMenuPanelLists): Bri
         (candidate as TestEntry).playerFacingLabel,
       getIcon: (candidate: VRActionMenuEntry) =>
         typeof candidate.icon === 'string' ? candidate.icon : undefined,
+      logger: state.logger,
       onTargetMenuAction: (panelIndex: number) => { state.targetDispatches.push(panelIndex); },
       onSelfMenuAction: (panelIndex: number) => { state.selfDispatches.push(panelIndex); },
     },
@@ -200,4 +203,31 @@ test('self actions remain independent when no target is available', () => {
 
   expect(livePanel.selectedIndex).toBe(0);
   expect(state.selfDispatches).toEqual([0]);
+});
+
+test('reports each malformed indexed ActionMenu source once through the injected logger', () => {
+  const actor = { id: 'exile' };
+  const malformedEntries = [null, {}] as unknown as readonly VRActionMenuEntry[];
+  const state = harness(actor, panels([panel([])]));
+  const snapshot = {
+    actor,
+    target: target(),
+    kind: 'target' as const,
+    panels: [panel(malformedEntries)],
+  };
+
+  expect(snapshotVRActionMenuPanelEntries(snapshot, state.dependencies)).toEqual([]);
+  expect(snapshotVRActionMenuPanelEntries(snapshot, state.dependencies)).toEqual([]);
+
+  expect(state.logger.warn).toHaveBeenCalledTimes(2);
+  expect(state.logger.warn).toHaveBeenNthCalledWith(
+    1,
+    expect.stringContaining('target:0:0'),
+    expect.anything(),
+  );
+  expect(state.logger.warn).toHaveBeenNthCalledWith(
+    2,
+    expect.stringContaining('target:0:1'),
+    expect.anything(),
+  );
 });

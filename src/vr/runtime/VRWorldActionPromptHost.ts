@@ -6,6 +6,13 @@ import {
   resolveValidVRWorldPromptPage,
 } from './VRWorldActionPromptModel';
 import { VRWorldPromptPresentation } from './VRWorldActionPromptController';
+import {
+  DEFAULT_VR_ACTION_ICON_FALLBACK_FACTORY,
+  DEFAULT_VR_ACTION_ICON_TEXTURE_LOADER,
+  resolveVRActionIcon,
+  VRActionIconTextureLoader,
+  VROwnedActionIconTextureCache,
+} from './VRActionIconTextureCache';
 
 export type { VRWorldPromptPresentation } from './VRWorldActionPromptController';
 
@@ -34,18 +41,34 @@ export class VRWorldActionPromptHost {
   private readonly context: CanvasRenderingContext2D;
   private readonly texture: THREE.CanvasTexture;
   private readonly pointers: Readonly<Record<XRHandRole, VRPanelPointerHost>>;
+  private readonly iconTextures: VROwnedActionIconTextureCache;
+  private readonly iconMaterialById = new Map<string, THREE.MeshBasicMaterial>();
   private regions: readonly PromptRegion[] = [];
   private renderKey: string | null = null;
+  private contentKey: string | null = null;
+  private iconPresentationToken = 0;
   private currentHoveredId: string | null = null;
   private disposed = false;
 
-  constructor(scene: THREE.Scene) {
+  constructor(
+    scene: THREE.Scene,
+    iconLoader: VRActionIconTextureLoader = DEFAULT_VR_ACTION_ICON_TEXTURE_LOADER,
+  ) {
     if (!scene || typeof scene.add !== 'function') {
       throw new TypeError('world prompt scene is required');
     }
     if (typeof document === 'undefined') {
       throw new Error('world prompt host requires a browser document');
     }
+    if (!iconLoader || typeof iconLoader.load !== 'function') {
+      throw new TypeError('world prompt icon loader must provide load(resref)');
+    }
+
+    this.iconTextures = new VROwnedActionIconTextureCache(
+      iconLoader,
+      DEFAULT_VR_ACTION_ICON_FALLBACK_FACTORY,
+      { capacity: 64, ownerLabel: 'VRWorldActionPromptHost' },
+    );
 
     this.canvas = document.createElement('canvas');
     this.canvas.width = CANVAS_WIDTH;
@@ -88,6 +111,12 @@ export class VRWorldActionPromptHost {
     return this.currentHoveredId;
   }
 
+  getIconMaterial(entryId: string): THREE.MeshBasicMaterial {
+    const material = this.iconMaterialById.get(entryId);
+    if (!material) throw new RangeError(`world prompt icon is not presented: ${entryId}`);
+    return material;
+  }
+
   present(
     presentation: VRWorldPromptPresentation,
     headPose: XRWorldPose,
@@ -102,9 +131,14 @@ export class VRWorldActionPromptHost {
     const acceptedHover = presentation.page.entries.some((entry) => entry.id === hoveredId)
       ? hoveredId
       : null;
+    const contentKey = createContentKey(presentation);
+    if (contentKey !== this.contentKey) {
+      this.regions = createRegions(presentation.page.entries);
+      this.rebuildIcons(presentation.page.entries, contentKey);
+      this.contentKey = contentKey;
+    }
     const renderKey = createRenderKey(presentation, acceptedHover);
     if (renderKey !== this.renderKey) {
-      this.regions = createRegions(presentation.page.entries);
       this.draw(presentation.page.entries, acceptedHover);
       this.renderKey = renderKey;
     }
@@ -127,9 +161,12 @@ export class VRWorldActionPromptHost {
       if (!hit) return null;
       const canvasX = hit.guiPosition.x + CANVAS_WIDTH / 2;
       const canvasY = CANVAS_HEIGHT / 2 - hit.guiPosition.y;
-      if (canvasY < 0 || canvasY > CANVAS_HEIGHT) return null;
+      if (canvasX < 0 || canvasX > CANVAS_WIDTH || canvasY < 0 || canvasY > CANVAS_HEIGHT) return null;
       return this.regions.find((region) =>
-        canvasX >= region.startX && canvasX < region.endX)?.id ?? null;
+        canvasX >= region.startX && (
+          canvasX < region.endX ||
+          (canvasX === CANVAS_WIDTH && region.endX === CANVAS_WIDTH)
+        ))?.id ?? null;
     } catch {
       this.pointers[hand].clear();
       return null;
@@ -140,8 +177,12 @@ export class VRWorldActionPromptHost {
     if (this.disposed) return;
     this.object.visible = false;
     this.renderKey = null;
+    this.contentKey = null;
+    this.iconPresentationToken += 1;
     this.currentHoveredId = null;
     this.regions = [];
+    this.disposeIconMeshes();
+    this.iconTextures.setActiveDescriptors([]);
     this.pointers.left.clear();
     this.pointers.right.clear();
   }
@@ -154,8 +195,59 @@ export class VRWorldActionPromptHost {
     this.object.geometry.dispose();
     this.object.material.dispose();
     this.texture.dispose();
+    this.iconTextures.dispose();
     this.pointers.left.dispose();
     this.pointers.right.dispose();
+  }
+
+  private rebuildIcons(entries: readonly VRWorldPromptEntry[], contentKey: string): void {
+    this.iconPresentationToken += 1;
+    const token = this.iconPresentationToken;
+    this.disposeIconMeshes();
+    const actionRegions = this.regions.filter((region) => region.entry.kind === 'action');
+    const descriptors = actionRegions.map((region) => resolveIconForEntry(region.entry));
+    this.iconTextures.setActiveDescriptors(descriptors);
+
+    actionRegions.forEach((region, index) => {
+      const descriptor = descriptors[index];
+      const material = new THREE.MeshBasicMaterial({
+        map: this.iconTextures.getFallback(descriptor),
+        color: 0xffffff,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const icon = new THREE.Mesh(new THREE.PlaneGeometry(0.066, 0.066), material);
+      icon.name = `Kotor2VR.WorldActionPrompt.Icon.${region.id}`;
+      icon.position.set(canvasXToLocal((region.startX + region.endX) / 2), 0.025, 0.003);
+      icon.renderOrder = RENDER_ORDER + 1;
+      this.object.add(icon);
+      this.iconMaterialById.set(region.id, material);
+
+      if (!descriptor.resref) return;
+      void this.iconTextures.load(descriptor).then((texture) => {
+        if (this.disposed || token !== this.iconPresentationToken || contentKey !== this.contentKey) return;
+        const currentMaterial = this.iconMaterialById.get(region.id);
+        if (currentMaterial !== material) return;
+        currentMaterial.map = texture;
+        currentMaterial.needsUpdate = true;
+      }).catch(() => {
+        // Disposal may reject a late load; no visible prompt remains to update.
+      });
+    });
+  }
+
+  private disposeIconMeshes(): void {
+    for (const [entryId, material] of this.iconMaterialById) {
+      const icon = this.object.getObjectByName(`Kotor2VR.WorldActionPrompt.Icon.${entryId}`) as THREE.Mesh | undefined;
+      if (icon) {
+        icon.removeFromParent();
+        icon.geometry.dispose();
+      }
+      material.dispose();
+    }
+    this.iconMaterialById.clear();
   }
 
   private draw(entries: readonly VRWorldPromptEntry[], hoveredId: string | null): void {
@@ -229,13 +321,8 @@ function drawAction(context: CanvasRenderingContext2D, region: PromptRegion): vo
   context.textAlign = 'center';
   context.textBaseline = 'middle';
   context.fillStyle = '#ffffff';
-  context.font = '700 42px Arial, sans-serif';
-  const iconText = region.entry.kind === 'action'
-    ? compactIconLabel(region.entry.icon ?? region.entry.label)
-    : '';
-  context.fillText(iconText, centerX, 84, availableWidth);
   context.font = '600 27px Arial, sans-serif';
-  context.fillText(ellipsize(region.entry.label, 20), centerX, 174, availableWidth);
+  context.fillText(ellipsize(region.entry.label, 20), centerX, 190, availableWidth);
 }
 
 function drawNavigation(context: CanvasRenderingContext2D, region: PromptRegion): void {
@@ -247,13 +334,6 @@ function drawNavigation(context: CanvasRenderingContext2D, region: PromptRegion)
   context.fillText(region.entry.kind === 'previous-page' ? '‹' : '›', centerX, 112, 48);
   context.font = '600 17px Arial, sans-serif';
   context.fillText(region.entry.kind === 'previous-page' ? 'PREV' : 'NEXT', centerX, 190, 58);
-}
-
-function compactIconLabel(value: string): string {
-  const words = value.trim().split(/[^a-zA-Z0-9]+/).filter(Boolean);
-  if (words.length === 0) return '•';
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return `${words[0][0]}${words[1][0]}`.toUpperCase();
 }
 
 function ellipsize(value: string, maximumCharacters: number): string {
@@ -270,6 +350,28 @@ function createRenderKey(presentation: VRWorldPromptPresentation, hoveredId: str
     ...presentation.page.entries.map((entry) =>
       `${entry.kind}:${entry.id}:${entry.label}:${entry.kind === 'action' ? entry.icon ?? '' : ''}`),
   ].join('|');
+}
+
+function createContentKey(presentation: VRWorldPromptPresentation): string {
+  return [
+    presentation.model.id,
+    presentation.pageIndex,
+    ...presentation.page.entries.map((entry) =>
+      `${entry.kind}:${entry.id}:${entry.label}:${entry.kind === 'action' ? entry.icon ?? '' : ''}`),
+  ].join('|');
+}
+
+function resolveIconForEntry(entry: VRWorldPromptEntry) {
+  return resolveVRActionIcon({
+    kind: entry.kind,
+    id: entry.id,
+    label: entry.label,
+    icon: entry.kind === 'action' ? entry.icon : undefined,
+  });
+}
+
+function canvasXToLocal(canvasX: number): number {
+  return (canvasX / CANVAS_WIDTH - 0.5) * PANEL_WIDTH_METRES;
 }
 
 function isValidPresentation(presentation: VRWorldPromptPresentation): boolean {

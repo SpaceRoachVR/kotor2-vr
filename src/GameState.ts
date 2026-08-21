@@ -257,6 +257,7 @@ const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreat
   },
   getPlayerFacingLabel: (entry, target) => getVRActionLabel(entry, target),
   getIcon: (entry) => getVRActionIcon(entry),
+  logger: console,
   onTargetMenuAction: (panelIndex) => GameState.ActionMenuManager.onTargetMenuAction(panelIndex),
   onSelfMenuAction: (panelIndex) => GameState.ActionMenuManager.onSelfMenuAction(panelIndex),
 };
@@ -273,6 +274,7 @@ const vrWorldPromptActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<
   },
   getPlayerFacingLabel: (entry, target) => getVRActionLabel(entry, target),
   getIcon: (entry) => getVRActionIcon(entry),
+  logger: console,
   onTargetMenuAction: (panelIndex) => GameState.ActionMenuManager.onTargetMenuAction(panelIndex),
   onSelfMenuAction: (panelIndex) => GameState.ActionMenuManager.onSelfMenuAction(panelIndex),
 };
@@ -325,65 +327,61 @@ function buildVRWorldActionPromptFor(
   candidate: VRWorldPromptCandidate,
 ): VRWorldActionPromptModel | null {
   if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return null;
-  try {
-    const panels = refreshVRWorldPromptPanels(actor, target);
-    if (!panels) return null;
-    const authoredActionCount = countVRWorldPromptTargetActions(panels.targetPanels);
-    const authoredActions = snapshotVRActionMenuPanelEntries(
-      {
-        actor,
-        target,
-        kind: 'target',
-        panels: panels.targetPanels,
-      },
-      vrWorldPromptActionMenuBridgeDependencies,
-    ).map((descriptor): VRWorldPromptAction => ({
-      kind: 'action',
-      id: descriptor.id,
-      label: descriptor.label,
-      icon: descriptor.icon,
-      revalidate: () => isLiveVRWorldPromptCandidate(actor, target, candidate) && descriptor.revalidate(),
-      activate: () => {
-        if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return;
-        descriptor.activate();
-      },
-    }));
+  const panels = refreshVRWorldPromptPanels(actor, target);
+  if (!panels) return null;
+  const authoredActionCount = countVRWorldPromptTargetActions(panels.targetPanels);
+  const authoredActions = snapshotVRActionMenuPanelEntries(
+    {
+      actor,
+      target,
+      kind: 'target',
+      panels: panels.targetPanels,
+    },
+    vrWorldPromptActionMenuBridgeDependencies,
+  ).map((descriptor): VRWorldPromptAction => ({
+    kind: 'action',
+    id: descriptor.id,
+    label: descriptor.label,
+    icon: descriptor.icon,
+    revalidate: () => isLiveVRWorldPromptCandidate(actor, target, candidate) && descriptor.revalidate(),
+    activate: () => {
+      if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return;
+      descriptor.activate();
+    },
+  }));
 
-    const actions = [...authoredActions];
-    if (isDirectVRWorldUseTarget(target)) {
-      const descriptor = describeDirectVRWorldUse(actor, target, console, {
-        authoredActionCount,
-        getLiveAuthoredActionCount: () => {
-          if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return 1;
-          const livePanels = refreshVRWorldPromptPanels(actor, target);
-          return livePanels ? countVRWorldPromptTargetActions(livePanels.targetPanels) : 1;
+  const actions = [...authoredActions];
+  if (isDirectVRWorldUseTarget(target)) {
+    const descriptor = describeDirectVRWorldUse(actor, target, console, {
+      authoredActionCount,
+      getLiveAuthoredActionCount: () => {
+        if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return 1;
+        const livePanels = refreshVRWorldPromptPanels(actor, target);
+        return livePanels ? countVRWorldPromptTargetActions(livePanels.targetPanels) : 1;
+      },
+    });
+    if (descriptor) {
+      actions.push({
+        kind: 'action',
+        id: descriptor.id,
+        label: descriptor.label,
+        revalidate: () => isLiveVRWorldPromptCandidate(actor, target, candidate) && descriptor.revalidate(),
+        activate: () => {
+          if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return;
+          descriptor.activate();
         },
       });
-      if (descriptor) {
-        actions.push({
-          kind: 'action',
-          id: descriptor.id,
-          label: descriptor.label,
-          revalidate: () => isLiveVRWorldPromptCandidate(actor, target, candidate) && descriptor.revalidate(),
-          activate: () => {
-            if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return;
-            descriptor.activate();
-          },
-        });
-      }
     }
-
-    const pages = buildVRWorldPromptPages(actions);
-    if (pages.length === 0) return null;
-    return {
-      id: `world-prompt:${target.id}:${candidate.stateKey}:${actions.map((action) => action.id).join('|')}`,
-      name: candidate.name,
-      anchor: candidate.position,
-      pages,
-    };
-  } catch {
-    return null;
   }
+
+  const pages = buildVRWorldPromptPages(actions);
+  if (pages.length === 0) return null;
+  return {
+    id: `world-prompt:${target.id}:${candidate.stateKey}:${actions.map((action) => action.id).join('|')}`,
+    name: candidate.name,
+    anchor: candidate.position,
+    pages,
+  };
 }
 
 function isLiveVRWorldPromptTarget(actor: ModuleCreature, target: ModuleObject): boolean {
