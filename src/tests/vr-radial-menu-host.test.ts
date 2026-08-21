@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import { TextureLoader } from '@/loaders/TextureLoader';
 import {
   VRRadialIconLoader,
   VRRadialMenuHost,
@@ -156,7 +157,7 @@ describe('VRRadialMenuHost', () => {
     expect(staleDispose).toHaveBeenCalledTimes(1);
   });
 
-  test('bounds the resolved icon cache at 64 textures and never disposes an evicted texture twice', async () => {
+  test('evicts resolved icons without retaining disposed textures in a strong host collection', async () => {
     const loadedTextures: THREE.Texture[] = [];
     const iconLoader: VRRadialIconLoader = {
       load: async (resref: string) => {
@@ -184,8 +185,39 @@ describe('VRRadialMenuHost', () => {
     }
     expect(loadedTextures).toHaveLength(65);
     expect(firstDispose).toHaveBeenCalledTimes(1);
+    expect(hostOwnsTextureInStrongCollection(host, loadedTextures[0])).toBe(false);
     host.dispose();
     expect(firstDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('clones overlapping shared engine icon results and disposes only host-owned textures', async () => {
+    const deferred = createDeferred<Awaited<ReturnType<typeof TextureLoader.Load>>>();
+    const sharedEngineTexture = new THREE.Texture() as Awaited<ReturnType<typeof TextureLoader.Load>>;
+    const sharedDispose = jest.spyOn(sharedEngineTexture, 'dispose');
+    jest.spyOn(TextureLoader, 'Load').mockImplementation(() => deferred.promise);
+    const first = createHostWithDefaultLoader();
+    const second = createHostWithDefaultLoader();
+    const iconMenu = menu('root', [action('attack', 'Attack', 'shared-icon')]);
+
+    first.host.present(presentationFor(iconMenu, null), headPose());
+    second.host.present(presentationFor(iconMenu, null), headPose());
+    deferred.resolve(sharedEngineTexture);
+    await flushPromises();
+
+    const firstOwnedTexture = first.host.getIconMaterial('attack').map as THREE.Texture;
+    const secondOwnedTexture = second.host.getIconMaterial('attack').map as THREE.Texture;
+    expect(firstOwnedTexture).not.toBe(sharedEngineTexture);
+    expect(secondOwnedTexture).not.toBe(sharedEngineTexture);
+    expect(firstOwnedTexture).not.toBe(secondOwnedTexture);
+    const firstOwnedDispose = jest.spyOn(firstOwnedTexture, 'dispose');
+    const secondOwnedDispose = jest.spyOn(secondOwnedTexture, 'dispose');
+
+    first.host.dispose();
+    second.host.dispose();
+
+    expect(sharedDispose).not.toHaveBeenCalled();
+    expect(firstOwnedDispose).toHaveBeenCalledTimes(1);
+    expect(secondOwnedDispose).toHaveBeenCalledTimes(1);
   });
 
   test('fails closed when presentation, head, ray, or touch poses contain non-finite coordinates', () => {
@@ -211,6 +243,19 @@ describe('VRRadialMenuHost', () => {
 function createHost(iconLoader: VRRadialIconLoader = { load: async () => null }): { host: VRRadialMenuHost; scene: THREE.Scene } {
   const scene = new THREE.Scene();
   return { host: new VRRadialMenuHost(scene, iconLoader), scene };
+}
+
+function createHostWithDefaultLoader(): { host: VRRadialMenuHost; scene: THREE.Scene } {
+  const scene = new THREE.Scene();
+  return { host: new VRRadialMenuHost(scene), scene };
+}
+
+function hostOwnsTextureInStrongCollection(host: VRRadialMenuHost, texture: THREE.Texture): boolean {
+  return Object.values(host as unknown as Record<string, unknown>).some((value) => {
+    if (value instanceof Set) return value.has(texture);
+    if (value instanceof Map) return [...value.values()].some((entry) => entry === texture);
+    return false;
+  });
 }
 
 function action(id: string, label: string, icon?: string): VRRadialActionItem {

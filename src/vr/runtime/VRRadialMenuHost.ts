@@ -14,6 +14,7 @@ import {
 import { VRRadialMenuItem } from './VRRadialMenuModel';
 
 export interface VRRadialIconLoader {
+  /** Returns a texture whose ownership transfers to the host. */
   load(resref: string): Promise<THREE.Texture | null>;
 }
 
@@ -44,7 +45,11 @@ const HORIZONTAL_EPSILON = 1e-8;
 
 const DEFAULT_ICON_LOADER: VRRadialIconLoader = {
   async load(resref: string): Promise<THREE.Texture | null> {
-    return (await TextureLoader.Load(resref, TextureLoader.NOCACHE)) ?? null;
+    const sharedTexture = await TextureLoader.Load(resref);
+    if (!sharedTexture) return null;
+    const ownedTexture = sharedTexture.clone();
+    ownedTexture.needsUpdate = true;
+    return ownedTexture;
   },
 };
 
@@ -67,7 +72,7 @@ export class VRRadialMenuHost {
   private readonly fallbackTextures = new Map<FallbackIconCategory, THREE.CanvasTexture>();
   private readonly ownedCanvasTextures = new Set<THREE.CanvasTexture>();
   private readonly pageCanvasTextures = new Set<THREE.CanvasTexture>();
-  private readonly disposedTextures = new Set<THREE.Texture>();
+  private readonly disposedTextures = new WeakSet<THREE.Texture>();
   private readonly lastHorizontalForward = new THREE.Vector3(0, 1, 0);
   private readonly centerMaterial: THREE.MeshBasicMaterial;
   private readonly plaqueSurface: CanvasSurface;
