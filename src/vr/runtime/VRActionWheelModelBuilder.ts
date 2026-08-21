@@ -135,15 +135,24 @@ function appendEngineActions(
     if (!isValidEngineAction(action)) continue;
     const stableId = action.id.trim();
     if (seenIds.has(stableId)) continue;
+    if (!safelyRevalidateEngineAction(action)) continue;
     seenIds.add(stableId);
     output.push({
       kind: 'action',
       id: `engine:${stableId}`,
       label: action.label.trim(),
       ...(action.icon === undefined ? {} : { icon: action.icon.trim() }),
-      revalidate: () => action.revalidate() === true,
+      revalidate: () => safelyRevalidateEngineAction(action),
       activate: () => action.activate(),
     });
+  }
+}
+
+function safelyRevalidateEngineAction(action: VRActionWheelEngineAction): boolean {
+  try {
+    return action.revalidate() === true;
+  } catch {
+    return false;
   }
 }
 

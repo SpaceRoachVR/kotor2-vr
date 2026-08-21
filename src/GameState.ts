@@ -57,11 +57,19 @@ import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
 import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
 import {
   buildVRActionWheel,
-  createVRActionSourceKey,
+} from "@/vr/runtime/VRActionWheelModelBuilder";
+import type {
   VRActionMenuEntry,
-  VRActionWheelEngineAction,
   VRActionWheelPartyMember,
 } from "@/vr/runtime/VRActionWheelModelBuilder";
+import {
+  snapshotVRActionMenuPanelEntries,
+} from "@/vr/runtime/VRActionMenuEngineBridge";
+import type {
+  VRActionMenuBridgeDependencies,
+  VRActionMenuPanel,
+  VRActionMenuPanelLists,
+} from "@/vr/runtime/VRActionMenuEngineBridge";
 import EngineLocation from "@/engine/EngineLocation";
 
 //THREE.js imports
@@ -212,11 +220,6 @@ function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null
   ) ?? null;
 }
 
-interface VRActionPanel {
-  readonly actions: readonly VRActionMenuEntry[];
-  selectedIndex: number;
-}
-
 function getVRActionLabel(entry: VRActionMenuEntry, target: ModuleObject | null): string {
   const talentLabel = entry.talent?.label ?? entry.talent?.name;
   if (typeof talentLabel === 'string' && talentLabel.trim()) return toPlayerFacingActionLabel(talentLabel);
@@ -243,88 +246,22 @@ function getVRActionIcon(entry: VRActionMenuEntry): string | undefined {
   return typeof entry.icon === 'string' && entry.icon.trim() ? entry.icon : undefined;
 }
 
-function createVRActionEntrySourceKey(
-  kind: 'target' | 'self',
-  panelIndex: number,
-  entry: VRActionMenuEntry,
-  target: ModuleObject | null,
-): string {
-  return createVRActionSourceKey(kind, panelIndex, {
-    action: entry.action,
-    talent: entry.talent,
-    item: entry.item,
-    icon: entry.icon,
-    playerFacingLabel: getVRActionLabel(entry, target),
-  });
-}
-
-function refreshVRActionSource(
-  actor: ModuleCreature,
-  target: ModuleObject | null,
-  kind: 'target' | 'self',
-  panelIndex: number,
-  sourceKey: string,
-): { panel: VRActionPanel; actionIndex: number } | null {
-  if (GameState.getCurrentPlayer() !== actor) return null;
-  if (target && !GameState.ModuleObjectManager.playerSelectableObjects.includes(target)) return null;
-
-  try {
+const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreature, ModuleObject> = {
+  getCurrentActor: () => GameState.getCurrentPlayer() ?? null,
+  isTargetAvailable: (actor, target) =>
+    GameState.ModuleObjectManager.playerSelectableObjects.includes(target) &&
+    isVRCombatTarget(actor, target),
+  refreshPanels: (actor, target): VRActionMenuPanelLists => {
     GameState.ActionMenuManager.SetPC(actor);
     if (target) GameState.ActionMenuManager.SetTarget(target);
     GameState.ActionMenuManager.UpdateMenuActions();
-    const panel = kind === 'target'
-      ? GameState.ActionMenuManager.ActionPanels.targetPanels[panelIndex]
-      : GameState.ActionMenuManager.ActionPanels.selfPanels[panelIndex];
-    const actionIndex = panel?.actions.findIndex(
-      (entry: VRActionMenuEntry) => createVRActionEntrySourceKey(kind, panelIndex, entry, target) === sourceKey,
-    ) ?? -1;
-    return actionIndex >= 0 ? { panel, actionIndex } : null;
-  } catch {
-    return null;
-  }
-}
-
-function snapshotVRActionPanelEntries(
-  actor: ModuleCreature,
-  target: ModuleObject | null,
-  kind: 'target' | 'self',
-  panels: readonly VRActionPanel[],
-): readonly VRActionWheelEngineAction[] {
-  const actions: VRActionWheelEngineAction[] = [];
-  panels.forEach((panel, panelIndex) => {
-    if (!panel || !Array.isArray(panel.actions)) return;
-    panel.actions.forEach((entry) => {
-      if (!entry || typeof entry !== 'object') return;
-      try {
-        const label = getVRActionLabel(entry, target);
-        const sourceKey = createVRActionEntrySourceKey(kind, panelIndex, entry, target);
-        actions.push({
-          id: sourceKey,
-          label,
-          icon: getVRActionIcon(entry),
-          revalidate: () => {
-            if (target && !isVRCombatTarget(actor, target)) return false;
-            return refreshVRActionSource(actor, target, kind, panelIndex, sourceKey) !== null;
-          },
-          activate: () => {
-            if (target && !isVRCombatTarget(actor, target)) return;
-            const refreshed = refreshVRActionSource(actor, target, kind, panelIndex, sourceKey);
-            if (!refreshed) return;
-            refreshed.panel.selectedIndex = refreshed.actionIndex;
-            if (kind === 'target') {
-              GameState.ActionMenuManager.onTargetMenuAction(panelIndex);
-            } else {
-              GameState.ActionMenuManager.onSelfMenuAction(panelIndex);
-            }
-          },
-        });
-      } catch {
-        // A malformed engine entry is omitted rather than invalidating the wheel.
-      }
-    });
-  });
-  return actions;
-}
+    return GameState.ActionMenuManager.ActionPanels as VRActionMenuPanelLists;
+  },
+  getPlayerFacingLabel: (entry, target) => getVRActionLabel(entry, target),
+  getIcon: (entry) => getVRActionIcon(entry),
+  onTargetMenuAction: (panelIndex) => GameState.ActionMenuManager.onTargetMenuAction(panelIndex),
+  onSelfMenuAction: (panelIndex) => GameState.ActionMenuManager.onSelfMenuAction(panelIndex),
+};
 
 function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
   return GameState.PartyManager.party.slice(1).map((member) => ({
@@ -1201,9 +1138,19 @@ export class GameState implements EngineContext {
         return buildVRActionWheel({
           id: `action-wheel:${actor.id}:${target?.id ?? 'self'}`,
           targetActions: target
-            ? snapshotVRActionPanelEntries(actor, target, 'target', panels.targetPanels)
+            ? snapshotVRActionMenuPanelEntries({
+              actor,
+              target,
+              kind: 'target',
+              panels: panels.targetPanels as readonly VRActionMenuPanel[],
+            }, vrActionMenuBridgeDependencies)
             : [],
-          selfActions: snapshotVRActionPanelEntries(actor, null, 'self', panels.selfPanels),
+          selfActions: snapshotVRActionMenuPanelEntries({
+            actor,
+            target: null,
+            kind: 'self',
+            panels: panels.selfPanels as readonly VRActionMenuPanel[],
+          }, vrActionMenuBridgeDependencies),
           canLevelUp: actor.canLevelUp(),
           partyMembers: snapshotVRPartyMembers(),
           openInventory: () => GameState.MenuManager.MenuInventory.open(),

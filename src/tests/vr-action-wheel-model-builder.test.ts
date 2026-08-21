@@ -136,6 +136,24 @@ test('deduplicates engine actions by trimmed stable ID while preserving first-se
   expect(findAction(menu, 'engine:attack').label).toBe('First Attack');
 });
 
+test('omits an engine descriptor that is already unavailable', () => {
+  const menu = buildVRActionWheel(context({
+    targetActions: [engineAction('stale-attack', 'Attack', { revalidate: () => false })],
+  }));
+
+  expect(contentIds(menu)).not.toContain('engine:stale-attack');
+});
+
+test('omits an engine descriptor whose initial revalidation throws', () => {
+  const menu = buildVRActionWheel(context({
+    selfActions: [engineAction('broken-force', 'Force', {
+      revalidate: () => { throw new Error('engine refresh failed'); },
+    })],
+  }));
+
+  expect(contentIds(menu)).not.toContain('engine:broken-force');
+});
+
 test('static actions invoke only their bound local routes', () => {
   const openInventory = jest.fn();
   const openCharacter = jest.fn();
@@ -205,7 +223,13 @@ test('party activation fails closed when the member is no longer switchable', ()
 });
 
 test('a refreshed engine action with a different source key fails instead of activating another action', () => {
-  const source = engineAction('attack', 'Attack', { revalidate: () => false });
+  let revalidationCount = 0;
+  const source = engineAction('attack', 'Attack', {
+    revalidate: () => {
+      revalidationCount += 1;
+      return revalidationCount === 1;
+    },
+  });
 
   expect(findAction(buildVRActionWheel(context({ targetActions: [source] })), 'engine:attack').revalidate())
     .toBe(false);
