@@ -85,6 +85,26 @@ describe('selectVRWorldPromptCandidate', () => {
     )).toThrow('head pose');
     expect(isInFrustum).not.toHaveBeenCalled();
   });
+
+  test.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('rejects a %s candidate position before consulting the frustum', (_label, x) => {
+    const invalidCandidate = {
+      ...candidate('invalid', 1, 0),
+      position: new THREE.Vector3(x, 1, 0),
+    };
+    const isInFrustum = jest.fn(() => true);
+
+    expect(selectVRWorldPromptCandidate(
+      [invalidCandidate],
+      headPose(),
+      null,
+      [],
+      isInFrustum,
+    )).toBeNull();
+    expect(isInFrustum).not.toHaveBeenCalled();
+  });
 });
 
 describe('buildVRWorldPromptPages', () => {

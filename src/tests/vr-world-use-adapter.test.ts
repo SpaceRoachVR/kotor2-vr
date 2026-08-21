@@ -43,6 +43,23 @@ describe('describeDirectVRWorldUse', () => {
     expect(target.use).not.toHaveBeenCalled();
     expect(activeActor.position.toArray()).toEqual([0, 0, 0]);
   });
+
+  test('blocks a descriptor that moves out of range before activation', () => {
+    const target = placeable('Console', 1);
+    const logger = { info: jest.fn(), error: jest.fn() };
+    const descriptor = describeDirectVRWorldUse(actor(), target, logger)!;
+
+    target.position.set(1.5001, 0, 0);
+    const outcome = descriptor.activate();
+
+    expect(outcome).toEqual({ handled: true, feedbackLabel: 'Console: Move closer' });
+    expect(target.use).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      '[VR interaction] target=42 type=placeable distance=1.50 route=blocked-range',
+    );
+    expect(logger.info).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
 });
 
 describe('tryDirectVRWorldUse', () => {
@@ -96,6 +113,26 @@ describe('tryDirectVRWorldUse', () => {
     expect(tryDirectVRWorldUse({ id: 7, position: new THREE.Vector3() }, target, quietLogger))
       .toEqual({ handled: false });
     expect(target.use).not.toHaveBeenCalled();
+  });
+
+  test('reports a caught target use error with the existing handled feedback', () => {
+    const target = placeable('Console', 1);
+    const useError = new Error('engine use failed');
+    target.use.mockImplementation(() => {
+      throw useError;
+    });
+    const logger = { info: jest.fn(), error: jest.fn() };
+
+    const outcome = tryDirectVRWorldUse(actor(), target, logger);
+
+    expect(outcome).toEqual({ handled: true, feedbackLabel: 'Console: Unavailable' });
+    expect(target.use).toHaveBeenCalledTimes(1);
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      '[VR interaction] target=42 type=placeable route=direct-use result=error',
+      useError,
+    );
+    expect(logger.error).toHaveBeenCalledTimes(1);
   });
 });
 
