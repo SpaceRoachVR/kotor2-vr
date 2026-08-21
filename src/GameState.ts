@@ -55,6 +55,13 @@ import { tryDirectVRWorldUse } from "@/vr/runtime/VRWorldUseAdapter";
 import type { EngineInteractableObject } from "@/vr/runtime/ModuleObjectInteractionTarget";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
 import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
+import {
+  buildVRActionWheel,
+  createVRActionSourceKey,
+  VRActionMenuEntry,
+  VRActionWheelEngineAction,
+  VRActionWheelPartyMember,
+} from "@/vr/runtime/VRActionWheelModelBuilder";
 import EngineLocation from "@/engine/EngineLocation";
 
 //THREE.js imports
@@ -101,8 +108,6 @@ const vrContextActionPanelController = new VRContextActionPanelController({
   triggerControllerYPress: () => GameState.MenuManager.InGameOverlay.triggerControllerYPress(),
 });
 let vrContextActionTarget: EngineInteractableObject | null = null;
-let vrRadialMenuPausedByVR = false;
-let vrWristMenuPausedByVR = false;
 let vrCombatIssuedTargetId: number | null = null;
 
 /**
@@ -207,13 +212,6 @@ function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null
   ) ?? null;
 }
 
-interface VRActionMenuEntry {
-  readonly icon?: unknown;
-  readonly action?: { readonly type?: unknown };
-  readonly talent?: { readonly label?: unknown; readonly name?: unknown };
-  readonly item?: { getName?: () => unknown };
-}
-
 interface VRActionPanel {
   readonly actions: readonly VRActionMenuEntry[];
   selectedIndex: number;
@@ -245,47 +243,97 @@ function getVRActionIcon(entry: VRActionMenuEntry): string | undefined {
   return typeof entry.icon === 'string' && entry.icon.trim() ? entry.icon : undefined;
 }
 
-function buildVRRadialItems(
-  panels: { readonly targetPanels: readonly VRActionPanel[]; readonly selfPanels: readonly VRActionPanel[] },
-  target: ModuleObject | null
-): readonly import('./vr/runtime/VRRadialMenuController').VRRadialMenuItem[] {
-  const candidates: Array<{
-    readonly entry: VRActionMenuEntry;
-    readonly activate: () => void;
-  }> = [];
-  panels.targetPanels.forEach((panel, panelIndex) => {
-    panel.actions.forEach((entry, actionIndex) => {
-      candidates.push({
-        entry,
-        activate: () => {
-          panel.selectedIndex = actionIndex;
-          GameState.ActionMenuManager.onTargetMenuAction(panelIndex);
-        },
-      });
-    });
+function createVRActionEntrySourceKey(
+  kind: 'target' | 'self',
+  panelIndex: number,
+  entry: VRActionMenuEntry,
+  target: ModuleObject | null,
+): string {
+  return createVRActionSourceKey(kind, panelIndex, {
+    action: entry.action,
+    talent: entry.talent,
+    item: entry.item,
+    icon: entry.icon,
+    playerFacingLabel: getVRActionLabel(entry, target),
   });
-  // Self actions, including Force powers, are deliberately radial-only in VR.
-  panels.selfPanels.forEach((panel, panelIndex) => {
-    panel.actions.forEach((entry, actionIndex) => {
-      candidates.push({
-        entry,
-        activate: () => {
-          panel.selectedIndex = actionIndex;
-          GameState.ActionMenuManager.onSelfMenuAction(panelIndex);
-        },
-      });
-    });
-  });
-  const items = candidates.slice(0, 4).map(({ entry, activate }, index) => ({
-    id: `action-${index}`,
-    label: getVRActionLabel(entry, target),
-    icon: getVRActionIcon(entry),
-    activate,
-  }));
-  while (items.length < 4) {
-    items.push({ id: `unavailable-${items.length}`, label: 'No action', activate: (): void => {} });
+}
+
+function refreshVRActionSource(
+  actor: ModuleCreature,
+  target: ModuleObject | null,
+  kind: 'target' | 'self',
+  panelIndex: number,
+  sourceKey: string,
+): { panel: VRActionPanel; actionIndex: number } | null {
+  if (GameState.getCurrentPlayer() !== actor) return null;
+  if (target && !GameState.ModuleObjectManager.playerSelectableObjects.includes(target)) return null;
+
+  try {
+    GameState.ActionMenuManager.SetPC(actor);
+    if (target) GameState.ActionMenuManager.SetTarget(target);
+    GameState.ActionMenuManager.UpdateMenuActions();
+    const panel = kind === 'target'
+      ? GameState.ActionMenuManager.ActionPanels.targetPanels[panelIndex]
+      : GameState.ActionMenuManager.ActionPanels.selfPanels[panelIndex];
+    const actionIndex = panel?.actions.findIndex(
+      (entry: VRActionMenuEntry) => createVRActionEntrySourceKey(kind, panelIndex, entry, target) === sourceKey,
+    ) ?? -1;
+    return actionIndex >= 0 ? { panel, actionIndex } : null;
+  } catch {
+    return null;
   }
-  return items;
+}
+
+function snapshotVRActionPanelEntries(
+  actor: ModuleCreature,
+  target: ModuleObject | null,
+  kind: 'target' | 'self',
+  panels: readonly VRActionPanel[],
+): readonly VRActionWheelEngineAction[] {
+  const actions: VRActionWheelEngineAction[] = [];
+  panels.forEach((panel, panelIndex) => {
+    if (!panel || !Array.isArray(panel.actions)) return;
+    panel.actions.forEach((entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      try {
+        const label = getVRActionLabel(entry, target);
+        const sourceKey = createVRActionEntrySourceKey(kind, panelIndex, entry, target);
+        actions.push({
+          id: sourceKey,
+          label,
+          icon: getVRActionIcon(entry),
+          revalidate: () => {
+            if (target && !isVRCombatTarget(actor, target)) return false;
+            return refreshVRActionSource(actor, target, kind, panelIndex, sourceKey) !== null;
+          },
+          activate: () => {
+            if (target && !isVRCombatTarget(actor, target)) return;
+            const refreshed = refreshVRActionSource(actor, target, kind, panelIndex, sourceKey);
+            if (!refreshed) return;
+            refreshed.panel.selectedIndex = refreshed.actionIndex;
+            if (kind === 'target') {
+              GameState.ActionMenuManager.onTargetMenuAction(panelIndex);
+            } else {
+              GameState.ActionMenuManager.onSelfMenuAction(panelIndex);
+            }
+          },
+        });
+      } catch {
+        // A malformed engine entry is omitted rather than invalidating the wheel.
+      }
+    });
+  });
+  return actions;
+}
+
+function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
+  return GameState.PartyManager.party.slice(1).map((member) => ({
+    id: String(member.id),
+    label: member.getName(),
+    icon: member.getPortraitResRef() || undefined,
+    resolveCurrentIndex: () => GameState.PartyManager.party.indexOf(member),
+    switchLeader: (index: number) => GameState.PartyManager.SwitchLeaderAtIndex(index),
+  }));
 }
 
 function resolveVRCombatWeaponMode(actor: ModuleCreature): CombatWeaponMode {
@@ -1137,51 +1185,32 @@ export class GameState implements EngineContext {
           },
         };
       },
-      getRadialMenuContext: (aimedTargetId) => {
+      createActionWheel: (aimedTargetId) => {
         const actor = GameState.getCurrentPlayer();
-        const target = resolveVRAimedObject(aimedTargetId);
-        if (actor && target && target !== actor) {
+        if (!actor) return null;
+        const candidate = resolveVRAimedObject(aimedTargetId);
+        const target = isVRCombatTarget(actor, candidate) ? candidate : null;
+        try {
           GameState.ActionMenuManager.SetPC(actor);
-          GameState.ActionMenuManager.SetTarget(target);
+          if (target) GameState.ActionMenuManager.SetTarget(target);
           GameState.ActionMenuManager.UpdateMenuActions();
+        } catch {
+          return null;
         }
         const panels = GameState.ActionMenuManager.ActionPanels;
-        return {
-          items: buildVRRadialItems(panels, target ?? null),
-          setPaused: (paused: boolean) => {
-          if (paused && GameState.State !== EngineState.PAUSED) {
-            GameState.State = EngineState.PAUSED;
-            vrRadialMenuPausedByVR = true;
-          } else if (!paused && vrRadialMenuPausedByVR) {
-            GameState.State = EngineState.RUNNING;
-            vrRadialMenuPausedByVR = false;
-          }
-        },
-        };
-      },
-      getWristMenuContext: () => {
-        if (GameState.State !== EngineState.RUNNING || GameState.Mode !== EngineMode.INGAME) return null;
-        return {
-          items: [
-            { id: 'wrist:inventory', label: 'Inventory', icon: 'inv_bag01', activate: () => GameState.MenuManager.MenuInventory.open() },
-            { id: 'wrist:character', label: 'Character', icon: 'iattackr', activate: () => GameState.MenuManager.MenuCharacter.open() },
-            { id: 'wrist:settings', label: 'Comfort Settings', icon: 'iopts', activate: () => { vrComfortSettingsPanelOpen = true; } },
-            // No galaxy map here. The galaxy map is a place in the world — the
-            // Ebon Hawk's map console — and the authored menu depends on the
-            // state that using that console sets up. Summoning it from the
-            // wrist opened it out of context, where it rendered but nothing
-            // could be selected. Reaching it is the console's job.
-          ],
-          setPaused: (paused: boolean) => {
-            if (paused && GameState.State !== EngineState.PAUSED) {
-              GameState.State = EngineState.PAUSED;
-              vrWristMenuPausedByVR = true;
-            } else if (!paused && vrWristMenuPausedByVR) {
-              GameState.State = EngineState.RUNNING;
-              vrWristMenuPausedByVR = false;
-            }
-          },
-        };
+        return buildVRActionWheel({
+          id: `action-wheel:${actor.id}:${target?.id ?? 'self'}`,
+          targetActions: target
+            ? snapshotVRActionPanelEntries(actor, target, 'target', panels.targetPanels)
+            : [],
+          selfActions: snapshotVRActionPanelEntries(actor, null, 'self', panels.selfPanels),
+          canLevelUp: actor.canLevelUp(),
+          partyMembers: snapshotVRPartyMembers(),
+          openInventory: () => GameState.MenuManager.MenuInventory.open(),
+          openCharacter: () => GameState.MenuManager.MenuCharacter.open(),
+          openMap: () => GameState.MenuManager.MenuMap.open(),
+          openComfortSettings: () => { vrComfortSettingsPanelOpen = true; },
+        });
       },
       getComfortSettingsPanelContext: () => {
         if (!vrComfortSettingsPanelOpen) {

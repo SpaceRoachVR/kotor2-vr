@@ -14,8 +14,9 @@ import { VRKeyboardInputController } from "./runtime/VRKeyboardInputController";
 import { VR_KEYBOARD_DONE_KEY } from "./runtime/VRKeyboardLayout";
 import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatInputController";
 import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
-import { VRRadialMenuController, VRRadialMenuItem } from "./runtime/VRRadialMenuController";
+import { VRRadialMenuController } from "./runtime/VRRadialMenuController";
 import { VRRadialMenuHost } from "./runtime/VRRadialMenuHost";
+import type { VRRadialMenuDefinition } from "./runtime/VRRadialMenuModel";
 import { resolveWallSoftBlockCorrection, VRWalkmeshQuery } from "./runtime/VRWallSoftBlock";
 import { getVRInteractionRange } from "./runtime/VRWorldUseAdapter";
 import { GamePad } from "@/controls/GamePad";
@@ -140,24 +141,12 @@ export interface VRSpikeHooks {
    * `getCombatContext`.
    */
   getForceContext?: (aimedTargetId: number | null) => { onForceGesture(gesture: VRForceGesture): void } | null;
-  getRadialMenuContext?: (aimedTargetId: number | null) => {
-    readonly items: readonly VRRadialMenuItem[];
-    setPaused(paused: boolean): void;
-  } | null;
-  /**
-   * Wrist device (ROADMAP 4.1/4.3): summons full panels (inventory,
-   * character sheet, galaxy map) and the comfort settings panel rather
-   * than contextual target actions. Always four items, matching the
-   * shared radial menu contract.
-   */
-  getWristMenuContext?: () => {
-    readonly items: readonly VRRadialMenuItem[];
-    setPaused(paused: boolean): void;
-  } | null;
+  /** Builds the engine-safe all-purpose action wheel for the current aim. */
+  createActionWheel?: (aimedTargetId: number | null) => VRRadialMenuDefinition | null;
   /**
    * Comfort settings panel (ROADMAP 2.6) — the settings the
    * ToggleLocomotionMode button alone doesn't reach: turn mode, snap-turn
-   * angle, and the comfort vignette. Opened from the wrist menu; always
+   * angle, and the comfort vignette. Opened from the action wheel; always
    * exactly four rows, matching `VRComfortSettingsHost`'s contract.
    */
   getComfortSettingsPanelContext?: () => {
