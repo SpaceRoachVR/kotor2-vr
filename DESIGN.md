@@ -62,7 +62,46 @@ Free movement. No round pauses outside cutscenes.
 
 ### Radial menu
 
-Opening the radial **pauses outright.** This is a single-player game and pausing is the most comfortable, most readable option. If multiplayer ever happens, this becomes time dilation instead.
+The left-controller `X` button opens one **all-purpose action wheel**. It replaces
+the separate four-way contextual and wrist radials with a dynamic snapshot of
+the currently available combat, self, menu, party, and comfort actions. Missing
+or malformed actions are omitted rather than padded; every action is
+revalidated before dispatch and a failed action is never replaced by another.
+Pages contain at most six content actions plus dedicated previous/next wedges,
+and Party opens a nested wheel built from the live selectable party list.
+
+Each opening captures the head pose and places the wheel 0.85 metres forward
+and 0.25 metres below it. The wheel then stays fixed in world space. Only the
+left-controller ray hovers its shared render/collision sectors, with amber
+extrusion, label, pointer, and best-effort haptic feedback; a left-trigger press
+confirms the hovered action. Either controller may instead activate a wedge by
+direct touch. The center cancels, a trigger with no resolved target does
+nothing, and releasing `X` always cancels without activating the hover.
+
+Opening the wheel **does not pause or slow the game**: simulation, locomotion,
+and turning continue. While open, the wheel owns conflicting combat, world-use,
+and UI activation input. It closes and clears ownership before dispatch, so a
+selected full-screen Inventory, Character, local Map, or other legacy menu can
+apply that menu's existing pause behavior.
+
+Doors, containers, mines, and ordinary consoles do not consume wheel slices.
+When an eligible object is in range, visible, and in front of the player, a
+compact world-anchored prompt proactively exposes only its safe direct use and
+authored `ActionMenuManager` routes. Either controller ray and trigger can
+activate a prompt action once; there is no prompt touch route. The prompt is
+removed immediately when its object, range, line of sight, view cone,
+visibility, or actions become invalid. Locked, key-required, plot, and other
+story-owned objects fail closed instead of receiving a generic direct-use
+fallback. The Ebon Hawk Galaxy Map console is the exact static exception: its
+existing world `Use` route remains available through the prompt and may open
+the context-dependent Galaxy Map UI, while the wheel's Map action opens only
+the local `MenuMap`.
+
+Tracking or XR-session loss, module transitions, dialogue/cutscene entry, and
+foreground-menu takeover close the wheel and prompts and clear rays, hover,
+haptics, press/touch latches, and ownership without engine activation. Session
+teardown also disposes the owned meshes, materials, canvas/icon textures, and
+pointer resources.
 
 ### Locomotion
 
@@ -86,9 +125,13 @@ Order-issuing stays, via the radial.
 
 **Diegetic where it can be, panels where it can't.**
 
-- **Wrist-mounted holo device** for at-a-glance state.
+- **All-purpose `X` action wheel** for combat/self actions, party selection,
+  menu access, and comfort settings, with proactive object prompts for world use.
 - **Physical inventory** — reach for it.
-- **Floating panels** for the character sheet, galaxy map, and dialogue skill checks, summoned and dismissed at will. These screens are too dense to make diegetic without losing information.
+- **Floating panels** for the character sheet, local map, context-dependent
+  galaxy map, and dialogue skill checks, summoned through their valid wheel or
+  world routes and dismissed at will. These screens are too dense to make
+  diegetic without losing information.
 
 ### Dialogue and cutscenes
 

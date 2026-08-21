@@ -274,7 +274,8 @@ First light in the headset. No interaction yet.
 - **2.6** ✅ Comfort settings surfaced somewhere reachable in-headset. The smooth/blink
   locomotion toggle was already reachable (`ToggleLocomotionMode`); `turnMode`,
   `snapTurnDegrees`, and `vignetteEnabled` are now reachable through a "Comfort
-  Settings" item on the wrist menu (4.1), opening `VRComfortSettingsHost` — a
+  Settings" item on the all-purpose `X` action wheel (4.1), opening
+  `VRComfortSettingsHost` — a
   four-row cycle panel (point at a row, press Select to cycle its value).
 
 **Exit:** walk around `101PER` in VR, roomscale, without falling through geometry or
@@ -306,8 +307,27 @@ unit/integration-tested only.
   applies to flatscreen combat generally, not just VR).
 - **3.7** ✅ Force gesture set — push/pull flicks (`VRForceGestureController`). Fixed
   this session: also no longer reads stale flatscreen-mouse target state.
-- **3.8** ✅ Radial menu for everything else; pauses outright (`VRRadialMenuController`
-  + `VRRadialMenuHost`; confirmed the engine actually pauses while it's open).
+- **3.8** ✅ implemented / ☐ headset-accepted — One dynamic, paginated all-purpose
+  action wheel replaces the fixed four-way contextual radial. Hold left `X` to
+  capture a head-relative placement that remains world-fixed; the left ray hovers
+  and left-trigger confirms, while either controller may directly touch a wedge.
+  Up to six available actions appear per page with dedicated navigation and a
+  nested Party wheel. Unavailable/malformed actions are omitted and every action
+  is revalidated before it delegates to the existing d20/action-menu/menu/party
+  route. Opening the wheel leaves simulation, locomotion, and turning active but
+  owns conflicting combat, world-use, and UI activation until it clears itself
+  before dispatch. `VRRadialMenuController`, `VRRadialMenuHost`,
+  `VRActionWheelModelBuilder`, and `VRSpike` own the separated state, rendering,
+  model, and lifecycle boundaries.
+- **3.9** ✅ implemented / ☐ headset-accepted — Proactive world-action prompts replace
+  the post-activation contextual panel for doors, containers/placeables, mines,
+  and ordinary consoles. Eligible objects expose only available authored
+  Security/tunneler/Bash/Mine/Disarm/Recover routes or a safe direct action;
+  either controller ray/trigger can activate once, and loss of range, line of
+  sight, visibility, front-cone eligibility, object, or actions clears the prompt
+  immediately. Locked/key-required/plot/story-owned direct use fails closed. The
+  exact Ebon Hawk Galaxy Map console exception delegates to its existing world
+  `Use` route; it is never added to the all-purpose wheel.
 
 **Exit:** a Peragus combat encounter completable in VR with the d20 layer intact.
 **Not yet verified on-device** — implemented and unit/integration-tested only.
@@ -318,17 +338,24 @@ unit/integration-tested only.
 
 Every button reachable in flatscreen needs a VR route.
 
-- **4.1** ✅ Wrist-mounted holo device shell. A second `VRRadialMenuController`
-  instance bound to the previously-idle `Wrist` action, reusing the existing radial
-  mechanics and `VRRadialMenuHost` presentation rather than new UI infrastructure.
+- **4.1** ✅ implemented / ☐ headset-accepted — The former wrist/contextual pair and
+  obsolete `Wrist` semantic route are replaced by the single left-`X` action wheel.
+  Its dynamic static-menu routes include Inventory, Character, local Map, Comfort
+  Settings, and conditional Level-Up-to-Character; full-screen menus retain their
+  existing pause/foreground ownership after the wheel closes. Tracking/session
+  loss, module transition, dialogue/cutscene entry, and foreground takeover clear
+  wheel/prompt state, rays, hover, haptics, press/touch latches, and ownership.
 - **4.2** ☐ Physical inventory. The existing flatscreen 2D inventory reprojects into
   world space generically (see 4.3) but there is no distinct physical/3D inventory.
 - **4.3** ✅ Summonable floating panels: character sheet, galaxy map (and inventory).
-  The wrist menu (4.1) opens `MenuInventory`/`MenuCharacter`/`MenuGalaxyMap` the same
-  way their flatscreen hotkeys do (the fourth wrist slot became "Comfort Settings" —
-  see 2.6 — rather than Journal, which wasn't itself a roadmap-named panel); the
-  existing generic `VRPanelHost` + `LegacyGUIVRPointerAdapter` reprojection handles the
-  rest — no new rendering infrastructure needed.
+  The wheel opens `MenuInventory`, `MenuCharacter`, and local `MenuMap`, plus
+  `VRComfortSettingsHost`; conditional Level-Up also opens `MenuCharacter` and its
+  working Auto Level-Up route rather than the empty `MenuLevelUp` shell. Galaxy Map
+  remains a context-dependent static popup reached only through the Ebon Hawk console's
+  proactive world prompt and existing `Use` route; no radial route opens
+  `MenuGalaxyMap`. The existing generic `VRPanelHost` +
+  `LegacyGUIVRPointerAdapter` reprojection handles legacy panels — no new rendering
+  infrastructure needed.
 - **4.4** ❓ Dialogue skill checks as floating panels. Genuinely unconfirmed — may
   already work via generic reprojection if skill checks are authored as ordinary GUI
   screens, or may need bespoke handling. Not chased down this pass.
