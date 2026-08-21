@@ -32,13 +32,18 @@ to the walkmesh — the rig cannot leave walkable space. Physical wall intrusion
 **Party.** Keep both order-issuing and full character swapping, anywhere. The cost of
 swapping was considered and accepted.
 
-**UI.** Wrist-mounted holo device plus physical inventory. Character sheet, galaxy map
-and dialogue skill checks are summonable floating panels. Every on-screen button in the
-flat game needs a VR route — the existing `gui/` widget layer is the thing being
-replaced or reprojected, and `game/tsl/` menus are frequently stubs, so check against
-`game/kotor/` before assuming a menu is missing.
-
-**Radial menu pauses outright.** Revisit only if multiplayer ever happens.
+**UI.** One all-purpose action wheel opens from left-controller `X`, captures a
+head-relative placement, and remains fixed in world space for that opening. The
+left-controller ray hovers and the left trigger confirms; either controller may
+activate a wedge immediately by direct touch. Opening the wheel does not pause or slow the
+game. It owns conflicting combat, world-use, and UI activation until it closes;
+foreground menus then pause only according to their existing behavior. Physical
+inventory remains a separate goal. Character sheet, local map, context-dependent
+galaxy map, and dialogue skill checks are summonable floating panels through their
+valid wheel or world routes. Every on-screen button in the flat game needs a VR
+route — the existing `gui/` widget layer is the thing being replaced or reprojected,
+and `game/tsl/` menus are frequently stubs, so check against `game/kotor/` before
+assuming a menu is missing.
 
 **Cutscenes.** Reproject onto a theater screen. Dialogue keeps the engine's camera
 cuts, with **fade-to-black between them** — the cuts themselves are nauseating in VR,

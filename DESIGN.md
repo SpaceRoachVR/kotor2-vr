@@ -99,9 +99,10 @@ the local `MenuMap`.
 
 Tracking or XR-session loss, module transitions, dialogue/cutscene entry, and
 foreground-menu takeover close the wheel and prompts and clear rays, hover,
-haptics, press/touch latches, and ownership without engine activation. Session
-teardown also disposes the owned meshes, materials, canvas/icon textures, and
-pointer resources.
+press/touch latches, and ownership without engine activation. Already-issued
+best-effort haptic pulses are not cancelled because the WebXR haptic port has no
+cancellation contract. Session teardown also disposes the owned meshes,
+materials, canvas/icon textures, and pointer resources.
 
 ### Locomotion
 

@@ -40,7 +40,7 @@ const HAND_ORDER: readonly XRHandRole[] = ['left', 'right'];
 /**
  * Engine-independent state machine for the trigger-confirm radial action
  * wheel. The owning XR runtime executes emitted activation effects only after
- * it has applied the corresponding close and pause transitions.
+ * it has applied the corresponding teardown and input-ownership transitions.
  */
 export class VRRadialMenuController {
   private state: ControllerState = 'closed';

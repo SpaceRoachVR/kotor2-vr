@@ -21,8 +21,9 @@ concrete playtest bugs (menu mirroring, VR keyboard, cutscene placement, combat
 targeting, world-object interaction — all root-caused and fixed except the
 menu-mirroring visual, which got a diagnostic instead since static reading
 couldn't confirm the cause) and several completeness gaps (wall soft-block,
-comfort locomotion options, diegetic hilt timer, blaster laser pointer, wrist
-device panel summon, cutscene fade-to-black — all now implemented). Phase
+comfort locomotion options, diegetic hilt timer, blaster laser pointer, the
+all-purpose action wheel and its Comfort Settings panel route, cutscene
+fade-to-black — all now implemented). Phase
 statuses below are updated to match. **None of this session's VR work has been
 verified in a headset** — 303 unit/integration tests pass and `tsc` is clean,
 but every phase exit below still needs the same device-evidence bar the rest
@@ -271,7 +272,8 @@ First light in the headset. No interaction yet.
 - **2.5** ✅ Smooth locomotion + smooth turn as default; teleport, snap turn, vignette as
   options. `VRSnapTurnController`, `VRTeleportController`, `VRComfortVignetteHost`,
   `GameState.getComfortSettings`/`setComfortSettings`.
-- **2.6** ✅ Comfort settings surfaced somewhere reachable in-headset. The smooth/blink
+- **2.6** ✅ implemented / ☐ headset-accepted — Comfort settings have an in-headset
+  route. The smooth/blink
   locomotion toggle was already reachable (`ToggleLocomotionMode`); `turnMode`,
   `snapTurnDegrees`, and `vignetteEnabled` are now reachable through a "Comfort
   Settings" item on the all-purpose `X` action wheel (4.1), opening
@@ -344,10 +346,13 @@ Every button reachable in flatscreen needs a VR route.
   Settings, and conditional Level-Up-to-Character; full-screen menus retain their
   existing pause/foreground ownership after the wheel closes. Tracking/session
   loss, module transition, dialogue/cutscene entry, and foreground takeover clear
-  wheel/prompt state, rays, hover, haptics, press/touch latches, and ownership.
+  wheel/prompt state, rays, hover, press/touch latches, and ownership without
+  activation. Already-issued optional haptic pulses are best-effort and are not
+  cancellable through the current WebXR haptic port.
 - **4.2** ☐ Physical inventory. The existing flatscreen 2D inventory reprojects into
   world space generically (see 4.3) but there is no distinct physical/3D inventory.
-- **4.3** ✅ Summonable floating panels: character sheet, galaxy map (and inventory).
+- **4.3** ✅ implemented / ☐ headset-accepted — Summonable floating panels: character
+  sheet, galaxy map (and inventory).
   The wheel opens `MenuInventory`, `MenuCharacter`, and local `MenuMap`, plus
   `VRComfortSettingsHost`; conditional Level-Up also opens `MenuCharacter` and its
   working Auto Level-Up route rather than the empty `MenuLevelUp` shell. Galaxy Map

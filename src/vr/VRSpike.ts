@@ -613,6 +613,15 @@ export class VRSpike {
       : null;
     VRSpike.traceStartupStage('callback');
     VRSpike.updateTrackedInput(timestamp, frame);
+    let moduleTransitioned = true;
+    try {
+      moduleTransitioned = VRSpike.observeWorldModuleTransition();
+    } catch (error) {
+      if (!VRSpike.worldInteractionInputErrorReported) {
+        VRSpike.worldInteractionInputErrorReported = true;
+        console.error('[VRSpike] world module lifecycle rejected', error);
+      }
+    }
     const movieOwnsInput = VRSpike.processMovieInput();
     const authoredCutsceneActive = VRSpike.hooks?.getCutsceneContext?.() != null;
     const keyboardOwnsInput = !movieOwnsInput && VRSpike.processKeyboardInput();
@@ -622,25 +631,22 @@ export class VRSpike {
       !comfortSettingsOwnsInput && VRSpike.processPanelInput();
     const foregroundSurfaceOwnsInput = movieOwnsInput || keyboardOwnsInput ||
       comfortSettingsOwnsInput || panelOwnsInput;
-    if (foregroundSurfaceOwnsInput) {
-      VRSpike.captureRadialMenuButtonLatch();
-      VRSpike.closeRadialMenuForLifecycle(false);
+    const lifecycleSuspendsGameplayInput = moduleTransitioned || authoredCutsceneActive;
+    if (foregroundSurfaceOwnsInput || lifecycleSuspendsGameplayInput) {
+      VRSpike.suspendTransientGameplayInputForLifecycle();
     }
-    const radialOwnsInput = !foregroundSurfaceOwnsInput && VRSpike.processRadialMenuInput();
-    const worldPromptSuspended = foregroundSurfaceOwnsInput || radialOwnsInput || authoredCutsceneActive;
-    if (worldPromptSuspended) {
+    const radialOwnsInput = !foregroundSurfaceOwnsInput && !lifecycleSuspendsGameplayInput &&
+      VRSpike.processRadialMenuInput();
+    if (radialOwnsInput) {
       VRSpike.captureWorldPromptSelectLatch();
       VRSpike.clearWorldActionPrompt(false);
     }
-    if (foregroundSurfaceOwnsInput) {
-      VRSpike.interactionTargetSet.clear();
-      VRSpike.interactionSystem.cancelTransientState();
-    } else {
+    if (!foregroundSurfaceOwnsInput) {
       VRSpike.processLocomotionInput(timestamp, frame, !radialOwnsInput);
-      if (radialOwnsInput || authoredCutsceneActive) {
+      if (radialOwnsInput) {
         VRSpike.interactionTargetSet.clear();
         VRSpike.interactionSystem.cancelTransientState();
-      } else {
+      } else if (!lifecycleSuspendsGameplayInput) {
         const interactionConsumed = VRSpike.processInteractionInput(timestamp);
         if (!interactionConsumed) VRSpike.processCombatInput(timestamp);
       }
@@ -913,7 +919,7 @@ export class VRSpike {
     return true;
   }
 
-  /** Comfort settings panel (ROADMAP 2.6), opened from the wrist menu. */
+  /** Comfort settings panel (ROADMAP 2.6), opened from the all-purpose action wheel. */
   private static processComfortSettingsInput(): boolean {
     const context = VRSpike.hooks?.getComfortSettingsPanelContext?.() ?? null;
     const inputFrame = VRSpike.latestInputFrame;
@@ -978,14 +984,8 @@ export class VRSpike {
     }
 
     try {
-      const module = VRSpike.hooks?.getWorldContext().module ?? null;
-      if (!VRSpike.worldPromptModuleInitialized) {
-        VRSpike.worldPromptModule = module;
-        VRSpike.worldPromptModuleInitialized = true;
-      } else if (module !== VRSpike.worldPromptModule) {
-        VRSpike.worldPromptModule = module;
-        VRSpike.interactionAimedTargetId = null;
-        VRSpike.clearWorldActionPrompt(false);
+      if (VRSpike.observeWorldModuleTransition()) {
+        VRSpike.suspendTransientGameplayInputForLifecycle();
         return false;
       }
 
@@ -1458,6 +1458,39 @@ export class VRSpike {
     } else {
       VRSpike.radialMenuHost?.clear();
     }
+  }
+
+  /**
+   * Records the current engine module and reports exactly the frame where its
+   * stable identity changes. This runs before any gameplay input owner so an
+   * open wheel cannot retain a ray/touch selection into the incoming module.
+   */
+  private static observeWorldModuleTransition(): boolean {
+    const module = VRSpike.hooks?.getWorldContext().module ?? null;
+    if (!VRSpike.worldPromptModuleInitialized) {
+      VRSpike.worldPromptModule = module;
+      VRSpike.worldPromptModuleInitialized = true;
+      return false;
+    }
+    if (module === VRSpike.worldPromptModule) return false;
+    VRSpike.worldPromptModule = module;
+    return true;
+  }
+
+  /**
+   * Releases transient wheel, prompt, ray, and target ownership without
+   * activating engine callbacks. Physical button state is sampled first so a
+   * held X/Select cannot become a fresh press after the lifecycle boundary.
+   * Already-issued optional haptic pulses are intentionally not cancellable.
+   */
+  private static suspendTransientGameplayInputForLifecycle(): void {
+    VRSpike.captureRadialMenuButtonLatch();
+    VRSpike.closeRadialMenuForLifecycle(false);
+    VRSpike.captureWorldPromptSelectLatch();
+    VRSpike.interactionAimedTargetId = null;
+    VRSpike.clearWorldActionPrompt(false);
+    VRSpike.interactionTargetSet.clear();
+    VRSpike.interactionSystem.cancelTransientState();
   }
 
   private static captureRadialMenuButtonLatch(): void {

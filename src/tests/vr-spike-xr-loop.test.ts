@@ -1385,6 +1385,109 @@ describe('VRSpike XR loop ownership', () => {
     expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
   });
 
+  test('module transition closes an open wheel before a stale touch can activate it', () => {
+    const activate = jest.fn();
+    const input = installRadialInput();
+    let module = '101PER';
+    const actor = { id: 7, position: new THREE.Vector3(), clearAllActions: jest.fn() };
+    const host = installRadialHost({
+      touchHit: (probe) => probe === input.rightTargetRayPose.position
+        ? { kind: 'entry', index: 0 }
+        : null,
+    });
+    const createActionWheel = jest.fn(() => actionWheel(activate));
+    VRSpike.hooks = basicHooks({
+      createActionWheel,
+      getInteractionContext: () => ({ actor, targets: [] as readonly EngineInteractableObject[] }),
+      getWorldActionPromptContext: () => ({
+        actor,
+        candidates: [] as readonly VRWorldPromptCandidate[],
+        createPrompt: (): VRWorldActionPromptModel | null => null,
+      }),
+      getWorldContext: () => ({
+        module,
+        position: actor.position,
+        room: null as string | null,
+        roomsVisible: 0,
+        roomsTotal: 0,
+      }),
+    });
+    jest.spyOn(VRSpike as any, 'updateTrackedInput').mockImplementation(() => undefined);
+
+    // Establish the outgoing module, then open the wheel on a later frame.
+    (VRSpike as any).frame(1_000, {} as XRFrame);
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).frame(1_016, {} as XRFrame);
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
+    host.clear.mockClear();
+    const cancelTransientState = jest.spyOn((VRSpike as any).interactionSystem, 'cancelTransientState');
+    cancelTransientState.mockClear();
+
+    module = '102PER';
+    (VRSpike as any).frame(1_032, {} as XRFrame);
+    (VRSpike as any).frame(1_048, {} as XRFrame);
+
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(false);
+    expect(activate).not.toHaveBeenCalled();
+    expect(host.clear).toHaveBeenCalled();
+    expect(cancelTransientState).toHaveBeenCalled();
+    expect(createActionWheel).toHaveBeenCalledTimes(1);
+
+    // The held X/touch state must not become a new opening in the new module.
+    input.leftButtons[4] = releasedButton();
+    (VRSpike as any).frame(1_064, {} as XRFrame);
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).frame(1_080, {} as XRFrame);
+    expect(createActionWheel).toHaveBeenCalledTimes(2);
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
+  });
+
+  test('dialogue or cutscene entry closes an open wheel before a stale ray trigger can activate it', () => {
+    const activate = jest.fn();
+    const input = installRadialInput();
+    let cutsceneActive = false;
+    const host = installRadialHost({
+      rayHit: { kind: 'entry', index: 0 },
+      touchHit: () => null,
+    });
+    const createActionWheel = jest.fn(() => actionWheel(activate));
+    VRSpike.hooks = basicHooks({
+      createActionWheel,
+      getCutsceneContext: () => cutsceneActive
+        ? { canSkip: false, skip: jest.fn(), abort: jest.fn() }
+        : null,
+    });
+    jest.spyOn(VRSpike as any, 'updateTrackedInput').mockImplementation(() => undefined);
+
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).frame(1_000, {} as XRFrame);
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
+    host.clear.mockClear();
+
+    cutsceneActive = true;
+    input.leftButtons[0] = pressedButton();
+    (VRSpike as any).frame(1_016, {} as XRFrame);
+    (VRSpike as any).frame(1_032, {} as XRFrame);
+
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(false);
+    expect(activate).not.toHaveBeenCalled();
+    expect(host.clear).toHaveBeenCalled();
+    expect(createActionWheel).toHaveBeenCalledTimes(1);
+    expect((VRSpike as any).worldPromptSelectHeld.left).toBe(true);
+
+    // Releasing while authored dialogue owns input rearms the next fresh X
+    // press without carrying the old trigger edge or ray hit across the entry.
+    input.leftButtons[4] = releasedButton();
+    input.leftButtons[0] = releasedButton();
+    (VRSpike as any).frame(1_048, {} as XRFrame);
+    expect((VRSpike as any).worldPromptSelectHeld.left).toBe(false);
+    cutsceneActive = false;
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).frame(1_064, {} as XRFrame);
+    expect(createActionWheel).toHaveBeenCalledTimes(2);
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
+  });
+
   test.each(['tracking unavailable', 'session end'] as const)(
     '%s closes without activation and disposes radial host resources',
     (reason) => {
