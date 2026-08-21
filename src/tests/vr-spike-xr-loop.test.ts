@@ -6,8 +6,11 @@ import {
   ResolvedLocomotion,
 } from '@/vr/runtime/LocomotionController';
 import { VRHapticFeedback } from '@/vr/runtime/VRHapticFeedback';
+import { EngineInteractableObject } from '@/vr/runtime/ModuleObjectInteractionTarget';
 import { VRRadialMenuController } from '@/vr/runtime/VRRadialMenuController';
 import { VRRadialMenuDefinition } from '@/vr/runtime/VRRadialMenuModel';
+import { VRWorldActionPromptController } from '@/vr/runtime/VRWorldActionPromptController';
+import { VRWorldActionPromptModel } from '@/vr/runtime/VRWorldActionPromptModel';
 import { XRHandRole, XRWorldPose } from '@/vr/runtime/XRTypes';
 import { afterEach, beforeEach, describe, expect, jest, test } from "@jest/globals";
 
@@ -63,6 +66,15 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).radialMenuController = new VRRadialMenuController();
     (VRSpike as any).radialMenuPressedLastFrame = false;
     (VRSpike as any).haptics = new VRHapticFeedback();
+    (VRSpike as any).worldActionPromptHost?.dispose?.();
+    (VRSpike as any).worldActionPromptHost = null;
+    (VRSpike as any).worldActionPromptController = new VRWorldActionPromptController();
+    (VRSpike as any).worldPromptCandidateId = null;
+    (VRSpike as any).worldPromptModel = null;
+    (VRSpike as any).worldPromptModule = null;
+    (VRSpike as any).worldPromptModuleInitialized = false;
+    (VRSpike as any).worldPromptSelectHeld = { left: false, right: false };
+    (VRSpike as any).interactionAimedTargetId = null;
 
     restoreGlobal('document', originalDocument);
     restoreGlobal('navigator', originalNavigator);
@@ -861,7 +873,7 @@ describe('VRSpike XR loop ownership', () => {
     expect(head.orientation.angleTo(VRSpike.rig.quaternion)).toBeLessThan(1e-10);
   });
 
-  test('routes a Quest trigger to an interaction intent without queuing desktop movement', () => {
+  test('keeps ray preview nomination without dispatching generic world activation', () => {
     const referenceSpace = {} as XRReferenceSpace;
     const gripSpace = {} as XRSpace;
     const buttons = Array.from({ length: 6 }, () => ({
@@ -878,7 +890,7 @@ describe('VRSpike XR loop ownership', () => {
       isUseable: () => true,
       onClick: jest.fn(),
     };
-    const onInteractionIntent = jest.fn();
+    const genericActivation = jest.spyOn((VRSpike as any).interactionSystem, 'process');
     const inputSource = {
       handedness: 'right',
       gripSpace,
@@ -906,7 +918,11 @@ describe('VRSpike XR loop ownership', () => {
       getInteractionContext: () => ({
         actor,
         targets: [target],
-        onInteractionIntent,
+      }),
+      getWorldActionPromptContext: () => ({
+        actor,
+        candidates: [],
+        createPrompt: () => null,
       }),
     };
     const frame = {
@@ -923,12 +939,208 @@ describe('VRSpike XR loop ownership', () => {
 
     expect(actor.clearAllActions).not.toHaveBeenCalled();
     expect(target.onClick).not.toHaveBeenCalled();
-    expect(onInteractionIntent).toHaveBeenCalledTimes(1);
-    expect(onInteractionIntent.mock.calls[0][0]).toMatchObject({
-      actorId: '7',
-      targetId: 'module-object:42',
-      interactionMode: 'ray',
-    });
+    expect(genericActivation).not.toHaveBeenCalled();
+    expect((VRSpike as any).interactionAimedTargetId).toBe(42);
+  });
+
+  test('prompt Select activates exactly once and supersedes generic world interaction', () => {
+    const buttons = Array.from({ length: 6 }, releasedButton);
+    const promptActivate = jest.fn();
+    const genericActivation = jest.spyOn((VRSpike as any).interactionSystem, 'process');
+    const actor = { id: 7, position: new THREE.Vector3(), clearAllActions: jest.fn() };
+    const target = {
+      id: 42,
+      objectType: 1 << 13,
+      position: new THREE.Vector3(0, 2, 0),
+      isUseable: () => true,
+      onClick: jest.fn(),
+    };
+    const model = worldPromptModel('module-object:42', promptActivate);
+    VRSpike.scene = new THREE.Scene();
+    VRSpike.camera = new THREE.PerspectiveCamera(70, 1, 0.05, 100);
+    VRSpike.camera.up.set(0, 0, 1);
+    VRSpike.camera.lookAt(new THREE.Vector3(0, 1, 0));
+    VRSpike.camera.updateProjectionMatrix();
+    VRSpike.camera.updateMatrixWorld(true);
+    VRSpike.renderer = {
+      xr: { getCamera: () => ({ cameras: [VRSpike.camera] }) },
+    } as never;
+    VRSpike.session = {
+      inputSources: [{
+        handedness: 'right',
+        profiles: ['oculus-touch-v3'],
+        gamepad: { axes: [0, 0, 0, 0], buttons },
+      }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      timestamp: 1_000,
+      head: {
+        ...worldPose(0, 0, 1.7),
+        orientation: new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(1, 0, 0),
+          Math.PI / 2,
+        ),
+      },
+      hands: {
+        right: {
+          hand: 'right',
+          pose: worldPose(0, 0, 1.2),
+          targetRayPose: worldPose(0, 0, 1.2),
+          buttons: {},
+          axes: [],
+          interactionProfile: 'oculus-touch-v3',
+        },
+      },
+      activeInteractionProfiles: ['oculus-touch-v3'],
+    };
+    const promptHost = {
+      present: jest.fn(),
+      resolveRay: jest.fn(() => 'direct-use:42'),
+      clear: jest.fn(),
+      dispose: jest.fn(),
+    };
+    (VRSpike as any).worldActionPromptHost = promptHost;
+    const pulse = jest.fn(async (
+      _session: XRSession,
+      _hand: XRHandRole,
+      _pattern: { readonly durationMs: number; readonly amplitude: number },
+    ): Promise<void> => undefined);
+    (VRSpike as any).haptics = { pulse };
+    VRSpike.hooks = basicHooks({
+      getInteractionContext: () => ({ actor, targets: [target] }),
+      getWorldActionPromptContext: () => ({
+        actor,
+        candidates: [{
+          id: 'module-object:42',
+          name: 'Galaxy Map',
+          position: new THREE.Vector3(0, 2, 1),
+          actorDistanceMetres: 2,
+          hasActions: true,
+          inRange: true,
+        }],
+        createPrompt: () => model,
+      }),
+    } as never);
+
+    (VRSpike as any).processInteractionInput(1_000);
+    buttons[0] = pressedButton();
+    (VRSpike as any).processInteractionInput(1_016);
+    (VRSpike as any).processInteractionInput(1_032);
+
+    expect(promptActivate).toHaveBeenCalledTimes(1);
+    expect(genericActivation).not.toHaveBeenCalled();
+    expect(target.onClick).not.toHaveBeenCalled();
+    expect(pulse).toHaveBeenCalledWith(expect.anything(), 'right', { durationMs: 35, amplitude: 0.35 });
+    expect(promptHost.clear.mock.invocationCallOrder.some(
+      (callOrder: number) => callOrder < promptActivate.mock.invocationCallOrder[0]
+    )).toBe(true);
+  });
+
+  test('lets either ray nominate an eligible object and otherwise prefers the head center', () => {
+    const center = promptCandidate('module-object:1', 0, 2);
+    const offCenter = promptCandidate('module-object:2', 1, 2);
+    const createPrompt = jest.fn((targetId: string) => worldPromptModelForTarget(targetId));
+    installWorldPromptHarness([center, offCenter], createPrompt);
+    const preview = jest.spyOn((VRSpike as any).interactionSystem, 'preview');
+
+    preview.mockReturnValue(null);
+    (VRSpike as any).processInteractionInput(1_000);
+    expect((VRSpike as any).worldPromptCandidateId).toBe('module-object:1');
+
+    preview.mockImplementation((_frame: unknown, hand: XRHandRole) => hand === 'left'
+      ? rayPreview(offCenter)
+      : null);
+    (VRSpike as any).processInteractionInput(1_016);
+    expect((VRSpike as any).worldPromptCandidateId).toBe('module-object:2');
+
+    preview.mockImplementation((_frame: unknown, hand: XRHandRole) => hand === 'right'
+      ? rayPreview(center)
+      : null);
+    (VRSpike as any).processInteractionInput(1_032);
+    expect((VRSpike as any).worldPromptCandidateId).toBe('module-object:1');
+    expect(createPrompt.mock.calls.map(([targetId]) => targetId)).toEqual([
+      'module-object:1',
+      'module-object:2',
+      'module-object:1',
+    ]);
+  });
+
+  test('clears immediately on range, eye-frustum, cone, list, or action loss', () => {
+    const candidate = promptCandidate('module-object:42', 0, 2);
+    let candidates = [candidate];
+    let actionAvailable = true;
+    const createPrompt = jest.fn(() => actionAvailable
+      ? worldPromptModelForTarget('module-object:42', () => actionAvailable)
+      : null);
+    const harness = installWorldPromptHarness(candidates, createPrompt, () => candidates);
+    jest.spyOn((VRSpike as any).interactionSystem, 'preview').mockReturnValue(null);
+
+    (VRSpike as any).processInteractionInput(1_000);
+    expect((VRSpike as any).worldPromptCandidateId).toBe('module-object:42');
+
+    candidates = [{ ...candidate, inRange: false }];
+    (VRSpike as any).processInteractionInput(1_016);
+    expectPromptCleared(harness.host);
+
+    // Thirty degrees is inside the 55-degree prompt cone, but outside this
+    // deliberately narrow 20-degree eye camera.
+    candidates = [promptCandidate('module-object:42', 1, Math.sqrt(3))];
+    harness.eyeCamera.fov = 20;
+    harness.eyeCamera.updateProjectionMatrix();
+    (VRSpike as any).processInteractionInput(1_032);
+    expectPromptCleared(harness.host);
+
+    // Sixty degrees is visible in the widened eye camera but outside the
+    // horizontal prompt cone.
+    candidates = [promptCandidate('module-object:42', Math.sqrt(3), 1)];
+    harness.eyeCamera.fov = 120;
+    harness.eyeCamera.updateProjectionMatrix();
+    (VRSpike as any).processInteractionInput(1_048);
+    expectPromptCleared(harness.host);
+
+    // The engine's selectable list is also the LOS/object-liveness source.
+    candidates = [];
+    (VRSpike as any).processInteractionInput(1_064);
+    expectPromptCleared(harness.host);
+
+    candidates = [candidate];
+    (VRSpike as any).processInteractionInput(1_080);
+    actionAvailable = false;
+    (VRSpike as any).processInteractionInput(1_096);
+    expectPromptCleared(harness.host);
+  });
+
+  test('accepts an anchor visible to either XR eye frustum', () => {
+    const leftEye = createEyeCamera(0, 1);
+    const rightEye = createEyeCamera(0, -1);
+    VRSpike.camera = new THREE.PerspectiveCamera();
+    VRSpike.renderer = {
+      xr: { getCamera: () => ({ cameras: [leftEye, rightEye] }) },
+    } as never;
+
+    const isVisible = (VRSpike as any).createPerEyeFrustumPredicate();
+
+    expect(isVisible(new THREE.Vector3(0, 2, 1))).toBe(true);
+    expect(isVisible(new THREE.Vector3(20, 0, 1))).toBe(false);
+  });
+
+  test('clears on module transition and rebuilds eligibility on the next stable frame', () => {
+    let module = '101PER';
+    const candidate = promptCandidate('module-object:42', 0, 2);
+    const createPrompt = jest.fn(() => worldPromptModelForTarget('module-object:42'));
+    const harness = installWorldPromptHarness([candidate], createPrompt, undefined, () => module);
+    jest.spyOn((VRSpike as any).interactionSystem, 'preview').mockReturnValue(null);
+
+    (VRSpike as any).processInteractionInput(1_000);
+    module = '102PER';
+    (VRSpike as any).processInteractionInput(1_016);
+
+    expectPromptCleared(harness.host);
+    expect(createPrompt).toHaveBeenCalledTimes(1);
+
+    (VRSpike as any).processInteractionInput(1_032);
+    expect(createPrompt).toHaveBeenCalledTimes(2);
+    expect((VRSpike as any).worldPromptCandidateId).toBe('module-object:42');
   });
 
   test('opens the action wheel once from left X at the captured head pose without pausing', () => {
@@ -936,7 +1148,7 @@ describe('VRSpike XR loop ownership', () => {
     const host = installRadialHost();
     const setPaused = jest.fn();
     const createActionWheel = jest.fn((_aimedTargetId: number | null) => actionWheel());
-    (VRSpike as any).interactionPreviewIndicator = { id: 'module-object:42' };
+    (VRSpike as any).interactionAimedTargetId = 42;
     VRSpike.hooks = basicHooks({ createActionWheel, setPaused } as never);
 
     input.leftButtons[4] = pressedButton();
@@ -1055,6 +1267,8 @@ describe('VRSpike XR loop ownership', () => {
     const combat = jest.spyOn(VRSpike as any, 'processCombatInput').mockImplementation(() => undefined);
     const clearTargets = jest.spyOn((VRSpike as any).interactionTargetSet, 'clear');
     const cancelInteraction = jest.spyOn((VRSpike as any).interactionSystem, 'cancelTransientState');
+    const promptHost = { clear: jest.fn(), dispose: jest.fn() };
+    (VRSpike as any).worldActionPromptHost = promptHost;
 
     (VRSpike as any).frame(1_000, {} as XRFrame);
 
@@ -1064,6 +1278,13 @@ describe('VRSpike XR loop ownership', () => {
     expect(combat).not.toHaveBeenCalled();
     expect(clearTargets).toHaveBeenCalled();
     expect(cancelInteraction).toHaveBeenCalled();
+    expect(promptHost.clear).toHaveBeenCalled();
+
+    input.leftButtons[4] = releasedButton();
+    (VRSpike as any).frame(1_016, {} as XRFrame);
+    (VRSpike as any).frame(1_032, {} as XRFrame);
+
+    expect(interaction).toHaveBeenCalledTimes(1);
   });
 
   test('observes X release under foreground ownership so the next fresh press opens', () => {
@@ -1087,8 +1308,11 @@ describe('VRSpike XR loop ownership', () => {
     jest.spyOn(VRSpike as any, 'processLocomotionInput').mockImplementation(() => undefined);
     jest.spyOn(VRSpike as any, 'processInteractionInput').mockReturnValue(false);
     jest.spyOn(VRSpike as any, 'processCombatInput').mockImplementation(() => undefined);
+    const promptHost = { clear: jest.fn(), dispose: jest.fn() };
+    (VRSpike as any).worldActionPromptHost = promptHost;
 
     (VRSpike as any).frame(1_000, {} as XRFrame);
+    expect(promptHost.clear).toHaveBeenCalled();
     input.leftButtons[4] = releasedButton();
     (VRSpike as any).frame(1_016, {} as XRFrame);
     input.leftButtons[4] = pressedButton();
@@ -1104,13 +1328,14 @@ describe('VRSpike XR loop ownership', () => {
       const activate = jest.fn();
       const input = installRadialInput();
       const host = installRadialHost();
+      const promptHost = { clear: jest.fn(), dispose: jest.fn() };
+      (VRSpike as any).worldActionPromptHost = promptHost;
       VRSpike.hooks = basicHooks({ createActionWheel: () => actionWheel(activate) });
       input.leftButtons[4] = pressedButton();
       (VRSpike as any).processRadialMenuInput();
 
       if (reason === 'tracking unavailable') {
-        (VRSpike as any).latestInputFrame = null;
-        (VRSpike as any).processRadialMenuInput();
+        (VRSpike as any).clearTrackedInput();
       } else {
         Object.defineProperty(globalThis, 'document', {
           configurable: true,
@@ -1125,6 +1350,12 @@ describe('VRSpike XR loop ownership', () => {
 
       expect((VRSpike as any).radialMenuController.isOpen).toBe(false);
       expect(host.dispose).toHaveBeenCalledTimes(1);
+      if (reason === 'tracking unavailable') {
+        expect(promptHost.clear).toHaveBeenCalled();
+        expect(promptHost.dispose).not.toHaveBeenCalled();
+      } else {
+        expect(promptHost.dispose).toHaveBeenCalledTimes(1);
+      }
       expect(activate).not.toHaveBeenCalled();
     },
   );
@@ -1147,6 +1378,135 @@ function basicHooks(overrides: Record<string, unknown> = {}): any {
   };
 }
 
+function installWorldPromptHarness(
+  initialCandidates: readonly ReturnType<typeof promptCandidate>[],
+  createPrompt: (targetId: string) => VRWorldActionPromptModel | null,
+  getCandidates: (() => readonly ReturnType<typeof promptCandidate>[]) | undefined = undefined,
+  getModule: (() => string | null) = () => '101PER',
+): {
+  readonly host: {
+    present: jest.Mock;
+    resolveRay: jest.Mock;
+    clear: jest.Mock;
+    dispose: jest.Mock;
+  };
+  readonly eyeCamera: THREE.PerspectiveCamera;
+} {
+  const leftButtons = Array.from({ length: 6 }, releasedButton);
+  const rightButtons = Array.from({ length: 6 }, releasedButton);
+  const actor = { id: 7, position: new THREE.Vector3(), clearAllActions: jest.fn() };
+  const eyeCamera = createEyeCamera(0, 1);
+  const head = worldPose(0, 0, 1.7);
+  head.orientation.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+  VRSpike.scene = new THREE.Scene();
+  VRSpike.camera = new THREE.PerspectiveCamera();
+  VRSpike.renderer = {
+    xr: { getCamera: () => ({ cameras: [eyeCamera] }) },
+  } as never;
+  VRSpike.session = {
+    inputSources: [
+      { handedness: 'left', profiles: ['oculus-touch-v3'], gamepad: { axes: [0, 0, 0, 0], buttons: leftButtons } },
+      { handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [0, 0, 0, 0], buttons: rightButtons } },
+    ],
+  } as unknown as XRSession;
+  (VRSpike as any).latestInputFrame = {
+    timestamp: 1_000,
+    head,
+    hands: {
+      left: { hand: 'left', pose: worldPose(-0.2, 0, 1.2), targetRayPose: worldPose(-0.2, 0, 1.2), buttons: {}, axes: [], interactionProfile: 'oculus-touch-v3' },
+      right: { hand: 'right', pose: worldPose(0.2, 0, 1.2), targetRayPose: worldPose(0.2, 0, 1.2), buttons: {}, axes: [], interactionProfile: 'oculus-touch-v3' },
+    },
+    activeInteractionProfiles: ['oculus-touch-v3'],
+  };
+  const host = {
+    present: jest.fn(),
+    resolveRay: jest.fn(() => null),
+    clear: jest.fn(),
+    dispose: jest.fn(),
+  };
+  (VRSpike as any).worldActionPromptHost = host;
+  (VRSpike as any).worldActionPromptController = new VRWorldActionPromptController();
+  (VRSpike as any).worldPromptCandidateId = null;
+  (VRSpike as any).worldPromptModel = null;
+  (VRSpike as any).worldPromptModule = null;
+  (VRSpike as any).worldPromptModuleInitialized = false;
+  (VRSpike as any).worldPromptSelectHeld = { left: false, right: false };
+  VRSpike.hooks = basicHooks({
+    getInteractionContext: () => ({ actor, targets: [] as unknown as readonly EngineInteractableObject[] }),
+    getWorldActionPromptContext: () => ({
+      actor,
+      candidates: getCandidates?.() ?? initialCandidates,
+      createPrompt,
+    }),
+    getWorldContext: () => ({
+      module: getModule(),
+      position: actor.position,
+      room: null as string | null,
+      roomsVisible: 0,
+      roomsTotal: 0,
+    }),
+  });
+  return { host, eyeCamera };
+}
+
+function promptCandidate(id: string, x: number, y: number) {
+  return {
+    id,
+    name: id === 'module-object:1' ? 'Center' : 'Object',
+    position: new THREE.Vector3(x, y, 1),
+    actorDistanceMetres: Math.hypot(x, y),
+    hasActions: true,
+    inRange: true,
+  };
+}
+
+function worldPromptModelForTarget(
+  targetId: string,
+  revalidate: () => boolean = () => true,
+): VRWorldActionPromptModel {
+  return {
+    id: `prompt:${targetId}`,
+    name: targetId,
+    anchor: new THREE.Vector3(0, 2, 1),
+    pages: [{
+      index: 0,
+      entries: [{
+        kind: 'action',
+        id: `action:${targetId}`,
+        label: 'Use',
+        revalidate,
+        activate: jest.fn(),
+      }],
+    }],
+  };
+}
+
+function rayPreview(candidate: ReturnType<typeof promptCandidate>) {
+  return {
+    id: candidate.id,
+    label: candidate.name,
+    interactionMode: 'ray' as const,
+    position: candidate.position,
+  };
+}
+
+function createEyeCamera(xDirection: number, yDirection: number): THREE.PerspectiveCamera {
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 100);
+  camera.position.set(0, 0, 1.7);
+  camera.up.set(0, 0, 1);
+  camera.lookAt(new THREE.Vector3(xDirection, yDirection, 1.7));
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld(true);
+  return camera;
+}
+
+function expectPromptCleared(host: { clear: jest.Mock }): void {
+  expect((VRSpike as any).worldPromptCandidateId).toBeNull();
+  expect((VRSpike as any).worldPromptModel).toBeNull();
+  expect((VRSpike as any).interactionPreviewIndicator).toBeNull();
+  expect(host.clear).toHaveBeenCalled();
+}
+
 function actionWheel(activate = jest.fn()): VRRadialMenuDefinition {
   return {
     id: 'test-wheel',
@@ -1157,6 +1517,24 @@ function actionWheel(activate = jest.fn()): VRRadialMenuDefinition {
         kind: 'action',
         id: 'test-action',
         label: 'Test Action',
+        revalidate: () => true,
+        activate,
+      }],
+    }],
+  };
+}
+
+function worldPromptModel(id: string, activate = jest.fn()): VRWorldActionPromptModel {
+  return {
+    id,
+    name: 'Galaxy Map',
+    anchor: new THREE.Vector3(0, 2, 1),
+    pages: [{
+      index: 0,
+      entries: [{
+        kind: 'action',
+        id: 'direct-use:42',
+        label: 'Use: Galaxy Map',
         revalidate: () => true,
         activate,
       }],
@@ -1370,4 +1748,212 @@ function restoreGlobal(
   } else {
     Reflect.deleteProperty(globalThis, property);
   }
+}
+
+describe('GameState proactive world-prompt assembly', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'info').mockImplementation((): void => undefined);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('describes an unlocked door without using it during model creation', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 11,
+      name: 'Airlock',
+      objectType: harness.objectTypes.ModuleDoor,
+      locked: false,
+    });
+    harness.setTarget(door, []);
+
+    const model = harness.buildPrompt('module-object:11');
+
+    expect(flattenPromptActions(model).map((action) => action.label)).toEqual(['Use: Airlock']);
+    expect(door.use).not.toHaveBeenCalled();
+  });
+
+  test('uses authoritative authored actions for a locked door and omits direct Open', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 12,
+      name: 'Security Door',
+      objectType: harness.objectTypes.ModuleDoor,
+      locked: true,
+    });
+    harness.setTarget(door, [
+      harness.entry('iaction_sec'),
+      harness.entry('i_use_item', 'Security Tunneler'),
+      harness.entry('iaction_attack'),
+      harness.entry('iaction_mine'),
+    ]);
+
+    const model = harness.buildPrompt('module-object:12');
+
+    expect(flattenPromptActions(model).map((action) => action.label)).toEqual([
+      'Security',
+      'Security Tunneler',
+      'Bash',
+      'Mine',
+    ]);
+    expect(door.use).not.toHaveBeenCalled();
+  });
+
+  test('maps authored trap actions to Disarm and Recover', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const trap = harness.target({
+      id: 13,
+      name: 'Deadly Gas Mine',
+      objectType: harness.objectTypes.ModuleTrigger,
+    });
+    harness.setTarget(trap, [
+      harness.entry('iaction_dismine'),
+      harness.entry('iaction_recmine'),
+    ]);
+
+    const model = harness.buildPrompt('module-object:13');
+
+    expect(flattenPromptActions(model).map((action) => action.label)).toEqual(['Disarm', 'Recover']);
+    expect(trap.use).not.toHaveBeenCalled();
+  });
+
+  test('keeps Galaxy Map on its existing direct world-console use route until selection', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const galaxyMap = harness.target({
+      id: 14,
+      name: 'Galaxy Map',
+      objectType: harness.objectTypes.ModulePlaceable,
+    });
+    harness.setTarget(galaxyMap, []);
+
+    const [useAction] = flattenPromptActions(harness.buildPrompt('module-object:14'));
+
+    expect(useAction.label).toBe('Use: Galaxy Map');
+    expect(galaxyMap.use).not.toHaveBeenCalled();
+    useAction.activate();
+    expect(galaxyMap.use).toHaveBeenCalledTimes(1);
+    expect(galaxyMap.use).toHaveBeenCalledWith(harness.actor);
+  });
+});
+
+interface GameStatePromptTestTarget {
+  readonly id: number;
+  readonly objectType: number;
+  readonly position: THREE.Vector3;
+  readonly destroyed: boolean;
+  readonly willDestroy: boolean;
+  readonly use: jest.Mock;
+  readonly onClick: jest.Mock;
+  getName(): string;
+  isUseable(): boolean;
+  isLocked(): boolean;
+}
+
+interface GameStatePromptTestAction {
+  readonly kind: 'action';
+  readonly id: string;
+  readonly label: string;
+  revalidate(): boolean;
+  activate(): void;
+}
+
+function createGameStateWorldPromptHarness(): {
+  readonly actor: { readonly id: number; readonly position: THREE.Vector3 };
+  readonly objectTypes: { readonly ModuleDoor: number; readonly ModulePlaceable: number; readonly ModuleTrigger: number };
+  target(options: { readonly id: number; readonly name: string; readonly objectType: number; readonly locked?: boolean }): GameStatePromptTestTarget;
+  entry(icon: string, itemName?: string): Record<string, unknown>;
+  setTarget(target: GameStatePromptTestTarget, actions: readonly Record<string, unknown>[]): void;
+  buildPrompt(targetId: string): unknown;
+} {
+  const EmptyClass = class {};
+  const mockNamedExports = (): object => new Proxy({}, { get: () => EmptyClass });
+  let loaded: any;
+
+  jest.isolateModules(() => {
+    jest.doMock('@/managers', mockNamedExports);
+    jest.doMock('@/controls/IngameControls', () => ({ IngameControls: EmptyClass }));
+    jest.doMock('@/controls/Mouse', () => ({ Mouse: {} }));
+    jest.doMock('@/engine/INIConfig', () => ({ INIConfig: EmptyClass }));
+    jest.doMock('@/audio', mockNamedExports);
+    jest.doMock('@/resource/TGAObject', () => ({ TGAObject: EmptyClass }));
+    jest.doMock('@/utility/ConfigClient', () => ({ ConfigClient: EmptyClass }));
+    jest.doMock('@/engine/FollowerCamera', () => ({ FollowerCamera: EmptyClass }));
+    jest.doMock('@/shaders/pass/OdysseyShaderPass', () => ({ OdysseyShaderPass: EmptyClass }));
+    jest.doMock('@/loaders', mockNamedExports);
+    jest.doMock('@/vr/VRSpike', () => ({ VRSpike }));
+    jest.doMock('@/vr/runtime/CreatureLocomotionAdapter', () => ({ CreatureLocomotionAdapter: EmptyClass }));
+    jest.doMock('@/vr/runtime/LegacyGUIVRPointerAdapter', () => ({ LegacyGUIVRPointerAdapter: EmptyClass }));
+    jest.doMock('@/engine/EngineLocation', () => ({ __esModule: true, default: EmptyClass }));
+    jest.doMock('three/examples/jsm/postprocessing/EffectComposer', () => ({ EffectComposer: EmptyClass }));
+    jest.doMock('three/examples/jsm/postprocessing/RenderPass', () => ({ RenderPass: EmptyClass }));
+    jest.doMock('three/examples/jsm/postprocessing/SSAARenderPass', () => ({ SSAARenderPass: EmptyClass }));
+    jest.doMock('three/examples/jsm/postprocessing/ShaderPass', () => ({ ShaderPass: EmptyClass }));
+    jest.doMock('three/examples/jsm/postprocessing/BloomPass', () => ({ BloomPass: EmptyClass }));
+    jest.doMock('three/examples/jsm/postprocessing/BokehPass', () => ({ BokehPass: EmptyClass }));
+    jest.doMock('three/examples/jsm/shaders/ColorCorrectionShader', () => ({ ColorCorrectionShader: {} }));
+    jest.doMock('three/examples/jsm/shaders/CopyShader', () => ({ CopyShader: {} }));
+    jest.doMock('three/examples/jsm/libs/stats.module', () => ({ __esModule: true, default: EmptyClass }));
+    jest.doMock('@/engine/Planetary', () => ({ Planetary: EmptyClass }));
+    jest.doMock('@/engine/Debugger', () => ({ Debugger: EmptyClass }));
+    jest.doMock('@/utility/PerformanceMonitor', () => ({ PerformanceMonitor: EmptyClass }));
+    loaded = {
+      ...require('@/GameState'),
+      THREE: require('three'),
+    };
+  });
+
+  const { GameState, buildVRWorldActionPrompt, THREE: engineThree } = loaded;
+  const { ModuleObjectType } = require('@/enums/module/ModuleObjectType');
+  const actor = { id: 7, position: new engineThree.Vector3(0, 0, 0) };
+  const actionPanels = {
+    targetPanels: [] as Array<{ actions: readonly Record<string, unknown>[]; selectedIndex: number }>,
+    selfPanels: [] as Array<{ actions: readonly Record<string, unknown>[]; selectedIndex: number }>,
+  };
+  const actionMenuManager = {
+    ActionPanels: actionPanels,
+    SetPC: jest.fn(),
+    SetTarget: jest.fn(),
+    UpdateMenuActions: jest.fn(),
+    onTargetMenuAction: jest.fn(),
+    onSelfMenuAction: jest.fn(),
+  };
+  GameState.PartyManager = { party: [actor], Player: actor };
+  GameState.ModuleObjectManager = { playerSelectableObjects: [] };
+  GameState.ActionMenuManager = actionMenuManager;
+
+  return {
+    actor,
+    objectTypes: ModuleObjectType,
+    target: ({ id, name, objectType, locked = false }) => ({
+      id,
+      objectType,
+      position: new engineThree.Vector3(0, 1, 0),
+      destroyed: false,
+      willDestroy: false,
+      use: jest.fn(),
+      onClick: jest.fn(),
+      getName: () => name,
+      isUseable: () => true,
+      isLocked: () => locked,
+    }),
+    entry: (icon, itemName) => ({
+      icon,
+      action: { type: icon },
+      ...(itemName ? { item: { id: icon, getName: () => itemName } } : {}),
+    }),
+    setTarget: (target, actions) => {
+      GameState.ModuleObjectManager.playerSelectableObjects = [target];
+      actionPanels.targetPanels = [{ actions, selectedIndex: 0 }];
+    },
+    buildPrompt: (targetId) => buildVRWorldActionPrompt(targetId),
+  };
+}
+
+function flattenPromptActions(model: any): readonly GameStatePromptTestAction[] {
+  if (!model) throw new Error('expected a world prompt model');
+  return model.pages.flatMap((page: any) =>
+    page.entries.filter((entry: any) => entry.kind === 'action')
+  );
 }

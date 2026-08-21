@@ -50,9 +50,21 @@ import {
   LegacyGUIVRPointerCoordinates,
   LegacyGUIVRPointerControl,
 } from "@/vr/runtime/LegacyGUIVRPointerAdapter";
-import { VRContextActionPanelController } from "@/vr/runtime/VRContextActionPanelController";
-import { tryDirectVRWorldUse } from "@/vr/runtime/VRWorldUseAdapter";
-import type { EngineInteractableObject } from "@/vr/runtime/ModuleObjectInteractionTarget";
+import {
+  describeDirectVRWorldUse,
+  getVRInteractionRange,
+} from "@/vr/runtime/VRWorldUseAdapter";
+import {
+  EngineInteractableObject,
+  resolveVRInteractionAnchor,
+} from "@/vr/runtime/ModuleObjectInteractionTarget";
+import {
+  VRWorldActionPromptModel,
+  VRWorldPromptAction,
+  VRWorldPromptCandidate,
+  buildVRWorldPromptPages,
+} from "@/vr/runtime/VRWorldActionPromptModel";
+import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
 import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
 import {
@@ -109,13 +121,6 @@ const namedGroup = (name: string = 'na'): THREE.Group => {
 }
 
 const vrCreatureLocomotionAdapter = new CreatureLocomotionAdapter(TURN_SPEED_FAST);
-const vrContextActionPanelController = new VRContextActionPanelController({
-  triggerControllerAPress: () => GameState.MenuManager.InGameOverlay.triggerControllerAPress(),
-  triggerControllerBPress: () => GameState.MenuManager.InGameOverlay.triggerControllerBPress(),
-  triggerControllerXPress: () => GameState.MenuManager.InGameOverlay.triggerControllerXPress(),
-  triggerControllerYPress: () => GameState.MenuManager.InGameOverlay.triggerControllerYPress(),
-});
-let vrContextActionTarget: EngineInteractableObject | null = null;
 let vrCombatIssuedTargetId: number | null = null;
 
 /**
@@ -124,7 +129,11 @@ let vrCombatIssuedTargetId: number | null = null;
  * vignette are opt-in alternatives a player switches on, not the other way
  * around.
  */
-const vrComfortSettings: VRComfortSettings = {
+type MutableVRComfortSettings = {
+  -readonly [Property in keyof VRComfortSettings]: VRComfortSettings[Property];
+};
+
+const vrComfortSettings: MutableVRComfortSettings = {
   locomotionMode: 'smooth',
   turnMode: 'smooth',
   snapTurnDegrees: 45,
@@ -197,22 +206,6 @@ function isWithinVRCombatRange(actor: ModuleCreature, target: ModuleObject): boo
   ) <= resolveVRCombatRange(actor);
 }
 
-/**
- * One-shot-per-object route reporting for VR world interactions.
- *
- * These findings only ever arrive as a console log pasted back from a headset
- * session, so this reports at `error` level: default DevTools filtering hides
- * `warn` and `info`, which is why the previous round's diagnostics came back
- * empty rather than informative.
- */
-const reportedVRInteractionRoutes = new Set<number>();
-
-function reportVRInteractionRoute(targetId: number, detail: string): void {
-  if (reportedVRInteractionRoutes.has(targetId)) return;
-  reportedVRInteractionRoutes.add(targetId);
-  console.error(`[VR interaction route] target=${targetId} ${detail}`);
-}
-
 function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null {
   if (aimedTargetId === null) return null;
   return GameState.ModuleObjectManager.playerSelectableObjects.find(
@@ -227,7 +220,9 @@ function getVRActionLabel(entry: VRActionMenuEntry, target: ModuleObject | null)
   if (typeof itemName === 'string' && itemName.trim()) return toPlayerFacingActionLabel(itemName);
   const icon = typeof entry.icon === 'string' ? entry.icon.toLowerCase() : '';
   if (icon.includes('attack')) return (target?.objectType & ModuleObjectType.ModuleDoor) !== 0 ? 'Bash' : 'Attack';
-  if (icon.includes('security') || icon.includes('unlock')) return 'Security';
+  if (icon.includes('security') || icon.includes('unlock') || /(^|_)sec/.test(icon)) return 'Security';
+  if (icon.includes('dismine')) return 'Disarm';
+  if (icon.includes('recmine')) return 'Recover';
   if (icon.includes('mine')) return 'Mine';
   return 'Action';
 }
@@ -262,6 +257,176 @@ const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreat
   onTargetMenuAction: (panelIndex) => GameState.ActionMenuManager.onTargetMenuAction(panelIndex),
   onSelfMenuAction: (panelIndex) => GameState.ActionMenuManager.onSelfMenuAction(panelIndex),
 };
+
+const vrWorldPromptActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreature, ModuleObject> = {
+  getCurrentActor: () => GameState.getCurrentPlayer() ?? null,
+  isTargetAvailable: (actor, target) => isLiveVRWorldPromptTarget(actor, target),
+  refreshPanels: (actor, target): VRActionMenuPanelLists | null => {
+    if (!target || !isLiveVRWorldPromptTarget(actor, target)) return null;
+    GameState.ActionMenuManager.SetPC(actor);
+    GameState.ActionMenuManager.SetTarget(target);
+    GameState.ActionMenuManager.UpdateMenuActions();
+    return GameState.ActionMenuManager.ActionPanels as VRActionMenuPanelLists;
+  },
+  getPlayerFacingLabel: (entry, target) => getVRActionLabel(entry, target),
+  getIcon: (entry) => getVRActionIcon(entry),
+  onTargetMenuAction: (panelIndex) => GameState.ActionMenuManager.onTargetMenuAction(panelIndex),
+  onSelfMenuAction: (panelIndex) => GameState.ActionMenuManager.onSelfMenuAction(panelIndex),
+};
+
+/**
+ * Builds immutable, non-activating prompt candidates from the engine's live
+ * LOS/usability list. ActionMenuManager may refresh its descriptive panels,
+ * but no action, target use route, or queue is invoked here.
+ */
+export function buildVRWorldPromptCandidates(
+  actor: ModuleCreature | null | undefined,
+  objects: readonly ModuleObject[],
+): readonly VRWorldPromptCandidate[] {
+  if (!actor || !Array.isArray(objects)) return [];
+  const candidates: VRWorldPromptCandidate[] = [];
+  for (const target of objects) {
+    if (!isStructurallyValidVRWorldPromptTarget(actor, target)) continue;
+    try {
+      const actorDistanceMetres = distance2D(actor.position, target.position);
+      const inRange = actorDistanceMetres <= getVRInteractionRange(target.objectType);
+      const model = inRange ? buildVRWorldActionPromptFor(actor, target) : null;
+      candidates.push({
+        id: `module-object:${target.id}`,
+        name: resolveVRWorldPromptName(target),
+        position: resolveVRInteractionAnchor(target as EngineInteractableObject, new THREE.Vector3()),
+        actorDistanceMetres,
+        hasActions: model !== null,
+        inRange,
+      });
+    } catch {
+      // A malformed object that is being destroyed must not suppress every
+      // other usable object in the engine-maintained selectable list.
+    }
+  }
+  return candidates;
+}
+
+/** Resolves and snapshots one exact live object for proactive prompt display. */
+export function buildVRWorldActionPrompt(targetId: string): VRWorldActionPromptModel | null {
+  const match = /^module-object:(\d+)$/.exec(targetId);
+  if (!match) return null;
+  const actor = GameState.getCurrentPlayer() ?? null;
+  if (!actor) return null;
+  const numericTargetId = Number(match[1]);
+  const target = GameState.ModuleObjectManager.playerSelectableObjects.find(
+    (candidate) => candidate.id === numericTargetId,
+  );
+  return target ? buildVRWorldActionPromptFor(actor, target) : null;
+}
+
+function buildVRWorldActionPromptFor(
+  actor: ModuleCreature,
+  target: ModuleObject,
+): VRWorldActionPromptModel | null {
+  if (!isLiveVRWorldPromptTarget(actor, target)) return null;
+  try {
+    GameState.ActionMenuManager.SetPC(actor);
+    GameState.ActionMenuManager.SetTarget(target);
+    GameState.ActionMenuManager.UpdateMenuActions();
+    const authoredActions = snapshotVRActionMenuPanelEntries(
+      {
+        actor,
+        target,
+        kind: 'target',
+        panels: GameState.ActionMenuManager.ActionPanels.targetPanels as readonly VRActionMenuPanel[],
+      },
+      vrWorldPromptActionMenuBridgeDependencies,
+    ).map((descriptor): VRWorldPromptAction => ({
+      kind: 'action',
+      id: descriptor.id,
+      label: descriptor.label,
+      icon: descriptor.icon,
+      revalidate: () => isLiveVRWorldPromptTarget(actor, target) && descriptor.revalidate(),
+      activate: () => {
+        if (!isLiveVRWorldPromptTarget(actor, target) || !descriptor.revalidate()) return;
+        descriptor.activate();
+      },
+    }));
+
+    const actions = [...authoredActions];
+    if (!isVRWorldPromptTargetLocked(target) && isDirectVRWorldUseTarget(target)) {
+      const descriptor = describeDirectVRWorldUse(actor, target);
+      if (descriptor) {
+        actions.push({
+          kind: 'action',
+          id: descriptor.id,
+          label: descriptor.label,
+          revalidate: () => isLiveVRWorldPromptTarget(actor, target) && descriptor.revalidate(),
+          activate: () => {
+            if (!isLiveVRWorldPromptTarget(actor, target) || !descriptor.revalidate()) return;
+            descriptor.activate();
+          },
+        });
+      }
+    }
+
+    const pages = buildVRWorldPromptPages(actions);
+    if (pages.length === 0) return null;
+    const anchor = resolveVRInteractionAnchor(target as EngineInteractableObject, new THREE.Vector3());
+    return {
+      id: `world-prompt:${target.id}:${actions.map((action) => action.id).join('|')}`,
+      name: resolveVRWorldPromptName(target),
+      anchor,
+      pages,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isLiveVRWorldPromptTarget(actor: ModuleCreature, target: ModuleObject): boolean {
+  return GameState.getCurrentPlayer() === actor &&
+    GameState.ModuleObjectManager.playerSelectableObjects.includes(target) &&
+    isStructurallyValidVRWorldPromptTarget(actor, target) &&
+    distance2D(actor.position, target.position) <= getVRInteractionRange(target.objectType);
+}
+
+function isStructurallyValidVRWorldPromptTarget(actor: ModuleCreature, target: ModuleObject): boolean {
+  try {
+    const supportedType = (target.objectType & (
+      ModuleObjectType.ModuleDoor |
+      ModuleObjectType.ModulePlaceable |
+      ModuleObjectType.ModuleTrigger
+    )) !== 0;
+    return !!target && target !== actor && supportedType &&
+      Number.isInteger(target.id) && target.id >= 0 &&
+      target.position instanceof THREE.Vector3 && Number.isInteger(target.objectType) &&
+      target.destroyed !== true && target.willDestroy !== true &&
+      typeof target.isUseable === 'function' && target.isUseable();
+  } catch {
+    return false;
+  }
+}
+
+function isVRWorldPromptTargetLocked(target: ModuleObject): boolean {
+  const lockable = target as ModuleObject & { isLocked?: () => boolean };
+  return typeof lockable.isLocked === 'function' && lockable.isLocked() === true;
+}
+
+function isDirectVRWorldUseTarget(target: ModuleObject): target is ModuleObject & {
+  use(actor: ModuleCreature): void;
+} {
+  const supportedType = (target.objectType & (ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable)) !== 0;
+  return supportedType && typeof (target as unknown as { use?: unknown }).use === 'function';
+}
+
+function resolveVRWorldPromptName(target: ModuleObject): string {
+  try {
+    return resolveDisplayName(target.getName?.()) || 'Object';
+  } catch {
+    return 'Object';
+  }
+}
+
+function distance2D(first: THREE.Vector3, second: THREE.Vector3): number {
+  return Math.hypot(first.x - second.x, first.y - second.y);
+}
 
 function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
   return GameState.PartyManager.party.slice(1).map((member) => ({
@@ -1021,60 +1186,18 @@ export class GameState implements EngineContext {
         // The engine has already removed the player, unusable/open objects,
         // out-of-range objects, and targets without line of sight.
         targets: GameState.ModuleObjectManager.playerSelectableObjects,
-        onInteractionIntent: (intent) => {
-          const actor = GameState.getCurrentPlayer();
-          const target = GameState.ModuleObjectManager.playerSelectableObjects.find(
-            (object) => `module-object:${object.id}` === intent.targetId
-          );
-          if (!actor || !target) {
-            vrContextActionTarget = null;
-            vrContextActionPanelController.close();
-            return;
-          }
-
-          // A locked door or container must reach the contextual action panel,
-          // which already offers the authored Security / Security Tunneler /
-          // Bash options for exactly this case. Direct-use would otherwise
-          // swallow the interaction first — `use()` on a locked object just
-          // plays the locked sound — leaving VR with no way to open anything
-          // locked, which read in the headset as "defaults to bash or does
-          // nothing at all".
-          const lockable = target as unknown as { isLocked?: () => boolean };
-          const targetIsLocked = typeof lockable.isLocked === 'function' && lockable.isLocked();
-          const directUseResult = targetIsLocked
-            ? { handled: false as const, feedbackLabel: undefined }
-            : tryDirectVRWorldUse(actor, target);
-          if (directUseResult.handled) {
-            vrContextActionTarget = null;
-            vrContextActionPanelController.close();
-            return { feedbackLabel: directUseResult.feedbackLabel };
-          }
-
-          GameState.ActionMenuManager.SetPC(actor);
-          GameState.ActionMenuManager.SetTarget(target);
-          GameState.ActionMenuManager.UpdateMenuActions();
-          const actionCount = GameState.ActionMenuManager.targetActionCount();
-          // Every "I used it and nothing happened" report — locked doors and
-          // containers, the galaxy map console, the Peragus lift — ends here,
-          // and until now this branch was silent about which of its three
-          // outcomes it took. Report the route once per object so the next
-          // headset run distinguishes "direct-use ran and the engine declined"
-          // from "the panel opened empty" from "no actions were offered".
-          reportVRInteractionRoute(
-            target.id,
-            `type=${target.objectType} locked=${targetIsLocked} ` +
-            `directUseHandled=${directUseResult.handled} actions=${actionCount} ` +
-            `name='${target.getName?.() ?? ''}'`
-          );
-          if (actionCount > 0) {
-            vrContextActionTarget = target;
-            vrContextActionPanelController.open(intent.targetId);
-          } else {
-            vrContextActionTarget = null;
-            vrContextActionPanelController.close();
-          }
-        },
       }),
+      getWorldActionPromptContext: () => {
+        const actor = GameState.getCurrentPlayer() ?? null;
+        return {
+          actor,
+          candidates: buildVRWorldPromptCandidates(
+            actor,
+            GameState.ModuleObjectManager.playerSelectableObjects,
+          ),
+          createPrompt: (targetId: string) => buildVRWorldActionPrompt(targetId),
+        };
+      },
       getCombatContext: (aimedTargetId) => {
         const actor = GameState.getCurrentPlayer();
         if (!actor) return null;
@@ -1215,25 +1338,9 @@ export class GameState implements EngineContext {
       },
       getPanelContext: () => {
         const foregroundMenu = GameState.MenuManager.GetForegroundMenu();
-        let menu = foregroundMenu?.bVisible && foregroundMenu !== GameState.MenuManager.InGameOverlay
+        const menu = foregroundMenu?.bVisible && foregroundMenu !== GameState.MenuManager.InGameOverlay
           ? foregroundMenu
           : null;
-        if (menu) {
-          vrContextActionTarget = null;
-          vrContextActionPanelController.close();
-        } else if (vrContextActionTarget) {
-          const targetId = `module-object:${vrContextActionTarget.id}`;
-          const targetIsAvailable = GameState.ModuleObjectManager.playerSelectableObjects.includes(
-            vrContextActionTarget as ModuleObject
-          );
-          menu = targetIsAvailable
-            ? vrContextActionPanelController.resolve(
-              targetId,
-              GameState.ActionMenuManager.targetActionCount() > 0
-            )
-            : null;
-          if (!menu) vrContextActionTarget = null;
-        }
         return {
           menu,
           guiScene: GameState.scene_gui,

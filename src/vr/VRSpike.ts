@@ -3,7 +3,7 @@ import { XRCoordinateConverter } from "./runtime/XRCoordinateConverter";
 import { XRControllerAnchorHost } from "./runtime/XRControllerAnchorHost";
 import { XRGamepadReader } from "./runtime/XRGamepadReader";
 import { XRInputFrameBuilder } from "./runtime/XRInputFrameBuilder";
-import { XRInputRouter } from "./runtime/XRInputRouter";
+import { RoutedXRAction, XRInputRouter } from "./runtime/XRInputRouter";
 import { InteractionSystem } from "./runtime/InteractionSystem";
 import { InteractionTargetRegistry } from "./runtime/InteractionTargetRegistry";
 import { LocomotionController, ResolvedLocomotion } from "./runtime/LocomotionController";
@@ -32,6 +32,13 @@ import {
   VRWorldTargetIndicator,
   VRWorldTargetLabelHost,
 } from "./runtime/VRWorldTargetLabelHost";
+import { VRWorldActionPromptController, VRWorldPromptEffect } from "./runtime/VRWorldActionPromptController";
+import { VRWorldActionPromptHost } from "./runtime/VRWorldActionPromptHost";
+import {
+  VRWorldActionPromptModel,
+  VRWorldPromptCandidate,
+  selectVRWorldPromptCandidate,
+} from "./runtime/VRWorldActionPromptModel";
 import {
   VRPanelInputController,
   VRPanelMenuController,
@@ -42,7 +49,7 @@ import {
   EngineInteractionActor,
   ModuleObjectInteractionTargetSet,
 } from "./runtime/ModuleObjectInteractionTarget";
-import { CombatWeaponMode, InteractionIntent, SemanticXRAction, VRComfortSettings, XRInputFrame, XRWorldPose } from "./runtime/XRTypes";
+import { CombatWeaponMode, SemanticXRAction, VRComfortSettings, XRHandRole, XRInputFrame, XRWorldPose } from "./runtime/XRTypes";
 import { PerfSampler, PerfWorldSnapshot } from "./PerfSampler";
 import type { EngineFrameSource } from "./XRFrameCadence";
 
@@ -109,9 +116,12 @@ export interface VRSpikeHooks {
   getInteractionContext?: () => {
     readonly actor: EngineInteractionActor | null;
     readonly targets: readonly EngineInteractableObject[];
-    readonly onInteractionIntent?: (intent: InteractionIntent) =>
-      | { readonly feedbackLabel?: string }
-      | void;
+  };
+  /** Live engine candidates and immutable prompt snapshots for world actions. */
+  getWorldActionPromptContext?: () => {
+    readonly actor: EngineInteractionActor | null;
+    readonly candidates: readonly VRWorldPromptCandidate[];
+    createPrompt(targetId: string): VRWorldActionPromptModel | null;
   };
   /**
    * Current engine combat target and the authoritative d20 action bridge.
@@ -261,6 +271,14 @@ export class VRSpike {
   private static readonly cutsceneOwner = {};
   private static panelPointerHost: VRPanelPointerHost | null = null;
   private static worldTargetLabelHost: VRWorldTargetLabelHost | null = null;
+  private static worldActionPromptHost: VRWorldActionPromptHost | null = null;
+  private static worldActionPromptController = new VRWorldActionPromptController();
+  private static worldPromptCandidateId: string | null = null;
+  private static worldPromptModel: VRWorldActionPromptModel | null = null;
+  private static worldPromptModule: string | null = null;
+  private static worldPromptModuleInitialized = false;
+  private static worldPromptSelectHeld: Record<XRHandRole, boolean> = { left: true, right: true };
+  private static interactionAimedTargetId: number | null = null;
   private static interactionPreviewIndicator: VRWorldTargetIndicator | null = null;
   private static latestPanelPointerPosition: THREE.Vector2 | null = null;
   private static movieCancelHeld = false;
@@ -449,6 +467,11 @@ export class VRSpike {
       VRSpike.turnOriginOffset.set(0, 0, 0);
       VRSpike.interactionTargetSet.clear();
       VRSpike.interactionSystem.cancelTransientState();
+      VRSpike.clearWorldActionPrompt(false);
+      VRSpike.worldPromptModule = null;
+      VRSpike.worldPromptModuleInitialized = false;
+      VRSpike.worldPromptSelectHeld = { left: true, right: true };
+      VRSpike.interactionAimedTargetId = null;
       VRSpike.combatInputController.reset();
       VRSpike.forceGestureController.reset();
       VRSpike.snapTurnController.reset();
@@ -543,6 +566,11 @@ export class VRSpike {
     VRSpike.movieHost?.clear();
     VRSpike.panelPointerHost?.clear();
     VRSpike.worldTargetLabelHost?.clear();
+    VRSpike.clearWorldActionPrompt(true);
+    VRSpike.worldPromptModule = null;
+    VRSpike.worldPromptModuleInitialized = false;
+    VRSpike.worldPromptSelectHeld = { left: true, right: true };
+    VRSpike.interactionAimedTargetId = null;
     VRSpike.latestPanelPointerPosition = null;
     VRSpike.comfortVignetteHost?.dispose();
     VRSpike.comfortVignetteHost = null;
@@ -584,6 +612,7 @@ export class VRSpike {
     VRSpike.traceStartupStage('callback');
     VRSpike.updateTrackedInput(timestamp, frame);
     const movieOwnsInput = VRSpike.processMovieInput();
+    const authoredCutsceneActive = VRSpike.hooks?.getCutsceneContext?.() != null;
     const keyboardOwnsInput = !movieOwnsInput && VRSpike.processKeyboardInput();
     const comfortSettingsOwnsInput = !movieOwnsInput && !keyboardOwnsInput &&
       VRSpike.processComfortSettingsInput();
@@ -596,12 +625,17 @@ export class VRSpike {
       VRSpike.closeRadialMenuForLifecycle(false);
     }
     const radialOwnsInput = !foregroundSurfaceOwnsInput && VRSpike.processRadialMenuInput();
+    const worldPromptSuspended = foregroundSurfaceOwnsInput || radialOwnsInput || authoredCutsceneActive;
+    if (worldPromptSuspended) {
+      VRSpike.captureWorldPromptSelectLatch();
+      VRSpike.clearWorldActionPrompt(false);
+    }
     if (foregroundSurfaceOwnsInput) {
       VRSpike.interactionTargetSet.clear();
       VRSpike.interactionSystem.cancelTransientState();
     } else {
       VRSpike.processLocomotionInput(timestamp, frame, !radialOwnsInput);
-      if (radialOwnsInput) {
+      if (radialOwnsInput || authoredCutsceneActive) {
         VRSpike.interactionTargetSet.clear();
         VRSpike.interactionSystem.cancelTransientState();
       } else {
@@ -659,6 +693,9 @@ export class VRSpike {
     VRSpike.closeRadialMenuForLifecycle(true);
     VRSpike.latestInputFrame = null;
     VRSpike.interactionPreviewIndicator = null;
+    VRSpike.interactionAimedTargetId = null;
+    VRSpike.worldPromptSelectHeld = { left: true, right: true };
+    VRSpike.clearWorldActionPrompt(false);
     VRSpike.controllerAnchorHost?.clear();
     VRSpike.interactionSystem.cancelTransientState();
     VRSpike.panelInputController.cancel();
@@ -926,45 +963,228 @@ export class VRSpike {
     context?.pointerSink.setPointerPosition(null);
   }
 
-  private static processInteractionInput(timestamp: number): boolean {
+  private static processInteractionInput(_timestamp: number): boolean {
     const inputFrame = VRSpike.latestInputFrame;
     const session = VRSpike.session;
-    const context = VRSpike.hooks?.getInteractionContext?.();
-    if (!inputFrame || !session || !context?.actor) {
-      VRSpike.interactionPreviewIndicator = null;
+    const interactionContext = VRSpike.hooks?.getInteractionContext?.();
+    const promptContext = VRSpike.hooks?.getWorldActionPromptContext?.();
+    if (!inputFrame || !session || !interactionContext?.actor || !promptContext?.actor ||
+      interactionContext.actor !== promptContext.actor) {
+      VRSpike.interactionAimedTargetId = null;
+      VRSpike.clearWorldActionPrompt(false);
       return false;
     }
 
     try {
-      VRSpike.interactionTargetSet.synchronize(context.targets);
-      const preview = VRSpike.interactionSystem.preview(inputFrame, 'right');
-      VRSpike.interactionPreviewIndicator = preview
-        ? { id: preview.id, name: preview.label, position: preview.position }
-        : null;
-      const controllers = XRGamepadReader.read(Array.from(session.inputSources ?? []));
-      const actions = VRSpike.inputRouter.route(controllers, new Set(['world-prompt', 'interaction']));
-      const intent = VRSpike.interactionSystem.process(
-        inputFrame,
-        actions,
-        String(context.actor.id),
-        timestamp
-      );
-      if (!intent) return false;
-      const result = context.onInteractionIntent?.(intent);
-      if (result && result.feedbackLabel && VRSpike.interactionPreviewIndicator) {
-        VRSpike.interactionPreviewIndicator = {
-          ...VRSpike.interactionPreviewIndicator,
-          name: result.feedbackLabel,
-        };
+      const module = VRSpike.hooks?.getWorldContext().module ?? null;
+      if (!VRSpike.worldPromptModuleInitialized) {
+        VRSpike.worldPromptModule = module;
+        VRSpike.worldPromptModuleInitialized = true;
+      } else if (module !== VRSpike.worldPromptModule) {
+        VRSpike.worldPromptModule = module;
+        VRSpike.interactionAimedTargetId = null;
+        VRSpike.clearWorldActionPrompt(false);
+        return false;
       }
-      return true;
+
+      VRSpike.interactionTargetSet.synchronize(interactionContext.targets);
+      const leftPreview = VRSpike.resolveRayPreview(inputFrame, 'left');
+      const rightPreview = VRSpike.resolveRayPreview(inputFrame, 'right');
+      VRSpike.interactionAimedTargetId = VRSpike.parseModuleObjectTargetId(rightPreview?.id ?? null);
+
+      const selectedCandidate = selectVRWorldPromptCandidate(
+        promptContext.candidates,
+        inputFrame.head,
+        VRSpike.worldPromptCandidateId,
+        [leftPreview?.id, rightPreview?.id].filter((id): id is string => typeof id === 'string'),
+        VRSpike.createPerEyeFrustumPredicate(),
+      );
+      if (!selectedCandidate) {
+        VRSpike.clearWorldActionPrompt(false);
+        return false;
+      }
+
+      const candidateChanged = selectedCandidate.id !== VRSpike.worldPromptCandidateId;
+      const modelInvalid = VRSpike.worldPromptModel !== null &&
+        !VRSpike.isWorldPromptModelCurrent(VRSpike.worldPromptModel);
+      if (candidateChanged || !VRSpike.worldPromptModel || modelInvalid) {
+        VRSpike.worldPromptModel = promptContext.createPrompt(selectedCandidate.id);
+      }
+      VRSpike.worldPromptCandidateId = selectedCandidate.id;
+      if (!VRSpike.worldPromptModel) {
+        VRSpike.clearWorldActionPrompt(false);
+        return false;
+      }
+
+      VRSpike.interactionPreviewIndicator = {
+        id: selectedCandidate.id,
+        name: selectedCandidate.name,
+        position: selectedCandidate.position,
+      };
+      const host = VRSpike.getOrCreateWorldActionPromptHost();
+      if (!host) {
+        VRSpike.clearWorldActionPrompt(false);
+        return false;
+      }
+
+      VRSpike.worldActionPromptController.process(VRSpike.worldPromptModel, {}, []);
+      const initialPresentation = VRSpike.worldActionPromptController.presentation;
+      if (!initialPresentation) {
+        VRSpike.clearWorldActionPrompt(false);
+        return false;
+      }
+      host.present(initialPresentation, inputFrame.head, null);
+      const hoveredByHand = {
+        left: VRSpike.resolveWorldPromptRay(host, inputFrame, 'left'),
+        right: VRSpike.resolveWorldPromptRay(host, inputFrame, 'right'),
+      };
+      const controllers = XRGamepadReader.read(Array.from(session.inputSources ?? []));
+      const routedActions = VRSpike.inputRouter.route(controllers, new Set(['world-prompt']));
+      const edgeActions = VRSpike.filterWorldPromptSelectEdges(routedActions);
+      const promptSelectConsumed = edgeActions.some((action) =>
+        action.action === SemanticXRAction.Select && action.pressed && hoveredByHand[action.hand] !== null
+      );
+      const effects = VRSpike.worldActionPromptController.process(
+        VRSpike.worldPromptModel,
+        hoveredByHand,
+        edgeActions,
+      );
+      VRSpike.applyWorldPromptEffects(effects, session);
+      const presentation = VRSpike.worldActionPromptController.presentation;
+      if (presentation && VRSpike.worldPromptModel) {
+        host.present(presentation, inputFrame.head, presentation.hoveredId);
+      }
+      return promptSelectConsumed;
     } catch (error) {
-      VRSpike.interactionPreviewIndicator = null;
+      VRSpike.interactionAimedTargetId = null;
+      VRSpike.clearWorldActionPrompt(false);
       if (!VRSpike.worldInteractionInputErrorReported) {
         VRSpike.worldInteractionInputErrorReported = true;
-        console.error('[VRSpike] world interaction input rejected', error);
+        console.error('[VRSpike] world action prompt input rejected', error);
       }
       return false;
+    }
+  }
+
+  private static resolveRayPreview(inputFrame: XRInputFrame, hand: XRHandRole) {
+    const handFrame = inputFrame.hands[hand];
+    if (!handFrame || handFrame.targetRayPose.trackingState !== 'tracked') return null;
+    const preview = VRSpike.interactionSystem.preview(inputFrame, hand);
+    return preview?.interactionMode === 'ray' ? preview : null;
+  }
+
+  private static createPerEyeFrustumPredicate(): (position: THREE.Vector3) => boolean {
+    const renderer = VRSpike.renderer;
+    const camera = VRSpike.camera;
+    if (!renderer || !camera || typeof renderer.xr.getCamera !== 'function') return () => false;
+    const xrCamera = (renderer.xr.getCamera as unknown as (
+      sourceCamera: THREE.Camera,
+    ) => THREE.ArrayCamera)(camera);
+    const cameras: readonly THREE.Camera[] = Array.isArray(xrCamera.cameras) && xrCamera.cameras.length > 0
+      ? xrCamera.cameras
+      : [xrCamera];
+    const frustums = cameras.map((eyeCamera) => {
+      const projectionView = new THREE.Matrix4().multiplyMatrices(
+        eyeCamera.projectionMatrix,
+        eyeCamera.matrixWorldInverse,
+      );
+      return new THREE.Frustum().setFromProjectionMatrix(projectionView);
+    });
+    return (position: THREE.Vector3): boolean => frustums.some((frustum) => frustum.containsPoint(position));
+  }
+
+  private static getOrCreateWorldActionPromptHost(): VRWorldActionPromptHost | null {
+    if (!VRSpike.worldActionPromptHost && VRSpike.scene) {
+      VRSpike.worldActionPromptHost = new VRWorldActionPromptHost(VRSpike.scene);
+    }
+    return VRSpike.worldActionPromptHost;
+  }
+
+  private static resolveWorldPromptRay(
+    host: VRWorldActionPromptHost,
+    inputFrame: XRInputFrame,
+    hand: XRHandRole,
+  ): string | null {
+    const pose = inputFrame.hands[hand]?.targetRayPose;
+    return pose?.trackingState === 'tracked' ? host.resolveRay(hand, pose) : null;
+  }
+
+  private static filterWorldPromptSelectEdges(actions: readonly RoutedXRAction[]): readonly RoutedXRAction[] {
+    const filtered: RoutedXRAction[] = [];
+    for (const hand of ['left', 'right'] as const) {
+      const action = actions.find((candidate) =>
+        candidate.action === SemanticXRAction.Select && candidate.hand === hand
+      );
+      if (!action) continue;
+      const pressed = action.pressed && !VRSpike.worldPromptSelectHeld[hand];
+      VRSpike.worldPromptSelectHeld[hand] = action.pressed;
+      filtered.push({ ...action, pressed });
+    }
+    return filtered;
+  }
+
+  private static captureWorldPromptSelectLatch(): void {
+    const session = VRSpike.session;
+    if (!session) return;
+    try {
+      const controllers = XRGamepadReader.read(Array.from(session.inputSources ?? []));
+      const actions = VRSpike.inputRouter.route(controllers, new Set(['world-prompt']));
+      for (const hand of ['left', 'right'] as const) {
+        const action = actions.find((candidate) =>
+          candidate.action === SemanticXRAction.Select && candidate.hand === hand
+        );
+        if (action) VRSpike.worldPromptSelectHeld[hand] = action.pressed;
+      }
+    } catch {
+      // Preserve the prior latch when optional controller state is unreadable.
+    }
+  }
+
+  private static applyWorldPromptEffects(
+    effects: readonly VRWorldPromptEffect[],
+    session: XRSession,
+  ): void {
+    for (const effect of effects) {
+      if (effect.type === 'closed') {
+        VRSpike.clearWorldActionPrompt(false);
+      } else if (effect.type === 'negative-haptic') {
+        void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 60, amplitude: 0.45 });
+      } else if (effect.type === 'activate') {
+        const action = effect.action;
+        const hand = effect.hand;
+        VRSpike.clearWorldActionPrompt(false);
+        void VRSpike.haptics.pulse(session, hand, { durationMs: 35, amplitude: 0.35 });
+        try {
+          action.activate();
+        } catch (error) {
+          console.error(`[VRSpike] world prompt action '${action.id}' failed`, error);
+        }
+      }
+    }
+  }
+
+  private static isWorldPromptModelCurrent(model: VRWorldActionPromptModel): boolean {
+    try {
+      const actions = model.pages.flatMap((page) =>
+        page.entries.filter((entry) => entry.kind === 'action')
+      );
+      return actions.length > 0 && actions.every((action) => action.revalidate() === true);
+    } catch {
+      return false;
+    }
+  }
+
+  private static clearWorldActionPrompt(disposeHost: boolean): void {
+    VRSpike.worldActionPromptController.process(null, {}, []);
+    VRSpike.worldPromptCandidateId = null;
+    VRSpike.worldPromptModel = null;
+    VRSpike.interactionPreviewIndicator = null;
+    VRSpike.worldTargetLabelHost?.clear();
+    if (disposeHost) {
+      VRSpike.worldActionPromptHost?.dispose();
+      VRSpike.worldActionPromptHost = null;
+    } else {
+      VRSpike.worldActionPromptHost?.clear();
     }
   }
 
@@ -976,7 +1196,10 @@ export class VRSpike {
    * the instant a WebXR session takes over input.
    */
   private static resolveAimedTargetId(): number | null {
-    const id = VRSpike.interactionPreviewIndicator?.id;
+    return VRSpike.interactionAimedTargetId;
+  }
+
+  private static parseModuleObjectTargetId(id: string | null): number | null {
     if (!id) return null;
     const match = /^module-object:(\d+)$/.exec(id);
     return match ? Number(match[1]) : null;
@@ -1476,6 +1699,7 @@ export class VRSpike {
     }
 
     if (cutsceneContext) {
+      VRSpike.clearWorldActionPrompt(false);
       VRSpike.renderCutscene(worldCamera, frameTimestamp);
       return;
     }
@@ -1487,6 +1711,7 @@ export class VRSpike {
 
     VRSpike.renderKeyboard();
     VRSpike.renderPanel();
+    VRSpike.renderWorldActionPrompt();
     VRSpike.renderWorldTargetLabel();
 
     // The GUI texture pass restores the target it observed. Legacy engine
@@ -1539,6 +1764,7 @@ export class VRSpike {
     }
 
     VRSpike.clearLegacyPanelPointer();
+    VRSpike.clearWorldActionPrompt(false);
     VRSpike.worldTargetLabelHost?.clear();
     VRSpike.latestPanelPointerPosition = null;
 
@@ -1720,6 +1946,25 @@ export class VRSpike {
       if (!VRSpike.worldTargetLabelErrorReported) {
         VRSpike.worldTargetLabelErrorReported = true;
         console.error('[VRSpike] world target label rejected', error);
+      }
+    }
+  }
+
+  private static renderWorldActionPrompt(): void {
+    const inputFrame = VRSpike.latestInputFrame;
+    const presentation = VRSpike.worldActionPromptController.presentation;
+    const host = VRSpike.worldActionPromptHost;
+    if (!inputFrame || !presentation || !host) {
+      host?.clear();
+      return;
+    }
+    try {
+      host.present(presentation, inputFrame.head, presentation.hoveredId);
+    } catch (error) {
+      VRSpike.clearWorldActionPrompt(false);
+      if (!VRSpike.worldInteractionInputErrorReported) {
+        VRSpike.worldInteractionInputErrorReported = true;
+        console.error('[VRSpike] world action prompt presentation rejected', error);
       }
     }
   }
