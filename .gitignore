@@ -25,6 +25,7 @@ extensions/
 .vscode/mcp.json
 .vscode/chrome-debug-profile/
 exports/
+.worktrees/
 
 # probe output
 tools/xr-probe/result.json
