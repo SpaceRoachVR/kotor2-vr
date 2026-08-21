@@ -53,7 +53,6 @@ import {
 import {
   describeDirectVRWorldUse,
   getVRInteractionRange,
-  isSafeDirectVRWorldUse,
 } from "@/vr/runtime/VRWorldUseAdapter";
 import {
   EngineInteractableObject,
@@ -125,6 +124,9 @@ const namedGroup = (name: string = 'na'): THREE.Group => {
 
 const vrCreatureLocomotionAdapter = new CreatureLocomotionAdapter(TURN_SPEED_FAST);
 let vrCombatIssuedTargetId: number | null = null;
+/** Phase G1: the object id VR last selected through CursorManager, if any. */
+let vrCursorSelectedTargetId: number | null = null;
+let vrCursorSelectionErrorReported = false;
 
 /**
  * Persists across the VR session (ROADMAP 2.5/2.6). Smooth movement and
@@ -145,8 +147,21 @@ const vrComfortSettings: MutableVRComfortSettings = {
 let vrComfortSettingsPanelOpen = false;
 let vrComfortSettingsPausedByVR = false;
 
+/**
+ * Only a live hostile *creature* may be attacked.
+ *
+ * The creature-type gate is load-bearing, not belt-and-braces. `isHostile`
+ * resolves through `FactionManager.GetReputation`, which returns 0 — read as
+ * hostile, since `IsHostile` tests `<= 10` — on its type-check failure path.
+ * Without this gate a console, container, or door could qualify as a combat
+ * target, which is what made the right trigger attack whatever the aim ray
+ * happened to be resting on. Bashing a door stays available through its
+ * authored ActionMenu route, where the engine owns the rules.
+ */
 function isVRCombatTarget(actor: ModuleCreature, candidate: ModuleObject | null | undefined): candidate is ModuleObject {
   return !!candidate && candidate !== actor &&
+    Number.isInteger(candidate.objectType) &&
+    (candidate.objectType & ModuleObjectType.ModuleCreature) !== 0 &&
     typeof candidate.isDead === 'function' && !candidate.isDead() &&
     typeof candidate.isHostile === 'function' && candidate.isHostile(actor);
 }
@@ -330,6 +345,7 @@ function buildVRWorldActionPromptFor(
   const panels = refreshVRWorldPromptPanels(actor, target);
   if (!panels) return null;
   const authoredActionCount = countVRWorldPromptTargetActions(panels.targetPanels);
+  reportVRWorldPromptPanelsOnce(target, panels.targetPanels);
   const authoredActions = snapshotVRActionMenuPanelEntries(
     {
       actor,
@@ -420,6 +436,7 @@ function describeVRWorldPromptCandidate(
     const inRange = actorDistanceMetres <= getVRInteractionRange(target.objectType);
     const hasActions = hasPotentialVRWorldPromptActions(actorActionState, target);
     const name = resolveVRWorldPromptName(target);
+    reportVRWorldPromptCandidacyOnce(target, name, actorDistanceMetres, inRange, hasActions);
     return {
       id: `module-object:${target.id}`,
       name,
@@ -443,6 +460,123 @@ function describeVRWorldPromptCandidate(
   }
 }
 
+/**
+ * One-shot-per-object diagnostic for why a door/placeable did or did not become
+ * a prompt candidate. Doors and containers work flatscreen but not in VR, and
+ * the VR path fails silently — nothing throws, so nothing reaches the console.
+ * Logs every input the candidacy decision actually reads so a single headset
+ * pass identifies the rejecting condition instead of another guess.
+ *
+ * TEMPORARY: remove once VR-PLAYTEST-FIX-PLAN.md H1 is closed.
+ */
+const reportedVRWorldPromptCandidacy = new Set<string>();
+
+function reportVRWorldPromptCandidacyOnce(
+  target: ModuleObject,
+  name: string,
+  actorDistanceMetres: number,
+  inRange: boolean,
+  hasActions: boolean,
+): void {
+  try {
+    const isDoorOrPlaceable = (target.objectType & (
+      ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable
+    )) !== 0;
+    if (!isDoorOrPlaceable) return;
+
+    const probe = target as ModuleObject & {
+      isLocked?: () => boolean;
+      lockable?: unknown;
+      keyRequired?: unknown;
+      notBlastable?: unknown;
+      plot?: unknown;
+      use?: unknown;
+      scripts?: Readonly<Record<string, unknown>>;
+    };
+    const locked = typeof probe.isLocked === 'function' ? probe.isLocked() : 'no-isLocked-fn';
+    const key = `${target.id}:${String(locked)}:${hasActions}:${inRange}`;
+    if (reportedVRWorldPromptCandidacy.has(key)) return;
+    reportedVRWorldPromptCandidacy.add(key);
+
+    console.info(
+      `[VR prompt candidacy] id=${target.id} name='${name}'` +
+      ` type=${(target.objectType & ModuleObjectType.ModuleDoor) !== 0 ? 'door' : 'placeable'}` +
+      ` distance=${actorDistanceMetres.toFixed(2)} range=${getVRInteractionRange(target.objectType)}` +
+      ` inRange=${inRange} hasActions=${hasActions}` +
+      ` locked=${String(locked)} hasUse=${typeof probe.use === 'function'}` +
+      ` plot=${JSON.stringify(probe.plot)} keyRequired=${JSON.stringify(probe.keyRequired)}` +
+      ` notBlastable=${JSON.stringify(probe.notBlastable)} lockable=${JSON.stringify(probe.lockable)}` +
+      ` onFailToOpen=${JSON.stringify(probe.scripts?.onFailToOpen ?? null)}`
+    );
+  } catch {
+    // Diagnostics must never suppress a candidate.
+  }
+}
+
+/**
+ * Dumps the raw ActionMenuManager target panels the engine produced for one
+ * object. Doors currently surface only "Bash" in VR; this separates "the engine
+ * offered exactly one action" from "we built more and then dropped them",
+ * which the absence of bridge malformed-source warnings alone cannot settle.
+ *
+ * TEMPORARY: remove once VR-PLAYTEST-FIX-PLAN.md door actions are resolved.
+ */
+const reportedVRWorldPromptPanels = new Set<string>();
+
+function reportVRWorldPromptPanelsOnce(
+  target: ModuleObject,
+  targetPanels: readonly { readonly actions?: readonly unknown[] }[],
+): void {
+  try {
+    const entries: string[] = [];
+    targetPanels.forEach((panel, panelIndex) => {
+      const actions = Array.isArray(panel?.actions) ? panel.actions : [];
+      actions.forEach((raw: any, actionIndex: number) => {
+        entries.push(
+          `${panelIndex}:${actionIndex}` +
+          ` icon=${JSON.stringify(raw?.icon ?? null)}` +
+          ` actionType=${JSON.stringify(raw?.action?.type ?? null)}` +
+          ` talent=${JSON.stringify(raw?.talent?.label ?? raw?.talent?.name ?? null)}` +
+          ` item=${JSON.stringify(raw?.item?.getName?.() ?? raw?.item?.id ?? null)}`
+        );
+      });
+    });
+    const key = `${target.id}:${entries.length}:${entries.join('|')}`;
+    if (reportedVRWorldPromptPanels.has(key)) return;
+    reportedVRWorldPromptPanels.add(key);
+    // canAttemptSecurityUnlock = locked && lockable && !keyRequired. If that is
+    // false, ActionMenuManager emits neither Security nor tunnelers and only
+    // i_attack survives. Dump its exact inputs, whether the template even
+    // carried a Lockable field, and the actor-side requirements alongside.
+    const probe = target as any;
+    const actor = GameState.getCurrentPlayer() as any;
+    const hasLockableField = (() => {
+      try { return !!probe?.template?.RootNode?.hasField?.('Lockable'); } catch { return 'unknown'; }
+    })();
+    const rawLockable = (() => {
+      try { return probe?.template?.getFieldByLabel?.('Lockable')?.getValue?.() ?? null; } catch { return 'unreadable'; }
+    })();
+    const inventory = (() => {
+      try { return actor?.getInventory?.() ?? []; } catch { return []; }
+    })();
+    const countBase = (id: number) => inventory.filter((i: any) => i?.baseItemId === id).length;
+
+    console.info(
+      `[VR prompt panels] id=${target.id} name='${resolveVRWorldPromptName(target)}'` +
+      ` panels=${targetPanels.length} rawActions=${entries.length}` +
+      ` || lockGate: locked=${JSON.stringify(probe?.isLocked?.())}` +
+      ` lockable=${JSON.stringify(probe?.lockable)} keyRequired=${JSON.stringify(probe?.keyRequired)}` +
+      ` templateHasLockable=${hasLockableField} templateLockable=${JSON.stringify(rawLockable)}` +
+      ` openLockDC=${JSON.stringify(probe?.openLockDC)}` +
+      ` || actor: securitySkill=${JSON.stringify(actor?.getSkillLevel?.(SkillType.SECURITY))}` +
+      ` tunnelers(base59)=${countBase(59)} mines(base58)=${countBase(58)}` +
+      (entries.length ? ` :: ${entries.join(' || ')}` : ' :: (engine offered none)')
+    );
+  } catch {
+    // Diagnostics must never break prompt assembly.
+  }
+}
+
 function refreshVRWorldPromptPanels(
   actor: ModuleCreature,
   target: ModuleObject,
@@ -454,9 +588,27 @@ function refreshVRWorldPromptPanels(
   return GameState.ActionMenuManager.ActionPanels as VRActionMenuPanelLists;
 }
 
+/**
+ * Counts authored actions that would make a generic direct `use()` redundant.
+ *
+ * Attack/Bash entries are deliberately excluded. This count feeds
+ * `classifySafeDirectVRWorldUse`, whose job is to stop the generic route from
+ * duplicating or pre-empting an authored one — but bashing a door is not an
+ * attempt to open it. Counting it suppressed the "Use" route on every locked
+ * bashable door, so the prompt offered Bash as the *only* option and the player
+ * could never simply try the door, which flatscreen allows.
+ */
 function countVRWorldPromptTargetActions(panels: readonly VRActionMenuPanel[]): number {
-  return panels.reduce((count, panel) =>
-    count + (panel && Array.isArray(panel.actions) ? panel.actions.length : 0), 0);
+  return panels.reduce((count, panel) => {
+    if (!panel || !Array.isArray(panel.actions)) return count;
+    return count + panel.actions.filter((entry) => !isVRAttackActionEntry(entry)).length;
+  }, 0);
+}
+
+function isVRAttackActionEntry(entry: VRActionMenuEntry | undefined): boolean {
+  if (!entry || typeof entry !== 'object') return false;
+  const icon = typeof entry.icon === 'string' ? entry.icon.trim().toLowerCase() : '';
+  return icon.includes('attack');
 }
 
 function isStructurallyValidVRWorldPromptTarget(actor: ModuleCreature, target: ModuleObject): boolean {
@@ -509,7 +661,17 @@ function hasPotentialVRWorldPromptActions(
     };
     if (typeof lockTarget.isLocked !== 'function') return false;
     if (!lockTarget.isLocked()) {
-      return isDirectVRWorldUseTarget(target) && isSafeDirectVRWorldUse(target, 0);
+      // Candidacy asks only "could this object plausibly offer an action?".
+      // It must NOT apply direct-use safety here: those rules exist to stop the
+      // generic use() fallback from stealing ownership from locks, keys, and
+      // story state, but a plot-owned or story-scripted container still exposes
+      // authored ActionMenu routes that the object itself owns and gates.
+      // Applying them at candidacy dropped every such container before its
+      // authored actions were ever counted, which is why ordinary containers
+      // and doors showed a name label but never a prompt. Safety is re-applied
+      // by classifySafeDirectVRWorldUse when the prompt is actually built —
+      // that is where the real authored action count exists.
+      return isDirectVRWorldUseTarget(target);
     }
     if (!Boolean(lockTarget.notBlastable)) return true;
     const securityAllowed = Boolean(lockTarget.lockable) && !Boolean(lockTarget.keyRequired);
@@ -1492,7 +1654,15 @@ export class GameState implements EngineContext {
             vrCombatIssuedTargetId = target.id;
           },
           cancel: () => {
-            if (vrCombatIssuedTargetId === null) return;
+            // NO `vrCombatIssuedTargetId === null` GUARD. That guard meant
+            // "only cancel combat VR itself started", but combat is far more
+            // often entered through the world prompt's authored Bash route,
+            // which goes via onTargetMenuAction and never sets that id. The
+            // guard therefore made cancel a silent no-op in exactly the case
+            // that needs it: an endless round against a door, which cannot die
+            // and so never resolves on its own. Traced in-headset — the queue
+            // was byte-identical before and after the call.
+            //
             // Clearing the combat round alone leaves the queued ActionCombat /
             // ActionPhysicalAttacks running, which re-arms excitedDuration every
             // frame and keeps battle music going with no way out. Drop the
@@ -1517,6 +1687,63 @@ export class GameState implements EngineContext {
             spell.useTalentOnObject(target, actor);
           },
         };
+      },
+      /**
+       * Phase G1 — drive the engine's own target selection from VR aim.
+       *
+       * `InGameOverlay._canShowTargetUI()` gates the whole target UI (name
+       * plate, health bar, the three action columns and their cyclers) on
+       * `CursorManager.reticle2.visible` and `CursorManager.selectedObject` —
+       * flatscreen mouse state that never updates during a WebXR session. Feed
+       * it from VR and the engine builds its own action menu, correctly, with
+       * no re-derivation on our side.
+       *
+       * `CursorManager.update()` maintains `reticle2.visible` and the reticle
+       * texture from `CursorManager.selected`, so setting the selection is
+       * enough; visibility follows.
+       */
+      setVRSelectedObject: (targetId) => {
+        try {
+          const actor = GameState.getCurrentPlayer();
+          if (!actor) return false;
+          const target = resolveVRAimedObject(targetId);
+          if (!target) {
+            // Only surrender a selection this hook established, so a flatscreen
+            // or script-driven selection is never stomped by VR aim drift.
+            if (vrCursorSelectedTargetId !== null) {
+              GameState.CursorManager.selected = undefined;
+              GameState.CursorManager.selectedObject = undefined;
+              vrCursorSelectedTargetId = null;
+            }
+            return false;
+          }
+          if (vrCursorSelectedTargetId === target.id) return true;
+          GameState.CursorManager.setReticleSelectedObject(target);
+          vrCursorSelectedTargetId = target.id;
+          return true;
+        } catch (error) {
+          if (!vrCursorSelectionErrorReported) {
+            vrCursorSelectionErrorReported = true;
+            console.error('[VR] engine target selection rejected', error);
+          }
+          return false;
+        }
+      },
+      describeCombatQueue: () => {
+        try {
+          const actor = GameState.getCurrentPlayer() as any;
+          if (!actor) return 'no-actor';
+          const queue = actor.actionQueue ?? [];
+          const types = Array.from(queue).map((a: any) => a?.constructor?.name ?? a?.type ?? '?');
+          return `actions=${queue.length}[${types.join(',')}]` +
+            ` combatAction=${actor.combatRound?.action?.constructor?.name ?? 'none'}` +
+            ` scheduled=${actor.combatRound?.scheduledActionList?.length ?? -1}` +
+            ` combatQueue=${actor.combatData?.combatQueue?.length ?? -1}` +
+            ` combatState=${JSON.stringify(actor.combatData?.combatState)}` +
+            ` target=${JSON.stringify(actor.combatData?.lastAttackTarget?.getName?.() ?? null)}`;
+        } catch (error) {
+          return `unreadable:${(error as Error)?.message ?? 'unknown'}`;
+        }
       },
       createActionWheel: (aimedTargetId) => {
         const actor = GameState.getCurrentPlayer();
@@ -1607,6 +1834,29 @@ export class GameState implements EngineContext {
             }
           },
           close: () => { vrComfortSettingsPanelOpen = false; },
+        };
+      },
+      /**
+       * Phase G2 — the in-game HUD overlay, presented separately from
+       * foreground panels.
+       *
+       * It cannot go through `getPanelContext`: that path claims foreground
+       * input ownership, which suspends locomotion and gameplay. The HUD must
+       * stay up *while* the player walks around, so it gets its own context and
+       * its own host. Returns null unless the overlay is the only visible menu.
+       */
+      getInGameOverlayContext: () => {
+        const overlay = GameState.MenuManager.InGameOverlay;
+        if (!overlay?.bVisible) return null;
+        const foregroundMenu = GameState.MenuManager.GetForegroundMenu();
+        if (foregroundMenu?.bVisible && foregroundMenu !== overlay) return null;
+        if (GameState.Mode !== EngineMode.INGAME) return null;
+        return {
+          overlay,
+          guiScene: GameState.scene_gui,
+          guiCamera: GameState.camera_gui,
+          viewportWidth: GameState.ResolutionManager.getViewportWidth(),
+          viewportHeight: GameState.ResolutionManager.getViewportHeight(),
         };
       },
       getPanelContext: () => {
@@ -1859,11 +2109,27 @@ export class GameState implements EngineContext {
   }
 
   static EventOnResize(){
+    // An immersive XR session owns the canvas, the renderer size, and every 3D
+    // camera's projection. three refuses `renderer.setSize()` outright while
+    // presenting ("Can't change size while VR device is presenting"), and
+    // rewriting the composer, depth target, world camera aspect, or the
+    // cutscene cameras mid-session corrupts the stereo view.
+    //
+    // The 2D GUI half must still run. `VRPanelHost` reprojects the legacy GUI
+    // by rendering `guiScene` through `camera_gui`, so skipping the
+    // `camera_gui` bounds and `MenuManager.Resize()` below leaves every
+    // summoned menu rendering as an empty black quad in the headset. A browser
+    // resize is routine in VR (the desktop window behind the headset changes
+    // size), so this is a split, not a bail-out.
+    const xrOwnsRenderTargets = !!GameState.renderer?.xr?.isPresenting;
+
     GameState.ResolutionManager.recalculate();
     let width = GameState.ResolutionManager.getViewportWidth();
     let height = GameState.ResolutionManager.getViewportHeight();
 
-    GameState.composer.setSize(width * GameState.rendererUpscaleFactor, height * GameState.rendererUpscaleFactor);
+    if(!xrOwnsRenderTargets){
+      GameState.composer.setSize(width * GameState.rendererUpscaleFactor, height * GameState.rendererUpscaleFactor);
+    }
 
     GameState.FadeOverlayManager.plane.scale.set(width, height, 1);
 
@@ -1876,30 +2142,34 @@ export class GameState implements EngineContext {
 
     GameState.camera_gui.updateProjectionMatrix();
 
-    GameState.camera.aspect = width / height;
-    GameState.camera.updateProjectionMatrix();
+    if(!xrOwnsRenderTargets){
+      GameState.camera.aspect = width / height;
+      GameState.camera.updateProjectionMatrix();
 
-    GameState.renderer.setSize(width, height);  
-    
-    GameState.camera_dialog.aspect = GameState.camera.aspect;
-    GameState.camera_dialog.updateProjectionMatrix();
+      GameState.renderer.setSize(width, height);
 
-    GameState.camera_animated.aspect = GameState.camera.aspect;
-    GameState.camera_animated.updateProjectionMatrix();
+      GameState.camera_dialog.aspect = GameState.camera.aspect;
+      GameState.camera_dialog.updateProjectionMatrix();
 
-    for(let i = 0; i < GameState.staticCameras.length; i++){
-      GameState.staticCameras[i].aspect = GameState.camera.aspect;
-      GameState.staticCameras[i].updateProjectionMatrix();
+      GameState.camera_animated.aspect = GameState.camera.aspect;
+      GameState.camera_animated.updateProjectionMatrix();
+
+      for(let i = 0; i < GameState.staticCameras.length; i++){
+        GameState.staticCameras[i].aspect = GameState.camera.aspect;
+        GameState.staticCameras[i].updateProjectionMatrix();
+      }
     }
 
     //GameState.bokehPass.renderTargetColor.setSize(width * GameState.rendererUpscaleFactor, height * GameState.rendererUpscaleFactor);
 
     GameState.screenCenter.x = ( (GameState.ResolutionManager.getViewportWidth()/2) / GameState.ResolutionManager.getViewportWidth() ) * 2 - 1;
-    GameState.screenCenter.y = - ( (GameState.ResolutionManager.getViewportHeight()/2) / GameState.ResolutionManager.getViewportHeight() ) * 2 + 1; 
+    GameState.screenCenter.y = - ( (GameState.ResolutionManager.getViewportHeight()/2) / GameState.ResolutionManager.getViewportHeight() ) * 2 + 1;
 
     GameState.MenuManager.Resize();
 
-    GameState.depthTarget.setSize(GameState.ResolutionManager.getViewportWidth() * GameState.rendererUpscaleFactor, GameState.ResolutionManager.getViewportHeight() * GameState.rendererUpscaleFactor);
+    if(!xrOwnsRenderTargets){
+      GameState.depthTarget.setSize(GameState.ResolutionManager.getViewportWidth() * GameState.rendererUpscaleFactor, GameState.ResolutionManager.getViewportHeight() * GameState.rendererUpscaleFactor);
+    }
 
     if(GameState.ResolutionManager.vpScaleFactor){
       GameState.canvas.style.transform = 'scale('+GameState.ResolutionManager.vpScaleFactor+')';

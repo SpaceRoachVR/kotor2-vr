@@ -465,6 +465,51 @@ describe('VRSpike XR loop ownership', () => {
     expect(combatEvents).toEqual([expect.objectContaining({ actorId: '7', nominatedTargetId: '42', rollEligible: true })]);
   });
 
+  test('a trigger held through an interaction-owned frame does not fire when combat resumes', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const combatEvents: unknown[] = [];
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: {
+          pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(), trackingState: 'tracked' },
+          targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+        },
+      },
+    };
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'blaster', inCombat: true,
+        onCombatSwing: (event) => combatEvents.push(event),
+      }),
+    };
+    (VRSpike as any).combatInputController.reset();
+
+    // The trigger goes down while a world prompt owns it, so combat is skipped
+    // for that frame and only the latch runs.
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).captureWeaponActionLatch();
+
+    // Prompt activated and released ownership; the trigger is still physically
+    // down. That must read as held, not as a fresh press.
+    (VRSpike as any).processCombatInput(1_000);
+    expect(combatEvents).toEqual([]);
+
+    // A genuine release and re-press still fires.
+    buttons[0] = { pressed: false, touched: false, value: 0 };
+    (VRSpike as any).processCombatInput(2_000);
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).processCombatInput(3_000);
+    expect(combatEvents).toHaveLength(1);
+  });
+
   test('does not invoke combat processing without a nominated hostile target', () => {
     const process = jest.spyOn((VRSpike as any).combatInputController, 'process');
     VRSpike.session = { inputSources: [] } as unknown as XRSession;
@@ -509,10 +554,51 @@ describe('VRSpike XR loop ownership', () => {
     };
 
     buttons[5] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processCombatInput(1_000);
-    (VRSpike as any).processCombatInput(1_014);
+    (VRSpike as any).processCombatCancel();
+    (VRSpike as any).processCombatCancel();
 
     expect(cancelCount).toBe(1);
+
+    // A genuine release and re-press cancels again.
+    buttons[5] = { pressed: false, touched: false, value: 0 };
+    (VRSpike as any).processCombatCancel();
+    buttons[5] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).processCombatCancel();
+    expect(cancelCount).toBe(2);
+  });
+
+  test('cancels combat even when the nominated target no longer qualifies', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    let cancelCount = 0;
+    const requestedTargets: (number | null)[] = [];
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+      hands: { right: { pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3() } } },
+    };
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatContext: (aimedTargetId: number | null) => {
+        requestedTargets.push(aimedTargetId);
+        // Bashing a door leaves rounds running with nothing that can die, so
+        // the escape hatch has to work with no qualifying target at all.
+        return {
+          actorId: '7', nominatedTargetId: null, weaponMode: 'unarmed', inCombat: true,
+          onCombatSwing: () => undefined, cancel: () => { cancelCount += 1; },
+        };
+      },
+    };
+
+    buttons[5] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).processCombatCancel();
+
+    expect(cancelCount).toBe(1);
+    expect(requestedTargets).toEqual([null]);
   });
 
   test('consumes a grip-modified Force flick before it can also activate a nearby object', () => {
@@ -2111,9 +2197,30 @@ describe('GameState proactive world-prompt assembly', () => {
     expect(door.use).not.toHaveBeenCalled();
   });
 
+  test('adds direct use for an unlocked plot-flagged object, matching flatscreen', () => {
+    const harness = createGameStateWorldPromptHarness();
+    // Odyssey's Plot flag marks an object indestructible, not unusable.
+    // Flatscreen opens plot-flagged containers and consoles normally, so VR
+    // must too — gating on it silently refused every prologue tutorial object
+    // while the Galaxy Map worked only via its own earlier bypass.
+    const cylinder = harness.target({
+      id: 33,
+      name: 'Plasteel Cylinder',
+      objectType: harness.objectTypes.ModulePlaceable,
+      plot: true,
+    });
+    harness.setTargets([cylinder], []);
+
+    const [useAction] = flattenPromptActions(harness.buildPrompt('module-object:33'));
+
+    expect(useAction.label).toBe('Use: Plasteel Cylinder');
+    expect(cylinder.use).not.toHaveBeenCalled();
+    useAction.activate();
+    expect(cylinder.use).toHaveBeenCalledTimes(1);
+  });
+
   test.each([
     ['key-required', { keyRequired: true }],
-    ['plot-owned', { plot: true }],
     ['story-script-owned', { storyScript: true }],
   ] as const)('does not add direct use for an unlocked %s object', (_reason, safetyState) => {
     const harness = createGameStateWorldPromptHarness();
@@ -2183,6 +2290,70 @@ describe('GameState proactive world-prompt assembly', () => {
       'module-object:20',
     ]);
     expect(harness.actionMenuCalls()).toEqual({ setPC: 0, setTarget: 0, update: 0 });
+  });
+
+  test.each([
+    ['plot-owned', { plot: true }],
+    ['story-script-owned', { storyScript: true }],
+    ['key-required', { keyRequired: true }],
+  ] as const)(
+    'offers an unlocked %s container its authored actions instead of no prompt at all',
+    (_reason, safetyState) => {
+      const harness = createGameStateWorldPromptHarness();
+      // Direct-use *safety* rules exist to stop the generic use() fallback from
+      // stealing ownership from story state. They must not suppress authored
+      // ActionMenu routes, which the object itself owns and gates.
+      const container = harness.target({
+        id: 31,
+        name: 'Footlocker',
+        objectType: harness.objectTypes.ModulePlaceable,
+        ...safetyState,
+      });
+      harness.setTargets([container], [harness.entry('iaction_sec')]);
+
+      const [candidate] = harness.buildCandidates();
+      expect(candidate?.hasActions).toBe(true);
+
+      expect(flattenPromptActions(harness.buildPrompt('module-object:31')).map((a) => a.label))
+        .toEqual(['Security']);
+      expect(container.use).not.toHaveBeenCalled();
+    },
+  );
+
+  test('offers Use alongside Bash so a bashable door can still simply be tried', () => {
+    const harness = createGameStateWorldPromptHarness();
+    // Bashing a door is not an attempt to open it, so an authored attack must
+    // not suppress the generic use() route the way a real open/use route would.
+    const door = harness.target({
+      id: 34,
+      name: 'Low Security Door',
+      objectType: harness.objectTypes.ModuleDoor,
+    });
+    harness.setTargets([door], [harness.entry('iaction_attack')]);
+
+    const labels = flattenPromptActions(harness.buildPrompt('module-object:34')).map((a) => a.label);
+
+    expect(labels).toContain('Bash');
+    expect(labels).toContain('Use: Low Security Door');
+  });
+
+  test('keeps Bash on an unlocked story-owned door exactly as the flat game offers it', () => {
+    const harness = createGameStateWorldPromptHarness();
+    // Bash is an authored ActionMenu route the engine owns and gates, so
+    // widening candidacy must not change which objects offer it, and the
+    // creature-only combat gate must not remove it.
+    const door = harness.target({
+      id: 32,
+      name: 'Bulkhead',
+      objectType: harness.objectTypes.ModuleDoor,
+      plot: true,
+    });
+    harness.setTargets([door], [harness.entry('iaction_attack')]);
+
+    // Bash is preserved verbatim; Use now accompanies it (see the
+    // countVRWorldPromptTargetActions note) rather than being suppressed by it.
+    expect(flattenPromptActions(harness.buildPrompt('module-object:32')).map((a) => a.label))
+      .toEqual(['Bash', 'Use: Bulkhead']);
   });
 
   test('changes candidate state when an authored inventory source identity changes', () => {

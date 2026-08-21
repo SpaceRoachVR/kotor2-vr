@@ -146,6 +146,31 @@ export interface VRSpikeHooks {
    * flatscreen-mouse hover/select state, which never updates once a WebXR
    * session has taken over input.
    */
+  /**
+   * Phase G1: hand the engine's CursorManager the object VR is aiming at, so
+   * `InGameOverlay` can build its own target action menu, name plate and health
+   * bar instead of us re-deriving them. Pass null to release a VR-established
+   * selection. Returns whether a selection is currently held.
+   */
+  setVRSelectedObject?: (targetId: number | null) => boolean;
+  /**
+   * Phase G2: the in-game HUD overlay, presented without claiming foreground
+   * input ownership so the player can keep moving while it is up.
+   */
+  getInGameOverlayContext?: () => {
+    /** Identity used by VRPanelHost to detect an owner change. */
+    readonly overlay: object;
+    readonly guiScene: THREE.Scene;
+    readonly guiCamera: THREE.Camera;
+    readonly viewportWidth: number;
+    readonly viewportHeight: number;
+  } | null;
+  /**
+   * TEMPORARY (VR-PLAYTEST-FIX-PLAN.md issue 8): one-line snapshot of the
+   * engine's combat/action queues, used to find what re-queues an attack after
+   * a cancel demonstrably runs. Remove with the rest of the issue-8 tracing.
+   */
+  describeCombatQueue?: () => string;
   getCombatContext?: (aimedTargetId: number | null) => {
     readonly actorId: string;
     readonly nominatedTargetId: string | null;
@@ -603,6 +628,21 @@ export class VRSpike {
     VRSpike.renderer?.xr.setAnimationLoop(null);
     const update = VRSpike.hooks?.update;
     if (update) requestAnimationFrame((timestamp) => update(timestamp, 'browser'));
+
+    // The engine ignores resizes while an immersive session owns the canvas
+    // (GameState.EventOnResize early-returns on xr.isPresenting), so a desktop
+    // window resized mid-session leaves flatscreen sized for the stale
+    // viewport. Replay one — but deferred a frame rather than dispatched
+    // synchronously here, so EventOnResize (renderer.setSize, composer, depth
+    // target, every camera aspect) cannot re-enter renderer state while three
+    // is still tearing the session down.
+    requestAnimationFrame(() => {
+      try {
+        window.dispatchEvent(new Event('resize'));
+      } catch (error) {
+        console.warn('[VRSpike] could not replay resize after session end', error);
+      }
+    });
     console.log('[VRSpike] session ended, back on requestAnimationFrame');
   };
 
@@ -672,11 +712,14 @@ export class VRSpike {
     if (!foregroundSurfaceOwnsInput) {
       VRSpike.processLocomotionInput(timestamp, frame, !radialOwnsInput);
       if (radialOwnsInput) {
+        VRSpike.captureWeaponActionLatch();
         VRSpike.interactionTargetSet.clear();
         VRSpike.interactionSystem.cancelTransientState();
       } else if (!lifecycleSuspendsGameplayInput) {
+        VRSpike.processCombatCancel();
         const interactionConsumed = VRSpike.processInteractionInput(timestamp);
-        if (!interactionConsumed) VRSpike.processCombatInput(timestamp);
+        if (interactionConsumed) VRSpike.captureWeaponActionLatch();
+        else VRSpike.processCombatInput(timestamp);
       }
     }
     VRSpike.hooks?.update(timestamp, 'xr');
@@ -696,6 +739,15 @@ export class VRSpike {
       typeof frame.getViewerPose !== 'function' ||
       typeof frame.getPose !== 'function'
     ) {
+      // Every controller action reads latestInputFrame, so losing this
+      // silently kills all VR input with nothing in the console to say why.
+      // Name the missing prerequisite instead.
+      VRSpike.reportWorldPromptStageOnce(
+        `tracked-input-unavailable rig=${!!rig} session=${!!session}` +
+        ` referenceSpace=${!!referenceSpace}` +
+        ` getViewerPose=${typeof frame.getViewerPose === 'function'}` +
+        ` getPose=${typeof frame.getPose === 'function'}`
+      );
       VRSpike.clearTrackedInput();
       return;
     }
@@ -1056,6 +1108,11 @@ export class VRSpike {
         VRSpike.createPerEyeFrustumPredicate(),
       );
       if (!selectedCandidate) {
+        VRSpike.reportWorldPromptStageOnce(
+          `no-selection candidates=${promptContext.candidates.length}` +
+          ` withActions=${promptContext.candidates.filter((c) => c.hasActions).length}` +
+          ` inRange=${promptContext.candidates.filter((c) => c.inRange).length}`
+        );
         VRSpike.clearWorldActionPrompt(false);
         return false;
       }
@@ -1071,15 +1128,30 @@ export class VRSpike {
       VRSpike.worldPromptCandidateId = selectedCandidate.id;
       VRSpike.worldPromptCandidateStateKey = candidateStateKey;
       if (!VRSpike.worldPromptModel) {
+        VRSpike.reportWorldPromptStageOnce(
+          `model-null id=${selectedCandidate.id} name='${selectedCandidate.name}'` +
+          ` resolution=${resolution.status}`
+        );
         VRSpike.hideWorldActionPromptPresentation();
         return false;
       }
+      VRSpike.reportWorldPromptStageOnce(
+        `model-ok id=${selectedCandidate.id} name='${selectedCandidate.name}'` +
+        ` pages=${VRSpike.worldPromptModel.pages.length}`
+      );
 
       VRSpike.interactionPreviewIndicator = {
         id: selectedCandidate.id,
         name: selectedCandidate.name,
         position: selectedCandidate.position,
       };
+      // Phase G1: mirror the resolved candidate into the engine's own cursor
+      // selection so InGameOverlay can present its authored target UI. Runs
+      // alongside the bespoke prompt for now; the prompt is removed in G4 once
+      // the overlay is confirmed in the headset.
+      VRSpike.hooks?.setVRSelectedObject?.(
+        VRSpike.parseModuleObjectTargetId(selectedCandidate.id)
+      );
       const host = VRSpike.getOrCreateWorldActionPromptHost();
       if (!host) {
         VRSpike.hideWorldActionPromptPresentation();
@@ -1254,6 +1326,10 @@ export class VRSpike {
     VRSpike.worldPromptModel = null;
     VRSpike.interactionPreviewIndicator = null;
     VRSpike.worldTargetLabelHost?.clear();
+    // Phase G1: release the engine cursor selection on the same boundary that
+    // drops the prompt, so a module transition, foreground menu, or aim drift
+    // cannot strand InGameOverlay showing a target the player is no longer at.
+    VRSpike.hooks?.setVRSelectedObject?.(null);
     if (disposeHost) {
       VRSpike.worldActionPromptHost?.dispose();
       VRSpike.worldActionPromptHost = null;
@@ -1279,6 +1355,81 @@ export class VRSpike {
     return match ? Number(match[1]) : null;
   }
 
+  /**
+   * Combat cancel is an escape hatch and must never be gated behind who owned
+   * input this frame. It used to live inside `processCombatInput`, which the
+   * frame loop skips whenever a world prompt consumed the trigger — so once
+   * prompts began appearing on every nearby object, the only way out of combat
+   * became unreachable exactly where the player needed it: standing next to the
+   * door they just started bashing. Bashing a door also starts rounds that
+   * never resolve on their own, since a door is not a creature that can die.
+   *
+   * Runs on every gameplay frame, before any owner claims input.
+   */
+  private static processCombatCancel(): void {
+    const session = VRSpike.session;
+    if (!session) {
+      VRSpike.combatCancelHeld = false;
+      return;
+    }
+    try {
+      const actions = VRSpike.inputRouter.route(
+        XRGamepadReader.read(Array.from(session.inputSources ?? [])),
+        new Set(['combat', 'interaction', 'ui'])
+      );
+      const cancelPressed = actions.some((action) =>
+        action.action === SemanticXRAction.Cancel && action.hand === 'right' && action.pressed
+      );
+      if (cancelPressed && !VRSpike.combatCancelHeld) {
+        // Resolve the context without a nominated target: a cancel must still
+        // work when the thing that started the round no longer qualifies.
+        const context = VRSpike.hooks?.getCombatContext?.(null) ?? null;
+        // TEMPORARY (VR-PLAYTEST-FIX-PLAN.md issue 8): B reportedly does not
+        // end combat. This distinguishes "the press never arrived", "there was
+        // no context", "cancel was missing", and "cancel ran but the engine
+        // re-queued the round anyway" — which need different fixes.
+        const before = VRSpike.hooks?.describeCombatQueue?.() ?? 'n/a';
+        context?.cancel?.();
+        const after = VRSpike.hooks?.describeCombatQueue?.() ?? 'n/a';
+        // cancel() demonstrably runs, yet rounds keep starting — so something
+        // re-queues the attack. Compare the queue immediately either side of
+        // the call, then again next frame, to see whether it is cleared and
+        // repopulated or never cleared at all.
+        console.info(
+          `[VR combat cancel] edge=true context=${!!context}` +
+          ` hasCancel=${typeof context?.cancel === 'function'}` +
+          ` inCombat=${JSON.stringify(context?.inCombat)}` +
+          ` nominatedTargetId=${JSON.stringify(context?.nominatedTargetId)}` +
+          ` || before=${before} || after=${after}`
+        );
+        VRSpike.pendingCancelTraceFrames = 3;
+      }
+      VRSpike.combatCancelHeld = cancelPressed;
+
+      // Follow the queue for a few frames after a cancel: if it is empty here
+      // but populated again on the next frame, the re-queue source is what
+      // needs fixing, not the cancel itself.
+      if (VRSpike.pendingCancelTraceFrames > 0 && !cancelPressed) {
+        VRSpike.pendingCancelTraceFrames -= 1;
+        console.info(
+          `[VR combat cancel] +frame queue=${VRSpike.hooks?.describeCombatQueue?.() ?? 'n/a'}`
+        );
+      }
+    } catch (error) {
+      // Deliberately NOT sharing combatInputErrorReported with
+      // processCombatInput: a flag already tripped there would have swallowed
+      // a cancel exception entirely, which is precisely the failure this
+      // method was added to diagnose.
+      if (!VRSpike.combatCancelErrorReported) {
+        VRSpike.combatCancelErrorReported = true;
+        console.error('[VRSpike] combat cancel rejected', error);
+      }
+    }
+  }
+
+  private static pendingCancelTraceFrames = 0;
+  private static combatCancelErrorReported = false;
+
   private static processCombatInput(timestamp: number): void {
     const inputFrame = VRSpike.latestInputFrame;
     const session = VRSpike.session;
@@ -1301,16 +1452,8 @@ export class VRSpike {
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['combat', 'interaction', 'ui'])
       );
-      const cancelPressed = actions.some((action) =>
-        action.action === SemanticXRAction.Cancel && action.hand === 'right' && action.pressed
-      );
-      // Cancel must run unconditionally, before the nominated-target check
-      // below returns early — otherwise a target that stops qualifying
-      // mid-round (dies, faction flips, walks out of range) takes its only
-      // cancel path down with it and orphans an in-flight attack.
-      if (cancelPressed && !VRSpike.combatCancelHeld) context.cancel?.();
-      VRSpike.combatCancelHeld = cancelPressed;
-
+      // Cancel is handled by processCombatCancel, which runs every gameplay
+      // frame regardless of whether a world prompt consumed input first.
       if (!context.nominatedTargetId) return;
 
       const offhandGrip = actions.some((action) =>
@@ -1542,12 +1685,52 @@ export class VRSpike {
    */
   private static suspendTransientGameplayInputForLifecycle(): void {
     VRSpike.captureRadialMenuButtonLatch();
+    VRSpike.captureWeaponActionLatch();
     VRSpike.closeRadialMenuForLifecycle(false);
     VRSpike.captureWorldPromptSelectLatch();
     VRSpike.interactionAimedTargetId = null;
     VRSpike.clearWorldActionPrompt(false);
     VRSpike.interactionTargetSet.clear();
     VRSpike.interactionSystem.cancelTransientState();
+  }
+
+  /**
+   * Keeps combat's weapon-action held state continuous across frames that some
+   * other surface owned the trigger. Without it, releasing that ownership while
+   * the trigger is still down reads as a fresh press and fires a shot — which
+   * is what made selecting a world prompt also attack the object behind it.
+   */
+  /**
+   * One-shot-per-message diagnostic for the world-prompt pipeline. Every failure
+   * path in `processInteractionInput` returns quietly, so a door or container
+   * that works flatscreen simply produces nothing in VR with no console trace.
+   *
+   * TEMPORARY: remove once VR-PLAYTEST-FIX-PLAN.md H1 is closed.
+   */
+  private static readonly reportedWorldPromptStages = new Set<string>();
+
+  private static reportWorldPromptStageOnce(message: string): void {
+    if (VRSpike.reportedWorldPromptStages.has(message)) return;
+    VRSpike.reportedWorldPromptStages.add(message);
+    console.info(`[VR prompt stage] ${message}`);
+  }
+
+  private static captureWeaponActionLatch(): void {
+    const session = VRSpike.session;
+    if (!session) return;
+    try {
+      const actions = VRSpike.inputRouter.route(
+        XRGamepadReader.read(Array.from(session.inputSources ?? [])),
+        new Set(['combat']),
+      );
+      const pressed = actions.some((action) =>
+        action.action === SemanticXRAction.WeaponAction && action.hand === 'right' && action.pressed
+      );
+      VRSpike.combatInputController.synchronizeWeaponActionHeld(pressed);
+    } catch {
+      // Keep the prior latch on malformed optional input rather than treating
+      // an unreadable controller as a release that can fire on the next frame.
+    }
   }
 
   private static captureRadialMenuButtonLatch(): void {
@@ -1818,6 +2001,7 @@ export class VRSpike {
 
     VRSpike.renderKeyboard();
     VRSpike.renderPanel();
+    VRSpike.renderInGameOverlay();
     VRSpike.renderWorldActionPrompt();
     VRSpike.renderWorldTargetLabel();
 
@@ -1979,6 +2163,51 @@ export class VRSpike {
     }
     VRSpike.keyboardHost?.present(inputFrame.head);
   }
+
+  /**
+   * Phase G2 — present the engine's own in-game overlay in VR.
+   *
+   * Presentation only for now: no ray, no click routing. The bespoke world
+   * prompt is still live and owns the trigger, so wiring overlay input here
+   * too would double-activate. Input moves across in G4 when the bespoke
+   * system is removed. The point of this step is to see how the authored
+   * target menu, name plate and Cancel Combat button actually read in the
+   * headset before committing to the rest.
+   */
+  private static renderInGameOverlay(): void {
+    const renderer = VRSpike.renderer;
+    const worldScene = VRSpike.scene;
+    const inputFrame = VRSpike.latestInputFrame;
+    const context = VRSpike.hooks?.getInGameOverlayContext?.() ?? null;
+    if (!renderer || !worldScene || !inputFrame || !context) {
+      VRSpike.inGameOverlayHost?.clear();
+      return;
+    }
+    try {
+      if (!VRSpike.inGameOverlayHost) {
+        VRSpike.inGameOverlayHost = new VRPanelHost(worldScene, {
+          distanceMetres: 1.6,
+          widthMetres: 1.5,
+        });
+      }
+      VRSpike.inGameOverlayHost.present(
+        context.overlay,
+        inputFrame.head,
+        context.viewportWidth,
+        context.viewportHeight
+      );
+      VRSpike.inGameOverlayHost.renderGui(renderer, context.guiScene, context.guiCamera);
+    } catch (error) {
+      VRSpike.inGameOverlayHost?.clear();
+      if (!VRSpike.inGameOverlayErrorReported) {
+        VRSpike.inGameOverlayErrorReported = true;
+        console.error('[VRSpike] in-game overlay presentation rejected', error);
+      }
+    }
+  }
+
+  private static inGameOverlayHost: VRPanelHost | null = null;
+  private static inGameOverlayErrorReported = false;
 
   private static renderPanel(): void {
     const renderer = VRSpike.renderer;

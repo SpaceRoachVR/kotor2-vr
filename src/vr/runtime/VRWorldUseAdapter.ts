@@ -44,8 +44,14 @@ export interface VRWorldUseSafetySource {
 
 export type SafeDirectVRWorldUseClassification = 'ordinary' | 'ebon-hawk-galaxy-map';
 
-const PLACEABLE_USE_DISTANCE = 1.5;
-const DOOR_USE_DISTANCE = 2;
+// Roomscale reach is not desktop click reach. The original 1.5m/2m values were
+// tight enough that a player standing at a natural conversational distance from
+// a console got no prompt at all, with nothing on screen to explain why — the
+// name label comes from the engine's own cursor path at a much larger range, so
+// the object looks targeted while the prompt silently refuses. Widened by one
+// metre on Allen's playtest call (2026-08-21).
+const PLACEABLE_USE_DISTANCE = 2.5;
+const DOOR_USE_DISTANCE = 3;
 
 /** Describes direct world use without invoking or queuing any engine action. */
 export function describeDirectVRWorldUse(
@@ -103,7 +109,17 @@ export function classifySafeDirectVRWorldUse(
 
     if (isEbonHawkGalaxyMap(target)) return 'ebon-hawk-galaxy-map';
 
-    if (!isExplicitFalseFlag(target.plot) || hasStoryFailureScript(target.scripts)) return null;
+    // `Plot` is deliberately NOT a gate. In Odyssey it marks an object as
+    // indestructible, not unusable — flatscreen opens plot-flagged containers
+    // and consoles normally, which is the behaviour VR has to match. Gating on
+    // it refused every prologue tutorial object (the Plasteel Cylinder, the
+    // Communications Console) while the Galaxy Map worked only because the
+    // check above returns before reaching it. The real ownership guard is an
+    // authored failure script, which is kept: if the object scripts its own
+    // refusal, the engine owns that outcome and the generic route must not
+    // pre-empt it. Locks, keys, and authored ActionMenu actions are still
+    // checked above.
+    if (hasStoryFailureScript(target.scripts)) return null;
     return 'ordinary';
   } catch {
     return null;

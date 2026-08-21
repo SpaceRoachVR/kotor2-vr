@@ -6,11 +6,18 @@ import {
   VRWorldUseActor,
   VRWorldUseTarget,
   tryDirectVRWorldUse,
+  getVRInteractionRange,
 } from '@/vr/runtime/VRWorldUseAdapter';
+
+// Derived from the adapter's own ranges so tuning them does not require
+// editing every distance literal in this file.
+const PLACEABLE_RANGE = getVRInteractionRange(ModuleObjectType.ModulePlaceable);
+const DOOR_RANGE = getVRInteractionRange(ModuleObjectType.ModuleDoor);
+const JUST_OUTSIDE = 0.0001;
 
 describe('describeDirectVRWorldUse', () => {
   test('describes an in-range console without using it', () => {
-    const target = placeable('Galaxy Map', 1.5);
+    const target = placeable('Galaxy Map', PLACEABLE_RANGE);
 
     const descriptor = describeDirectVRWorldUse(actor(), target, quietLogger);
 
@@ -29,7 +36,7 @@ describe('describeDirectVRWorldUse', () => {
 
   test('returns null for unsupported or out-of-range direct-use targets', () => {
     expect(describeDirectVRWorldUse(actor(), creature(), quietLogger)).toBeNull();
-    expect(describeDirectVRWorldUse(actor(), placeable('Far', 1.5001), quietLogger)).toBeNull();
+    expect(describeDirectVRWorldUse(actor(), placeable('Far', PLACEABLE_RANGE + JUST_OUTSIDE), quietLogger)).toBeNull();
   });
 
   test('revalidates the live range without mutating either engine object', () => {
@@ -37,7 +44,7 @@ describe('describeDirectVRWorldUse', () => {
     const target = placeable('Console', 1);
     const descriptor = describeDirectVRWorldUse(activeActor, target, quietLogger)!;
 
-    target.position.set(1.5001, 0, 0);
+    target.position.set(PLACEABLE_RANGE + JUST_OUTSIDE, 0, 0);
 
     expect(descriptor.revalidate()).toBe(false);
     expect(target.use).not.toHaveBeenCalled();
@@ -49,13 +56,13 @@ describe('describeDirectVRWorldUse', () => {
     const logger = { info: jest.fn(), error: jest.fn() };
     const descriptor = describeDirectVRWorldUse(actor(), target, logger)!;
 
-    target.position.set(1.5001, 0, 0);
+    target.position.set(PLACEABLE_RANGE + JUST_OUTSIDE, 0, 0);
     const outcome = descriptor.activate();
 
     expect(outcome).toEqual({ handled: true, feedbackLabel: 'Console: Move closer' });
     expect(target.use).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
-      '[VR interaction] target=42 type=placeable distance=1.50 route=blocked-range',
+      `[VR interaction] target=42 type=placeable distance=${(PLACEABLE_RANGE + JUST_OUTSIDE).toFixed(2)} route=blocked-range`,
     );
     expect(logger.info).toHaveBeenCalledTimes(1);
     expect(logger.error).not.toHaveBeenCalled();
@@ -64,10 +71,10 @@ describe('describeDirectVRWorldUse', () => {
 
 describe('tryDirectVRWorldUse', () => {
   test.each([
-    ['door', ModuleObjectType.ModuleDoor, 2],
-    ['terminal', ModuleObjectType.ModulePlaceable, 1.5],
-    ['container', ModuleObjectType.ModulePlaceable, 1.5],
-    ['galaxy map', ModuleObjectType.ModulePlaceable, 1.5],
+    ['door', ModuleObjectType.ModuleDoor, DOOR_RANGE],
+    ['terminal', ModuleObjectType.ModulePlaceable, PLACEABLE_RANGE],
+    ['container', ModuleObjectType.ModulePlaceable, PLACEABLE_RANGE],
+    ['galaxy map', ModuleObjectType.ModulePlaceable, PLACEABLE_RANGE],
   ])('uses an in-range %s directly without a walk action', (_name, objectType, range) => {
     const actor = { id: 7, position: new THREE.Vector3() };
     const target = {
@@ -90,7 +97,7 @@ describe('tryDirectVRWorldUse', () => {
     const target = {
       id: 42,
       objectType: ModuleObjectType.ModulePlaceable,
-      position: new THREE.Vector3(1.5001, 0, 0),
+      position: new THREE.Vector3(PLACEABLE_RANGE + JUST_OUTSIDE, 0, 0),
       getName: () => 'Galaxy Map',
       use: jest.fn(),
     };

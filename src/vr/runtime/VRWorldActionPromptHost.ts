@@ -32,6 +32,7 @@ const ACTION_SLOT_COUNT = 4;
 const NAME_LABEL_OFFSET_METRES = 0.32;
 const PROMPT_BELOW_NAME_METRES = 0.12;
 const RENDER_ORDER = 1_000_000;
+const HORIZONTAL_EPSILON = 1e-8;
 
 /** Canvas-backed, head-facing world prompt with independent rays for both hands. */
 export class VRWorldActionPromptHost {
@@ -43,6 +44,8 @@ export class VRWorldActionPromptHost {
   private readonly pointers: Readonly<Record<XRHandRole, VRPanelPointerHost>>;
   private readonly iconTextures: VROwnedActionIconTextureCache;
   private readonly iconMaterialById = new Map<string, THREE.MeshBasicMaterial>();
+  /** Retains the last valid horizontal facing for a head directly above or below. */
+  private readonly lastHorizontalNormal = new THREE.Vector3(0, -1, 0);
   private regions: readonly PromptRegion[] = [];
   private renderKey: string | null = null;
   private contentKey: string | null = null;
@@ -146,9 +149,36 @@ export class VRWorldActionPromptHost {
 
     this.object.position.copy(presentation.model.anchor);
     this.object.position.z += NAME_LABEL_OFFSET_METRES - PROMPT_BELOW_NAME_METRES;
-    this.object.lookAt(headPose.position);
+    this.faceHeadUpright(headPose);
     this.object.visible = true;
     this.object.updateWorldMatrix(true, false);
+  }
+
+  /**
+   * Yaw-only billboard toward the head. `Object3D.lookAt` cannot be used here:
+   * it derives its basis from `Object3D.up`, which defaults to Y-up, while this
+   * engine is Z-up. That mismatch rolled the panel onto its side and made the
+   * prompt text read vertically. Building the basis explicitly — and keeping
+   * world up as the panel's local Y — guarantees the text stays level, and
+   * matches the convention `VRRadialMenuHost.placeAtOpeningHeadPose` already
+   * uses. Pitch is deliberately dropped so an object below eye level does not
+   * tip its own label away from the reader.
+   */
+  private faceHeadUpright(headPose: XRWorldPose): void {
+    const normal = headPose.position.clone().sub(this.object.position);
+    normal.z = 0;
+    if (normal.lengthSq() <= HORIZONTAL_EPSILON) {
+      normal.copy(this.lastHorizontalNormal);
+    } else {
+      normal.normalize();
+      this.lastHorizontalNormal.copy(normal);
+    }
+
+    const up = new THREE.Vector3(0, 0, 1);
+    const right = up.clone().cross(normal).normalize();
+    this.object.quaternion.setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(right, up, normal),
+    );
   }
 
   resolveRay(hand: XRHandRole, pose: XRWorldPose): string | null {

@@ -42,6 +42,57 @@ describe('VRWorldActionPromptHost', () => {
     expect(host.hoveredId).toBe('security');
   });
 
+  test('keeps world up as the panel local Y so Z-up text never rolls onto its side', () => {
+    const host = createPromptHost();
+    const model = promptModel('console', [promptAction('use')], new THREE.Vector3(0, 4, 1));
+
+    // A head well above the prompt is the case that rolled the panel when
+    // placement went through Object3D.lookAt with its default Y-up basis.
+    for (const head of [
+      new THREE.Vector3(0, 0, 1.7),
+      new THREE.Vector3(0, 0, 4.5),
+      new THREE.Vector3(2, 1, 0.2),
+      new THREE.Vector3(-3, 7, 2.4),
+    ]) {
+      host.present(presentation(model), headAt(head), null);
+      const { up } = extractBasis(host);
+      expect(up.x).toBeCloseTo(0, 10);
+      expect(up.y).toBeCloseTo(0, 10);
+      expect(up.z).toBeCloseTo(1, 10);
+    }
+  });
+
+  test('faces the head horizontally without pitching toward its height', () => {
+    const host = createPromptHost();
+    const model = promptModel('console', [promptAction('use')], new THREE.Vector3(0, 4, 1));
+
+    host.present(presentation(model), headAt(new THREE.Vector3(0, 0, 9)), null);
+
+    const { normal } = extractBasis(host);
+    // Panel sits at y=4, head at y=0, so it must face -Y regardless of the
+    // 8-metre height difference.
+    expect(normal.x).toBeCloseTo(0, 10);
+    expect(normal.y).toBeCloseTo(-1, 10);
+    expect(normal.z).toBeCloseTo(0, 10);
+  });
+
+  test('retains the last horizontal facing when the head is directly overhead', () => {
+    const host = createPromptHost();
+    const model = promptModel('console', [promptAction('use')], new THREE.Vector3(0, 4, 1));
+
+    host.present(presentation(model), headAt(new THREE.Vector3(0, 0, 1.7)), null);
+    const settled = host.object.quaternion.clone();
+
+    // Straight overhead leaves no horizontal component to derive a facing from.
+    host.present(presentation(model), headAt(new THREE.Vector3(0, 4, 6)), null);
+
+    const { up, right, normal } = extractBasis(host);
+    for (const axis of [up, right, normal]) {
+      expect(Number.isFinite(axis.x) && Number.isFinite(axis.y) && Number.isFinite(axis.z)).toBe(true);
+    }
+    expect(host.object.quaternion.angleTo(settled)).toBeCloseTo(0, 10);
+  });
+
   test('maps both controller rays to rectangular action IDs and highlights one', () => {
     const host = createPromptHost();
     const model = promptModel('door', [
@@ -232,6 +283,20 @@ function promptAction(id: string): VRWorldPromptAction {
 
 function headAt(position: THREE.Vector3): XRWorldPose {
   return pose(position, new THREE.Quaternion());
+}
+
+/** Decomposes the presented panel's orientation into its world basis vectors. */
+function extractBasis(host: VRWorldActionPromptHost): {
+  right: THREE.Vector3;
+  up: THREE.Vector3;
+  normal: THREE.Vector3;
+} {
+  const matrix = new THREE.Matrix4().makeRotationFromQuaternion(host.object.quaternion);
+  const right = new THREE.Vector3();
+  const up = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+  matrix.extractBasis(right, up, normal);
+  return { right, up, normal };
 }
 
 function rayAtActionRegion(host: VRWorldActionPromptHost, index: number): XRWorldPose {

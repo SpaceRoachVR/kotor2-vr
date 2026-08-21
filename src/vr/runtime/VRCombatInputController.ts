@@ -105,6 +105,19 @@ export class VRCombatInputController {
     }];
   }
 
+  /**
+   * Records the physical weapon-action state for a frame this controller did
+   * not process. `processBlaster` derives its firing edge from
+   * `weaponActionHeld`, which only advances on frames combat actually runs — so
+   * a trigger held through a world-prompt activation, an open action wheel, or
+   * a foreground menu would read as a fresh press the instant combat resumed,
+   * firing a shot the player never asked for. The owning runtime calls this on
+   * every frame it skips combat so the held state stays continuous.
+   */
+  synchronizeWeaponActionHeld(pressed: boolean): void {
+    this.weaponActionHeld = pressed === true;
+  }
+
   reset(): void {
     this.resetMeleeSample();
     this.lastVisualSwingAt = Number.NEGATIVE_INFINITY;
