@@ -62,15 +62,26 @@ export class VRRadialMenuController {
     return { menu: this.menu, pageIndex: this.pageIndex, page, hoveredId: this.hoveredId };
   }
 
+  /**
+   * Synchronizes the physical Menu state while another foreground surface owns
+   * input. This can only release the post-close latch; it never opens the wheel
+   * or emits an activation.
+   */
+  synchronizeMenuPressed(menuPressed: boolean): void {
+    this.lastMenuPressed = menuPressed === true;
+    if (this.state === 'waiting-for-menu-release' && !this.lastMenuPressed) {
+      this.state = 'closed';
+    }
+  }
+
   process(input: VRRadialControllerInput): readonly VRRadialControllerEffect[] {
     const effects: VRRadialControllerEffect[] = [];
     const selectPressed = input.selectPressed === true;
     const selectPressedEdge = selectPressed && !this.previousSelectPressed;
     this.previousSelectPressed = selectPressed;
-    this.lastMenuPressed = input.menuPressed === true;
+    this.synchronizeMenuPressed(input.menuPressed);
 
     if (this.state === 'waiting-for-menu-release') {
-      if (!input.menuPressed) this.state = 'closed';
       return effects;
     }
 

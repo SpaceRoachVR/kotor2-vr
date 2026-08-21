@@ -3,13 +3,18 @@ import {
   BUILT_IN_XR_PROFILES,
   SemanticXRBinding,
   XRControllerSnapshot,
-  XRActionContext,
   XRInputBindingProfile,
   XRInputRouter,
 } from '@/vr/runtime/XRInputRouter';
 import { SemanticXRAction, XRButtonState } from '@/vr/runtime/XRTypes';
 
 const RELEASED_BUTTON: XRButtonState = { pressed: false, touched: false, value: 0 };
+const BUILT_IN_TRIGGER_PROFILES = [
+  { id: 'quest-touch', interactionProfile: 'oculus-touch-v3', triggerButtonIndex: 0 },
+  { id: 'valve-index', interactionProfile: 'valve-index', triggerButtonIndex: 0 },
+  { id: 'htc-vive', interactionProfile: 'htc-vive', triggerButtonIndex: 0 },
+  { id: 'xr-standard', interactionProfile: 'generic-trigger-squeeze-thumbstick', triggerButtonIndex: 0 },
+] as const;
 
 function questController(
   hand: 'left' | 'right',
@@ -20,6 +25,21 @@ function questController(
     profiles: ['oculus-touch-v3'],
     buttons: Array.from({ length: 6 }, () => RELEASED_BUTTON),
     axes,
+  };
+}
+
+function profileController(
+  hand: 'left' | 'right',
+  interactionProfile: string,
+  triggerButtonIndex: number,
+): XRControllerSnapshot {
+  const buttons = Array.from({ length: 6 }, () => RELEASED_BUTTON);
+  buttons[triggerButtonIndex] = { pressed: true, touched: true, value: 1 };
+  return {
+    hand,
+    profiles: [interactionProfile],
+    buttons,
+    axes: [0, 0, 0, 0],
   };
 }
 
@@ -77,42 +97,36 @@ describe('XRInputRouter', () => {
     expect(actions.some((action) => String(action.action) === 'wrist')).toBe(false);
   });
 
-  test('routes only the Quest left trigger as Select in the radial-wheel context', () => {
-    const controllers = (['left', 'right'] as const).map((hand) => {
-      const controller = questController(hand);
-      const buttons = [...controller.buttons];
-      buttons[0] = { pressed: true, touched: true, value: 1 };
-      return { ...controller, buttons };
-    });
+  test.each(BUILT_IN_TRIGGER_PROFILES)(
+    'routes only the left trigger as radial-wheel Select for $id',
+    ({ interactionProfile, triggerButtonIndex }) => {
+      const controllers = (['left', 'right'] as const).map((hand) =>
+        profileController(hand, interactionProfile, triggerButtonIndex)
+      );
 
-    const actions = new XRInputRouter().route(
-      controllers,
-      new Set(['radial-wheel' as XRActionContext]),
-    );
+      const actions = new XRInputRouter().route(controllers, new Set(['radial-wheel']));
 
-    expect(actions.filter((action) => action.action === SemanticXRAction.Select)).toEqual([
-      expect.objectContaining({ hand: 'left', pressed: true }),
-    ]);
-  });
+      expect(actions.filter((action) => action.action === SemanticXRAction.Select)).toEqual([
+        expect.objectContaining({ hand: 'left', pressed: true }),
+      ]);
+    },
+  );
 
-  test('routes either Quest trigger as Select only in the world-prompt context', () => {
-    const controllers = (['left', 'right'] as const).map((hand) => {
-      const controller = questController(hand);
-      const buttons = [...controller.buttons];
-      buttons[0] = { pressed: true, touched: true, value: 1 };
-      return { ...controller, buttons };
-    });
+  test.each(BUILT_IN_TRIGGER_PROFILES)(
+    'routes either trigger as world-prompt Select for $id',
+    ({ interactionProfile, triggerButtonIndex }) => {
+      const controllers = (['left', 'right'] as const).map((hand) =>
+        profileController(hand, interactionProfile, triggerButtonIndex)
+      );
 
-    const actions = new XRInputRouter().route(
-      controllers,
-      new Set(['world-prompt' as XRActionContext]),
-    );
+      const actions = new XRInputRouter().route(controllers, new Set(['world-prompt']));
 
-    expect(actions.filter((action) => action.action === SemanticXRAction.Select)).toEqual([
-      expect.objectContaining({ hand: 'left', pressed: true }),
-      expect.objectContaining({ hand: 'right', pressed: true }),
-    ]);
-  });
+      expect(actions.filter((action) => action.action === SemanticXRAction.Select)).toEqual([
+        expect.objectContaining({ hand: 'left', pressed: true }),
+        expect.objectContaining({ hand: 'right', pressed: true }),
+      ]);
+    },
+  );
 
   test('swaps dominant and off-hand semantic actions for left-handed play', () => {
     const router = new XRInputRouter(BUILT_IN_XR_PROFILES, { dominantHand: 'left' });

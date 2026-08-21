@@ -1228,9 +1228,11 @@ export class VRSpike {
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['global']),
       );
-      VRSpike.radialMenuPressedLastFrame = actions.some((action) =>
+      const menuPressed = actions.some((action) =>
         action.action === SemanticXRAction.Menu && action.hand === 'left' && action.pressed
       );
+      VRSpike.radialMenuPressedLastFrame = menuPressed;
+      VRSpike.radialMenuController.synchronizeMenuPressed(menuPressed);
     } catch {
       // Keep the prior latch on malformed optional input rather than treating
       // an unreadable controller as a release that can reopen the wheel.

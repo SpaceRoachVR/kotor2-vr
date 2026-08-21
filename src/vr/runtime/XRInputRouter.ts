@@ -73,6 +73,8 @@ function standardBindings(
     { action: SemanticXRAction.Turn, context: 'locomotion', hand: 'dominant', input: { kind: 'axis2d', xIndex: stickAxes[0], yIndex: stickAxes[1] } },
     { action: SemanticXRAction.Select, context: 'ui', hand: 'dominant', input: { kind: 'button', index: 0 } },
     { action: SemanticXRAction.Select, context: 'gameplay', hand: 'dominant', input: { kind: 'button', index: 0 } },
+    { action: SemanticXRAction.Select, context: 'radial-wheel', hand: 'left', input: { kind: 'button', index: 0 } },
+    { action: SemanticXRAction.Select, context: 'world-prompt', hand: 'either', input: { kind: 'button', index: 0 } },
     { action: SemanticXRAction.Cancel, context: 'ui', hand: 'dominant', input: { kind: 'button', index: 5 } },
     { action: SemanticXRAction.Use, context: 'gameplay', hand: 'dominant', input: { kind: 'button', index: 4 } },
     { action: SemanticXRAction.Grab, context: 'interaction', hand: 'either', input: { kind: 'button', index: 1 } },
@@ -89,11 +91,7 @@ export const BUILT_IN_XR_PROFILES: readonly XRInputBindingProfile[] = [
   {
     id: 'quest-touch',
     interactionProfiles: ['oculus-touch-v3', 'oculus-touch-v2', 'oculus-touch'],
-    bindings: [
-      ...standardBindings([2, 3], { hand: 'left', input: { kind: 'button', index: 4 } }),
-      { action: SemanticXRAction.Select, context: 'radial-wheel', hand: 'left', input: { kind: 'button', index: 0 } },
-      { action: SemanticXRAction.Select, context: 'world-prompt', hand: 'either', input: { kind: 'button', index: 0 } },
-    ],
+    bindings: standardBindings([2, 3], { hand: 'left', input: { kind: 'button', index: 4 } }),
   },
   {
     id: 'valve-index',

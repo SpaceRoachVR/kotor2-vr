@@ -191,6 +191,22 @@ describe('VRRadialMenuController', () => {
 
     expect(controller.process(input({ menuPressed: true, openingMenu: menu }))).toContainEqual({ type: 'opened' });
   });
+
+  test('synchronizes a suspended X release without opening or activating', () => {
+    const activate = jest.fn();
+    const controller = new VRRadialMenuController();
+    const menu = singlePageMenu([action('attack', activate)]);
+    controller.process(input({ menuPressed: true, openingMenu: menu }));
+    controller.close('lifecycle');
+
+    controller.synchronizeMenuPressed(true);
+    expect(controller.isOpen).toBe(false);
+    controller.synchronizeMenuPressed(false);
+    expect(controller.isOpen).toBe(false);
+    expect(activate).not.toHaveBeenCalled();
+
+    expect(controller.process(input({ menuPressed: true, openingMenu: menu }))).toContainEqual({ type: 'opened' });
+  });
 });
 
 function input(overrides: Partial<VRRadialControllerInput> = {}): VRRadialControllerInput {

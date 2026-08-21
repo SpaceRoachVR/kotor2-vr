@@ -1066,12 +1066,15 @@ describe('VRSpike XR loop ownership', () => {
     expect(cancelInteraction).toHaveBeenCalled();
   });
 
-  test('requires a fresh X press after a foreground legacy panel releases ownership', () => {
+  test('observes X release under foreground ownership so the next fresh press opens', () => {
     const input = installRadialInput();
     installRadialHost();
     const createActionWheel = jest.fn((_aimedTargetId: number | null) => actionWheel());
     VRSpike.hooks = basicHooks({ createActionWheel });
     input.leftButtons[4] = pressedButton();
+
+    (VRSpike as any).processRadialMenuInput();
+    expect(createActionWheel).toHaveBeenCalledTimes(1);
 
     jest.spyOn(VRSpike as any, 'updateTrackedInput').mockImplementation(() => undefined);
     jest.spyOn(VRSpike as any, 'processMovieInput').mockReturnValue(false);
@@ -1079,21 +1082,20 @@ describe('VRSpike XR loop ownership', () => {
     jest.spyOn(VRSpike as any, 'processComfortSettingsInput').mockReturnValue(false);
     jest.spyOn(VRSpike as any, 'processPanelInput')
       .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
       .mockReturnValue(false);
     jest.spyOn(VRSpike as any, 'processLocomotionInput').mockImplementation(() => undefined);
     jest.spyOn(VRSpike as any, 'processInteractionInput').mockReturnValue(false);
     jest.spyOn(VRSpike as any, 'processCombatInput').mockImplementation(() => undefined);
 
     (VRSpike as any).frame(1_000, {} as XRFrame);
-    (VRSpike as any).frame(1_016, {} as XRFrame);
-    expect(createActionWheel).not.toHaveBeenCalled();
-
     input.leftButtons[4] = releasedButton();
-    (VRSpike as any).frame(1_032, {} as XRFrame);
+    (VRSpike as any).frame(1_016, {} as XRFrame);
     input.leftButtons[4] = pressedButton();
-    (VRSpike as any).frame(1_048, {} as XRFrame);
+    (VRSpike as any).frame(1_032, {} as XRFrame);
 
-    expect(createActionWheel).toHaveBeenCalledTimes(1);
+    expect(createActionWheel).toHaveBeenCalledTimes(2);
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
   });
 
   test.each(['tracking unavailable', 'session end'] as const)(
