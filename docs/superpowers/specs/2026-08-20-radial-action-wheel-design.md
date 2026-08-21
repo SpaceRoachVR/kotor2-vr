@@ -12,7 +12,7 @@ Replace the two current four-way VR radials with one all-purpose action wheel
 opened by holding `X` on the left controller. The new wheel supports dynamic
 pie slices, pagination, a nested party wheel, left-controller ray selection,
 either-controller direct touch, hover feedback, center/outside cancellation,
-and release-to-confirm without pausing gameplay.
+and left-trigger confirmation without pausing gameplay.
 
 Move doors, placeables, mines, consoles, and other world-object actions out of
 the radial. Their authored actions appear automatically in a compact,
@@ -60,7 +60,8 @@ the wheel closes and the selected menu opens.
 - Do not put doors, containers, mines, ordinary consoles, or the galaxy map in
   the all-purpose wheel.
 - Do not execute combat damage directly from the wheel.
-- Do not replace Inventory, Character, Map, or other legacy menus.
+- Do not replace Inventory, Character, Map, Comfort Settings, or other legacy
+  menus.
 - Do not implement the engine's unfinished manual `MenuLevelUp` workflow. The
   conditional Level-Up slice opens the Character screen, where Auto Level-Up
   is currently functional.
@@ -109,6 +110,8 @@ The stable top-level ordering is:
 6. Level-Up, only when the current player can level up; this opens the existing
    Character screen and its working Auto Level-Up route.
 7. Party, only when at least one other selectable party member exists.
+8. Comfort Settings, preserving the route currently exposed by the wrist
+   radial that this design replaces.
 
 Duplicate engine entries with the same source panel, action index, and action
 identity are included once. Invalid entries are omitted and logged once with
@@ -129,10 +132,14 @@ Hovering a different target:
 - displays a collision dot where the ray meets the surface; and
 - requests one best-effort 20 ms haptic pulse at amplitude 0.15.
 
-Releasing `X` confirms the currently ray-hovered action. Releasing over the
-center or outside the wheel cancels. Navigation wedges change pages without
-closing the wheel and do not call engine action callbacks. After navigation,
-the hover is cleared until the ray resolves a slice on the new page.
+Pressing the left trigger confirms the currently ray-hovered gameplay/menu
+action. Pressing it over a navigation wedge changes pages immediately without
+calling an engine action callback. Pressing it over the center cancels. A
+trigger press with no resolved target does nothing and leaves the wheel open.
+Every trigger operation is press-edge debounced, so holding the trigger cannot
+repeat an action or page change. Releasing `X` closes the wheel as a cancel,
+regardless of hover, and never activates the hovered entry. Direct-touch
+navigation remains immediate.
 
 ### Direct touch
 
@@ -171,7 +178,7 @@ the current leader and invalid or unavailable members. Each member slice shows
 the member's portrait/icon and display name. Choosing a member delegates to
 `PartyManager.SwitchLeaderAtIndex` after revalidating that member's current
 party index. The nested wheel uses the same pagination, center cancel, hover,
-ray, touch, and `X`-release rules. Cancel closes the entire wheel rather than
+ray, left-trigger, touch, and `X`-hold rules. Cancel closes the entire wheel rather than
 returning to the parent; previous navigation is reserved for page navigation.
 
 ## Architecture
@@ -208,9 +215,10 @@ layer.
 ### `VRRadialMenuController`
 
 Replace the current four-item controller with a state machine whose externally
-observable states are closed, open, and waiting-for-trigger-release. Open state
+observable states are closed, open, and waiting-for-`X`-release. Open state
 contains the immutable snapshot, current page, nested party snapshot when
-applicable, ray hover, touch-overlap identities, and previous `X` state.
+applicable, ray hover, touch-overlap identities, previous `X` state, and
+previous left-trigger state.
 
 The controller consumes semantic input and resolved hit identities rather than
 THREE objects. It emits typed effects for open, close, hover haptic, confirm
@@ -243,14 +251,14 @@ eligibility. Do not let the builder call an action while assembling the model.
 Engine action callbacks continue to set the source panel's selected index and
 delegate to `ActionMenuManager.onTargetMenuAction` or
 `ActionMenuManager.onSelfMenuAction`. Static menu callbacks open
-`MenuInventory`, `MenuCharacter`, or `MenuMap`. The Level-Up callback is present
-only when `canLevelUp()` is true and opens `MenuCharacter`, whose existing Auto
-Level-Up action is functional. It must not open the currently empty
-`MenuLevelUp` shell.
+`MenuInventory`, `MenuCharacter`, `MenuMap`, or the existing VR Comfort
+Settings panel. The Level-Up callback is present only when `canLevelUp()` is
+true and opens `MenuCharacter`, whose existing Auto Level-Up action is
+functional. It must not open the currently empty `MenuLevelUp` shell.
 
 ### `VRSpike` orchestration
 
-Map Quest Touch off-hand button index 4 (`X`) to `SemanticXRAction.Menu` and
+Map Quest Touch left-hand button index 4 (`X`) to `SemanticXRAction.Menu` and
 remove the separate `Wrist` semantic route/controller/host. Preserve profile
 abstraction so Index and Vive mappings remain semantic rather than hard-coded
 inside wheel logic.
@@ -311,8 +319,8 @@ Either controller ray can hover. On the Select press edge, the hovered action
 is revalidated and activated once. Hover requests the same light haptic pulse
 on the corresponding controller. Losing range, visibility, front-cone status,
 line of sight, the object, or all actions hides the prompt immediately and
-clears pressed/hover state. World prompts do not use direct touch or `X`
-release-to-confirm.
+clears pressed/hover state. World prompts do not use direct touch or the
+wheel's held `X` input.
 
 The Ebon Hawk galaxy map is handled through its world console's direct/authored
 action and then opens the existing context-dependent galaxy-map UI. The wheel's
@@ -345,12 +353,14 @@ Map action always opens `MenuMap` and never `MenuGalaxyMap`.
   hits, boundary ownership, ray-plane intersections, and touch depth.
 - Pagination for 0, 1, 6, 7, 12, and 13 content actions, including navigation
   ordering and reset to page one on every opening.
-- Controller sequences for hold/open, hover, release confirmation, neutral
-  cancellation, center cancellation, outside cancellation, page navigation,
-  submenu entry, immediate touch, overlap debounce, and wait-for-release.
+- Controller sequences for hold/open, hover, left-trigger confirmation,
+  `X`-release cancellation, center cancellation, no-target trigger handling,
+  page navigation, submenu entry, immediate touch, overlap debounce, trigger
+  press-edge debounce, and wait-for-`X`-release.
 - Builder filtering, deterministic ordering, malformed/duplicate omission,
   conditional Level-Up routing to `MenuCharacter`, conditional Party, nested
-  party revalidation, menu callbacks, and engine action delegation.
+  party revalidation, retained Comfort Settings routing, menu callbacks, and
+  engine action delegation.
 - World prompt eligibility, front cone, frustum/range loss, candidate stability,
   aimed-object priority, both-hand ray selection, pagination, and cleanup.
 
@@ -376,13 +386,14 @@ Quest 3 acceptance separately verifies:
 
 - readable scale and unobstructed forward view;
 - stable world-fixed placement;
-- accurate left-ray hover and release confirmation;
+- accurate left-ray hover and left-trigger confirmation;
 - either-controller direct touch and reopen suppression;
 - hover/confirm/negative haptics;
 - continued gameplay and locomotion while open;
 - pagination and nested party selection;
 - combat/self-action queuing without direct damage bypass;
-- Inventory, Character, local Map, and conditional Level-Up-to-Character route;
+- Inventory, Character, local Map, Comfort Settings, and conditional
+  Level-Up-to-Character route;
 - door, container, mine, console, Security, Bash, and galaxy-map prompts; and
 - cancellation leaving targets, queues, party, and menus unchanged.
 
