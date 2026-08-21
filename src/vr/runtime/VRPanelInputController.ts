@@ -20,8 +20,6 @@ const ACTION_TO_BUTTON: Readonly<Partial<Record<SemanticXRAction, PanelButton>>>
   [SemanticXRAction.Select]: 'select',
   [SemanticXRAction.Use]: 'a',
   [SemanticXRAction.Cancel]: 'b',
-  [SemanticXRAction.Wrist]: 'x',
-  [SemanticXRAction.Menu]: 'y',
 };
 
 /**

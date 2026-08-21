@@ -14,9 +14,10 @@ import { VRKeyboardInputController } from "./runtime/VRKeyboardInputController";
 import { VR_KEYBOARD_DONE_KEY } from "./runtime/VRKeyboardLayout";
 import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatInputController";
 import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
-import { VRRadialMenuController } from "./runtime/VRRadialMenuController";
+import { VRRadialControllerEffect, VRRadialMenuController } from "./runtime/VRRadialMenuController";
 import { VRRadialMenuHost } from "./runtime/VRRadialMenuHost";
 import type { VRRadialMenuDefinition } from "./runtime/VRRadialMenuModel";
+import { VRHapticFeedback } from "./runtime/VRHapticFeedback";
 import { resolveWallSoftBlockCorrection, VRWalkmeshQuery } from "./runtime/VRWallSoftBlock";
 import { getVRInteractionRange } from "./runtime/VRWorldUseAdapter";
 import { GamePad } from "@/controls/GamePad";
@@ -41,7 +42,7 @@ import {
   EngineInteractionActor,
   ModuleObjectInteractionTargetSet,
 } from "./runtime/ModuleObjectInteractionTarget";
-import { CombatWeaponMode, InteractionIntent, SemanticXRAction, VRComfortSettings, XRInputFrame } from "./runtime/XRTypes";
+import { CombatWeaponMode, InteractionIntent, SemanticXRAction, VRComfortSettings, XRInputFrame, XRWorldPose } from "./runtime/XRTypes";
 import { PerfSampler, PerfWorldSnapshot } from "./PerfSampler";
 import type { EngineFrameSource } from "./XRFrameCadence";
 
@@ -242,12 +243,10 @@ export class VRSpike {
   private static readonly combatInputController = new VRCombatInputController();
   private static readonly forceGestureController = new VRForceGestureController();
   private static readonly radialMenuController = new VRRadialMenuController();
+  private static readonly haptics = new VRHapticFeedback();
   private static radialMenuHost: VRRadialMenuHost | null = null;
-  private static radialPointerHost: VRPanelPointerHost | null = null;
-  /** Wrist device (ROADMAP 4.1/4.3): the same radial mechanics, Wrist-triggered, summoning full panels instead of contextual target actions. */
-  private static readonly wristMenuController = new VRRadialMenuController(SemanticXRAction.Wrist);
-  private static wristMenuHost: VRRadialMenuHost | null = null;
-  private static wristPointerHost: VRPanelPointerHost | null = null;
+  private static radialOpeningHeadPose: XRWorldPose | null = null;
+  private static radialMenuPressedLastFrame = false;
   private static comfortSettingsHost: VRComfortSettingsHost | null = null;
   private static comfortSettingsSelectHeld = false;
   private static comfortSettingsCancelHeld = false;
@@ -543,7 +542,6 @@ export class VRSpike {
     VRSpike.keyboardHost?.clear();
     VRSpike.movieHost?.clear();
     VRSpike.panelPointerHost?.clear();
-    VRSpike.radialPointerHost?.clear();
     VRSpike.worldTargetLabelHost?.clear();
     VRSpike.latestPanelPointerPosition = null;
     VRSpike.comfortVignetteHost?.dispose();
@@ -587,19 +585,29 @@ export class VRSpike {
     VRSpike.updateTrackedInput(timestamp, frame);
     const movieOwnsInput = VRSpike.processMovieInput();
     const keyboardOwnsInput = !movieOwnsInput && VRSpike.processKeyboardInput();
-    const radialOwnsInput = !movieOwnsInput && !keyboardOwnsInput && VRSpike.processRadialMenuInput();
-    const wristOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && VRSpike.processWristMenuInput();
-    const comfortSettingsOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && !wristOwnsInput &&
+    const comfortSettingsOwnsInput = !movieOwnsInput && !keyboardOwnsInput &&
       VRSpike.processComfortSettingsInput();
-    const panelOwnsInput = !movieOwnsInput && !keyboardOwnsInput && !radialOwnsInput && !wristOwnsInput &&
+    const panelOwnsInput = !movieOwnsInput && !keyboardOwnsInput &&
       !comfortSettingsOwnsInput && VRSpike.processPanelInput();
-    if (movieOwnsInput || keyboardOwnsInput || radialOwnsInput || wristOwnsInput || comfortSettingsOwnsInput || panelOwnsInput) {
+    const foregroundSurfaceOwnsInput = movieOwnsInput || keyboardOwnsInput ||
+      comfortSettingsOwnsInput || panelOwnsInput;
+    if (foregroundSurfaceOwnsInput) {
+      VRSpike.captureRadialMenuButtonLatch();
+      VRSpike.closeRadialMenuForLifecycle(false);
+    }
+    const radialOwnsInput = !foregroundSurfaceOwnsInput && VRSpike.processRadialMenuInput();
+    if (foregroundSurfaceOwnsInput) {
       VRSpike.interactionTargetSet.clear();
       VRSpike.interactionSystem.cancelTransientState();
     } else {
-      VRSpike.processLocomotionInput(timestamp, frame);
-      const interactionConsumed = VRSpike.processInteractionInput(timestamp);
-      if (!interactionConsumed) VRSpike.processCombatInput(timestamp);
+      VRSpike.processLocomotionInput(timestamp, frame, !radialOwnsInput);
+      if (radialOwnsInput) {
+        VRSpike.interactionTargetSet.clear();
+        VRSpike.interactionSystem.cancelTransientState();
+      } else {
+        const interactionConsumed = VRSpike.processInteractionInput(timestamp);
+        if (!interactionConsumed) VRSpike.processCombatInput(timestamp);
+      }
     }
     VRSpike.hooks?.update(timestamp, 'xr');
   };
@@ -648,6 +656,7 @@ export class VRSpike {
   }
 
   private static clearTrackedInput(): void {
+    VRSpike.closeRadialMenuForLifecycle(true);
     VRSpike.latestInputFrame = null;
     VRSpike.interactionPreviewIndicator = null;
     VRSpike.controllerAnchorHost?.clear();
@@ -933,7 +942,7 @@ export class VRSpike {
         ? { id: preview.id, name: preview.label, position: preview.position }
         : null;
       const controllers = XRGamepadReader.read(Array.from(session.inputSources ?? []));
-      const actions = VRSpike.inputRouter.route(controllers, new Set(['gameplay', 'interaction']));
+      const actions = VRSpike.inputRouter.route(controllers, new Set(['world-prompt', 'interaction']));
       const intent = VRSpike.interactionSystem.process(
         inputFrame,
         actions,
@@ -1094,91 +1103,145 @@ export class VRSpike {
   }
 
   private static processRadialMenuInput(): boolean {
-    const context = VRSpike.hooks?.getRadialMenuContext?.(VRSpike.resolveAimedTargetId()) ?? null;
     const session = VRSpike.session;
-    if (!context || !session) return false;
+    const inputFrame = VRSpike.latestInputFrame;
+    if (!session || !inputFrame) {
+      VRSpike.closeRadialMenuForLifecycle(true);
+      return false;
+    }
+
     try {
       const wasOpen = VRSpike.radialMenuController.isOpen;
-      const inputFrame = VRSpike.latestInputFrame;
       const actions = VRSpike.inputRouter.route(
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
-        new Set(['global', 'locomotion', 'ui'])
+        new Set(['global', 'radial-wheel'])
       );
-      let pointerVector: { x: number; y: number } | null = null;
-      const offHand = inputFrame?.hands.left;
-      const dominantHand = inputFrame?.hands.right;
-      if (wasOpen && VRSpike.scene && inputFrame && offHand) {
-        if (!VRSpike.radialMenuHost) VRSpike.radialMenuHost = new VRRadialMenuHost(VRSpike.scene);
-        if (!VRSpike.radialPointerHost) VRSpike.radialPointerHost = new VRPanelPointerHost(VRSpike.scene);
-        VRSpike.radialMenuHost.present(offHand.pose, inputFrame.head, context.items, VRSpike.radialMenuController.selected);
-        const pointerHit = dominantHand
-          ? VRSpike.radialPointerHost.update(VRSpike.radialMenuHost.object, dominantHand.targetRayPose, 800, 800)
-          : null;
-        pointerVector = pointerHit?.guiPosition ?? null;
+      const menuPressed = actions.some((action) =>
+        action.action === SemanticXRAction.Menu && action.hand === 'left' && action.pressed
+      );
+      const selectPressed = actions.some((action) =>
+        action.action === SemanticXRAction.Select && action.hand === 'left' && action.pressed
+      );
+      let openingMenu: VRRadialMenuDefinition | null = null;
+      if (menuPressed && !VRSpike.radialMenuPressedLastFrame && !wasOpen) {
+        openingMenu = VRSpike.hooks?.createActionWheel?.(VRSpike.resolveAimedTargetId()) ?? null;
       }
-      const ownsInput = VRSpike.radialMenuController.process(context.items, actions, pointerVector);
-      const isOpen = VRSpike.radialMenuController.isOpen;
-      if (isOpen && VRSpike.scene && inputFrame?.hands.left) {
-        if (!VRSpike.radialMenuHost) VRSpike.radialMenuHost = new VRRadialMenuHost(VRSpike.scene);
-        VRSpike.radialMenuHost.present(inputFrame.hands.left.pose, inputFrame.head, context.items, VRSpike.radialMenuController.selected);
+      VRSpike.radialMenuPressedLastFrame = menuPressed;
+
+      const host = VRSpike.radialMenuHost;
+      const leftRayPose = inputFrame.hands.left?.targetRayPose;
+      const rayHit = wasOpen && host && leftRayPose?.trackingState === 'tracked'
+        ? host.resolveRay(leftRayPose)
+        : null;
+      const touchHits = wasOpen && host
+        ? {
+          left: VRSpike.resolveRadialTouch(host, inputFrame.hands.left?.targetRayPose),
+          right: VRSpike.resolveRadialTouch(host, inputFrame.hands.right?.targetRayPose),
+        }
+        : {};
+
+      const effects = VRSpike.radialMenuController.process({
+        menuPressed,
+        selectPressed,
+        openingMenu,
+        rayHit,
+        touchHits,
+      });
+      VRSpike.applyRadialMenuEffects(effects, session, inputFrame.head);
+
+      const presentation = VRSpike.radialMenuController.presentation;
+      if (presentation) {
+        const presentationHost = VRSpike.getOrCreateRadialMenuHost();
+        const openingHeadPose = VRSpike.radialOpeningHeadPose;
+        if (presentationHost && openingHeadPose) presentationHost.present(presentation, openingHeadPose);
       } else {
         VRSpike.radialMenuHost?.clear();
-        VRSpike.radialPointerHost?.clear();
       }
-      if (wasOpen !== isOpen) context.setPaused(isOpen);
-      return ownsInput;
+      return wasOpen || VRSpike.radialMenuController.isOpen || menuPressed || effects.length > 0;
     } catch (error) {
-      VRSpike.radialMenuController.close();
-      context.setPaused(false);
+      VRSpike.closeRadialMenuForLifecycle(false);
       console.error('[VRSpike] radial menu input rejected', error);
-      return false;
+      return true;
     }
   }
 
-  /** Wrist device (ROADMAP 4.1/4.3) — identical mechanics to the target radial menu, on its own trigger and instances so the two never collide. */
-  private static processWristMenuInput(): boolean {
-    const context = VRSpike.hooks?.getWristMenuContext?.() ?? null;
+  private static resolveRadialTouch(
+    host: VRRadialMenuHost,
+    targetRayPose: XRWorldPose | undefined,
+  ) {
+    return targetRayPose?.trackingState === 'tracked'
+      ? host.resolveTouch(targetRayPose.position)
+      : null;
+  }
+
+  private static getOrCreateRadialMenuHost(): VRRadialMenuHost | null {
+    if (!VRSpike.radialMenuHost && VRSpike.scene) {
+      VRSpike.radialMenuHost = new VRRadialMenuHost(VRSpike.scene);
+    }
+    return VRSpike.radialMenuHost;
+  }
+
+  private static applyRadialMenuEffects(
+    effects: readonly VRRadialControllerEffect[],
+    session: XRSession,
+    currentHeadPose: XRWorldPose,
+  ): void {
+    for (const effect of effects) {
+      if (effect.type === 'opened') {
+        VRSpike.radialOpeningHeadPose = cloneXRWorldPose(currentHeadPose);
+      } else if (effect.type === 'closed') {
+        VRSpike.radialMenuHost?.clear();
+        VRSpike.radialOpeningHeadPose = null;
+      } else if (effect.type === 'activate') {
+        VRSpike.radialMenuHost?.clear();
+        try {
+          effect.item.activate();
+        } catch (error) {
+          console.error(`[VRSpike] radial action '${effect.item.id}' failed`, error);
+        }
+      } else if (effect.type === 'hover-haptic') {
+        void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 20, amplitude: 0.15 });
+      } else if (effect.type === 'confirm-haptic') {
+        void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 35, amplitude: 0.35 });
+      } else if (effect.type === 'negative-haptic') {
+        void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 60, amplitude: 0.45 });
+      }
+    }
+  }
+
+  private static closeRadialMenuForLifecycle(disposeHost: boolean): void {
+    VRSpike.radialMenuController.close('lifecycle');
+    VRSpike.radialOpeningHeadPose = null;
+    if (disposeHost) {
+      VRSpike.radialMenuHost?.dispose();
+      VRSpike.radialMenuHost = null;
+    } else {
+      VRSpike.radialMenuHost?.clear();
+    }
+  }
+
+  private static captureRadialMenuButtonLatch(): void {
     const session = VRSpike.session;
-    if (!context || !session) return false;
+    if (!session) return;
     try {
-      const wasOpen = VRSpike.wristMenuController.isOpen;
-      const inputFrame = VRSpike.latestInputFrame;
       const actions = VRSpike.inputRouter.route(
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
-        new Set(['global', 'locomotion', 'ui'])
+        new Set(['global']),
       );
-      let pointerVector: { x: number; y: number } | null = null;
-      const offHand = inputFrame?.hands.left;
-      const dominantHand = inputFrame?.hands.right;
-      if (wasOpen && VRSpike.scene && inputFrame && offHand) {
-        if (!VRSpike.wristMenuHost) VRSpike.wristMenuHost = new VRRadialMenuHost(VRSpike.scene);
-        if (!VRSpike.wristPointerHost) VRSpike.wristPointerHost = new VRPanelPointerHost(VRSpike.scene);
-        VRSpike.wristMenuHost.present(offHand.pose, inputFrame.head, context.items, VRSpike.wristMenuController.selected);
-        const pointerHit = dominantHand
-          ? VRSpike.wristPointerHost.update(VRSpike.wristMenuHost.object, dominantHand.targetRayPose, 800, 800)
-          : null;
-        pointerVector = pointerHit?.guiPosition ?? null;
-      }
-      const ownsInput = VRSpike.wristMenuController.process(context.items, actions, pointerVector);
-      const isOpen = VRSpike.wristMenuController.isOpen;
-      if (isOpen && VRSpike.scene && inputFrame?.hands.left) {
-        if (!VRSpike.wristMenuHost) VRSpike.wristMenuHost = new VRRadialMenuHost(VRSpike.scene);
-        VRSpike.wristMenuHost.present(inputFrame.hands.left.pose, inputFrame.head, context.items, VRSpike.wristMenuController.selected);
-      } else {
-        VRSpike.wristMenuHost?.clear();
-        VRSpike.wristPointerHost?.clear();
-      }
-      if (wasOpen !== isOpen) context.setPaused(isOpen);
-      return ownsInput;
-    } catch (error) {
-      VRSpike.wristMenuController.close();
-      context.setPaused(false);
-      console.error('[VRSpike] wrist menu input rejected', error);
-      return false;
+      VRSpike.radialMenuPressedLastFrame = actions.some((action) =>
+        action.action === SemanticXRAction.Menu && action.hand === 'left' && action.pressed
+      );
+    } catch {
+      // Keep the prior latch on malformed optional input rather than treating
+      // an unreadable controller as a release that can reopen the wheel.
     }
   }
 
-  private static processLocomotionInput(timestamp: number, frame: XRFrame): void {
+  private static processLocomotionInput(
+    timestamp: number,
+    frame: XRFrame,
+    allowGameplayActions = true,
+  ): void {
     const renderer = VRSpike.renderer;
     const session = VRSpike.session;
     const rig = VRSpike.rig;
@@ -1198,7 +1261,9 @@ export class VRSpike {
         controllers,
         // 'gameplay' is only needed here for ToggleLocomotionMode, which is
         // bound in that context rather than 'locomotion'.
-        new Set(['locomotion', 'gameplay'])
+        allowGameplayActions
+          ? new Set(['locomotion', 'gameplay'])
+          : new Set(['locomotion'])
       );
       const move = routedActions.find((action) => action.action === SemanticXRAction.Move);
       const turn = routedActions.find((action) => action.action === SemanticXRAction.Turn);
@@ -1719,4 +1784,14 @@ export class VRSpike {
       facing + Math.PI / 2 + VRSpike.yawOffset + VRSpike.turnYaw
     );
   }
+}
+
+function cloneXRWorldPose(pose: XRWorldPose): XRWorldPose {
+  return {
+    position: pose.position.clone(),
+    orientation: pose.orientation.clone(),
+    linearVelocity: pose.linearVelocity?.clone() ?? null,
+    angularVelocity: pose.angularVelocity?.clone() ?? null,
+    trackingState: pose.trackingState,
+  };
 }

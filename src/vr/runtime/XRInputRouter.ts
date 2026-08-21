@@ -1,7 +1,15 @@
 import { SemanticXRAction, XRButtonState, XRHandRole } from './XRTypes';
 
-export type XRActionContext = 'global' | 'locomotion' | 'gameplay' | 'interaction' | 'ui' | 'combat';
-export type XRBindingHand = 'dominant' | 'offhand' | 'either';
+export type XRActionContext =
+  | 'global'
+  | 'locomotion'
+  | 'gameplay'
+  | 'interaction'
+  | 'ui'
+  | 'combat'
+  | 'radial-wheel'
+  | 'world-prompt';
+export type XRBindingHand = 'dominant' | 'offhand' | 'either' | XRHandRole;
 
 export type XRPhysicalInput =
   | { readonly kind: 'button'; readonly index: number }
@@ -49,12 +57,17 @@ const DEFAULT_REQUIRED_ACTIONS: readonly SemanticXRAction[] = [
   SemanticXRAction.Use,
   SemanticXRAction.Grab,
   SemanticXRAction.Menu,
-  SemanticXRAction.Wrist,
   SemanticXRAction.Recenter,
   SemanticXRAction.WeaponAction,
 ];
 
-function standardBindings(stickAxes: readonly [number, number]): readonly SemanticXRBinding[] {
+function standardBindings(
+  stickAxes: readonly [number, number],
+  menuBinding: Pick<SemanticXRBinding, 'hand' | 'input'> = {
+    hand: 'offhand',
+    input: { kind: 'button', index: 5 },
+  },
+): readonly SemanticXRBinding[] {
   return [
     { action: SemanticXRAction.Move, context: 'locomotion', hand: 'offhand', input: { kind: 'axis2d', xIndex: stickAxes[0], yIndex: stickAxes[1] } },
     { action: SemanticXRAction.Turn, context: 'locomotion', hand: 'dominant', input: { kind: 'axis2d', xIndex: stickAxes[0], yIndex: stickAxes[1] } },
@@ -63,8 +76,7 @@ function standardBindings(stickAxes: readonly [number, number]): readonly Semant
     { action: SemanticXRAction.Cancel, context: 'ui', hand: 'dominant', input: { kind: 'button', index: 5 } },
     { action: SemanticXRAction.Use, context: 'gameplay', hand: 'dominant', input: { kind: 'button', index: 4 } },
     { action: SemanticXRAction.Grab, context: 'interaction', hand: 'either', input: { kind: 'button', index: 1 } },
-    { action: SemanticXRAction.Menu, context: 'global', hand: 'offhand', input: { kind: 'button', index: 5 } },
-    { action: SemanticXRAction.Wrist, context: 'global', hand: 'offhand', input: { kind: 'button', index: 4 } },
+    { action: SemanticXRAction.Menu, context: 'global', ...menuBinding },
     { action: SemanticXRAction.Recenter, context: 'global', hand: 'dominant', input: { kind: 'button', index: 3 } },
     { action: SemanticXRAction.Pause, context: 'global', hand: 'dominant', input: { kind: 'button', index: 5 } },
     { action: SemanticXRAction.WeaponAction, context: 'combat', hand: 'dominant', input: { kind: 'button', index: 0 } },
@@ -77,7 +89,11 @@ export const BUILT_IN_XR_PROFILES: readonly XRInputBindingProfile[] = [
   {
     id: 'quest-touch',
     interactionProfiles: ['oculus-touch-v3', 'oculus-touch-v2', 'oculus-touch'],
-    bindings: standardBindings([2, 3]),
+    bindings: [
+      ...standardBindings([2, 3], { hand: 'left', input: { kind: 'button', index: 4 } }),
+      { action: SemanticXRAction.Select, context: 'radial-wheel', hand: 'left', input: { kind: 'button', index: 0 } },
+      { action: SemanticXRAction.Select, context: 'world-prompt', hand: 'either', input: { kind: 'button', index: 0 } },
+    ],
   },
   {
     id: 'valve-index',
@@ -199,6 +215,7 @@ export class XRInputRouter {
 
   private matchesHand(bindingHand: XRBindingHand, controllerHand: XRHandRole): boolean {
     if (bindingHand === 'either') return true;
+    if (bindingHand === 'left' || bindingHand === 'right') return controllerHand === bindingHand;
     if (bindingHand === 'dominant') return controllerHand === this.options.dominantHand;
     return controllerHand !== this.options.dominantHand;
   }

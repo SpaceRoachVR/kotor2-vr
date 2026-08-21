@@ -8,7 +8,6 @@ export enum SemanticXRAction {
   Use = 'use',
   Grab = 'grab',
   Menu = 'menu',
-  Wrist = 'wrist',
   Recenter = 'recenter',
   Pause = 'pause',
   WeaponAction = 'weapon-action',

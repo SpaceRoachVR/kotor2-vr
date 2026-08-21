@@ -5,6 +5,10 @@ import {
   LocomotionController,
   ResolvedLocomotion,
 } from '@/vr/runtime/LocomotionController';
+import { VRHapticFeedback } from '@/vr/runtime/VRHapticFeedback';
+import { VRRadialMenuController } from '@/vr/runtime/VRRadialMenuController';
+import { VRRadialMenuDefinition } from '@/vr/runtime/VRRadialMenuModel';
+import { XRHandRole, XRWorldPose } from '@/vr/runtime/XRTypes';
 import { afterEach, beforeEach, describe, expect, jest, test } from "@jest/globals";
 
 type CapturedXRCallback = (timestamp: number, frame?: XRFrame) => void;
@@ -54,6 +58,11 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).previousXRInputTimestamp = null;
     (VRSpike as any).turnYaw = 0;
     (VRSpike as any).turnOriginOffset?.set(0, 0, 0);
+    (VRSpike as any).radialMenuHost?.dispose?.();
+    (VRSpike as any).radialMenuHost = null;
+    (VRSpike as any).radialMenuController = new VRRadialMenuController();
+    (VRSpike as any).radialMenuPressedLastFrame = false;
+    (VRSpike as any).haptics = new VRHapticFeedback();
 
     restoreGlobal('document', originalDocument);
     restoreGlobal('navigator', originalNavigator);
@@ -852,7 +861,7 @@ describe('VRSpike XR loop ownership', () => {
     expect(head.orientation.angleTo(VRSpike.rig.quaternion)).toBeLessThan(1e-10);
   });
 
-  test('routes a Quest use-button to an interaction intent without queuing desktop movement', () => {
+  test('routes a Quest trigger to an interaction intent without queuing desktop movement', () => {
     const referenceSpace = {} as XRReferenceSpace;
     const gripSpace = {} as XRSpace;
     const buttons = Array.from({ length: 6 }, () => ({
@@ -907,7 +916,7 @@ describe('VRSpike XR loop ownership', () => {
 
     (VRSpike as any).updateTrackedInput(1000, frame);
     (VRSpike as any).processInteractionInput(1000);
-    buttons[4] = { pressed: true, touched: true, value: 1 };
+    buttons[0] = { pressed: true, touched: true, value: 1 };
     (VRSpike as any).updateTrackedInput(1014, frame);
     (VRSpike as any).processInteractionInput(1014);
     (VRSpike as any).processInteractionInput(1028);
@@ -922,7 +931,307 @@ describe('VRSpike XR loop ownership', () => {
     });
   });
 
+  test('opens the action wheel once from left X at the captured head pose without pausing', () => {
+    const input = installRadialInput();
+    const host = installRadialHost();
+    const setPaused = jest.fn();
+    const createActionWheel = jest.fn((_aimedTargetId: number | null) => actionWheel());
+    (VRSpike as any).interactionPreviewIndicator = { id: 'module-object:42' };
+    VRSpike.hooks = basicHooks({ createActionWheel, setPaused } as never);
+
+    input.leftButtons[4] = pressedButton();
+
+    expect((VRSpike as any).processRadialMenuInput()).toBe(true);
+    expect(createActionWheel).toHaveBeenCalledTimes(1);
+    expect(createActionWheel).toHaveBeenCalledWith(42);
+    expect(host.present).toHaveBeenCalledWith(
+      expect.objectContaining({ menu: expect.objectContaining({ id: 'test-wheel' }) }),
+      input.headPose,
+    );
+    expect(setPaused).not.toHaveBeenCalled();
+  });
+
+  test('confirms the current left-ray hit once and clears the host before engine activation', () => {
+    const activate = jest.fn();
+    const input = installRadialInput();
+    const host = installRadialHost({
+      rayHit: { kind: 'entry', index: 0 },
+    });
+    VRSpike.hooks = basicHooks({ createActionWheel: () => actionWheel(activate) });
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+
+    input.leftButtons[0] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+    (VRSpike as any).processRadialMenuInput();
+
+    expect(host.resolveRay).toHaveBeenCalledWith(input.leftTargetRayPose);
+    expect(activate).toHaveBeenCalledTimes(1);
+    const activationOrder = activate.mock.invocationCallOrder[0];
+    expect(host.clear.mock.invocationCallOrder.some((callOrder: number) => callOrder < activationOrder)).toBe(true);
+  });
+
+  test('lets either tracked touch activate and does not reopen while X remains held', () => {
+    const activate = jest.fn();
+    const input = installRadialInput();
+    let activeTouchX = -0.2;
+    const host = installRadialHost({
+      touchHit: (probe) => probe.x === activeTouchX ? { kind: 'entry', index: 0 } : null,
+    });
+    const createActionWheel = jest.fn(() => actionWheel(activate));
+    const pulse = jest.fn(async (
+      _session: XRSession,
+      _hand: XRHandRole,
+      _pattern: { readonly durationMs: number; readonly amplitude: number },
+    ): Promise<void> => undefined);
+    (VRSpike as any).haptics = { pulse };
+    VRSpike.hooks = basicHooks({ createActionWheel });
+
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+    (VRSpike as any).processRadialMenuInput();
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(createActionWheel).toHaveBeenCalledTimes(1);
+
+    input.leftButtons[4] = releasedButton();
+    (VRSpike as any).processRadialMenuInput();
+    activeTouchX = 0.2;
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+    (VRSpike as any).processRadialMenuInput();
+
+    expect(activate).toHaveBeenCalledTimes(2);
+    expect(host.resolveTouch).toHaveBeenCalledWith(input.leftTargetRayPose.position);
+    expect(host.resolveTouch).toHaveBeenCalledWith(input.rightTargetRayPose.position);
+    expect(pulse).toHaveBeenCalledWith(expect.anything(), 'left', { durationMs: 35, amplitude: 0.35 });
+    expect(pulse).toHaveBeenCalledWith(expect.anything(), 'right', { durationMs: 35, amplitude: 0.35 });
+  });
+
+  test('center trigger cancels, no-target trigger does nothing, and X release never activates', () => {
+    const activate = jest.fn();
+    const input = installRadialInput();
+    let rayHit: { kind: 'center' } | null = null;
+    installRadialHost({ touchHit: () => null, rayHit: () => rayHit });
+    VRSpike.hooks = basicHooks({ createActionWheel: () => actionWheel(activate) });
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+
+    input.leftButtons[0] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(true);
+    input.leftButtons[0] = releasedButton();
+    (VRSpike as any).processRadialMenuInput();
+    rayHit = { kind: 'center' };
+    input.leftButtons[0] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+    expect((VRSpike as any).radialMenuController.isOpen).toBe(false);
+
+    input.leftButtons[4] = releasedButton();
+    input.leftButtons[0] = releasedButton();
+    (VRSpike as any).processRadialMenuInput();
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+    input.leftButtons[4] = releasedButton();
+    (VRSpike as any).processRadialMenuInput();
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  test('continues locomotion while an open wheel suppresses interaction and combat', () => {
+    const input = installRadialInput();
+    installRadialHost();
+    VRSpike.hooks = basicHooks({ createActionWheel: () => actionWheel() });
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+
+    jest.spyOn(VRSpike as any, 'updateTrackedInput').mockImplementation(() => undefined);
+    jest.spyOn(VRSpike as any, 'processMovieInput').mockReturnValue(false);
+    jest.spyOn(VRSpike as any, 'processKeyboardInput').mockReturnValue(false);
+    const radial = jest.spyOn(VRSpike as any, 'processRadialMenuInput');
+    jest.spyOn(VRSpike as any, 'processComfortSettingsInput');
+    jest.spyOn(VRSpike as any, 'processPanelInput');
+    const locomotion = jest.spyOn(VRSpike as any, 'processLocomotionInput').mockImplementation(() => undefined);
+    const interaction = jest.spyOn(VRSpike as any, 'processInteractionInput').mockReturnValue(false);
+    const combat = jest.spyOn(VRSpike as any, 'processCombatInput').mockImplementation(() => undefined);
+    const clearTargets = jest.spyOn((VRSpike as any).interactionTargetSet, 'clear');
+    const cancelInteraction = jest.spyOn((VRSpike as any).interactionSystem, 'cancelTransientState');
+
+    (VRSpike as any).frame(1_000, {} as XRFrame);
+
+    expect(radial).toHaveReturnedWith(true);
+    expect(locomotion).toHaveBeenCalledTimes(1);
+    expect(interaction).not.toHaveBeenCalled();
+    expect(combat).not.toHaveBeenCalled();
+    expect(clearTargets).toHaveBeenCalled();
+    expect(cancelInteraction).toHaveBeenCalled();
+  });
+
+  test('requires a fresh X press after a foreground legacy panel releases ownership', () => {
+    const input = installRadialInput();
+    installRadialHost();
+    const createActionWheel = jest.fn((_aimedTargetId: number | null) => actionWheel());
+    VRSpike.hooks = basicHooks({ createActionWheel });
+    input.leftButtons[4] = pressedButton();
+
+    jest.spyOn(VRSpike as any, 'updateTrackedInput').mockImplementation(() => undefined);
+    jest.spyOn(VRSpike as any, 'processMovieInput').mockReturnValue(false);
+    jest.spyOn(VRSpike as any, 'processKeyboardInput').mockReturnValue(false);
+    jest.spyOn(VRSpike as any, 'processComfortSettingsInput').mockReturnValue(false);
+    jest.spyOn(VRSpike as any, 'processPanelInput')
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    jest.spyOn(VRSpike as any, 'processLocomotionInput').mockImplementation(() => undefined);
+    jest.spyOn(VRSpike as any, 'processInteractionInput').mockReturnValue(false);
+    jest.spyOn(VRSpike as any, 'processCombatInput').mockImplementation(() => undefined);
+
+    (VRSpike as any).frame(1_000, {} as XRFrame);
+    (VRSpike as any).frame(1_016, {} as XRFrame);
+    expect(createActionWheel).not.toHaveBeenCalled();
+
+    input.leftButtons[4] = releasedButton();
+    (VRSpike as any).frame(1_032, {} as XRFrame);
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).frame(1_048, {} as XRFrame);
+
+    expect(createActionWheel).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(['tracking unavailable', 'session end'] as const)(
+    '%s closes without activation and disposes radial host resources',
+    (reason) => {
+      const activate = jest.fn();
+      const input = installRadialInput();
+      const host = installRadialHost();
+      VRSpike.hooks = basicHooks({ createActionWheel: () => actionWheel(activate) });
+      input.leftButtons[4] = pressedButton();
+      (VRSpike as any).processRadialMenuInput();
+
+      if (reason === 'tracking unavailable') {
+        (VRSpike as any).latestInputFrame = null;
+        (VRSpike as any).processRadialMenuInput();
+      } else {
+        Object.defineProperty(globalThis, 'document', {
+          configurable: true,
+          value: { getElementById: (): null => null },
+        });
+        Object.defineProperty(globalThis, 'requestAnimationFrame', {
+          configurable: true,
+          value: () => 1,
+        });
+        (VRSpike as any).finishSessionEnd();
+      }
+
+      expect((VRSpike as any).radialMenuController.isOpen).toBe(false);
+      expect(host.dispose).toHaveBeenCalledTimes(1);
+      expect(activate).not.toHaveBeenCalled();
+    },
+  );
+
 });
+
+function basicHooks(overrides: Record<string, unknown> = {}): any {
+  return {
+    update: (_timestamp: number, _source: string): void => undefined,
+    getPlayerPosition: (): THREE.Vector3 | null => null,
+    getFacing: (): number => 0,
+    getWorldContext: (): any => ({
+      module: null as string | null,
+      position: null as THREE.Vector3 | null,
+      room: null as string | null,
+      roomsVisible: 0,
+      roomsTotal: 0,
+    }),
+    ...overrides,
+  };
+}
+
+function actionWheel(activate = jest.fn()): VRRadialMenuDefinition {
+  return {
+    id: 'test-wheel',
+    title: 'Actions',
+    pages: [{
+      index: 0,
+      entries: [{
+        kind: 'action',
+        id: 'test-action',
+        label: 'Test Action',
+        revalidate: () => true,
+        activate,
+      }],
+    }],
+  };
+}
+
+function installRadialInput(): {
+  readonly leftButtons: Array<{ pressed: boolean; touched: boolean; value: number }>;
+  readonly rightButtons: Array<{ pressed: boolean; touched: boolean; value: number }>;
+  readonly headPose: ReturnType<typeof worldPose>;
+  readonly leftTargetRayPose: ReturnType<typeof worldPose>;
+  readonly rightTargetRayPose: ReturnType<typeof worldPose>;
+} {
+  const leftButtons = Array.from({ length: 6 }, releasedButton);
+  const rightButtons = Array.from({ length: 6 }, releasedButton);
+  const headPose = worldPose(0, 0, 1.7);
+  const leftTargetRayPose = worldPose(-0.2, 0.4, 1.2);
+  const rightTargetRayPose = worldPose(0.2, 0.4, 1.2);
+  VRSpike.scene = new THREE.Scene();
+  VRSpike.session = {
+    inputSources: [
+      { handedness: 'left', profiles: ['oculus-touch-v3'], gamepad: { axes: [0, 0, 0, 0], buttons: leftButtons } },
+      { handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [0, 0, 0, 0], buttons: rightButtons } },
+    ],
+  } as unknown as XRSession;
+  (VRSpike as any).latestInputFrame = {
+    timestamp: 1_000,
+    head: headPose,
+    hands: {
+      left: { hand: 'left', pose: worldPose(-0.2, 0.4, 1.2), targetRayPose: leftTargetRayPose, buttons: {}, axes: [], interactionProfile: 'oculus-touch-v3' },
+      right: { hand: 'right', pose: worldPose(0.2, 0.4, 1.2), targetRayPose: rightTargetRayPose, buttons: {}, axes: [], interactionProfile: 'oculus-touch-v3' },
+    },
+    activeInteractionProfiles: ['oculus-touch-v3'],
+  };
+  (VRSpike as any).radialMenuController = new VRRadialMenuController();
+  (VRSpike as any).radialMenuPressedLastFrame = false;
+  return { leftButtons, rightButtons, headPose, leftTargetRayPose, rightTargetRayPose };
+}
+
+function installRadialHost(options: {
+  readonly rayHit?: { kind: 'entry'; index: number } | { kind: 'center' } | null | (() => { kind: 'entry'; index: number } | { kind: 'center' } | null);
+  readonly touchHit?: ((probe: THREE.Vector3) => { kind: 'entry'; index: number } | { kind: 'center' } | null);
+  readonly onClear?: () => void;
+} = {}): any {
+  const resolveRay = typeof options.rayHit === 'function'
+    ? jest.fn(options.rayHit)
+    : jest.fn(() => options.rayHit ?? null);
+  const host = {
+    object: new THREE.Group(),
+    present: jest.fn(),
+    resolveRay,
+    resolveTouch: jest.fn(options.touchHit ?? (() => null)),
+    clear: jest.fn(() => options.onClear?.()),
+    dispose: jest.fn(),
+  };
+  (VRSpike as any).radialMenuHost = host;
+  return host;
+}
+
+function worldPose(x: number, y: number, z: number): XRWorldPose {
+  return {
+    position: new THREE.Vector3(x, y, z),
+    orientation: new THREE.Quaternion(),
+    linearVelocity: null,
+    angularVelocity: null,
+    trackingState: 'tracked' as const,
+  };
+}
+
+function pressedButton(): { pressed: boolean; touched: boolean; value: number } {
+  return { pressed: true, touched: true, value: 1 };
+}
+
+function releasedButton(): { pressed: boolean; touched: boolean; value: number } {
+  return { pressed: false, touched: false, value: 0 };
+}
 
 function xrPose(x: number, y: number, z: number): XRPose {
   return {

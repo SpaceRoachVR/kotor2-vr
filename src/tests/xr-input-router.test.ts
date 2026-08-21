@@ -3,6 +3,7 @@ import {
   BUILT_IN_XR_PROFILES,
   SemanticXRBinding,
   XRControllerSnapshot,
+  XRActionContext,
   XRInputBindingProfile,
   XRInputRouter,
 } from '@/vr/runtime/XRInputRouter';
@@ -59,6 +60,58 @@ describe('XRInputRouter', () => {
       hand: 'right',
       pressed: true,
     }));
+  });
+
+  test('routes Quest left X as Menu and no longer emits Wrist', () => {
+    const left = questController('left');
+    const buttons = [...left.buttons];
+    buttons[4] = { pressed: true, touched: true, value: 1 };
+
+    const actions = new XRInputRouter().route([{ ...left, buttons }], new Set(['global']));
+
+    expect(actions).toContainEqual(expect.objectContaining({
+      action: SemanticXRAction.Menu,
+      hand: 'left',
+      pressed: true,
+    }));
+    expect(actions.some((action) => String(action.action) === 'wrist')).toBe(false);
+  });
+
+  test('routes only the Quest left trigger as Select in the radial-wheel context', () => {
+    const controllers = (['left', 'right'] as const).map((hand) => {
+      const controller = questController(hand);
+      const buttons = [...controller.buttons];
+      buttons[0] = { pressed: true, touched: true, value: 1 };
+      return { ...controller, buttons };
+    });
+
+    const actions = new XRInputRouter().route(
+      controllers,
+      new Set(['radial-wheel' as XRActionContext]),
+    );
+
+    expect(actions.filter((action) => action.action === SemanticXRAction.Select)).toEqual([
+      expect.objectContaining({ hand: 'left', pressed: true }),
+    ]);
+  });
+
+  test('routes either Quest trigger as Select only in the world-prompt context', () => {
+    const controllers = (['left', 'right'] as const).map((hand) => {
+      const controller = questController(hand);
+      const buttons = [...controller.buttons];
+      buttons[0] = { pressed: true, touched: true, value: 1 };
+      return { ...controller, buttons };
+    });
+
+    const actions = new XRInputRouter().route(
+      controllers,
+      new Set(['world-prompt' as XRActionContext]),
+    );
+
+    expect(actions.filter((action) => action.action === SemanticXRAction.Select)).toEqual([
+      expect.objectContaining({ hand: 'left', pressed: true }),
+      expect.objectContaining({ hand: 'right', pressed: true }),
+    ]);
   });
 
   test('swaps dominant and off-hand semantic actions for left-handed play', () => {

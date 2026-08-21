@@ -19,20 +19,17 @@ describe('VRPanelInputController', () => {
     expect(menu.triggerControllerAPress).toHaveBeenCalledTimes(1);
   });
 
-  test('routes Quest face buttons to the original foreground-menu actions', () => {
+  test('routes the remaining Quest face-button action to the foreground menu', () => {
     const controller = new VRPanelInputController();
     const menu = createMenu();
 
     controller.process(menu, []);
     controller.process(menu, [action(SemanticXRAction.Cancel, true)]);
     controller.process(menu, [action(SemanticXRAction.Cancel, false)]);
-    controller.process(menu, [action(SemanticXRAction.Wrist, true)]);
-    controller.process(menu, [action(SemanticXRAction.Wrist, false)]);
-    controller.process(menu, [action(SemanticXRAction.Menu, true)]);
 
     expect(menu.triggerControllerBPress).toHaveBeenCalledTimes(1);
-    expect(menu.triggerControllerXPress).toHaveBeenCalledTimes(1);
-    expect(menu.triggerControllerYPress).toHaveBeenCalledTimes(1);
+    expect(menu.triggerControllerXPress).not.toHaveBeenCalled();
+    expect(menu.triggerControllerYPress).not.toHaveBeenCalled();
   });
 
   test('resets edge state when modal ownership is cancelled', () => {
@@ -87,9 +84,7 @@ function createMenu(): VRPanelMenuController {
 function action(actionName: SemanticXRAction, pressed: boolean): RoutedXRAction {
   return {
     action: actionName,
-    hand: actionName === SemanticXRAction.Wrist || actionName === SemanticXRAction.Menu
-      ? 'left'
-      : 'right',
+    hand: actionName === SemanticXRAction.Menu ? 'left' : 'right',
     pressed,
     touched: pressed,
     value: pressed ? 1 : 0,
