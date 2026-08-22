@@ -10,23 +10,45 @@ settle comfort, cadence, or whether anything actually *reads* correctly through
 lenses, because IWER renders through the ordinary page WebGL context. So every
 item below still needs the device.
 
+## Current focus: sections A and B only
+
+21 checks, roughly half an hour. These are the items automation fundamentally
+cannot reach — comfort is felt, not measured, and tracking loss cannot be
+emulated honestly — and they gate the most design decisions, so they are worth
+doing before more is built on top. The rest keeps for a later pass.
+
 ## Before you start
 
-1. Start the asset service and note the printed launch URL:
+1. Bring up the VR runtime **first**: Virtual Desktop Streamer with VDXR
+   selected as the OpenXR runtime. SteamVR need not run. Disable Synchronous
+   Spacewarp and select 72 Hz — the configuration the sustained-50 gate was
+   measured under.
+2. Then one command, which starts the asset service and opens a browser with a
+   fresh profile and DevTools already open:
    ```bash
-   node tools/asset-http/asset-server.js
+   npm run vr:play
    ```
-2. Bring up the VR runtime **before** launching the browser: Virtual Desktop
-   Streamer, with VDXR selected as the OpenXR runtime. SteamVR need not run.
-3. Launch Chrome or Edge with a **fresh `--user-data-dir`**. A Chromium process
-   caches "no XR device" from startup, so a window opened in an already-running
-   browser reports `immersive-vr: false` forever and looks exactly like a broken
-   runtime.
-4. Disable Synchronous Spacewarp and select 72 Hz — that is the configuration
-   the sustained-50 gate was measured under.
+   The fresh profile is not cosmetic. A Chromium process caches "no XR device"
+   from startup, so a window opened in an already-running browser reports
+   `immersive-vr: false` forever and looks exactly like a broken runtime — that
+   confound produced two wrong readings during Phase 0.
+3. Accept the EULA, load a save, then press **Enter VR (spike)**.
+4. Leave DevTools open. The console is the evidence several open roadmap items
+   are still waiting on.
 
 Record for each item: pass/fail, and if it fails, what it looked like. One
 change per run where you can; confounding two fixes wastes a playthrough.
+
+`npm run vr:check` runs the automated half of this against an emulated device —
+session lifecycle, input routing, recenter maths, locomotion, texture
+resolution. It is worth running before a headset session so you are not
+spending device time on something already broken in logic.
+
+## What this list cannot tell you
+
+Nothing here is settled by the emulator, and nothing the emulator settles is
+device evidence. IWER renders through the ordinary page WebGL context, so
+frametimes measured there are not headset frametimes.
 
 ---
 
