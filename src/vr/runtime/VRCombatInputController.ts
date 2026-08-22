@@ -5,6 +5,19 @@ export interface VRCombatInputConfiguration {
   readonly minimumSwingSpeedMetresPerSecond: number;
   readonly visualSwingCooldownMilliseconds: number;
   readonly rollCooldownMilliseconds: number;
+  /**
+   * How far along the blade, in metres, the swing is measured when both hands
+   * are on the hilt. Sampling at the hands alone is what made the off hand
+   * inert: rotating a two-handed grip about the rear hand barely moves either
+   * hand while sweeping the blade through a large arc.
+   */
+  readonly bladeSampleDistanceMetres: number;
+  /**
+   * Maximum distance between the hands for a two-handed grip to count. Holding
+   * the offhand grip button with the hands far apart is not a two-handed grip
+   * on one hilt, and should not promote.
+   */
+  readonly twoHandedGripMaxSeparationMetres: number;
 }
 
 export interface VRCombatInputContext {
@@ -25,12 +38,19 @@ export interface VRCombatSwingEvent {
   readonly rollEligible: boolean;
   readonly pose: XRWorldPose;
   readonly timestamp: number;
+  /**
+   * Hand separation when a two-handed grip was resolved, for on-device tuning
+   * of `twoHandedGripMaxSeparationMetres`. Absent for one-handed swings.
+   */
+  readonly gripSeparationMetres?: number;
 }
 
 const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
   minimumSwingSpeedMetresPerSecond: 0.8,
   visualSwingCooldownMilliseconds: 120,
   rollCooldownMilliseconds: 3_000,
+  bladeSampleDistanceMetres: 0.6,
+  twoHandedGripMaxSeparationMetres: 0.35,
 };
 
 /**
@@ -41,6 +61,7 @@ const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
 export class VRCombatInputController {
   private readonly configuration: VRCombatInputConfiguration;
   private previousPose: XRWorldPose | null = null;
+  private previousSamplePoint: THREE.Vector3 | null = null;
   private previousTimestamp: number | null = null;
   private lastVisualSwingAt = Number.NEGATIVE_INFINITY;
   private nextRollAt = Number.NEGATIVE_INFINITY;
@@ -80,8 +101,25 @@ export class VRCombatInputController {
       this.resetMeleeSample();
       return [];
     }
-    const speed = this.resolveSpeed(dominantPose, context.timestamp);
+    // ROADMAP 3.3. A two-handed grip is a physical claim, not just a held
+    // button: both hands must be tracked and close enough to be on one hilt.
+    const offhandPose = inputFrame.hands.left?.pose ?? null;
+    const grip = this.resolveTwoHandedGrip(context, dominantPose, offhandPose);
+
+    // Measure the swing where the blade actually is. With both hands on the
+    // hilt, rotating about the rear hand sweeps the blade through a wide arc
+    // while barely moving either hand — which is exactly why sampling the
+    // dominant hand alone left the off hand contributing nothing.
+    const samplePoint = grip
+      ? VRCombatInputController.resolveBladeSamplePoint(
+        dominantPose, grip.offhandPose, this.configuration.bladeSampleDistanceMetres)
+      : dominantPose.position.clone();
+    const speed = grip
+      ? this.resolveSampledSpeed(samplePoint, context.timestamp)
+      : this.resolveSpeed(dominantPose, context.timestamp);
+
     this.previousPose = VRCombatInputController.clonePose(dominantPose);
+    this.previousSamplePoint = samplePoint.clone();
     this.previousTimestamp = context.timestamp;
     if (speed < this.configuration.minimumSwingSpeedMetresPerSecond ||
       context.timestamp - this.lastVisualSwingAt < this.configuration.visualSwingCooldownMilliseconds) {
@@ -95,14 +133,63 @@ export class VRCombatInputController {
       actorId: context.actorId,
       nominatedTargetId: context.nominatedTargetId,
       hand: 'right',
-      weaponMode: context.offhandGrip && context.weaponMode === 'melee-one-handed'
-        ? 'melee-two-handed'
-        : context.weaponMode,
+      weaponMode: grip ? 'melee-two-handed' : context.weaponMode,
       speedMetresPerSecond: speed,
       rollEligible,
       pose: VRCombatInputController.clonePose(dominantPose),
       timestamp: context.timestamp,
+      ...(grip ? { gripSeparationMetres: grip.separationMetres } : {}),
     }];
+  }
+
+  /**
+   * Resolves a genuine two-handed grip, or null.
+   *
+   * Only promotes a one-handed weapon: a double-bladed saber or dual wield is
+   * already a two-weapon stance and adding a second hand to it means something
+   * different, which is not modelled here.
+   */
+  private resolveTwoHandedGrip(
+    context: VRCombatInputContext,
+    dominantPose: XRWorldPose,
+    offhandPose: XRWorldPose | null,
+  ): { readonly offhandPose: XRWorldPose; readonly separationMetres: number } | null {
+    if (!context.offhandGrip) return null;
+    if (context.weaponMode !== 'melee-one-handed') return null;
+    if (!offhandPose || offhandPose.trackingState === 'unavailable') return null;
+    const separationMetres = offhandPose.position.distanceTo(dominantPose.position);
+    if (!Number.isFinite(separationMetres)) return null;
+    if (separationMetres > this.configuration.twoHandedGripMaxSeparationMetres) return null;
+    return { offhandPose, separationMetres };
+  }
+
+  /**
+   * A point `distance` along the blade, taken as the direction from the
+   * dominant (rear) hand to the off hand. Hands too close together give no
+   * usable direction, so the dominant hand's own forward is used instead.
+   */
+  private static resolveBladeSamplePoint(
+    dominantPose: XRWorldPose,
+    offhandPose: XRWorldPose,
+    distance: number,
+  ): THREE.Vector3 {
+    const along = offhandPose.position.clone().sub(dominantPose.position);
+    const direction = along.lengthSq() < 1e-6
+      ? new THREE.Vector3(0, 0, -1).applyQuaternion(dominantPose.orientation)
+      : along.normalize();
+    return dominantPose.position.clone().addScaledVector(direction, distance);
+  }
+
+  /**
+   * Speed of the sampled blade point between frames. Controller linear
+   * velocity cannot be used here — it describes the hand, not a point offset
+   * from it, and would discard the rotational contribution this exists for.
+   */
+  private resolveSampledSpeed(samplePoint: THREE.Vector3, timestamp: number): number {
+    if (!this.previousSamplePoint || this.previousTimestamp === null) return 0;
+    const elapsedSeconds = (timestamp - this.previousTimestamp) / 1_000;
+    if (!(elapsedSeconds > 0)) return 0;
+    return samplePoint.distanceTo(this.previousSamplePoint) / elapsedSeconds;
   }
 
   /**
@@ -158,6 +245,7 @@ export class VRCombatInputController {
 
   private resetMeleeSample(): void {
     this.previousPose = null;
+    this.previousSamplePoint = null;
     this.previousTimestamp = null;
   }
 
