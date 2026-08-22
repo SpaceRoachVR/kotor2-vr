@@ -489,11 +489,27 @@ its replacement is confirmed in the headset.
   through a panel host while the overlay is the only visible menu. Delivers the
   target action menu, name plate, health bar **and** `BTN_CLEARALL` (Cancel
   Combat) in one step.
-- **G3 — Anchor and trim.** The overlay is screen-space positioned against the
-  target's projected 2D location, meaningless per-eye. Anchor the presented
-  panel to the target in world space, and decide how much of the HUD to show
-  (target UI + combat widgets vs. the whole 2D HUD).
-- **G4 — Delete the bespoke system.** `VRWorldActionPromptHost`,
+- **G3 — ~~Anchor and trim~~ → Wire overlay input.** ✅ implemented.
+  Superseded by playtest: Allen reported the head-relative full HUD read
+  "perfect", so trimming and world-anchoring were dropped as solutions to a
+  problem that did not exist. G3 became input instead: ray, pointer and click
+  routing through `VRPanelPointerHost` + `VRPanelInputController` into the
+  overlay. Deliberately does NOT claim blanket foreground ownership the way
+  `processPanelInput` does — the HUD is up while walking, so it consumes the
+  trigger only on the frame a select edge lands on a control the overlay
+  accepts, leaving the trigger free for combat otherwise.
+- **G4 — Delete the bespoke system.** ◐ disabled, not yet deleted.
+  `VRSpike.BESPOKE_WORLD_PROMPT_ENABLED = false` suppresses the prompt's
+  presentation and activation while leaving aim resolution (which feeds
+  CursorManager) intact. Shipping the deletion together with untested overlay
+  input risks a build with no interaction surface and no way back; the code
+  comes out once the overlay is confirmed in the headset. Sequencing within
+  the decision, not a hedge against it.
+  *Also fixed here:* the engine cursor selection was being fed **after** the
+  bespoke prompt model was built, so a candidate whose model failed to build
+  never reached CursorManager and the overlay showed nothing for a perfectly
+  selectable object. Hoisted above the model build.
+- **G4 (deletion, pending confirmation).** `VRWorldActionPromptHost`,
   `VRWorldActionPromptModel`, `VRWorldActionPromptController`,
   `VRWorldPromptModelResolver`, and the candidacy/prompt plumbing in
   `GameState.ts` — plus the temporary instrumentation that served them.

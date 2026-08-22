@@ -158,12 +158,16 @@ export interface VRSpikeHooks {
    * input ownership so the player can keep moving while it is up.
    */
   getInGameOverlayContext?: () => {
-    /** Identity used by VRPanelHost to detect an owner change. */
-    readonly overlay: object;
+    /**
+     * The overlay menu itself: identity for VRPanelHost owner tracking, and
+     * the controller-button sink for VRPanelInputController.
+     */
+    readonly overlay: VRPanelMenuController;
     readonly guiScene: THREE.Scene;
     readonly guiCamera: THREE.Camera;
     readonly viewportWidth: number;
     readonly viewportHeight: number;
+    readonly pointerSink: VRPanelPointerSink;
   } | null;
   /**
    * TEMPORARY (VR-PLAYTEST-FIX-PLAN.md issue 8): one-line snapshot of the
@@ -717,8 +721,14 @@ export class VRSpike {
         VRSpike.interactionSystem.cancelTransientState();
       } else if (!lifecycleSuspendsGameplayInput) {
         VRSpike.processCombatCancel();
+        // Phase G: the engine overlay is the interaction surface. It still runs
+        // through processInteractionInput to resolve *which* object VR is
+        // aiming at (that feeds CursorManager, which is what makes the overlay
+        // show its target UI at all), but when the bespoke prompt is disabled
+        // that call no longer presents or activates anything itself.
         const interactionConsumed = VRSpike.processInteractionInput(timestamp);
-        if (interactionConsumed) VRSpike.captureWeaponActionLatch();
+        const overlayConsumed = VRSpike.processInGameOverlayInput();
+        if (interactionConsumed || overlayConsumed) VRSpike.captureWeaponActionLatch();
         else VRSpike.processCombatInput(timestamp);
       }
     }
@@ -875,6 +885,79 @@ export class VRSpike {
       return true;
     }
   }
+
+  /**
+   * Phase G3 — ray, pointer and click routing into the engine's in-game
+   * overlay.
+   *
+   * Unlike `processPanelInput` this must NOT claim blanket foreground
+   * ownership: the HUD is up the whole time the player is walking around, so
+   * seizing input would suspend locomotion permanently. Instead it consumes
+   * the trigger only on the frame a select edge lands on a control that the
+   * overlay actually accepts — the same narrow-consumption pattern the world
+   * prompt used — leaving the trigger free for combat otherwise.
+   *
+   * Returns whether this frame's activation was consumed by the overlay.
+   */
+  private static processInGameOverlayInput(): boolean {
+    const context = VRSpike.hooks?.getInGameOverlayContext?.() ?? null;
+    const session = VRSpike.session;
+    const inputFrame = VRSpike.latestInputFrame;
+    const worldScene = VRSpike.scene;
+    if (!context || !session || !inputFrame || !worldScene) {
+      VRSpike.inGameOverlayPointerHost?.clear();
+      VRSpike.inGameOverlayInputController.cancel();
+      context?.pointerSink.setPointerPosition(null);
+      return false;
+    }
+
+    try {
+      if (!VRSpike.inGameOverlayPointerHost) {
+        VRSpike.inGameOverlayPointerHost = new VRPanelPointerHost(worldScene);
+      }
+      const host = VRSpike.inGameOverlayHost;
+      const hand = inputFrame.hands.right;
+      const pointerHit = hand && host?.isVisible
+        ? VRSpike.inGameOverlayPointerHost.update(
+          host.object,
+          hand.targetRayPose,
+          context.viewportWidth,
+          context.viewportHeight
+        ) ?? null
+        : null;
+      if (!hand || !pointerHit) VRSpike.inGameOverlayPointerHost.clear();
+
+      // Feed the hit to the legacy GUI so the overlay's own hover/highlight
+      // state tracks the ray, exactly as the mouse would drive it flatscreen.
+      VRSpike.latestInGameOverlayPointerPosition = pointerHit?.guiPosition.clone() ?? null;
+
+      const actions = VRSpike.inputRouter.route(
+        XRGamepadReader.read(Array.from(session.inputSources ?? [])),
+        new Set(['ui', 'gameplay'])
+      );
+      const consumed = VRSpike.inGameOverlayInputController.process(
+        context.overlay,
+        actions,
+        pointerHit?.guiPosition ?? null,
+        context.pointerSink
+      );
+      return consumed && !!pointerHit;
+    } catch (error) {
+      VRSpike.inGameOverlayInputController.cancel();
+      VRSpike.inGameOverlayPointerHost?.clear();
+      VRSpike.latestInGameOverlayPointerPosition = null;
+      if (!VRSpike.inGameOverlayInputErrorReported) {
+        VRSpike.inGameOverlayInputErrorReported = true;
+        console.error('[VRSpike] in-game overlay input rejected', error);
+      }
+      return false;
+    }
+  }
+
+  private static inGameOverlayPointerHost: VRPanelPointerHost | null = null;
+  private static readonly inGameOverlayInputController = new VRPanelInputController();
+  private static latestInGameOverlayPointerPosition: THREE.Vector2 | null = null;
+  private static inGameOverlayInputErrorReported = false;
 
   private static resolveMovieInputContexts(): VRMovieInputContexts {
     const movie = VRSpike.hooks?.getMovieContext?.() ?? null;
@@ -1117,6 +1200,14 @@ export class VRSpike {
         return false;
       }
 
+      // Phase G: drive the engine cursor from aim resolution alone. This used
+      // to sit after the bespoke prompt model was built, so a candidate whose
+      // model failed to build never reached CursorManager and the overlay
+      // showed nothing — even though the object was perfectly selectable.
+      VRSpike.hooks?.setVRSelectedObject?.(
+        VRSpike.parseModuleObjectTargetId(selectedCandidate.id)
+      );
+
       const candidateStateKey = VRSpike.getWorldPromptCandidateStateKey(selectedCandidate);
       const resolution = VRSpike.worldPromptModelResolver.resolve(
         { candidateId: selectedCandidate.id, openingKey: candidateStateKey },
@@ -1145,13 +1236,11 @@ export class VRSpike {
         name: selectedCandidate.name,
         position: selectedCandidate.position,
       };
-      // Phase G1: mirror the resolved candidate into the engine's own cursor
-      // selection so InGameOverlay can present its authored target UI. Runs
-      // alongside the bespoke prompt for now; the prompt is removed in G4 once
-      // the overlay is confirmed in the headset.
-      VRSpike.hooks?.setVRSelectedObject?.(
-        VRSpike.parseModuleObjectTargetId(selectedCandidate.id)
-      );
+      if (!VRSpike.BESPOKE_WORLD_PROMPT_ENABLED) {
+        // Aim resolution above already fed CursorManager, which is all the
+        // engine overlay needs. Do not present or activate the bespoke prompt.
+        return false;
+      }
       const host = VRSpike.getOrCreateWorldActionPromptHost();
       if (!host) {
         VRSpike.hideWorldActionPromptPresentation();
@@ -1281,11 +1370,22 @@ export class VRSpike {
       } else if (effect.type === 'hover-haptic') {
         void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 20, amplitude: 0.15 });
       } else if (effect.type === 'negative-haptic') {
+        // TEMPORARY (issue 11 / medbay container): a refused activation is the
+        // exact signature of "the option was there but clicking did nothing" —
+        // the action revalidated false and was dropped silently. Haptics are
+        // unavailable on this rig, so there is no feedback at all without this.
+        console.info(
+          `[VR prompt activate] REFUSED hand=${effect.hand}` +
+          ` prompt=${VRSpike.worldPromptCandidateId ?? 'none'}`
+        );
         VRSpike.clearWorldActionPrompt(false);
         void VRSpike.haptics.pulse(session, effect.hand, { durationMs: 60, amplitude: 0.45 });
       } else if (effect.type === 'activate') {
         const action = effect.action;
         const hand = effect.hand;
+        console.info(
+          `[VR prompt activate] id=${action.id} label='${action.label}' hand=${hand}`
+        );
         VRSpike.clearWorldActionPrompt(false);
         void VRSpike.haptics.pulse(session, hand, { durationMs: 35, amplitude: 0.35 });
         try {
@@ -1709,6 +1809,31 @@ export class VRSpike {
    */
   private static readonly reportedWorldPromptStages = new Set<string>();
 
+  /**
+   * TEMPORARY (VR-PLAYTEST-FIX-PLAN.md issue 13): room visibility trace.
+   *
+   * `ModuleArea.updateRoomVisibility` hides every room then shows
+   * `player.room` plus its linked rooms, and early-returns unless the player
+   * changed room. That is camera-independent, so it should behave identically
+   * in VR — unless VR locomotion leaves `player.room` stale or wrong, which
+   * would hide whole rooms and every door and creature in them. Logs only on
+   * change, so it is quiet while standing still.
+   */
+  private static lastRoomTrace = '';
+
+  private static traceRoomVisibility(): void {
+    try {
+      const world = VRSpike.hooks?.getWorldContext?.();
+      if (!world) return;
+      const trace = `room=${world.room ?? 'none'} visible=${world.roomsVisible}/${world.roomsTotal}`;
+      if (trace === VRSpike.lastRoomTrace) return;
+      VRSpike.lastRoomTrace = trace;
+      console.info(`[VR rooms] ${trace}`);
+    } catch {
+      // Diagnostics must never disturb the frame loop.
+    }
+  }
+
   private static reportWorldPromptStageOnce(message: string): void {
     if (VRSpike.reportedWorldPromptStages.has(message)) return;
     VRSpike.reportedWorldPromptStages.add(message);
@@ -1999,6 +2124,7 @@ export class VRSpike {
     VRSpike.lastCutsceneCamera = null;
     VRSpike.cutsceneFadeHost?.setOpacity(0);
 
+    VRSpike.traceRoomVisibility();
     VRSpike.renderKeyboard();
     VRSpike.renderPanel();
     VRSpike.renderInGameOverlay();
@@ -2196,6 +2322,10 @@ export class VRSpike {
         context.viewportWidth,
         context.viewportHeight
       );
+      // GameState hides the legacy mouse cursor during ordinary XR play.
+      // Reapply this frame's ray hit only for the GUI-to-texture pass, so the
+      // overlay draws its own hover highlight under the VR pointer.
+      context.pointerSink.setPointerPosition(VRSpike.latestInGameOverlayPointerPosition);
       VRSpike.inGameOverlayHost.renderGui(renderer, context.guiScene, context.guiCamera);
     } catch (error) {
       VRSpike.inGameOverlayHost?.clear();
@@ -2208,6 +2338,23 @@ export class VRSpike {
 
   private static inGameOverlayHost: VRPanelHost | null = null;
   private static inGameOverlayErrorReported = false;
+
+  /**
+   * Phase G4 — the bespoke world prompt is superseded by the engine overlay.
+   *
+   * Disabled rather than deleted for one build. Shipping the deletion together
+   * with untested overlay input risks a build with no interaction surface at
+   * all and no way back; once the overlay is confirmed in the headset the
+   * prompt host, model, controller, resolver and their GameState plumbing come
+   * out for real. This is sequencing within the full-replacement decision, not
+   * a hedge against it.
+   *
+   * `processInteractionInput` still runs: it resolves which object VR is
+   * aiming at, and that feeds CursorManager, which is what makes the overlay
+   * present its target UI. Only the prompt's own presentation and activation
+   * are suppressed.
+   */
+  private static readonly BESPOKE_WORLD_PROMPT_ENABLED = false;
 
   private static renderPanel(): void {
     const renderer = VRSpike.renderer;
@@ -2276,7 +2423,10 @@ export class VRSpike {
       if (!VRSpike.worldTargetLabelHost) {
         VRSpike.worldTargetLabelHost = new VRWorldTargetLabelHost(worldScene);
       }
-      VRSpike.worldTargetLabelHost.update(indicator);
+      VRSpike.worldTargetLabelHost.update(
+        indicator,
+        VRSpike.latestInputFrame?.head?.position,
+      );
     } catch (error) {
       VRSpike.worldTargetLabelHost?.clear();
       if (!VRSpike.worldTargetLabelErrorReported) {
@@ -2287,6 +2437,10 @@ export class VRSpike {
   }
 
   private static renderWorldActionPrompt(): void {
+    if (!VRSpike.BESPOKE_WORLD_PROMPT_ENABLED) {
+      VRSpike.worldActionPromptHost?.clear();
+      return;
+    }
     const inputFrame = VRSpike.latestInputFrame;
     const presentation = VRSpike.worldActionPromptController.presentation;
     const host = VRSpike.worldActionPromptHost;

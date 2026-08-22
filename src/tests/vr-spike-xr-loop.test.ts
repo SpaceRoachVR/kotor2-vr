@@ -32,7 +32,11 @@ describe('VRSpike XR loop ownership', () => {
     jest.spyOn(console, 'warn').mockImplementation((): void => undefined);
   });
 
+  /** Property descriptors restored after each test (see the prompt-enable note). */
+  const afterEachRestore: Array<() => void> = [];
+
   afterEach(() => {
+    while (afterEachRestore.length) afterEachRestore.pop()!();
     VRSpike.perf.stop();
     VRSpike.renderer = null;
     VRSpike.scene = null;
@@ -1036,6 +1040,20 @@ describe('VRSpike XR loop ownership', () => {
   });
 
   test('prompt Select activates exactly once and supersedes generic world interaction', () => {
+    // The bespoke world prompt is disabled in favour of the engine overlay
+    // (VRSpike.BESPOKE_WORLD_PROMPT_ENABLED) but has not been deleted yet.
+    // Re-enable it here so this keeps covering code that still ships; the test
+    // is deleted together with the prompt in phase G4, rather than weakened
+    // now into an assertion that proves nothing.
+    const promptEnabled = Object.getOwnPropertyDescriptor(VRSpike, 'BESPOKE_WORLD_PROMPT_ENABLED');
+    Object.defineProperty(VRSpike, 'BESPOKE_WORLD_PROMPT_ENABLED', {
+      value: true, configurable: true, writable: true,
+    });
+    if (promptEnabled) {
+      afterEachRestore.push(() => Object.defineProperty(
+        VRSpike, 'BESPOKE_WORLD_PROMPT_ENABLED', promptEnabled,
+      ));
+    }
     const buttons = Array.from({ length: 6 }, releasedButton);
     const promptActivate = jest.fn();
     const genericActivation = jest.spyOn((VRSpike as any).interactionSystem, 'process');

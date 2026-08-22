@@ -13,6 +13,7 @@ import { AutoPauseState } from "@/enums/engine/AutoPauseState";
 import { BitWise } from "@/utility/BitWise";
 import { KeyMapAction, ModuleObjectType } from "@/enums";
 import type { ModuleObject } from "@/module/ModuleObject";
+import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
 
 const TLK_TOOLTIP_FULL_HEALTH = 42498;
 
@@ -699,8 +700,14 @@ export class InGameOverlay extends GameMenu {
         this.namePlateArrowMaterial.map = preloadTexturesMap.get('friendlyarrow');
       }
     }
-    if (this.manager.InGameOverlay.LBL_NAME.text.text != GameState.CursorManager.selectedObject.getName()) {
-      this.LBL_NAME.setText(GameState.CursorManager.selectedObject.getName(), 25);
+    // Retail module data carries designer annotations inside object names —
+    // `Blast Door{HK-50}`, `Body{Invis container}`. They are authoring notes,
+    // never meant to reach a player, and they read especially badly on a
+    // world-space VR label. Strip for display only; diagnostics keep the raw
+    // name, where the annotations are genuinely useful.
+    const selectedDisplayName = resolveDisplayName(GameState.CursorManager.selectedObject.getName());
+    if (this.manager.InGameOverlay.LBL_NAME.text.text != selectedDisplayName) {
+      this.LBL_NAME.setText(selectedDisplayName, 25);
     }
     let health = 100 * Math.min(Math.max(GameState.CursorManager.selectedObject.getHP() / GameState.CursorManager.selectedObject.getMaxHP(), 0), 1);
     if (health > 100)

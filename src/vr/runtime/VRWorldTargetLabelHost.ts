@@ -6,6 +6,8 @@ export interface VRWorldTargetIndicator {
   readonly position: THREE.Vector3;
 }
 
+const HORIZONTAL_EPSILON = 1e-8;
+
 export interface VRWorldTargetLabelTextureRenderer {
   render(text: string): THREE.Texture;
   dispose(): void;
@@ -23,11 +25,22 @@ const DEFAULT_OPTIONS: VRWorldTargetLabelHostOptions = {
   heightMetres: 0.12,
 };
 
-/** Head-facing world label paired with KOTOR's existing interaction reticle. */
+/**
+ * Upright world label paired with KOTOR's existing interaction reticle.
+ *
+ * Deliberately a Mesh, not a Sprite. A THREE.Sprite billboards against the
+ * camera's full basis including its up vector, so tilting your head rolled the
+ * label with it — readable, but it swims. This yaw-billboards instead, keeping
+ * world up (Z, in this engine) as the label's local Y so it stays flat and
+ * level however the head is oriented. Same convention as
+ * VRWorldActionPromptHost.faceHeadUpright and VRRadialMenuHost.
+ */
 export class VRWorldTargetLabelHost {
-  readonly object: THREE.Sprite;
+  readonly object: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private currentText = '';
   private readonly options: VRWorldTargetLabelHostOptions;
+  /** Retains the last valid horizontal facing for a head directly above. */
+  private readonly lastHorizontalNormal = new THREE.Vector3(0, -1, 0);
 
   constructor(
     worldScene: THREE.Scene,
@@ -36,17 +49,19 @@ export class VRWorldTargetLabelHost {
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     VRWorldTargetLabelHost.validateOptions(this.options);
-    this.object = new THREE.Sprite(new THREE.SpriteMaterial({
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-      sizeAttenuation: true,
-    }));
+    this.object = new THREE.Mesh(
+      new THREE.PlaneGeometry(this.options.widthMetres, this.options.heightMetres),
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
     this.object.name = 'Kotor2VR.WorldTargetLabel';
     this.object.visible = false;
     this.object.frustumCulled = false;
     this.object.renderOrder = 999_999;
-    this.object.scale.set(this.options.widthMetres, this.options.heightMetres, 1);
     worldScene.add(this.object);
   }
 
@@ -54,7 +69,7 @@ export class VRWorldTargetLabelHost {
     return this.currentText;
   }
 
-  update(indicator: VRWorldTargetIndicator): void {
+  update(indicator: VRWorldTargetIndicator, headPosition?: THREE.Vector3): void {
     const text = indicator.name.trim();
     if (!text) {
       this.clear();
@@ -67,7 +82,25 @@ export class VRWorldTargetLabelHost {
     }
     this.object.position.copy(indicator.position);
     this.object.position.z += this.options.verticalOffsetMetres;
+    if (headPosition) this.faceHeadUpright(headPosition);
     this.object.visible = true;
+  }
+
+  /** Yaw-only billboard: the label turns to follow the head but never rolls. */
+  private faceHeadUpright(headPosition: THREE.Vector3): void {
+    const normal = headPosition.clone().sub(this.object.position);
+    normal.z = 0;
+    if (normal.lengthSq() <= HORIZONTAL_EPSILON) {
+      normal.copy(this.lastHorizontalNormal);
+    } else {
+      normal.normalize();
+      this.lastHorizontalNormal.copy(normal);
+    }
+    const up = new THREE.Vector3(0, 0, 1);
+    const right = up.clone().cross(normal).normalize();
+    this.object.quaternion.setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(right, up, normal),
+    );
   }
 
   clear(): void {

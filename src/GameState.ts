@@ -1857,6 +1857,7 @@ export class GameState implements EngineContext {
           guiCamera: GameState.camera_gui,
           viewportWidth: GameState.ResolutionManager.getViewportWidth(),
           viewportHeight: GameState.ResolutionManager.getViewportHeight(),
+          pointerSink: vrLegacyGUIPointerAdapter,
         };
       },
       getPanelContext: () => {
@@ -1935,7 +1936,12 @@ export class GameState implements EngineContext {
         const position = reticle.getWorldPosition(new THREE.Vector3());
         return {
           id: String(object.id),
-          name: object.getName(),
+          // Raw retail names carry designer annotations — `Blast Door{HK-50}`,
+          // `Body{Invis container}`. resolveVRWorldPromptName already strips
+          // them; this fallback path did not, so any object reached through the
+          // engine cursor rather than the VR prompt showed the annotation on a
+          // label an arm's length from the player's face.
+          name: resolveDisplayName(object.getName?.()) || 'Object',
           position,
         };
       },
@@ -2181,6 +2187,34 @@ export class GameState implements EngineContext {
 
   static updateRendererUpscaleFactor(){
     this.EventOnResize();
+  }
+
+  /**
+   * Rebuilds the frustum that `ModuleObject.isOnScreen()` culls against.
+   *
+   * `updateVisibility()` hard-sets `model.visible = false` for anything outside
+   * this frustum. Built from `currentCamera` — the flatscreen follower camera —
+   * that culled against a viewpoint the player is no longer looking through
+   * once an immersive session takes over, so doors, creatures, and the player's
+   * own model vanished in the headset while rendering fine in flatscreen.
+   *
+   * While presenting, three's `WebXRManager.getCamera()` returns an ArrayCamera
+   * whose projection is computed specifically to encompass both eye frusta for
+   * exactly this purpose, so it is the correct culling source in XR.
+   */
+  static updateViewportFrustum(){
+    let cullCamera: THREE.Camera = GameState.currentCamera;
+    try {
+      const xr = GameState.renderer?.xr;
+      if(xr?.isPresenting && typeof xr.getCamera === 'function'){
+        const xrCamera = (xr.getCamera as unknown as () => THREE.Camera)();
+        if(xrCamera?.projectionMatrix) cullCamera = xrCamera;
+      }
+    }catch(e){
+      // Fall back to the flatscreen camera rather than losing culling entirely.
+    }
+    GameState.frustumMat4.multiplyMatrices( cullCamera.projectionMatrix, cullCamera.matrixWorldInverse );
+    GameState.viewportFrustum.setFromProjectionMatrix(GameState.frustumMat4);
   }
 
   public static getCurrentPlayer(): ModuleCreature {
@@ -2626,8 +2660,7 @@ export class GameState implements EngineContext {
     }
 
     GameState.FadeOverlayManager.Update(delta);
-    GameState.frustumMat4.multiplyMatrices( GameState.currentCamera.projectionMatrix, GameState.currentCamera.matrixWorldInverse )
-    GameState.viewportFrustum.setFromProjectionMatrix(GameState.frustumMat4);
+    GameState.updateViewportFrustum();
     GameState.currentCameraPosition.set(0, 0, 0);
     GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
     GameState.lightManager.update(delta, GameState.getCurrentPlayer());
@@ -2663,8 +2696,7 @@ export class GameState implements EngineContext {
       GameState.MenuManager.InGameBark.update(delta);
     }
     GameState.FadeOverlayManager.Update(delta);
-    GameState.frustumMat4.multiplyMatrices( GameState.currentCamera.projectionMatrix, GameState.currentCamera.matrixWorldInverse )
-    GameState.viewportFrustum.setFromProjectionMatrix(GameState.frustumMat4);
+    GameState.updateViewportFrustum();
     GameState.currentCameraPosition.set(0, 0, 0);
     GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
     GameState.lightManager.update(delta, GameState.currentCamera);
@@ -2684,8 +2716,7 @@ export class GameState implements EngineContext {
   }
 
   static UpdateMinigame(delta: number = 0){
-    GameState.frustumMat4.multiplyMatrices( GameState.currentCamera.projectionMatrix, GameState.currentCamera.matrixWorldInverse )
-    GameState.viewportFrustum.setFromProjectionMatrix(GameState.frustumMat4);
+    GameState.updateViewportFrustum();
     GameState.currentCameraPosition.set(0, 0, 0);
     GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
 
@@ -2721,8 +2752,7 @@ export class GameState implements EngineContext {
       }
     }
 
-    GameState.frustumMat4.multiplyMatrices( GameState.currentCamera.projectionMatrix, GameState.currentCamera.matrixWorldInverse )
-    GameState.viewportFrustum.setFromProjectionMatrix(GameState.frustumMat4);
+    GameState.updateViewportFrustum();
     GameState.currentCameraPosition.set(0, 0, 0);
     GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
 
