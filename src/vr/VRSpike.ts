@@ -2348,21 +2348,26 @@ export class VRSpike {
   private static inGameOverlayErrorReported = false;
 
   /**
-   * Phase G4 — the bespoke world prompt is superseded by the engine overlay.
+   * RE-ENABLED. Phase G assumed the engine overlay could replace this. It
+   * cannot, and the assumption was wrong in a specific way worth recording.
    *
-   * Disabled rather than deleted for one build. Shipping the deletion together
-   * with untested overlay input risks a build with no interaction surface at
-   * all and no way back; once the overlay is confirmed in the headset the
-   * prompt host, model, controller, resolver and their GameState plumbing come
-   * out for real. This is sequencing within the full-replacement decision, not
-   * a hedge against it.
+   * `InGameOverlay`'s action columns show only *authored* ActionMenu entries —
+   * Security, Bash, Mine. Ordinary containers, consoles and placeables have
+   * none (`rawActions=0`), and flatscreen opens those by clicking the object
+   * in the 3D world, not by pressing a menu button. The columns supplement
+   * object interaction; they do not provide it.
    *
-   * `processInteractionInput` still runs: it resolves which object VR is
-   * aiming at, and that feeds CursorManager, which is what makes the overlay
-   * present its target UI. Only the prompt's own presentation and activation
-   * are suppressed.
+   * So the overlay genuinely delivers the name plate, health, combat widgets
+   * and authored actions — all confirmed working, `[VR targetUI] result=true` —
+   * while this prompt supplies the primary "use the thing I am looking at"
+   * route that has no overlay equivalent. Disabling it removed every
+   * interaction with objects that have no authored actions, which is most of
+   * them.
+   *
+   * Deleting this is blocked until VR has its own equivalent of the flatscreen
+   * world click.
    */
-  private static readonly BESPOKE_WORLD_PROMPT_ENABLED = false;
+  private static readonly BESPOKE_WORLD_PROMPT_ENABLED = true;
 
   private static renderPanel(): void {
     const renderer = VRSpike.renderer;

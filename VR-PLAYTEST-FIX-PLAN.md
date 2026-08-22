@@ -30,10 +30,11 @@ prologue** (`001EBO`).
 | 12 | Lift plays wrong cutscene, then stops working | ☐ not investigated |
 | 13 | Doors invisible in VR, normal in flatscreen | ◐ XR-camera culling fixed, still reproduces |
 | 14 | Doors had no action menu (new game only) | ✅ fixed, ☐ headset-accepted |
-| 15 | Engine overlay target UI never appears | ◐ fix in flight, traced |
-| 16 | 2D UI stuck on screen after a computer console | ✅ fixed, ☐ headset-accepted |
+| 15 | Engine overlay target UI never appears | ✅ resolved — was never broken, see G-premise correction |
+| 16 | 2D UI stuck on screen after a computer console | ◐ pointer leak fixed, still reproduces |
 | 17 | Intro-skip leaves a stuck black screen | ☐ not investigated |
 | 18 | Camera spawns inside a T-posed body on new game | ☐ not investigated |
+| 19 | Prologue skip/continue dialog unreachable in VR | ☐ not investigated |
 
 Two regressions were introduced and fixed within this effort; both are recorded
 below under Phase A/B rather than hidden, because both came from changes that
@@ -553,7 +554,7 @@ extended; two regression tests now cover the branch.
 
 ---
 
-## Issue 15 — Engine overlay target UI never appears ◐ fix in flight
+## Issue 15 — Engine overlay target UI ✅ resolved (and the Phase G premise was wrong)
 
 With the bespoke prompt disabled (G4), **all** object action menus vanished —
 the overlay never drew its target UI even though selection was demonstrably
@@ -578,9 +579,47 @@ whenever it differs. Also assigns the fields directly instead of calling
 effect would otherwise fire on every re-assert and fight VR locomotion for the
 body's facing — the risk flagged when G1 landed.
 
-A `[VR targetUI] result=… container=… reticle2Visible=… selected=… selectedObject=…`
-trace was added to the predicate so the failing condition is named directly if
-this is not the whole story.
+A `[VR targetUI]` trace was added to the predicate — and it showed the gate was
+**passing** all along:
+
+```
+[VR targetUI] result=true container=false reticle2Visible=true selected=true selectedObject=Plasteel Cylinder
+```
+
+The selection cache fix above was real and worth keeping, but it was not the
+cause of "all action menus gone".
+
+### The Phase G premise was wrong
+
+`InGameOverlay`'s action columns show only **authored** ActionMenu entries —
+Security, Bash, Mine. Ordinary containers, consoles and placeables have none
+(every `[VR prompt panels]` line reads `rawActions=0 :: (engine offered none)`),
+and flatscreen opens those by **clicking the object in the 3D world**, not by
+pressing a menu button. The columns *supplement* object interaction; they do not
+provide it.
+
+`_canShowTargetUI()` passing and the name plate re-laying out — exactly what
+Allen observed as "the name jumps up as if making room" — is the overlay working
+correctly. There was simply nothing to put in the columns.
+
+So G4 (delete the bespoke prompt) is **blocked, not deferred**. The prompt
+supplies the primary "use the thing I am looking at" route, which has no overlay
+equivalent. Disabling it removed interaction with every object lacking authored
+actions, which is most of them.
+
+**What the overlay did deliver, and keeps:** name plate, health bar, authored
+action columns, combat widgets — driven from VR aim via `CursorManager`. That
+half of Phase G stands and is confirmed.
+
+**Revised G4:** before the prompt can be deleted, VR needs its own equivalent of
+the flatscreen world click — ray at an object plus trigger invoking the engine's
+default use/onClick path. Until then the two coexist: prompt for object use,
+overlay for authored actions and status.
+
+**Process note:** this premise should have been checked before disabling the
+working path. The evidence was available from the first `[VR prompt panels]`
+line — `rawActions=0` on nearly every object — and was read as an engine quirk
+rather than as "the overlay has nothing to show for these".
 
 ---
 
@@ -613,6 +652,18 @@ On a new game the camera starts inside the pre-swap player model, which is
 T-posed, until the intro movie loads and `DoSpecialSpawnInT3M4` runs. Likely
 related to the T-posed medbay body already noted under issue 13's family
 (animations not applied to a model VR is rendering).
+
+---
+
+## Issue 19 — Prologue skip/continue dialog unreachable ☐ not investigated
+
+The opening "Do you want to skip the Prologue?" dialog no longer offers its
+options in VR. The log shows the node firing
+(`saving Prologue{Invis} [Do you want to skip the Prologue?]`) and the
+`Skip Prologue` placeable being selected by VR aim
+(`[VR targetUI] … selectedObject=Skip Prologue`), so the conversation starts but
+its reply list is not reachable. Related to the legacy dialogue GUI only being
+partly clickable in VR (see Deferred observations) and to ROADMAP 4.4.
 
 ---
 
