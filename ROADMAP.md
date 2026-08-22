@@ -103,7 +103,9 @@ Partial pass/fail marks live in the tester's own copy of the plan.
 - **Opening Map or Abilities from the wheel threw.** `MenuMap.show` touched
   `BTN_PRTYSLCT`, which TSL's map GUI does not contain, and `GUIFeatItem`
   dereferenced a padding hole in `feats.2da`. Both built fine and threw on use,
-  so only opening them catches it — `vr:check` now does.
+  so only opening them catches it — `vr:check` now does, and reports all eight
+  wheel-reachable menus opening cleanly after the fix (18/18, page exceptions
+  zero).
 - **Interacting drags the avatar (open).** See 3.10.
 
 **Observed performance:** 32-36 FPS in stereo through the busier Ebon Hawk
