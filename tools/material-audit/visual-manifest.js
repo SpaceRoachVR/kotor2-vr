@@ -179,7 +179,7 @@ function validateResolverProvenance(record, recordName, requestedResref) {
       if (!usableResref) {
         throw new TypeError(`${recordName} resolved material has an invalid requested resref`);
       }
-      validateConcreteSourcePath(record, recordName, eligibleSources);
+      validateConcreteSourcePath(record, recordName, requestedResref, eligibleSources);
       if (record.diagnosticCode !== undefined) {
         throw new TypeError(`${recordName} resolved material must not carry a diagnostic code`);
       }
@@ -189,7 +189,7 @@ function validateResolverProvenance(record, recordName, requestedResref) {
       if (!usableResref) {
         throw new TypeError(`${recordName} decode failure has an invalid requested resref`);
       }
-      validateConcreteSourcePath(record, recordName, eligibleSources);
+      validateConcreteSourcePath(record, recordName, requestedResref, eligibleSources);
       if (record.diagnosticCode !== 'decode-error') {
         throw new TypeError(`${recordName} decode failure requires diagnostic code decode-error`);
       }
@@ -240,7 +240,7 @@ function getEligibleSources(semantic, activeModule) {
   return sources;
 }
 
-function validateConcreteSourcePath(record, recordName, eligibleSources) {
+function validateConcreteSourcePath(record, recordName, requestedResref, eligibleSources) {
   if (record.source === 'none') {
     throw new TypeError(`${recordName} resolved source must be concrete`);
   }
@@ -249,6 +249,21 @@ function validateConcreteSourcePath(record, recordName, eligibleSources) {
     throw new TypeError(`${recordName} selected source is ineligible for ${record.semantic}`);
   }
   const expectedSources = eligibleSources.slice(0, sourceIndex + 1);
+  const resolvedResref = normalizeResref(record.resolvedResref);
+  const isDocumentedAlias = resolvedResref && resolvedResref !== requestedResref;
+  if (isDocumentedAlias) {
+    if (typeof record.aliasEvidence !== 'string' || !record.aliasEvidence.trim()) {
+      throw new TypeError(`${recordName} alias route requires installed-content evidence`);
+    }
+    const expectedAliasRoute = [...eligibleSources, ...expectedSources];
+    if (!sameSourceSequence(record.searchedSources, expectedAliasRoute)) {
+      throw new TypeError(`${recordName} alias searched sources must exhaust the canonical precedence path before the aliased resolution path`);
+    }
+    return;
+  }
+  if (record.aliasEvidence !== undefined) {
+    throw new TypeError(`${recordName} direct resolution must not claim alias evidence`);
+  }
   if (!sameSourceSequence(record.searchedSources, expectedSources)) {
     throw new TypeError(`${recordName} searched sources must be the ordered resolver precedence path to its selected source`);
   }

@@ -163,6 +163,81 @@ describe('production texture resolver routing', () => {
     await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(guiTexture);
   });
 
+  test('reuses a GUI-pack texture after module unload without consulting a stale module cache key', async () => {
+    const guiTexture = texture('shared-effect-icon');
+    const provider = new SyntheticTextureProvider(new Map([
+      ['gui-pack:effect_icon', { texture: guiTexture, txiSource: 'embedded-tpc' }],
+    ]));
+    TextureLoader.setSourceProvider(provider);
+    TextureLoader.beginModule('101PER');
+
+    await expect(TextureLoader.LoadGUI('effect_icon')).resolves.toBe(guiTexture);
+    TextureLoader.endModule();
+    await expect(TextureLoader.LoadGUI('effect_icon')).resolves.toBe(guiTexture);
+
+    expect(provider.attempts).toEqual([
+      { source: 'override-tga', resref: 'effect_icon', activeModule: '101per' },
+      { source: 'override-tpc', resref: 'effect_icon', activeModule: '101per' },
+      { source: 'active-module', resref: 'effect_icon', activeModule: '101per' },
+      { source: 'gui-pack', resref: 'effect_icon', activeModule: '101per' },
+    ]);
+  });
+
+  test('keeps resolver-owned model textures alive until each module generation unloads', async () => {
+    const firstGenerationTextures = [
+      texture('first-wall'),
+      texture('first-environment'),
+      texture('first-lightmap'),
+      texture('first-bump'),
+    ];
+    const secondGenerationWall = texture('second-wall');
+    const disposeFirstGeneration = firstGenerationTextures.map((value) => jest.spyOn(value, 'dispose'));
+    const disposeSecondWall = jest.spyOn(secondGenerationWall, 'dispose');
+    const provider: TextureSourceProvider<OdysseyTexture> = {
+      async load(source, resref, activeModule) {
+        if (source !== 'active-module') {
+          return undefined;
+        }
+        if (activeModule === '101per') {
+          const index = ['wall', 'environment', 'lightmap', 'bump'].indexOf(resref);
+          return index >= 0 ? { texture: firstGenerationTextures[index] } : undefined;
+        }
+        if (activeModule === '102per' && resref === 'wall') {
+          return { texture: secondGenerationWall };
+        }
+        return undefined;
+      },
+    };
+    TextureLoader.setSourceProvider(provider);
+    TextureLoader.beginModule('101PER');
+
+    const [map, envMap, lightMap, bumpMap] = await Promise.all([
+      TextureLoader.Load('wall'),
+      TextureLoader.Resolve({ resref: 'environment', semantic: 'environment', allowAlias: false }),
+      TextureLoader.LoadLightmap('lightmap'),
+      TextureLoader.Resolve({ resref: 'bump', semantic: 'bump', allowAlias: false }),
+    ]);
+    TextureLoader.disposeModelOwnedTexture(map);
+    TextureLoader.disposeModelOwnedTexture(envMap.status === 'resolved' ? envMap.texture : undefined);
+    TextureLoader.disposeModelOwnedTexture(lightMap);
+    TextureLoader.disposeModelOwnedTexture(bumpMap.status === 'resolved' ? bumpMap.texture : undefined);
+
+    for (const dispose of disposeFirstGeneration) {
+      expect(dispose).not.toHaveBeenCalled();
+    }
+    expect(TextureLoader.endModule()).toMatchObject({ disposed: 4 });
+    for (const dispose of disposeFirstGeneration) {
+      expect(dispose).toHaveBeenCalledTimes(1);
+    }
+
+    TextureLoader.beginModule('102PER');
+    await expect(TextureLoader.Load('wall')).resolves.toBe(secondGenerationWall);
+    TextureLoader.disposeModelOwnedTexture(secondGenerationWall);
+    expect(disposeSecondWall).not.toHaveBeenCalled();
+    expect(TextureLoader.endModule()).toMatchObject({ disposed: 1 });
+    expect(disposeSecondWall).toHaveBeenCalledTimes(1);
+  });
+
   test('does not hand a disposed module GUI texture to queued consumers after module unload', async () => {
     const moduleGuiTexture = texture('module-panel');
     const sharedGuiTexture = texture('shared-panel');

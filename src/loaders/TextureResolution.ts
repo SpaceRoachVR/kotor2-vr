@@ -364,6 +364,15 @@ export class TextureLifetimeRegistry<TTexture extends { dispose(): void }> {
     return this.entries.get(lifetimeKey(normalizedResref, ownership, generation))?.texture;
   }
 
+  hasTexture(texture: TTexture): boolean {
+    for (const entry of this.entries.values()) {
+      if (entry.texture === texture) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   disposeModuleGeneration(generation: number): { disposed: number; nextGeneration: number } {
     if (generation !== this.currentGeneration) {
       throw new RangeError(`Texture generation ${generation} is not active`);

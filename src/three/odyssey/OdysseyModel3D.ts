@@ -547,19 +547,22 @@ export class OdysseyModel3D extends OdysseyObject3D {
   disposeMaterial(material: THREE.Material){
     if(material instanceof THREE.ShaderMaterial){
       if(material.uniforms.map && material.uniforms.map.value)
-        material.uniforms.map.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.map.value);
 
       if(material.uniforms.envMap && material.uniforms.envMap.value)
-        material.uniforms.envMap.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.envMap.value);
 
       if(material.uniforms.alphaMap && material.uniforms.alphaMap.value)
-        material.uniforms.alphaMap.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.alphaMap.value);
 
       if(material.uniforms.lightMap && material.uniforms.lightMap.value)
-        material.uniforms.lightMap.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.lightMap.value);
 
       if(material.uniforms.bumpMap && material.uniforms.bumpMap.value)
-        material.uniforms.bumpMap.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.bumpMap.value);
+
+      if(material.uniforms.normalMap && material.uniforms.normalMap.value)
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.normalMap.value);
     }
   }
 

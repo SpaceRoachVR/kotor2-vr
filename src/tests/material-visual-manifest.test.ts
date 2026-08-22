@@ -142,6 +142,26 @@ describe('material visual manifest', () => {
     expect(() => createVisualManifest({ runtime: 'chrome', modules })).not.toThrow();
   });
 
+  test('accepts a documented GUI alias after the canonical route exhausts its precedence search', () => {
+    const modules = coveredModules();
+    modules['001EBO'][1] = {
+      ...modules['001EBO'][1],
+      requestedResref: 'border1',
+      resolvedResref: 'border1c',
+      semantic: 'gui',
+      source: 'gui-pack',
+      selectedSource: 'gui-pack',
+      searchedSources: [
+        'override-tga', 'override-tpc', 'active-module', 'gui-pack', 'texture-pack', 'key-bif',
+        'override-tga', 'override-tpc', 'active-module', 'gui-pack',
+      ],
+      txiSource: 'embedded-tpc',
+      aliasEvidence: 'retail-tsl-gui-pack:swpc_tex_gui.erf',
+    };
+
+    expect(() => createVisualManifest({ runtime: 'chrome', modules })).not.toThrow();
+  });
+
   test.each([
     {
       name: 'the typed resolution source contradicts the selected source',

@@ -347,6 +347,23 @@ export class TextureLoader {
     texture.dispose();
   }
 
+  /**
+   * Disposes a texture created by a model while preserving resolver-owned
+   * textures until their cache ownership releases them. Model materials borrow
+   * TGA/TPC, GUI, lightmap, envmap, and bump textures from the loader; direct
+   * material teardown must not poison those cache entries.
+   */
+  static disposeModelOwnedTexture(texture: THREE.Texture | null | undefined): boolean {
+    if (!texture || texture === TextureLoader.diagnosticFallbackTexture) {
+      return false;
+    }
+    if (TextureLoader.isResolverOwnedTexture(texture)) {
+      return false;
+    }
+    texture.dispose();
+    return true;
+  }
+
   static resetRoutingForTests(): void {
     TextureLoader.sourceProvider = TextureLoader.createDefaultSourceProvider();
     TextureLoader.resolver = TextureLoader.createResolver(TextureLoader.sourceProvider);
@@ -634,7 +651,15 @@ export class TextureLoader {
     const ownership = TextureLoader.getOwnership(request.semantic, resolution.source);
     const generation = TextureLoader.lifetimeRegistry.currentGeneration;
     TextureLoader.lifetimeRegistry.set(resolution.requestedResref, resolution.texture, ownership, generation);
-    TextureLoader.resolutionCache.set(cacheKey, { resolution, ownership, generation });
+    const entry = { resolution, ownership, generation };
+    TextureLoader.resolutionCache.set(cacheKey, entry);
+    if (ownership !== 'module') {
+      const sharedCacheKey = TextureLoader.getCacheKey({
+        ...request,
+        activeModule: undefined,
+      });
+      TextureLoader.resolutionCache.set(sharedCacheKey, entry);
+    }
     if (request.semantic === 'gui' || request.semantic === 'font') {
       TextureLoader.guiTextures.set(resolution.requestedResref, resolution.texture);
     } else if (request.semantic === 'lightmap') {
@@ -661,6 +686,24 @@ export class TextureLoader {
       request.allowAlias ? 'alias' : 'exact',
       normalizeTextureResref(request.resref),
     ].join(':');
+  }
+
+  private static isResolverOwnedTexture(texture: THREE.Texture): boolean {
+    if (TextureLoader.lifetimeRegistry.hasTexture(texture as OdysseyTexture)) {
+      return true;
+    }
+    for (const cached of TextureLoader.resolutionCache.values()) {
+      if (cached.resolution.status === 'resolved' && cached.resolution.texture === texture) {
+        return true;
+      }
+    }
+    return (
+      (TextureLoader.textures.has(texture.name)
+        && TextureLoader.textures.get(texture.name) === texture)
+      || (TextureLoader.guiTextures.has(texture.name)
+        && TextureLoader.guiTextures.get(texture.name) === texture)
+      || TextureLoader.lightmaps[texture.name] === texture
+    );
   }
 
   private static recordDiagnostic(
