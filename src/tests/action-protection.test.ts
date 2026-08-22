@@ -34,19 +34,21 @@ import { ActionUnlockObject } from '@/actions/ActionUnlockObject';
 import { ActionStatus } from '@/enums/actions/ActionStatus';
 import { SignalEventType } from '@/enums/events/SignalEventType';
 import { ModuleObjectType } from '@/enums/module/ModuleObjectType';
+import { EventSignalEvent } from '@/events/EventSignalEvent';
 import { GameState } from '@/GameState';
 
 describe('protected object action execution', () => {
-  const queuedEvents: unknown[] = [];
+  const queuedEvents: EventSignalEvent[] = [];
 
   beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => undefined);
     jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     queuedEvents.length = 0;
     Object.assign(GameState, {
       module: {
         area: { id: 1 },
         timeManager: { pauseDay: 2, pauseTime: 3 },
-        addEvent: (event: unknown): void => { queuedEvents.push(event); },
+        addEvent: (event: unknown): void => { queuedEvents.push(event as EventSignalEvent); },
       },
       ActionFactory: {
         ActionPlayAnimation: class {
@@ -56,18 +58,7 @@ describe('protected object action execution', () => {
         },
       },
       GameEventFactory: {
-        EventSignalEvent: class {
-          caller: unknown;
-          object: unknown;
-          day: unknown;
-          time: unknown;
-          eventType: unknown;
-
-          setCaller(value: unknown): void { this.caller = value; }
-          setObject(value: unknown): void { this.object = value; }
-          setDay(value: unknown): void { this.day = value; }
-          setTime(value: unknown): void { this.time = value; }
-        },
+        EventSignalEvent,
       },
     });
   });
@@ -120,6 +111,34 @@ describe('protected object action execution', () => {
       time: 3,
       eventType: SignalEventType.OnFailToOpen,
     }));
+  });
+
+  test.each([
+    ['door', ModuleObjectType.ModuleDoor],
+    ['placeable', ModuleObjectType.ModulePlaceable],
+  ])('executes the authored OnFailToOpen script exactly once for an invalid queued Security action on a %s', (_name, objectType) => {
+    const action = new ActionUnlockObject();
+    const owner = creature();
+    const failureScript = { run: jest.fn() };
+    const target = {
+      objectType: ModuleObjectType.ModuleObject | objectType,
+      position: new THREE.Vector3(),
+      keyRequired: true,
+      lockable: true,
+      isLocked: (): boolean => true,
+      getScriptInstance: (requestedScriptKey: string) => requestedScriptKey === 'OnFailToOpen' ? failureScript : undefined,
+    };
+    action.owner = owner as any;
+    jest.spyOn(action, 'getParameter').mockImplementation((index: number) => index === 0 ? target as any : undefined);
+
+    expect(action.update()).toBe(ActionStatus.FAILED);
+    expect(action.update()).toBe(ActionStatus.FAILED);
+    expect(queuedEvents).toHaveLength(1);
+
+    queuedEvents[0].execute();
+
+    expect(failureScript.run).toHaveBeenCalledTimes(1);
+    expect(failureScript.run).toHaveBeenCalledWith(target);
   });
 });
 
