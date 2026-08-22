@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const REQUIRED_MODULES = Object.freeze(['001ebo', '101per', '102per']);
 const RUNTIMES = new Set(['electron', 'chrome']);
@@ -32,6 +33,10 @@ const REQUIRED_COVERAGE = Object.freeze([
   Object.freeze({ module: '101per', visualCategory: 'force-fields' }),
   Object.freeze({ module: '101per', visualCategory: 'lightmaps' }),
   Object.freeze({ module: '102per', visualCategory: 'doors' }),
+]);
+const REVIEWED_TEXTURE_ALIASES = new Map([
+  ['border1:border1c', 'retail-tsl-gui-pack:swpc_tex_gui.erf'],
+  ['border2:border2c', 'retail-tsl-gui-pack:swpc_tex_gui.erf'],
 ]);
 
 function createVisualManifest(input) {
@@ -252,8 +257,9 @@ function validateConcreteSourcePath(record, recordName, requestedResref, eligibl
   const resolvedResref = normalizeResref(record.resolvedResref);
   const isDocumentedAlias = resolvedResref && resolvedResref !== requestedResref;
   if (isDocumentedAlias) {
-    if (typeof record.aliasEvidence !== 'string' || !record.aliasEvidence.trim()) {
-      throw new TypeError(`${recordName} alias route requires installed-content evidence`);
+    const reviewedEvidence = REVIEWED_TEXTURE_ALIASES.get(`${requestedResref}:${resolvedResref}`);
+    if (!reviewedEvidence || record.aliasEvidence !== reviewedEvidence) {
+      throw new TypeError(`${recordName} alias must match an exact reviewed alias mapping and installed-content evidence`);
     }
     const expectedAliasRoute = [...eligibleSources, ...expectedSources];
     if (!sameSourceSequence(record.searchedSources, expectedAliasRoute)) {
@@ -344,9 +350,72 @@ function run(argv = process.argv.slice(2)) {
     process.stdout.write(json);
     return;
   }
-  const outputPath = path.resolve(options.output);
-  fs.writeFileSync(outputPath, json, { encoding: 'utf8', flag: 'wx' });
+  const outputPath = writeVisualManifest(options.output, json);
   process.stdout.write(`${outputPath}\n`);
+}
+
+/**
+ * Writes audit metadata only into a local evidence or user-data root.  This
+ * CLI intentionally has no path that can write into a retail installation.
+ */
+function writeVisualManifest(outputPath, json, options = {}) {
+  if (typeof outputPath !== 'string' || !outputPath.trim()) {
+    throw new TypeError('Material visual manifest output path is required');
+  }
+  if (typeof json !== 'string') {
+    throw new TypeError('Material visual manifest output must be JSON text');
+  }
+  const approvedRoots = [
+    ...(options.evidenceRoots ?? getDefaultEvidenceRoots()),
+    ...(options.userDataRoots ?? getDefaultUserDataRoots()),
+  ].map(resolveUsableRoot);
+  const retailRoots = (options.retailRoots ?? getConfiguredRetailRoots()).map(resolveUsableRoot);
+  const resolvedOutput = path.resolve(outputPath);
+
+  if (retailRoots.some((root) => isPathInside(resolvedOutput, root))) {
+    throw new TypeError('Material visual manifest output must not be inside a retail installation');
+  }
+  if (!approvedRoots.some((root) => isPathInside(resolvedOutput, root))) {
+    throw new TypeError('Material visual manifest output must be inside an approved local evidence or user-data root');
+  }
+
+  fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
+  fs.writeFileSync(resolvedOutput, json, { encoding: 'utf8', flag: 'wx' });
+  return resolvedOutput;
+}
+
+function getDefaultEvidenceRoots() {
+  const configured = process.env.KOTOR2_VR_EVIDENCE_ROOT;
+  return [configured || path.join(getDefaultUserDataRoot(), 'evidence')];
+}
+
+function getDefaultUserDataRoots() {
+  const configured = process.env.KOTOR2_VR_USER_DATA_ROOT;
+  return [configured || getDefaultUserDataRoot()];
+}
+
+function getConfiguredRetailRoots() {
+  return [
+    process.env.KOTOR2_VR_RETAIL_PATH,
+    process.env.KOTOR2_RETAIL_PATH,
+    process.env.KOTOR2_PATH,
+  ].filter((value) => typeof value === 'string' && value.trim());
+}
+
+function getDefaultUserDataRoot() {
+  return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'KOTOR2-VR');
+}
+
+function resolveUsableRoot(root) {
+  if (typeof root !== 'string' || !root.trim()) {
+    throw new TypeError('Material visual manifest roots must be non-empty paths');
+  }
+  return path.resolve(root);
+}
+
+function isPathInside(candidate, root) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!!relative && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
 if (require.main === module) {
@@ -358,4 +427,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { createVisualManifest, run };
+module.exports = { createVisualManifest, run, writeVisualManifest };

@@ -1,6 +1,12 @@
 import { describe, expect, test } from '@jest/globals';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
-const { createVisualManifest } = require('../../tools/material-audit/visual-manifest');
+const {
+  createVisualManifest,
+  writeVisualManifest,
+} = require('../../tools/material-audit/visual-manifest');
 
 const SHA256 = 'a'.repeat(64);
 
@@ -160,6 +166,64 @@ describe('material visual manifest', () => {
     };
 
     expect(() => createVisualManifest({ runtime: 'chrome', modules })).not.toThrow();
+  });
+
+  test.each([
+    {
+      name: 'an unreviewed resref mapping',
+      patch: { resolvedResref: 'border_fake', aliasEvidence: 'retail-tsl-gui-pack:swpc_tex_gui.erf' },
+    },
+    {
+      name: 'fabricated installed-content evidence',
+      patch: { resolvedResref: 'border1c', aliasEvidence: 'retail-tsl-gui-pack:invented.erf' },
+    },
+  ])('rejects $name for a claimed GUI alias', ({ patch }) => {
+    const modules = coveredModules();
+    modules['001EBO'][1] = {
+      ...modules['001EBO'][1],
+      requestedResref: 'border1',
+      semantic: 'gui',
+      source: 'gui-pack',
+      selectedSource: 'gui-pack',
+      searchedSources: [
+        'override-tga', 'override-tpc', 'active-module', 'gui-pack', 'texture-pack', 'key-bif',
+        'override-tga', 'override-tpc', 'active-module', 'gui-pack',
+      ],
+      txiSource: 'embedded-tpc',
+      ...patch,
+    };
+
+    expect(() => createVisualManifest({ runtime: 'chrome', modules })).toThrow(/reviewed alias/i);
+  });
+
+  test('writes material manifests only under approved local evidence or user-data roots', () => {
+    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'kotor2-vr-material-manifest-'));
+    const evidenceRoot = path.join(temporaryDirectory, 'evidence');
+    const userDataRoot = path.join(temporaryDirectory, 'user-data');
+    const retailRoot = path.join(temporaryDirectory, 'retail-install');
+    const json = JSON.stringify(createVisualManifest({ runtime: 'electron', modules: coveredModules() }));
+
+    try {
+      const writtenPath = writeVisualManifest(path.join(evidenceRoot, 'peragus.json'), json, {
+        evidenceRoots: [evidenceRoot],
+        userDataRoots: [userDataRoot],
+        retailRoots: [retailRoot],
+      });
+      expect(fs.existsSync(writtenPath)).toBe(true);
+
+      expect(() => writeVisualManifest(path.join(retailRoot, 'material-audit.json'), json, {
+        evidenceRoots: [evidenceRoot],
+        userDataRoots: [userDataRoot],
+        retailRoots: [retailRoot],
+      })).toThrow(/retail installation/i);
+      expect(() => writeVisualManifest(path.join(temporaryDirectory, 'outside.json'), json, {
+        evidenceRoots: [evidenceRoot],
+        userDataRoots: [userDataRoot],
+        retailRoots: [retailRoot],
+      })).toThrow(/approved local evidence or user-data/i);
+    } finally {
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 
   test.each([

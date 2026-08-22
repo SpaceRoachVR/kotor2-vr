@@ -185,6 +185,13 @@ export class TextureLoader {
     resolution: TextureResolution<OdysseyTexture>;
     ownership: TextureOwnership;
     generation: number;
+    /**
+     * A cache entry resolved while a module is active cannot survive that
+     * module's lifetime, even when its winning texture is shared.  The module
+     * can shadow the same resref on a later visit.
+     */
+    activeModule?: string;
+    semantic: TextureSemantic;
   }>();
   private static routingDiagnostics: TextureRoutingDiagnostic[] = [];
   private static activeModule?: string;
@@ -285,12 +292,15 @@ export class TextureLoader {
         nextGeneration: TextureLoader.lifetimeRegistry.currentGeneration,
       };
     }
+    const closingModule = TextureLoader.activeModule;
     const generation = TextureLoader.lifetimeRegistry.currentGeneration;
     const result = TextureLoader.lifetimeRegistry.disposeModuleGeneration(generation);
     for (const [key, entry] of TextureLoader.resolutionCache) {
-      if (entry.ownership === 'module' && entry.generation === generation) {
+      const ownedByClosingGeneration = entry.ownership === 'module' && entry.generation === generation;
+      const scopedToClosingModule = entry.activeModule === closingModule;
+      if (ownedByClosingGeneration || scopedToClosingModule) {
         TextureLoader.resolutionCache.delete(key);
-        if (entry.resolution.status === 'resolved') {
+        if (ownedByClosingGeneration && entry.resolution.status === 'resolved') {
           const resref = entry.resolution.requestedResref;
           if (TextureLoader.textures.get(resref) === entry.resolution.texture) {
             TextureLoader.textures.delete(resref);
@@ -301,6 +311,7 @@ export class TextureLoader {
           if (TextureLoader.guiTextures.get(resref) === entry.resolution.texture) {
             TextureLoader.guiTextures.delete(resref);
           }
+          TextureLoader.restoreSharedLegacyCache(resref, entry.semantic);
         }
       }
     }
@@ -339,10 +350,8 @@ export class TextureLoader {
     if (!texture || texture === TextureLoader.diagnosticFallbackTexture) {
       return;
     }
-    for (const sharedTexture of TextureLoader.guiTextures.values()) {
-      if (sharedTexture === texture) {
-        return;
-      }
+    if (TextureLoader.isResolverOwnedTexture(texture)) {
+      return;
     }
     texture.dispose();
   }
@@ -651,14 +660,18 @@ export class TextureLoader {
     const ownership = TextureLoader.getOwnership(request.semantic, resolution.source);
     const generation = TextureLoader.lifetimeRegistry.currentGeneration;
     TextureLoader.lifetimeRegistry.set(resolution.requestedResref, resolution.texture, ownership, generation);
-    const entry = { resolution, ownership, generation };
+    const activeModule = normalizeTextureResref(request.activeModule) || undefined;
+    const entry = { resolution, ownership, generation, activeModule, semantic: request.semantic };
     TextureLoader.resolutionCache.set(cacheKey, entry);
     if (ownership !== 'module') {
       const sharedCacheKey = TextureLoader.getCacheKey({
         ...request,
         activeModule: undefined,
       });
-      TextureLoader.resolutionCache.set(sharedCacheKey, entry);
+      TextureLoader.resolutionCache.set(sharedCacheKey, {
+        ...entry,
+        activeModule: undefined,
+      });
     }
     if (request.semantic === 'gui' || request.semantic === 'font') {
       TextureLoader.guiTextures.set(resolution.requestedResref, resolution.texture);
@@ -704,6 +717,32 @@ export class TextureLoader {
         && TextureLoader.guiTextures.get(texture.name) === texture)
       || TextureLoader.lightmaps[texture.name] === texture
     );
+  }
+
+  /** Restores a shared legacy cache entry after a module-local texture stopped shadowing it. */
+  private static restoreSharedLegacyCache(resref: string, semantic: TextureSemantic): void {
+    const normalizedResref = normalizeTextureResref(resref);
+    if (!isTextureResrefUsable(normalizedResref)) {
+      return;
+    }
+    const sharedEntry = [...TextureLoader.resolutionCache.values()].find((entry) => (
+      entry.ownership !== 'module'
+      && entry.activeModule === undefined
+      && entry.semantic === semantic
+      && entry.resolution.status === 'resolved'
+      && entry.resolution.requestedResref === normalizedResref
+    ));
+    if (!sharedEntry || sharedEntry.resolution.status !== 'resolved') {
+      return;
+    }
+    const { texture } = sharedEntry.resolution;
+    if (semantic === 'gui' || semantic === 'font') {
+      TextureLoader.guiTextures.set(normalizedResref, texture);
+    } else if (semantic === 'lightmap') {
+      TextureLoader.lightmaps[normalizedResref] = texture;
+    } else {
+      TextureLoader.textures.set(normalizedResref, texture);
+    }
   }
 
   private static recordDiagnostic(

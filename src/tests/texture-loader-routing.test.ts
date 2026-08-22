@@ -279,6 +279,70 @@ describe('production texture resolver routing', () => {
     expect(disposeGui).not.toHaveBeenCalled();
   });
 
+  test('keeps a resolver-owned GUI texture alive after a module-local texture shadows it', async () => {
+    const sharedGuiTexture = texture('shared-panel');
+    const moduleGuiTexture = texture('module-panel');
+    const disposeSharedGui = jest.spyOn(sharedGuiTexture, 'dispose');
+    const disposeModuleGui = jest.spyOn(moduleGuiTexture, 'dispose');
+    const provider = new SyntheticTextureProvider(new Map([
+      ['gui-pack:panel', { texture: sharedGuiTexture, txiSource: 'embedded-tpc' }],
+      ['active-module:panel', { texture: moduleGuiTexture }],
+    ]));
+    TextureLoader.setSourceProvider(provider);
+
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(sharedGuiTexture);
+    TextureLoader.beginModule('101PER');
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(moduleGuiTexture);
+    TextureLoader.endModule();
+
+    TextureLoader.releaseGUITexture(sharedGuiTexture);
+
+    expect(disposeModuleGui).toHaveBeenCalledTimes(1);
+    expect(disposeSharedGui).not.toHaveBeenCalled();
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(sharedGuiTexture);
+  });
+
+  test('does not reuse a disposed shared GUI texture through a previous module cache key', async () => {
+    const firstModuleTexture = texture('101-first-panel');
+    const secondModuleTexture = texture('102-panel');
+    const returningModuleTexture = texture('101-returning-panel');
+    const disposeFirst = jest.spyOn(firstModuleTexture, 'dispose');
+    let firstModuleLoads = 0;
+    const provider: TextureSourceProvider<OdysseyTexture> = {
+      async load(source, resref, activeModule) {
+        if (source !== 'gui-pack' || resref !== 'panel') {
+          return undefined;
+        }
+        if (activeModule === '101per') {
+          firstModuleLoads += 1;
+          return {
+            texture: firstModuleLoads === 1 ? firstModuleTexture : returningModuleTexture,
+            txiSource: 'embedded-tpc',
+          };
+        }
+        if (activeModule === '102per') {
+          return { texture: secondModuleTexture, txiSource: 'embedded-tpc' };
+        }
+        return undefined;
+      },
+    };
+    TextureLoader.setSourceProvider(provider);
+
+    TextureLoader.beginModule('101PER');
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(firstModuleTexture);
+    TextureLoader.endModule();
+
+    TextureLoader.beginModule('102PER');
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(secondModuleTexture);
+    TextureLoader.endModule();
+
+    TextureLoader.beginModule('101PER');
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(returningModuleTexture);
+
+    expect(firstModuleLoads).toBe(2);
+    expect(disposeFirst).toHaveBeenCalledTimes(1);
+  });
+
 });
 
 describe('Odyssey texture source provider', () => {
