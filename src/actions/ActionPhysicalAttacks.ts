@@ -12,6 +12,10 @@ import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
 import * as THREE from 'three';
 import { TURN_SPEED_FAST } from "@/engine/TurnSpeeds";
+import {
+  canExecuteObjectDestruction,
+  isObjectDestructionTarget,
+} from "@/engine/interaction/ObjectLockRules";
 
 /**
  * ActionPhysicalAttacks class.
@@ -50,6 +54,10 @@ export class ActionPhysicalAttacks extends Action {
     }
 
     if(!BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
+      return ActionStatus.FAILED;
+    }
+
+    if (isObjectDestructionTarget(this.target) && !canExecuteObjectDestruction(this.target)) {
       return ActionStatus.FAILED;
     }
 

@@ -44,6 +44,19 @@ describe('resolveSecurityUnlock', () => {
     expect(rollD20).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ attempted: true, unlocked: false, roll: 1, total: 12 });
   });
+
+  test('rejects a Security total exactly equal to the authored OpenLockDC', () => {
+    const result = resolveSecurityUnlock({
+      locked: true,
+      lockable: false,
+      keyRequired: false,
+      securitySkill: 6,
+      wisdom: 10,
+      openLockDC: 21,
+    }, () => 10);
+
+    expect(result).toEqual({ attempted: true, unlocked: false, roll: 10, total: 21 });
+  });
 });
 
 describe('canBashObject', () => {

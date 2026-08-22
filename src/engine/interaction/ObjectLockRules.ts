@@ -1,3 +1,5 @@
+import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
+
 export interface ObjectLockState {
   locked: boolean;
   lockable: boolean;
@@ -14,6 +16,10 @@ export interface ObjectBashState {
   readonly plot: boolean;
   readonly min1HP: boolean;
   readonly notBlastable: boolean;
+}
+
+export interface ObjectDestructionTarget extends ObjectBashState {
+  readonly objectType: number;
 }
 
 export type SecurityUnlockResult =
@@ -57,12 +63,29 @@ export function resolveSecurityUnlock(
     throw new RangeError('Security d20 roll must be an integer between 1 and 20');
   }
   const total = roll + (attempt.wisdom / 2) + attempt.securitySkill;
-  return { attempted: true, unlocked: total >= attempt.openLockDC, roll, total };
+  return { attempted: true, unlocked: total > attempt.openLockDC, roll, total };
 }
 
 /** Plot, Min1HP, and NotBlastable objects never expose the generic Bash route. */
 export function canBashObject(state: ObjectBashState): boolean {
   return !state.plot && !state.min1HP && !state.notBlastable;
+}
+
+/** Returns whether an object is one of the world targets that can be bashed or mined. */
+export function isObjectDestructionTarget(value: unknown): value is ObjectDestructionTarget {
+  if (!value || typeof value !== 'object') return false;
+  const target = value as Partial<ObjectDestructionTarget>;
+  return typeof target.objectType === 'number' &&
+    (target.objectType & (ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable)) !== 0;
+}
+
+/**
+ * Revalidates the authored destruction rules when a queued Bash or Mine action
+ * executes. Menu visibility alone is not an authorization boundary because an
+ * action can outlive a target-state change or be forged by a script/save.
+ */
+export function canExecuteObjectDestruction(value: unknown): boolean {
+  return isObjectDestructionTarget(value) && canBashObject(value);
 }
 
 function validateSecurityAttempt(

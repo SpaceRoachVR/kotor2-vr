@@ -8,6 +8,7 @@ import {
   tryDirectVRWorldUse,
   getVRInteractionRange,
 } from '@/vr/runtime/VRWorldUseAdapter';
+import { activateSelectedObject } from '@/engine/interaction/SelectedObjectActivation';
 
 // Derived from the adapter's own ranges so tuning them does not require
 // editing every distance literal in this file.
@@ -70,6 +71,21 @@ describe('describeDirectVRWorldUse', () => {
 });
 
 describe('tryDirectVRWorldUse', () => {
+  test('flatscreen activation and VR preserve the same ordinary object-open queue', () => {
+    const desktopActor = queueingActor();
+    const vrActor = queueingActor();
+    const target = ordinaryOpenablePlaceable();
+
+    expect(activateSelectedObject(desktopActor, target)).toEqual({ status: 'activated' });
+    expect(tryDirectVRWorldUse(vrActor, target, quietLogger))
+      .toEqual({ handled: true, feedbackLabel: 'Use: Ordinary Container' });
+
+    expect(desktopActor.queuedActions).toEqual(['open:42']);
+    expect(vrActor.queuedActions).toEqual(['open:42']);
+    expect(target.onClick).toHaveBeenCalledWith(desktopActor);
+    expect(target.onClick).toHaveBeenCalledWith(vrActor);
+  });
+
   test('uses the native selected-target click semantics instead of invoking target use directly', () => {
     const activeActor = actor();
     const target = placeable('Console', 1);
@@ -189,5 +205,34 @@ function creature(): VRWorldUseTarget & { use: jest.Mock; onClick: jest.Mock } {
     getName: () => 'Creature',
     use: jest.fn(),
     onClick: jest.fn(),
+  };
+}
+
+function queueingActor(): VRWorldUseActor & { queuedActions: string[] } {
+  const actor = {
+    id: 7,
+    position: new THREE.Vector3(),
+    queuedActions: ['stale-action'],
+    clearAllActions(): void {
+      this.queuedActions.length = 0;
+    },
+  };
+  return actor;
+}
+
+function ordinaryOpenablePlaceable(): VRWorldUseTarget & { use: jest.Mock; onClick: jest.Mock } {
+  return {
+    id: 42,
+    objectType: ModuleObjectType.ModulePlaceable,
+    position: new THREE.Vector3(1, 0, 0),
+    keyRequired: 0,
+    plot: 0,
+    scripts: {},
+    isLocked: () => false,
+    getName: () => 'Ordinary Container',
+    use: jest.fn(),
+    onClick: jest.fn((activeActor: VRWorldUseActor & { queuedActions?: string[] }) => {
+      activeActor.queuedActions?.push('open:42');
+    }),
   };
 }

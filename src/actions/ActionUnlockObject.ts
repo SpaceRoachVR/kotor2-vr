@@ -32,6 +32,7 @@ export class ActionUnlockObject extends Action {
   shouted: boolean;
   usedItem: boolean;
   oItem: ModuleItem;
+  failureSignalled: boolean = false;
 
   constructor( actionId: number = -1, groupId: number = -1 ){
     super(actionId, groupId);
@@ -65,6 +66,7 @@ export class ActionUnlockObject extends Action {
       lockable: lockTarget.lockable,
       keyRequired: lockTarget.keyRequired,
     })){
+      this.signalFailure();
       return ActionStatus.FAILED;
     }
     
@@ -138,13 +140,7 @@ export class ActionUnlockObject extends Action {
         // would execute OnFailToOpen twice.
         const unlocked = (this.target as any).attemptUnlock(this.owner, false);
         if(!unlocked){
-          const event = new GameState.GameEventFactory.EventSignalEvent();
-          event.setCaller(this.getOwner());
-          event.setObject(this.target);
-          event.setDay(GameState.module.timeManager.pauseDay);
-          event.setTime(GameState.module.timeManager.pauseTime);
-          event.eventType = SignalEventType.OnFailToOpen;
-          GameState.module.addEvent(event);
+          this.signalFailure();
         }
         return ActionStatus.COMPLETE;
       }
@@ -166,6 +162,18 @@ export class ActionUnlockObject extends Action {
     }
 
     return ActionStatus.FAILED;
+  }
+
+  private signalFailure(): void {
+    if (this.failureSignalled) return;
+    this.failureSignalled = true;
+    const event = new GameState.GameEventFactory.EventSignalEvent();
+    event.setCaller(this.getOwner());
+    event.setObject(this.target);
+    event.setDay(GameState.module.timeManager.pauseDay);
+    event.setTime(GameState.module.timeManager.pauseTime);
+    event.eventType = SignalEventType.OnFailToOpen;
+    GameState.module.addEvent(event);
   }
 
 }

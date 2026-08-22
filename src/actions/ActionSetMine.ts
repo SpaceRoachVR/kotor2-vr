@@ -10,6 +10,7 @@ import type { ModuleObject } from "@/module/ModuleObject";
 import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
+import { canExecuteObjectDestruction } from "@/engine/interaction/ObjectLockRules";
 
 /**
  * ActionSetMine class.
@@ -46,6 +47,11 @@ export class ActionSetMine extends Action {
 
     if(!this.target){
       console.warn('ActionSetMine: target could not be resolved, aborting.');
+      return ActionStatus.FAILED;
+    }
+
+    if (!canExecuteObjectDestruction(this.target)) {
+      console.warn('ActionSetMine: target does not permit mine placement, aborting.');
       return ActionStatus.FAILED;
     }
 
