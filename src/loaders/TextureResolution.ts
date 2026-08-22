@@ -289,10 +289,22 @@ export class TextureResolver<TTexture> {
     if (activeModule) {
       sources.push('active-module');
     }
+    // The GUI pack has to be searched for every semantic, not just 'gui' and
+    // 'font'. TSL genuinely ships non-GUI assets in swpc_tex_gui.erf and asks
+    // for them under other semantics: `loadscreen3` and `innermenu` arrive as
+    // 'diffuse', and the galaxy map's `gui_galxy_1..3` / `gui_sun_1` arrive as
+    // 'particle'. Skipping the pack for those made six textures that are
+    // present on disk resolve as missing-required-texture.
+    //
+    // Priority still differs by semantic. GUI and font prefer the GUI pack over
+    // the world packs; everything else treats it as a late fallback, so a world
+    // texture sharing a name with a GUI one keeps resolving to the world pack.
     if (semantic === 'gui' || semantic === 'font') {
-      sources.push('gui-pack');
+      sources.push('gui-pack', 'texture-pack');
+    } else {
+      sources.push('texture-pack', 'gui-pack');
     }
-    sources.push('texture-pack', 'key-bif');
+    sources.push('key-bif');
 
     const searchedSources: ResolvedTextureSource[] = [];
     for (const source of sources) {

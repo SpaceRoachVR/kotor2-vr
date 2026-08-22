@@ -81,29 +81,66 @@ describe('TextureResolver', () => {
     ]);
   });
 
-  test('consults the GUI pack only for GUI and font semantics', async () => {
+  test('finds a GUI-pack texture requested under any semantic', async () => {
+    // TSL ships non-GUI assets in swpc_tex_gui.erf and asks for them under
+    // other semantics: `loadscreen3` and `innermenu` arrive as 'diffuse', and
+    // the galaxy map's `gui_galxy_1..3` / `gui_sun_1` arrive as 'particle'.
+    // Skipping the pack for those made textures that are present on disk
+    // resolve as missing-required-texture.
     const guiTexture = { name: 'gui-panel' };
-    const diffuseProvider = new RecordingTextureProvider(new Map([
-      ['gui-pack:panel', guiTexture],
-    ]));
-    const guiProvider = new RecordingTextureProvider(new Map([
+
+    for (const semantic of ['diffuse', 'particle', 'gui', 'font'] as const) {
+      const provider = new RecordingTextureProvider(new Map([['gui-pack:panel', guiTexture]]));
+
+      const resolution = await new TextureResolver(provider).resolve({
+        resref: 'panel',
+        semantic,
+        allowAlias: false,
+      });
+
+      expect(resolution).toMatchObject({
+        status: 'resolved', source: 'gui-pack', texture: guiTexture,
+      });
+    }
+  });
+
+  test('keeps the world pack ahead of the GUI pack for non-GUI semantics', async () => {
+    // A world texture sharing a name with a GUI one must still resolve to the
+    // world pack; the GUI pack is a late fallback outside gui/font.
+    const worldTexture = { name: 'world-panel' };
+    const guiTexture = { name: 'gui-panel' };
+    const provider = new RecordingTextureProvider(new Map([
+      ['texture-pack:panel', worldTexture],
       ['gui-pack:panel', guiTexture],
     ]));
 
-    const diffuse = await new TextureResolver(diffuseProvider).resolve({
+    const resolution = await new TextureResolver(provider).resolve({
       resref: 'panel',
       semantic: 'diffuse',
       allowAlias: false,
     });
-    const gui = await new TextureResolver(guiProvider).resolve({
-      resref: 'panel',
-      semantic: 'gui',
-      allowAlias: false,
-    });
 
-    expect(diffuse.status).toBe('missing');
-    expect(diffuseProvider.attempts.map(({ source }) => source)).not.toContain('gui-pack');
-    expect(gui).toMatchObject({ status: 'resolved', source: 'gui-pack', texture: guiTexture });
+    expect(resolution).toMatchObject({ status: 'resolved', source: 'texture-pack' });
+  });
+
+  test('keeps the GUI pack ahead of the world pack for GUI and font semantics', async () => {
+    const worldTexture = { name: 'world-panel' };
+    const guiTexture = { name: 'gui-panel' };
+
+    for (const semantic of ['gui', 'font'] as const) {
+      const provider = new RecordingTextureProvider(new Map([
+        ['texture-pack:panel', worldTexture],
+        ['gui-pack:panel', guiTexture],
+      ]));
+
+      const resolution = await new TextureResolver(provider).resolve({
+        resref: 'panel',
+        semantic,
+        allowAlias: false,
+      });
+
+      expect(resolution).toMatchObject({ status: 'resolved', source: 'gui-pack' });
+    }
   });
 
   test.each(['', '0', '****'])('rejects invalid sentinel %j before any source I/O', async (resref) => {
