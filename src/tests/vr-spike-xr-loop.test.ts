@@ -128,6 +128,44 @@ describe('VRSpike XR loop ownership', () => {
     expect(harness.engineUpdates).toEqual([]);
   });
 
+  test('stops the startup trace after the first frame even when the update path returns early', async () => {
+    // `completeStartupTrace` only runs on the fully-successful update path.
+    // Entering VR at the main menu leaves the engine in MOVIE/LEGAL mode, which
+    // returns before that terminator, so the trace used to log every frame for
+    // the whole session.
+    const harness = createXRLoopHarness();
+    const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await VRSpike.enter();
+    harness.invokeXRFrame(1000, {} as XRFrame);
+    const afterFirstFrame = log.mock.calls
+      .filter(([message]) => typeof message === 'string' && message.includes('startup stage')).length;
+
+    harness.invokeXRFrame(2000, {} as XRFrame);
+    harness.invokeXRFrame(3000, {} as XRFrame);
+    const afterThreeFrames = log.mock.calls
+      .filter(([message]) => typeof message === 'string' && message.includes('startup stage')).length;
+
+    expect(afterFirstFrame).toBeGreaterThan(0);
+    expect(afterThreeFrames).toBe(afterFirstFrame);
+  });
+
+  test('does not report missing semantic actions before the runtime delivers input sources', async () => {
+    // A session reports no input sources until its first `inputsourceschange`,
+    // and entry validates once before that. Validating an empty list reported
+    // every required action as missing on every entry.
+    const harness = createXRLoopHarness();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await VRSpike.enter();
+    harness.invokeXRFrame(1000, {} as XRFrame);
+
+    const topologyWarnings = warn.mock.calls.filter(
+      ([message]) => typeof message === 'string' && message.includes('topology is missing required semantic actions')
+    );
+    expect(topologyWarnings).toEqual([]);
+  });
+
   test('restores legacy gamepad ownership when XR renderer binding fails', async () => {
     const originalSuppressed = GamePad.suppressed;
     afterEachRestore.push(() => { GamePad.suppressed = originalSuppressed; });

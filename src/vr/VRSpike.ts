@@ -259,6 +259,7 @@ export class VRSpike {
   static session: XRSession | null = null;
   static installed = false;
   private static traceXRStartup = false;
+  private static traceXRStartupCallbacksSeen = 0;
   private static xrFrameRenderTarget: THREE.WebGLRenderTarget | null = null;
   private static readonly inputRouter = new XRInputRouter();
   private static inputCapabilityValidator = new XRInputCapabilityValidator();
@@ -556,8 +557,16 @@ export class VRSpike {
   private static onInputSourcesChange = (): void => {
     const session = VRSpike.session;
     if (!session) return;
+    const sources = Array.from(session.inputSources ?? []);
+    // A session reports an empty input source list until the runtime delivers
+    // its first `inputsourceschange`, and this runs once on entry before that.
+    // Validating an empty list reports every required action as missing, so
+    // entering VR always warned that the controllers were unusable while the
+    // real topology — once it arrived — matched the quest-touch profile fine.
+    // No sources means "not known yet", not "unsupported".
+    if (sources.length === 0) return;
     const update = VRSpike.inputCapabilityValidator.update(
-      XRGamepadReader.readCapabilities(Array.from(session.inputSources ?? []))
+      XRGamepadReader.readCapabilities(sources)
     );
     if (update.changed && !update.validation.valid) {
       console.warn('[VRSpike] XR controller topology is missing required semantic actions', update);
@@ -573,6 +582,7 @@ export class VRSpike {
   private static prepareXRSession(session: XRSession): void {
     VRSpike.session = session;
     VRSpike.traceXRStartup = true;
+    VRSpike.traceXRStartupCallbacksSeen = 0;
     VRSpike.previousXRInputTimestamp = null;
     VRSpike.locomotionInputErrorReported = false;
     VRSpike.trackedInputErrorReported = false;
@@ -748,6 +758,7 @@ export class VRSpike {
     VRSpike.xrFrameRenderTarget = isXRRenderTarget
       ? renderTarget
       : null;
+    VRSpike.beginStartupTraceFrame();
     VRSpike.traceStartupStage('callback');
     VRSpike.updateTrackedInput(timestamp, frame);
     let moduleTransitioned = true;
@@ -2170,6 +2181,26 @@ export class VRSpike {
     const turnedRigOrientation = turnQuaternion.multiply(rig.quaternion);
     const newHeadOffset = localHeadPosition.applyQuaternion(turnedRigOrientation);
     VRSpike.turnOriginOffset.add(oldHeadOffset.sub(newHeadOffset));
+  }
+
+  /**
+   * Bound the startup trace to its first frame.
+   *
+   * `completeStartupTrace` is the intended terminator, but it only runs on the
+   * fully-successful update path. Entering VR from the main menu leaves the
+   * engine in MOVIE/LEGAL mode, whose early return in `GameState.Update`
+   * happens before that call is ever reached — so the "one-shot" trace kept
+   * emitting two console lines per frame for the whole session (measured at
+   * ~120 lines/second under the emulator). Console I/O at that rate is real
+   * cost in the same submission loop Phase 0 spent its budget on.
+   */
+  private static beginStartupTraceFrame(): void {
+    if (!VRSpike.traceXRStartup) return;
+    if (VRSpike.traceXRStartupCallbacksSeen >= 1) {
+      VRSpike.traceXRStartup = false;
+      return;
+    }
+    VRSpike.traceXRStartupCallbacksSeen += 1;
   }
 
   /** One-shot evidence for isolating a blocked first immersive frame. */
