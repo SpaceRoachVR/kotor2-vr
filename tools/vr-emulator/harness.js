@@ -19,6 +19,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 const { spawn } = require('child_process');
 const { CdpSession, waitForEndpoint, findPageTarget } = require('./cdp');
 
@@ -28,6 +29,19 @@ const CHROME_CANDIDATES = [
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
 ];
+
+function isPortListening(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    const finish = (listening) => {
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+    socket.setTimeout(1000, () => finish(false));
+  });
+}
 
 function resolveChrome() {
   for (const candidate of CHROME_CANDIDATES) {
@@ -112,6 +126,16 @@ class VrHarness {
 
   async launch(url) {
     const chromePath = resolveChrome();
+    // A previous run whose Chrome outlived it still holds this port. Chrome
+    // would fail to bind, `waitForEndpoint` would happily answer from the *old*
+    // browser, and the scenario would drive a stale page — which surfaces as a
+    // baffling timeout waiting for a button that was clicked minutes ago.
+    if (await isPortListening(this.port)) {
+      throw new Error(
+        `CDP port ${this.port} is already in use — a previous harness Chrome is still ` +
+        `running. Close it (or pass a different port) before launching.`
+      );
+    }
     const userDataDir =
       this.userDataDir ||
       path.join(process.env.TEMP || '.', `kotor2vr-emul-${process.pid}-${this.port}`);

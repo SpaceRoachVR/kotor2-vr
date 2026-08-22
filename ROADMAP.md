@@ -74,6 +74,9 @@ headset too, now fixed and re-verified:
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
 
+The master list of what still needs a human in a headset is
+[HEADSET-TEST-PLAN.md](HEADSET-TEST-PLAN.md).
+
 ---
 
 ## Phase 0 — De-risk
@@ -408,16 +411,29 @@ Every button reachable in flatscreen needs a VR route.
   screens, or may need bespoke handling. Not chased down this pass.
 - **4.5** ☐ Audit `gui/` for anything still unreachable — check `game/tsl/` against
   `game/kotor/` for stubs while doing it. Not done.
-- **Found, not implemented:** `SemanticXRAction.Recenter`, `Pause`, `PartyCommand`, and
-  `ToggleWalkRun` are all bound to physical buttons in `XRInputRouter.ts` but never
-  consumed anywhere — the same "bound but dead" shape `ToggleLocomotionMode` was in
-  before Stage 2.2. `Recenter`'s math is knowable (there's already an unused `yawOffset`
-  field on `VRSpike` built for exactly this) but genuinely risky to get subtly wrong
-  without a headset to verify against — a bad recenter is a real comfort hazard, unlike
-  a UI bug. `Pause`/`PartyCommand` have no defined intent to build against, and
-  `ToggleWalkRun` has no underlying walk/run distinction anywhere in the movement system
-  to hook into (creature movement always applies full force). Left for a session with
-  device access rather than guessed at blind.
+- **4.6** ✅ implemented / ☐ headset-accepted — **Recenter** (2026-08-22). Was the
+  one "bound but dead" action deferred specifically because a bad recenter is a
+  real comfort hazard and there was no way to verify it without a device; the
+  emulated-headset harness closed that gap. Routed with locomotion, edge-triggered
+  so holding the button does not pin the head to the origin.
+
+  The first attempt was wrong in a way the tests caught: it aimed the head at the
+  rig's *current* forward, but rotating the rig turns the head with it, so that
+  target is unreachable. The reachable one is the game's natural forward — the
+  rig's bearing with the recenter offset removed (`facing + 90° + turnYaw`), which
+  preserves deliberate in-game turning and cancels only the physical offset.
+  Because `rigFacing` already carries the previous offset the correction is a
+  direct assignment rather than an accumulation, so repeat presses are idempotent
+  and cannot drift; position is set the same way, horizontal only, leaving the
+  canonical eye height alone. A pose with no horizontal forward (looking straight
+  up) is ignored rather than recentred on a degenerate reading.
+  `src/tests/vr-recenter.test.ts` asserts the invariants — not the feel.
+- **Found, not implemented:** `Pause`, `PartyCommand`, and `ToggleWalkRun` are
+  bound to physical buttons in `XRInputRouter.ts` but never consumed anywhere.
+  `Pause`/`PartyCommand` have no defined intent to build against, and
+  `ToggleWalkRun` has no underlying walk/run distinction anywhere in the movement
+  system to hook into (creature movement always applies full force). These need a
+  decision about intent, not a headset.
 
 ---
 
