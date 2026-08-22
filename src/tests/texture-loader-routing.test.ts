@@ -163,6 +163,55 @@ describe('production texture resolver routing', () => {
     await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(guiTexture);
   });
 
+  test('reuses a shared global texture across diffuse and lightmap semantics through a module transition', async () => {
+    const diffuseTexture = texture('shared-surface-diffuse');
+    const lightmapCandidate = texture('shared-surface-lightmap-candidate');
+    const returningDiffuseCandidate = texture('shared-surface-returning-diffuse');
+    const returningLightmapCandidate = texture('shared-surface-returning-lightmap');
+    const disposeDiffuse = jest.spyOn(diffuseTexture, 'dispose');
+    const disposeLightmapCandidate = jest.spyOn(lightmapCandidate, 'dispose');
+    const disposeReturningDiffuseCandidate = jest.spyOn(returningDiffuseCandidate, 'dispose');
+    const disposeReturningLightmapCandidate = jest.spyOn(returningLightmapCandidate, 'dispose');
+    const candidates = [
+      diffuseTexture,
+      lightmapCandidate,
+      returningDiffuseCandidate,
+      returningLightmapCandidate,
+    ];
+    const provider: TextureSourceProvider<OdysseyTexture> = {
+      async load(source, resref) {
+        if (source !== 'texture-pack' || resref !== 'shared_surface') {
+          return undefined;
+        }
+        const candidate = candidates.shift();
+        if (!candidate) {
+          throw new Error('Unexpected shared texture decode');
+        }
+        return { texture: candidate, txiSource: 'embedded-tpc' };
+      },
+    };
+    TextureLoader.setSourceProvider(provider);
+
+    TextureLoader.beginModule('101PER');
+    const firstMaterial = new THREE.MeshBasicMaterial();
+    firstMaterial.map = await TextureLoader.Load('shared_surface');
+    const firstLightmap = await TextureLoader.LoadLightmap('shared_surface');
+
+    expect(firstLightmap).toBe(firstMaterial.map);
+    expect(disposeDiffuse).not.toHaveBeenCalled();
+    expect(disposeLightmapCandidate).toHaveBeenCalledTimes(1);
+    TextureLoader.endModule();
+
+    TextureLoader.beginModule('102PER');
+    await expect(TextureLoader.Load('shared_surface')).resolves.toBe(firstMaterial.map);
+    await expect(TextureLoader.LoadLightmap('shared_surface')).resolves.toBe(firstMaterial.map);
+
+    expect(firstMaterial.map).toBe(diffuseTexture);
+    expect(disposeDiffuse).not.toHaveBeenCalled();
+    expect(disposeReturningDiffuseCandidate).toHaveBeenCalledTimes(1);
+    expect(disposeReturningLightmapCandidate).toHaveBeenCalledTimes(1);
+  });
+
   test('reuses a GUI-pack texture after module unload without consulting a stale module cache key', async () => {
     const guiTexture = texture('shared-effect-icon');
     const provider = new SyntheticTextureProvider(new Map([

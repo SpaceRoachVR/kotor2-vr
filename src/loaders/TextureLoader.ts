@@ -667,29 +667,38 @@ export class TextureLoader {
   }
 
   /**
-   * Reuses an already-live shared source after every module-specific lookup.
-   * The lookup still runs, so an active module can shadow it, but a fresh
-   * decode of the same GUI/global source must not replace textures held by a
-   * material created for a previous module.
+   * Reuses an already-live compatible shared source after every
+   * module-specific lookup. Resolution-cache entries are semantic-scoped,
+   * while shared lifetime ownership is resource-scoped; a diffuse and a
+   * lightmap request for the same shared asset must therefore borrow the same
+   * texture instead of replacing (and disposing) a material-bound texture.
+   *
+   * The lookup still runs, so an active module can shadow the asset. Only an
+   * unscoped cached result with the same ownership, source provenance, and
+   * resolved/requested resrefs is compatible with the candidate.
    */
   private static retainSharedResolution(
     request: TextureRequest,
     resolution: TextureResolution<OdysseyTexture>,
   ): TextureResolution<OdysseyTexture> {
-    if (resolution.status !== 'resolved' || resolution.source === 'active-module') {
+    if (resolution.status !== 'resolved') {
       return resolution;
     }
-    const sharedCacheKey = TextureLoader.getCacheKey({
-      ...request,
-      activeModule: undefined,
-    });
-    const existing = TextureLoader.resolutionCache.get(sharedCacheKey);
+    const ownership = TextureLoader.getOwnership(request.semantic, resolution.source);
+    if (ownership === 'module') {
+      return resolution;
+    }
+    const existing = [...TextureLoader.resolutionCache.values()].find((entry) => (
+      entry.ownership === ownership
+      && entry.activeModule === undefined
+      && entry.resolution.status === 'resolved'
+      && entry.resolution.source === resolution.source
+      && entry.resolution.requestedResref === resolution.requestedResref
+      && entry.resolution.resolvedResref === resolution.resolvedResref
+    ));
     if (
       !existing
-      || existing.ownership === 'module'
       || existing.resolution.status !== 'resolved'
-      || existing.resolution.source !== resolution.source
-      || existing.resolution.resolvedResref !== resolution.resolvedResref
     ) {
       return resolution;
     }
