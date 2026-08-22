@@ -19,8 +19,8 @@ describe('TextureLifetimeRegistry', () => {
     expect(disposal).toEqual({ disposed: 1, nextGeneration: generation + 1 });
     expect(moduleTexture.dispose).toHaveBeenCalledTimes(1);
     expect(guiTexture.dispose).not.toHaveBeenCalled();
-    expect(registry.get('module-wall')).toBeUndefined();
-    expect(registry.get('shared-gui')).toBe(guiTexture);
+    expect(registry.get('module-wall', 'module', generation)).toBeUndefined();
+    expect(registry.get('shared-gui', 'shared-gui')).toBe(guiTexture);
   });
 
   test('does not dispose an object that is also retained by a shared cache entry', () => {
@@ -33,7 +33,43 @@ describe('TextureLifetimeRegistry', () => {
     registry.disposeModuleGeneration(generation);
 
     expect(sharedObject.dispose).not.toHaveBeenCalled();
-    expect(registry.get('gui-alias')).toBe(sharedObject);
+    expect(registry.get('gui-alias', 'shared-gui')).toBe(sharedObject);
+  });
+
+  test('keeps identical module and shared GUI resrefs in separate ownership namespaces', () => {
+    const registry = new TextureLifetimeRegistry<ReturnType<typeof disposableTexture>>();
+    const moduleTexture = disposableTexture('module-panel');
+    const guiTexture = disposableTexture('gui-panel');
+    const generation = registry.currentGeneration;
+    registry.set('panel', moduleTexture, 'module', generation);
+    registry.set('panel', guiTexture, 'shared-gui', generation);
+
+    expect(registry.get('panel', 'module', generation)).toBe(moduleTexture);
+    expect(registry.get('panel', 'shared-gui')).toBe(guiTexture);
+
+    registry.disposeModuleGeneration(generation);
+
+    expect(moduleTexture.dispose).toHaveBeenCalledTimes(1);
+    expect(guiTexture.dispose).not.toHaveBeenCalled();
+    expect(registry.get('panel', 'module', generation)).toBeUndefined();
+    expect(registry.get('panel', 'shared-gui')).toBe(guiTexture);
+  });
+
+  test('disposes an unreferenced texture when its ownership entry is replaced', () => {
+    const registry = new TextureLifetimeRegistry<ReturnType<typeof disposableTexture>>();
+    const replacedTexture = disposableTexture('old-module-panel');
+    const replacementTexture = disposableTexture('new-module-panel');
+    const generation = registry.currentGeneration;
+    registry.set('panel', replacedTexture, 'module', generation);
+
+    registry.set('panel', replacementTexture, 'module', generation);
+
+    expect(replacedTexture.dispose).toHaveBeenCalledTimes(1);
+    expect(replacementTexture.dispose).not.toHaveBeenCalled();
+    expect(registry.get('panel', 'module', generation)).toBe(replacementTexture);
+
+    registry.disposeModuleGeneration(generation);
+    expect(replacementTexture.dispose).toHaveBeenCalledTimes(1);
   });
 
   test('refuses to dispose a stale generation twice', () => {

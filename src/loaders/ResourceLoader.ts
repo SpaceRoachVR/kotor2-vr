@@ -8,6 +8,7 @@ import { RIMManager } from "@/managers/RIMManager";
 import { IRIMResource } from "@/interface/resource/IRIMResource";
 import { IERFResource } from "@/interface/resource/IERFResource";
 import { GameFileSystem } from "@/utility/GameFileSystem";
+import { isTextureResrefUsable, normalizeTextureResref } from "@/loaders/TextureResolution";
 
 /**
  * ResourceLoader class.
@@ -59,7 +60,7 @@ export class ResourceLoader {
     }
     const pathSegments = filepath.trim().replace(/\\/g, '/').split('/');
     if (
-      pathSegments[0].toLocaleLowerCase() !== 'override' ||
+      pathSegments[0].toLowerCase() !== 'override' ||
       pathSegments.some((segment) => !segment || segment === '.' || segment === '..')
     ) {
       throw new TypeError(`Override resource path must stay beneath Override: ${filepath}`);
@@ -70,14 +71,14 @@ export class ResourceLoader {
       resourcesForType = new Map();
       ResourceLoader.OverrideResources.set(resId, resourcesForType);
     }
-    resourcesForType.set(resRef.toLocaleLowerCase(), filepath);
+    resourcesForType.set(resRef.toLowerCase(), filepath);
   }
 
   static getOverrideResourcePath(resId: number, resRef: string): string | undefined {
     if (!Number.isInteger(resId) || resId <= 0 || typeof resRef !== 'string' || !resRef) {
       return undefined;
     }
-    return ResourceLoader.OverrideResources.get(resId)?.get(resRef.toLocaleLowerCase());
+    return ResourceLoader.OverrideResources.get(resId)?.get(resRef.toLowerCase());
   }
 
   static async InitGlobalCache(){
@@ -96,7 +97,7 @@ export class ResourceLoader {
     await Promise.all(keys.map(async (key) => {
       const buffer = await KEYManager.Key.getFileBuffer(key);
       scope.get(key.resType).set(
-        key.resRef.toLocaleLowerCase(),
+        key.resRef.toLowerCase(),
         buffer
       );
     }));
@@ -118,7 +119,7 @@ export class ResourceLoader {
           const buffer = await archive.getResourceBuffer(resource);
           // console.log('InitModuleCache: RIM', resource.resRef.toLocaleLowerCase(), buffer);
           scope.get(resource.resType).set(
-            resource.resRef.toLocaleLowerCase(),
+            resource.resRef.toLowerCase(),
             buffer
           );
         }
@@ -129,7 +130,7 @@ export class ResourceLoader {
           const buffer = await archive.getResourceBufferByResRef(key.resRef, key.resType);
           // console.log('InitModuleCache: ERF', resource.resRef.toLocaleLowerCase(), buffer);
           scope.get(key.resType).set(
-            key.resRef.toLocaleLowerCase(),
+            key.resRef.toLowerCase(),
             buffer
           );
         }
@@ -154,11 +155,11 @@ export class ResourceLoader {
       throw new Error(`Invalid resId ${resId}`);
     }
 
-    if(!resRef){
+    if(!isTextureResrefUsable(normalizeTextureResref(resRef))){
       throw new Error(`Invalid resRef ${resRef}`);
     }
 
-    resRef = resRef.toLocaleLowerCase();
+    resRef = normalizeTextureResref(resRef);
 
     //Resource Cache
     let data = ResourceLoader.getCache(resId, resRef);
@@ -192,7 +193,7 @@ export class ResourceLoader {
   }
 
   static loadCachedResource(resId: number, resRef: string): Uint8Array {
-    return ResourceLoader.getCache(resId, resRef.toLocaleLowerCase());
+    return ResourceLoader.getCache(resId, resRef.toLowerCase());
   }
 
   static setResource(resId: number, resRef: string, opts = {}){
@@ -218,7 +219,7 @@ export class ResourceLoader {
   }
 
   static getCache(resId: number, resRef: string): Uint8Array {
-    const normalizedRef = resRef.toLocaleLowerCase();
+    const normalizedRef = resRef.toLowerCase();
     if(ResourceLoader.CacheScopes[CacheScope.OVERRIDE].get(resId)?.has(normalizedRef)){
       return ResourceLoader.CacheScopes[CacheScope.OVERRIDE].get(resId).get(normalizedRef);
     }
@@ -247,14 +248,14 @@ export class ResourceLoader {
         resourcesForType = new Map();
         ResourceLoader.CacheScopes[type].set(resId, resourcesForType);
       }
-      resourcesForType.set(resRef.toLocaleLowerCase(), buffer);
+      resourcesForType.set(resRef.toLowerCase(), buffer);
       return;
     }
 
     if(typeof ResourceLoader.cache[resId] === 'undefined')
       ResourceLoader.cache[resId] = {};
 
-    ResourceLoader.cache[resId][resRef.toLocaleLowerCase()] = buffer;
+    ResourceLoader.cache[resId][resRef.toLowerCase()] = buffer;
   }
 
   static async searchLocal(resId: number, resRef = ''): Promise<Uint8Array> {
@@ -269,7 +270,7 @@ export class ResourceLoader {
     if (!resRef) {
       return undefined;
     }
-    const normalizedRef = resRef.toLocaleLowerCase();
+    const normalizedRef = resRef.toLowerCase();
     const filepath = ResourceLoader.getOverrideResourcePath(resId, normalizedRef);
     if (!filepath) {
       return undefined;

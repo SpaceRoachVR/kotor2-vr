@@ -97,6 +97,10 @@ export class TextureLoader {
 
   static async LoadLocal(resRef: string, noCache: boolean = false): Promise<OdysseyTexture> {
 
+    if (!isTextureResrefUsable(normalizeTextureResref(resRef))) {
+      return undefined;
+    }
+
     let dir = resRef;
     const tga_exists = await GameFileSystem.exists(path.join(dir, resRef));
     if(!tga_exists){ return undefined; }
@@ -114,7 +118,10 @@ export class TextureLoader {
   }
 
   static async LoadLightmap(resRef: string, noCache: boolean = false){
-    resRef = resRef.toLowerCase();
+    resRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(resRef)) {
+      return undefined;
+    }
     if(TextureLoader.lightmaps.hasOwnProperty(resRef) && !noCache){
       return TextureLoader.lightmaps[resRef];
     }

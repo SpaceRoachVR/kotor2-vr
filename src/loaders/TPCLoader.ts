@@ -7,6 +7,7 @@ import { KEYManager } from "@/managers/KEYManager";
 import { OdysseyCompressedTexture } from "@/three/odyssey";
 import { IFindTPCResult } from "@/interface/graphics/IFindTPCResult";
 import { TextureLoaderState } from "@/loaders/TextureLoaderState";
+import { isTextureResrefUsable, normalizeTextureResref } from "@/loaders/TextureResolution";
 
 const GUI_TEXTURE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   border1: 'border1c',
@@ -27,7 +28,10 @@ const GUI_TEXTURE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
 export class TPCLoader {
   
   async findTPC( resRef: string ): Promise<IFindTPCResult> {
-    resRef = resRef.toLocaleLowerCase();
+    resRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(resRef)) {
+      throw new TypeError(`Invalid texture resref '${resRef || '<empty>'}'`);
+    }
   
     const guiPack = ERFManager.ERFs.get('swpc_tex_gui');
     let erfResource = guiPack.getResourceInfo(resRef, ResourceTypes['tpc']);
@@ -99,6 +103,10 @@ export class TPCLoader {
   }
   
   async fetchOverride(resRef: string = ''): Promise<OdysseyCompressedTexture> {
+    resRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(resRef)) {
+      return undefined;
+    }
     const dir = path.join('Override');
   
     try{

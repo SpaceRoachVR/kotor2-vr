@@ -18,6 +18,16 @@ export type TextureResolutionSource =
   | 'texture-pack'
   | 'key-bif';
 
+export type ResolvedTextureSource = Exclude<TextureResolutionSource, 'none'>;
+
+export type TextureTxiSource =
+  | 'override-txi'
+  | 'embedded-tpc'
+  | 'active-module-txi'
+  | 'gui-pack-txi'
+  | 'texture-pack-txi'
+  | 'key-bif-txi';
+
 export interface TextureRequest {
   resref: string;
   semantic: TextureSemantic;
@@ -32,33 +42,102 @@ export interface ExplicitTextureAlias {
 }
 
 export interface TextureDiagnostic {
-  code: 'invalid-resref' | 'missing-required-texture' | 'missing-optional-texture';
+  code:
+    | 'invalid-resref'
+    | 'missing-required-texture'
+    | 'missing-optional-texture'
+    | 'decode-error';
   message: string;
 }
 
-export interface TextureResolution<TTexture> {
-  status: 'resolved' | 'missing' | 'invalid';
+interface TextureResolutionBase {
   requestedResref: string;
-  resolvedResref?: string;
-  source: TextureResolutionSource;
-  diagnostic?: TextureDiagnostic;
   cacheGeneration: number;
+}
+
+export interface ResolvedTextureResolution<TTexture> extends TextureResolutionBase {
+  status: 'resolved';
+  resolvedResref: string;
+  source: ResolvedTextureSource;
+  txiSource?: TextureTxiSource;
   aliasEvidence?: string;
-  texture?: TTexture;
+  texture: TTexture;
+  diagnostic?: never;
+}
+
+export interface MissingTextureResolution extends TextureResolutionBase {
+  status: 'missing';
+  source: 'none';
+  diagnostic: TextureDiagnostic & {
+    code: 'missing-required-texture' | 'missing-optional-texture';
+  };
+  resolvedResref?: never;
+  txiSource?: never;
+  aliasEvidence?: never;
+  texture?: never;
+}
+
+export interface InvalidTextureResolution extends TextureResolutionBase {
+  status: 'invalid';
+  source: 'none';
+  diagnostic: TextureDiagnostic & { code: 'invalid-resref' };
+  resolvedResref?: never;
+  txiSource?: never;
+  aliasEvidence?: never;
+  texture?: never;
+}
+
+export interface DecodeErrorTextureResolution extends TextureResolutionBase {
+  status: 'decode-error';
+  resolvedResref: string;
+  source: ResolvedTextureSource;
+  txiSource?: TextureTxiSource;
+  aliasEvidence?: string;
+  diagnostic: TextureDiagnostic & { code: 'decode-error' };
+  texture?: never;
+}
+
+export type TextureResolution<TTexture> =
+  | ResolvedTextureResolution<TTexture>
+  | MissingTextureResolution
+  | InvalidTextureResolution
+  | DecodeErrorTextureResolution;
+
+export interface TextureSourceArtifact<TTexture> {
+  texture: TTexture;
+  txiSource?: TextureTxiSource;
 }
 
 export interface TextureSourceProvider<TTexture> {
   load(
-    source: TextureResolutionSource,
+    source: ResolvedTextureSource,
     resref: string,
     activeModule?: string,
-  ): Promise<TTexture | undefined>;
+  ): Promise<TextureSourceArtifact<TTexture> | undefined>;
 }
 
 export interface TextureResolverOptions {
   aliases?: readonly ExplicitTextureAlias[];
   cacheGeneration?: () => number;
 }
+
+type ExactResolution<TTexture> =
+  | { status: 'resolved'; artifact: TextureSourceArtifact<TTexture>; source: ResolvedTextureSource }
+  | { status: 'decode-error'; source: ResolvedTextureSource; error: unknown };
+
+const TEXTURE_SEMANTICS = new Set<TextureSemantic>([
+  'diffuse', 'lightmap', 'normal', 'bump', 'environment',
+  'gui', 'font', 'particle', 'other',
+]);
+
+const RESOLVED_TEXTURE_SOURCES = new Set<ResolvedTextureSource>([
+  'override-tga', 'override-tpc', 'active-module', 'gui-pack', 'texture-pack', 'key-bif',
+]);
+
+const TEXTURE_TXI_SOURCES = new Set<TextureTxiSource>([
+  'override-txi', 'embedded-tpc', 'active-module-txi',
+  'gui-pack-txi', 'texture-pack-txi', 'key-bif-txi',
+]);
 
 export class TextureResolver<TTexture> {
   private readonly aliases = new Map<string, ExplicitTextureAlias>();
@@ -93,9 +172,7 @@ export class TextureResolver<TTexture> {
   }
 
   async resolve(request: TextureRequest): Promise<TextureResolution<TTexture>> {
-    if (!request || typeof request !== 'object') {
-      throw new TypeError('TextureResolver.resolve requires a texture request');
-    }
+    validateTextureRequest(request);
     const requestedResref = normalizeTextureResref(request.resref);
     const activeModule = normalizeOptionalResref(request.activeModule);
     const cacheGeneration = this.readCacheGeneration();
@@ -114,33 +191,25 @@ export class TextureResolver<TTexture> {
 
     const direct = await this.resolveExact(requestedResref, request.semantic, activeModule);
     if (direct) {
-      return {
-        status: 'resolved',
-        requestedResref,
-        resolvedResref: requestedResref,
-        source: direct.source,
-        cacheGeneration,
-        texture: direct.texture,
-      };
+      return this.toResolution(direct, request, requestedResref, requestedResref, cacheGeneration);
     }
 
     const alias = request.allowAlias ? this.aliases.get(requestedResref) : undefined;
     if (alias) {
       const aliased = await this.resolveExact(alias.resolvedResref, request.semantic, activeModule);
       if (aliased) {
-        return {
-          status: 'resolved',
+        return this.toResolution(
+          aliased,
+          request,
           requestedResref,
-          resolvedResref: alias.resolvedResref,
-          source: aliased.source,
+          alias.resolvedResref,
           cacheGeneration,
-          aliasEvidence: alias.evidence,
-          texture: aliased.texture,
-        };
+          alias.evidence,
+        );
       }
     }
 
-    const isOptional = isOptionalSemantic(request.semantic);
+    const isOptional = isOptionalTextureSemantic(request.semantic);
     return {
       status: 'missing',
       requestedResref,
@@ -155,12 +224,47 @@ export class TextureResolver<TTexture> {
     };
   }
 
+  private toResolution(
+    exact: ExactResolution<TTexture>,
+    request: TextureRequest,
+    requestedResref: string,
+    resolvedResref: string,
+    cacheGeneration: number,
+    aliasEvidence?: string,
+  ): ResolvedTextureResolution<TTexture> | DecodeErrorTextureResolution {
+    if (exact.status === 'decode-error') {
+      return {
+        status: 'decode-error',
+        requestedResref,
+        resolvedResref,
+        source: exact.source,
+        cacheGeneration,
+        ...(aliasEvidence ? { aliasEvidence } : {}),
+        diagnostic: {
+          code: 'decode-error',
+          message: `Failed to decode ${request.semantic} texture '${resolvedResref}' from ${exact.source}: ${formatError(exact.error)}`,
+        },
+      };
+    }
+
+    return {
+      status: 'resolved',
+      requestedResref,
+      resolvedResref,
+      source: exact.source,
+      cacheGeneration,
+      ...(exact.artifact.txiSource ? { txiSource: exact.artifact.txiSource } : {}),
+      ...(aliasEvidence ? { aliasEvidence } : {}),
+      texture: exact.artifact.texture,
+    };
+  }
+
   private async resolveExact(
     resref: string,
     semantic: TextureSemantic,
     activeModule?: string,
-  ): Promise<{ source: TextureResolutionSource; texture: TTexture } | undefined> {
-    const sources: TextureResolutionSource[] = ['override-tga', 'override-tpc'];
+  ): Promise<ExactResolution<TTexture> | undefined> {
+    const sources: ResolvedTextureSource[] = ['override-tga', 'override-tpc'];
     if (activeModule) {
       sources.push('active-module');
     }
@@ -170,9 +274,14 @@ export class TextureResolver<TTexture> {
     sources.push('texture-pack', 'key-bif');
 
     for (const source of sources) {
-      const texture = await this.provider.load(source, resref, activeModule);
-      if (texture !== undefined && texture !== null) {
-        return { source, texture };
+      try {
+        const artifact = await this.provider.load(source, resref, activeModule);
+        if (artifact !== undefined && artifact !== null) {
+          validateTextureSourceArtifact(artifact, source, resref);
+          return { status: 'resolved', source, artifact };
+        }
+      } catch (error) {
+        return { status: 'decode-error', source, error };
       }
     }
     return undefined;
@@ -210,23 +319,26 @@ export class TextureLifetimeRegistry<TTexture extends { dispose(): void }> {
     generation: number = this.currentGeneration,
   ): void {
     const normalizedResref = normalizeTextureResref(resref);
-    if (!isTextureResrefUsable(normalizedResref)) {
-      throw new TypeError(`Cannot cache invalid texture resref '${normalizedResref || '<empty>'}'`);
+    validateLifetimeEntry(normalizedResref, texture, ownership, generation, this.currentGeneration);
+
+    const key = lifetimeKey(normalizedResref, ownership, generation);
+    const replaced = this.entries.get(key);
+    this.entries.set(key, { texture, ownership, generation });
+    if (replaced && replaced.texture !== texture && !this.isTextureRetained(replaced.texture)) {
+      replaced.texture.dispose();
     }
-    if (!texture || typeof texture.dispose !== 'function') {
-      throw new TypeError(`Texture '${normalizedResref}' is not disposable`);
-    }
-    if (!['module', 'shared-gui', 'shared-global'].includes(ownership)) {
-      throw new TypeError(`Invalid texture ownership '${ownership}'`);
-    }
-    if (generation !== this.currentGeneration) {
-      throw new RangeError(`Texture generation ${generation} is not active`);
-    }
-    this.entries.set(normalizedResref, { texture, ownership, generation });
   }
 
-  get(resref: string): TTexture | undefined {
-    return this.entries.get(normalizeTextureResref(resref))?.texture;
+  get(
+    resref: string,
+    ownership: TextureOwnership,
+    generation: number = this.currentGeneration,
+  ): TTexture | undefined {
+    const normalizedResref = normalizeTextureResref(resref);
+    if (!isTextureResrefUsable(normalizedResref) || !isTextureOwnership(ownership)) {
+      return undefined;
+    }
+    return this.entries.get(lifetimeKey(normalizedResref, ownership, generation))?.texture;
   }
 
   disposeModuleGeneration(generation: number): { disposed: number; nextGeneration: number } {
@@ -235,19 +347,16 @@ export class TextureLifetimeRegistry<TTexture extends { dispose(): void }> {
     }
 
     const removedTextures = new Set<TTexture>();
-    for (const [resref, entry] of this.entries) {
+    for (const [key, entry] of this.entries) {
       if (entry.ownership === 'module' && entry.generation === generation) {
         removedTextures.add(entry.texture);
-        this.entries.delete(resref);
+        this.entries.delete(key);
       }
     }
 
-    const retainedTextures = new Set(
-      Array.from(this.entries.values(), ({ texture }) => texture),
-    );
     let disposed = 0;
     for (const texture of removedTextures) {
-      if (!retainedTextures.has(texture)) {
+      if (!this.isTextureRetained(texture)) {
         texture.dispose();
         disposed += 1;
       }
@@ -256,12 +365,201 @@ export class TextureLifetimeRegistry<TTexture extends { dispose(): void }> {
     this.generation += 1;
     return { disposed, nextGeneration: this.generation };
   }
+
+  private isTextureRetained(texture: TTexture): boolean {
+    for (const entry of this.entries.values()) {
+      if (entry.texture === texture) {
+        return true;
+      }
+    }
+    return false;
+  }
 }
 
 const INVALID_RESREFS = new Set(['', '0', '****']);
 
 export function normalizeTextureResref(resref: unknown): string {
-  return typeof resref === 'string' ? resref.trim().toLocaleLowerCase() : '';
+  return typeof resref === 'string' ? resref.trim().toLowerCase() : '';
+}
+
+export function isTextureResrefUsable(resref: unknown): resref is string {
+  return typeof resref === 'string' && !INVALID_RESREFS.has(normalizeTextureResref(resref));
+}
+
+export function isOptionalTextureSemantic(semantic: TextureSemantic): boolean {
+  return semantic === 'lightmap' || semantic === 'normal' || semantic === 'bump' || semantic === 'environment';
+}
+
+export function validateTextureResolution<TTexture>(
+  resolution: TextureResolution<TTexture>,
+): TextureResolution<TTexture> {
+  if (!resolution || typeof resolution !== 'object') {
+    throw new TypeError('Texture resolution must be an object');
+  }
+  if (!Number.isSafeInteger(resolution.cacheGeneration) || resolution.cacheGeneration < 1) {
+    throw new RangeError('Texture resolution cache generation must be a positive safe integer');
+  }
+  if (resolution.requestedResref !== normalizeTextureResref(resolution.requestedResref)) {
+    throw new TypeError('Texture resolution requested resref must be normalized');
+  }
+
+  switch (resolution.status) {
+    case 'resolved':
+      validateConcreteResolutionIdentity(resolution);
+      if (resolution.texture === undefined || resolution.texture === null) {
+        throw new TypeError('Resolved texture resolution requires a texture');
+      }
+      if (resolution.diagnostic !== undefined) {
+        throw new TypeError('Resolved texture resolution cannot contain a diagnostic');
+      }
+      break;
+    case 'decode-error':
+      validateConcreteResolutionIdentity(resolution);
+      validateDiagnostic(resolution.diagnostic, ['decode-error']);
+      if (resolution.texture !== undefined) {
+        throw new TypeError('Decode-error texture resolution cannot contain a texture');
+      }
+      break;
+    case 'missing':
+      if (!isTextureResrefUsable(resolution.requestedResref)) {
+        throw new TypeError('Missing texture resolution requires a usable requested resref');
+      }
+      validateEmptyResolutionFields(resolution);
+      validateDiagnostic(resolution.diagnostic, [
+        'missing-required-texture', 'missing-optional-texture',
+      ]);
+      break;
+    case 'invalid':
+      if (isTextureResrefUsable(resolution.requestedResref)) {
+        throw new TypeError('Invalid texture resolution requires an unusable requested resref');
+      }
+      validateEmptyResolutionFields(resolution);
+      validateDiagnostic(resolution.diagnostic, ['invalid-resref']);
+      break;
+    default:
+      throw new TypeError(`Unknown texture resolution status '${String((resolution as { status?: unknown }).status)}'`);
+  }
+  return resolution;
+}
+
+export function validateTextureRequest(request: TextureRequest): TextureRequest {
+  if (!request || typeof request !== 'object') {
+    throw new TypeError('Texture request must be an object');
+  }
+  if (typeof request.resref !== 'string') {
+    throw new TypeError('Texture request resref must be a string');
+  }
+  if (!TEXTURE_SEMANTICS.has(request.semantic)) {
+    throw new TypeError(`Unknown texture semantic '${String(request.semantic)}'`);
+  }
+  if (typeof request.allowAlias !== 'boolean') {
+    throw new TypeError('Texture request allowAlias must be boolean');
+  }
+  if (request.activeModule !== undefined && typeof request.activeModule !== 'string') {
+    throw new TypeError('Texture request activeModule must be a string when provided');
+  }
+  return request;
+}
+
+function validateTextureSourceArtifact<TTexture>(
+  artifact: TextureSourceArtifact<TTexture>,
+  source: ResolvedTextureSource,
+  resref: string,
+): void {
+  if (!artifact || typeof artifact !== 'object' || artifact.texture === undefined || artifact.texture === null) {
+    throw new TypeError(`Texture provider returned an invalid artifact for '${resref}' from ${source}`);
+  }
+  if (artifact.txiSource !== undefined && !TEXTURE_TXI_SOURCES.has(artifact.txiSource)) {
+    throw new TypeError(`Texture provider returned an invalid TXI source for '${resref}' from ${source}`);
+  }
+}
+
+function validateConcreteResolutionIdentity(
+  resolution: ResolvedTextureResolution<unknown> | DecodeErrorTextureResolution,
+): void {
+  if (!isTextureResrefUsable(resolution.requestedResref)) {
+    throw new TypeError(`${resolution.status} texture resolution requires a usable requested resref`);
+  }
+  if (
+    !isTextureResrefUsable(resolution.resolvedResref) ||
+    resolution.resolvedResref !== normalizeTextureResref(resolution.resolvedResref)
+  ) {
+    throw new TypeError(`${resolution.status} texture resolution requires a normalized resolved resref`);
+  }
+  if (!RESOLVED_TEXTURE_SOURCES.has(resolution.source)) {
+    throw new TypeError(`${resolution.status} texture resolution requires a concrete source`);
+  }
+  if (resolution.txiSource !== undefined && !TEXTURE_TXI_SOURCES.has(resolution.txiSource)) {
+    throw new TypeError(`${resolution.status} texture resolution has an invalid TXI source`);
+  }
+
+  const isAlias = resolution.resolvedResref !== resolution.requestedResref;
+  const hasAliasEvidence = typeof resolution.aliasEvidence === 'string' && !!resolution.aliasEvidence.trim();
+  if (isAlias !== hasAliasEvidence) {
+    throw new TypeError('Texture alias identity and evidence must agree');
+  }
+}
+
+function validateEmptyResolutionFields(
+  resolution: MissingTextureResolution | InvalidTextureResolution,
+): void {
+  if (resolution.source !== 'none') {
+    throw new TypeError(`${resolution.status} texture resolution cannot name a concrete source`);
+  }
+  if (
+    resolution.resolvedResref !== undefined ||
+    resolution.txiSource !== undefined ||
+    resolution.aliasEvidence !== undefined ||
+    resolution.texture !== undefined
+  ) {
+    throw new TypeError(`${resolution.status} texture resolution contains incompatible fields`);
+  }
+}
+
+function validateDiagnostic(
+  diagnostic: TextureDiagnostic,
+  allowedCodes: readonly TextureDiagnostic['code'][],
+): void {
+  if (
+    !diagnostic ||
+    typeof diagnostic !== 'object' ||
+    !allowedCodes.includes(diagnostic.code) ||
+    typeof diagnostic.message !== 'string' ||
+    !diagnostic.message.trim()
+  ) {
+    throw new TypeError(`Texture resolution requires diagnostic code ${allowedCodes.join(' or ')}`);
+  }
+}
+
+function validateLifetimeEntry<TTexture extends { dispose(): void }>(
+  normalizedResref: string,
+  texture: TTexture,
+  ownership: TextureOwnership,
+  generation: number,
+  currentGeneration: number,
+): void {
+  if (!isTextureResrefUsable(normalizedResref)) {
+    throw new TypeError(`Cannot cache invalid texture resref '${normalizedResref || '<empty>'}'`);
+  }
+  if (!texture || typeof texture.dispose !== 'function') {
+    throw new TypeError(`Texture '${normalizedResref}' is not disposable`);
+  }
+  if (!isTextureOwnership(ownership)) {
+    throw new TypeError(`Invalid texture ownership '${ownership}'`);
+  }
+  if (generation !== currentGeneration) {
+    throw new RangeError(`Texture generation ${generation} is not active`);
+  }
+}
+
+function lifetimeKey(resref: string, ownership: TextureOwnership, generation: number): string {
+  return ownership === 'module'
+    ? `${ownership}:${generation}:${resref}`
+    : `${ownership}:${resref}`;
+}
+
+function isTextureOwnership(ownership: unknown): ownership is TextureOwnership {
+  return ownership === 'module' || ownership === 'shared-gui' || ownership === 'shared-global';
 }
 
 function normalizeOptionalResref(resref: unknown): string | undefined {
@@ -269,10 +567,9 @@ function normalizeOptionalResref(resref: unknown): string | undefined {
   return isTextureResrefUsable(normalized) ? normalized : undefined;
 }
 
-export function isTextureResrefUsable(resref: string): boolean {
-  return !INVALID_RESREFS.has(resref);
-}
-
-function isOptionalSemantic(semantic: TextureSemantic): boolean {
-  return semantic === 'lightmap' || semantic === 'normal' || semantic === 'bump' || semantic === 'environment';
+function formatError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  return typeof error === 'string' && error.trim() ? error.trim() : 'unknown decoder error';
 }

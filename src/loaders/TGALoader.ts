@@ -5,6 +5,7 @@ import { TXI } from "@/resource/TXI";
 import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 import type { TextureLoader } from "@/loaders/TextureLoader";
 import { GameFileSystem } from "@/utility/GameFileSystem";
+import { isTextureResrefUsable, normalizeTextureResref } from "@/loaders/TextureResolution";
 
 /**
  * TGALoader class.
@@ -26,6 +27,10 @@ export class TGALoader {
 	static TextureLoader: typeof TextureLoader;
 
 	async fetch( resRef: string ): Promise<OdysseyTexture> {
+		resRef = normalizeTextureResref(resRef);
+		if (!isTextureResrefUsable(resRef)) {
+			return undefined;
+		}
 		const texture = new OdysseyTexture();
 		
 		try{
@@ -63,6 +68,10 @@ export class TGALoader {
 	}
 
 	async fetchOverride ( name: string ): Promise<OdysseyTexture> {
+		name = normalizeTextureResref(name);
+		if (!isTextureResrefUsable(name)) {
+			return undefined;
+		}
 		const dir = path.join('Override');
 		const texture = new OdysseyTexture();
 	
@@ -94,6 +103,9 @@ export class TGALoader {
 	}
 	
 	async fetchLocal( resRef: string ) {
+		if (!isTextureResrefUsable(normalizeTextureResref(resRef))) {
+			return undefined;
+		}
 		const texture = new OdysseyTexture();
 	
 		try{

@@ -1,12 +1,17 @@
-import { describe, expect, jest, test } from '@jest/globals';
+import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import {
   ExplicitTextureAlias,
+  TextureResolution,
   TextureResolutionSource,
   TextureResolver,
+  TextureSourceArtifact,
   TextureSourceProvider,
 } from '@/loaders/TextureResolution';
 import { TPCObject } from '@/resource/TPCObject';
 import { TextureLoader } from '@/loaders/TextureLoader';
+import { ResourceLoader } from '@/loaders/ResourceLoader';
+import { GameFileSystem } from '@/utility/GameFileSystem';
+import { ERFManager } from '@/managers/ERFManager';
 import { createMaterialAuditRecord } from '../../tools/material-audit';
 
 type FakeTexture = { readonly name: string };
@@ -22,9 +27,10 @@ class RecordingTextureProvider implements TextureSourceProvider<FakeTexture> {
     source: TextureResolutionSource,
     resref: string,
     activeModule?: string,
-  ): Promise<FakeTexture | undefined> {
+  ): Promise<TextureSourceArtifact<FakeTexture> | undefined> {
     this.attempts.push({ source, resref, activeModule });
-    return this.available.get(`${source}:${resref}`);
+    const texture = this.available.get(`${source}:${resref}`);
+    return texture ? { texture } : undefined;
   }
 }
 
@@ -40,6 +46,10 @@ function createUncompressedTpc(): TPCObject {
   file.set([10, 20, 30, 255], 128);
   return new TPCObject({ file, filename: 'fixture', pack: 2 });
 }
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 describe('TextureResolver', () => {
   test('stops at the active module before GUI, texture pack, and KEY/BIF sources', async () => {
@@ -147,6 +157,59 @@ describe('TextureResolver', () => {
     expect(arbitrary.status).toBe('missing');
     expect(provider.attempts).not.toContainEqual(expect.objectContaining({ resref: 'unknownc' }));
   });
+
+  test('returns an attributable decode-error instead of falling through precedence', async () => {
+    const provider: TextureSourceProvider<FakeTexture> = {
+      load: jest.fn(async (source) => {
+        if (source === 'override-tga') {
+          throw new Error('invalid TGA header');
+        }
+        return { texture: { name: 'must-not-fall-through' } };
+      }),
+    };
+
+    const result = await new TextureResolver(provider).resolve({
+      resref: 'panel',
+      semantic: 'diffuse',
+      allowAlias: false,
+    });
+
+    expect(result).toEqual({
+      status: 'decode-error',
+      requestedResref: 'panel',
+      resolvedResref: 'panel',
+      source: 'override-tga',
+      cacheGeneration: 1,
+      diagnostic: {
+        code: 'decode-error',
+        message: "Failed to decode diffuse texture 'panel' from override-tga: invalid TGA header",
+      },
+    });
+    expect(provider.load).toHaveBeenCalledTimes(1);
+  });
+
+  test('preserves Override TXI sidecar provenance on the winning texture source', async () => {
+    const expected = { name: 'override-panel' };
+    const provider: TextureSourceProvider<FakeTexture> = {
+      load: jest.fn(async (source) => source === 'override-tga'
+        ? { texture: expected, txiSource: 'override-txi' as const }
+        : { texture: { name: 'lower-precedence-panel' } }),
+    };
+
+    const result = await new TextureResolver(provider).resolve({
+      resref: 'panel',
+      semantic: 'diffuse',
+      allowAlias: false,
+    });
+
+    expect(result).toMatchObject({
+      status: 'resolved',
+      source: 'override-tga',
+      txiSource: 'override-txi',
+      texture: expected,
+    });
+    expect(provider.load).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('TPC texture cloning', () => {
@@ -176,6 +239,84 @@ describe('legacy texture entry point', () => {
     expect(tpcFetch).not.toHaveBeenCalled();
     tgaFetch.mockRestore();
     tpcFetch.mockRestore();
+  });
+
+  test.each(['', '0', '****'])('rejects lightmap sentinel %j before either decoder performs I/O', async (resref) => {
+    const tgaFetch = jest.spyOn(TextureLoader.tgaLoader, 'fetch');
+    const tpcFetch = jest.spyOn(TextureLoader.tpcLoader, 'fetch');
+
+    await expect(TextureLoader.LoadLightmap(resref)).resolves.toBeUndefined();
+
+    expect(tgaFetch).not.toHaveBeenCalled();
+    expect(tpcFetch).not.toHaveBeenCalled();
+    tgaFetch.mockRestore();
+    tpcFetch.mockRestore();
+  });
+
+  test.each(['', '0', '****'])('rejects local sentinel %j before filesystem or decoder I/O', async (resref) => {
+    const exists = jest.spyOn(GameFileSystem, 'exists');
+    const tgaFetchLocal = jest.spyOn(TextureLoader.tgaLoader, 'fetchLocal');
+
+    await expect(TextureLoader.LoadLocal(resref)).resolves.toBeUndefined();
+
+    expect(exists).not.toHaveBeenCalled();
+    expect(tgaFetchLocal).not.toHaveBeenCalled();
+    exists.mockRestore();
+    tgaFetchLocal.mockRestore();
+  });
+});
+
+describe('direct texture resource entry points', () => {
+  test('rejects a TGA sentinel before resource lookup', async () => {
+    const loadResource = jest.spyOn(ResourceLoader, 'loadResource');
+
+    await expect(TextureLoader.tgaLoader.fetch('****')).resolves.toBeUndefined();
+
+    expect(loadResource).not.toHaveBeenCalled();
+  });
+
+  test('rejects an Override TGA sentinel before filesystem I/O', async () => {
+    const readFile = jest.spyOn(GameFileSystem, 'readFile');
+
+    await expect(TextureLoader.tgaLoader.fetchOverride('****')).resolves.toBeUndefined();
+
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  test('rejects a local TGA sentinel before filesystem I/O', async () => {
+    const readFile = jest.spyOn(GameFileSystem, 'readFile');
+
+    await expect(TextureLoader.tgaLoader.fetchLocal('****')).resolves.toBeUndefined();
+
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  test('rejects a TPC sentinel before archive lookup', async () => {
+    const getArchive = jest.spyOn(ERFManager.ERFs, 'get');
+
+    await expect(TextureLoader.tpcLoader.fetch('****')).resolves.toBeUndefined();
+
+    expect(getArchive).not.toHaveBeenCalled();
+  });
+
+  test('rejects an Override TPC sentinel before filesystem I/O', async () => {
+    const readFile = jest.spyOn(GameFileSystem, 'readFile');
+
+    await expect(TextureLoader.tpcLoader.fetchOverride('****')).resolves.toBeUndefined();
+
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  test('rejects a generic resource sentinel before source I/O', async () => {
+    const searchOverride = jest.spyOn(ResourceLoader, 'searchOverride');
+    const searchKeyTable = jest.spyOn(ResourceLoader, 'searchKeyTable');
+    const searchModuleArchives = jest.spyOn(ResourceLoader, 'searchModuleArchives');
+
+    await expect(ResourceLoader.loadResource(1, '****')).rejects.toThrow('Invalid resRef ****');
+
+    expect(searchOverride).not.toHaveBeenCalled();
+    expect(searchKeyTable).not.toHaveBeenCalled();
+    expect(searchModuleArchives).not.toHaveBeenCalled();
   });
 });
 
@@ -214,5 +355,74 @@ describe('material audit records', () => {
       sha256: 'a'.repeat(64),
     });
     expect(JSON.stringify(record)).not.toContain('forbiddenBytes');
+  });
+
+  test('serializes Override TXI sidecar provenance', () => {
+    const record = createMaterialAuditRecord({
+      request: {
+        resref: 'Panel',
+        semantic: 'diffuse',
+        allowAlias: false,
+      },
+      resolution: {
+        status: 'resolved',
+        requestedResref: 'panel',
+        resolvedResref: 'panel',
+        source: 'override-tga',
+        txiSource: 'override-txi',
+        cacheGeneration: 2,
+        texture: { name: 'panel' },
+      },
+    });
+
+    expect(record).toEqual({
+      requestedResref: 'panel',
+      resolvedResref: 'panel',
+      semantic: 'diffuse',
+      status: 'resolved',
+      source: 'override-tga',
+      txiSource: 'override-txi',
+      cacheGeneration: 2,
+    });
+  });
+
+  test.each([
+    {
+      name: 'request and result resrefs differ',
+      request: { resref: 'panel', semantic: 'gui' as const, allowAlias: false },
+      resolution: {
+        status: 'missing', requestedResref: 'other', source: 'none', cacheGeneration: 1,
+        diagnostic: { code: 'missing-required-texture' as const, message: 'missing' },
+      },
+    },
+    {
+      name: 'resolved result has no texture',
+      request: { resref: 'panel', semantic: 'gui' as const, allowAlias: false },
+      resolution: {
+        status: 'resolved', requestedResref: 'panel', resolvedResref: 'panel',
+        source: 'gui-pack', cacheGeneration: 1,
+      },
+    },
+    {
+      name: 'missing result names a concrete source',
+      request: { resref: 'panel', semantic: 'gui' as const, allowAlias: false },
+      resolution: {
+        status: 'missing', requestedResref: 'panel', source: 'gui-pack', cacheGeneration: 1,
+        diagnostic: { code: 'missing-required-texture' as const, message: 'missing' },
+      },
+    },
+    {
+      name: 'invalid result contains a usable resref',
+      request: { resref: 'panel', semantic: 'gui' as const, allowAlias: false },
+      resolution: {
+        status: 'invalid', requestedResref: 'panel', source: 'none', cacheGeneration: 1,
+        diagnostic: { code: 'invalid-resref' as const, message: 'invalid' },
+      },
+    },
+  ])('rejects a contradictory audit input when $name', ({ request, resolution }) => {
+    expect(() => createMaterialAuditRecord({
+      request,
+      resolution: resolution as unknown as TextureResolution<FakeTexture>,
+    })).toThrow();
   });
 });
