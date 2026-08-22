@@ -50,7 +50,20 @@ native `XRSystem` even with no headset and no OpenXR runtime.
 
 Confirmed end to end: EULA, engine boot, `immersive-vr` supported, Enter VR
 enabled, session entry with two `meta-quest-touch-plus` sources (7 buttons,
-4 axes, grip, haptics), 90 XR frames delivered, clean exit.
+4 axes, grip, haptics), 90 XR frames delivered, clean exit. `in-game.js` goes
+further — loads a save, opens `InGameOverlay` to reach INGAME mode, enters VR,
+and drives recenter, the action wheel, and stick locomotion against a live
+module.
+
+Two traps worth knowing when reading its evidence. Engine mode follows the
+current menu, so a scripted load that clears menus without reopening
+`InGameOverlay` leaves the engine in GUI mode with gameplay input suppressed —
+locomotion and recenter then silently do nothing and the run looks flaky rather
+than broken. And the harness must never `JSON.stringify` a logged argument:
+stringify invokes `toJSON()`, THREE's `Texture.toJSON` warns on any texture it
+cannot encode, and the engine logs texture-bearing objects constantly — that
+alone produced ~30k warnings in one run, 98% of all console output, inside the
+loop being measured. The console capture walks plain containers by hand instead.
 
 **What the emulator does and does not settle.** It can exercise session
 lifecycle, frame ownership, input routing, the action wheel, world prompts,
@@ -255,6 +268,26 @@ entities result: a phantom human the camera follows, and the real T3 the UI repo
 - **Done when:** the prologue player is T3-M4, one entity, camera and UI agree.
 - **Files:** `src/module/ModuleArea.ts` (~line 1600), `src/managers/PartyManager.ts`,
   the `DoSpecialSpawnInT3M4` path.
+
+### 1.3b — `Invalid Item Property Sub Type: undefined` on save load ☐ new evidence
+The emulator run supplied the log that 1.2/1.4 were waiting on: loading a
+Peragus save emits `Invalid Item Property Sub Type: undefined` **36 times**
+(`src/engine/ItemProperty.ts:65`). `this.subType` is `undefined`, so
+`subTypeDef.rows[undefined]` misses — the 2DA resolves fine, the template's
+subtype field does not.
+
+Two latent faults sit in the same constructor and are worth fixing alongside it,
+since both turn a data gap into a harder failure:
+- the `row` miss is logged and then used anyway — `SWSubTypeBase.From2DA(row)`
+  runs on `undefined` rather than bailing out;
+- the cost-table `else` branch dereferences `this.costTableLookupDefinition.name`
+  on the path where that value is falsy and `costTable <= -1`, which throws
+  instead of reporting.
+
+- **Possible relation to 1.4:** item properties failing to resolve is a
+  plausible cause of equipment behaving oddly. Worth checking before treating
+  1.4 as independent GUI logic.
+- **Files:** `src/engine/ItemProperty.ts`.
 
 ### 1.4 — Inventory slots do not equip
 Clicking an equipment slot does not equip. Unknown whether this shares a cause with
@@ -462,6 +495,17 @@ Every button reachable in flatscreen needs a VR route.
   canonical eye height alone. A pose with no horizontal forward (looking straight
   up) is ignored rather than recentred on a degenerate reading.
   `src/tests/vr-recenter.test.ts` asserts the invariants — not the feel.
+
+  **Verified under the emulator (2026-08-22):** with the emulated head yawed
+  0.9 rad off-axis in a loaded `101PER` save, pressing the dominant thumbstick
+  moved `yawOffset` from `0` to `-0.9000000060058315` — an exact cancellation of
+  the physical yaw, reproduced identically across two runs. Locomotion in the
+  same runs moved the avatar 7.85 m, the action wheel opened and loaded its real
+  `lbl_icn_*` icons (texture *resize* notices, no load failures), and the whole
+  session's console came to 397 lines with the startup trace at 8 — one frame. Comfort still needs the headset; see A6-A8 and A12 in the test
+  plan. **A12 matters:** Recenter shares the dominant thumbstick with Turn, and
+  implementing it made a previously inert stray click able to cause a comfort
+  event.
 - **Found, not implemented:** `Pause`, `PartyCommand`, and `ToggleWalkRun` are
   bound to physical buttons in `XRInputRouter.ts` but never consumed anywhere.
   `Pause`/`PartyCommand` have no defined intent to build against, and

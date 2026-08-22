@@ -82,23 +82,48 @@ function buildBootstrap(deviceName) {
     // CDP reports object arguments as "Object" unless each is fetched by id.
     // Serialising at the call site keeps warning payloads readable, which is
     // the whole point of the engine's diagnostics.
+    //
+    // This must NOT use JSON.stringify. stringify invokes toJSON() on every
+    // nested value, and THREE's Texture.toJSON warns
+    // 'THREE.Texture: Unable to serialize Texture.' for any texture whose image
+    // it cannot encode. The engine logs objects that reach THREE materials all
+    // the time, so stringifying them made the harness itself emit ~30k warnings
+    // in a single run — 98% of all console output, in the middle of the exact
+    // loop we are measuring. Walk plain containers by hand instead and render
+    // anything else by constructor name, so nothing is ever asked to serialise.
+    function describe(value, depth, seen) {
+      if (value === null) return 'null';
+      var type = typeof value;
+      if (type === 'string') return depth === 0 ? value : JSON.stringify(value);
+      if (type === 'number' || type === 'boolean' || type === 'undefined') return String(value);
+      if (type === 'bigint') return value.toString() + 'n';
+      if (type === 'function') return '[fn ' + (value.name || 'anonymous') + ']';
+      if (type === 'symbol') return value.toString();
+      if (value instanceof Error) return value.stack || String(value);
+      if (seen.has(value)) return '[circular]';
+      if (depth > 4) return '[deep]';
+      seen.add(value);
+      if (Array.isArray(value)) {
+        var items = value.slice(0, 20).map(function (v) { return describe(v, depth + 1, seen); });
+        if (value.length > 20) items.push('… +' + (value.length - 20));
+        return '[' + items.join(', ') + ']';
+      }
+      var ctor = value.constructor && value.constructor.name;
+      // Only walk plain objects. A class instance is named, not expanded —
+      // expanding engine/THREE objects is what caused the flood.
+      if (ctor && ctor !== 'Object') return '[' + ctor + ']';
+      var keys = Object.keys(value).slice(0, 30);
+      return '{' + keys.map(function (k) {
+        return k + ': ' + describe(value[k], depth + 1, seen);
+      }).join(', ') + (Object.keys(value).length > 30 ? ', …' : '') + '}';
+    }
+
     ['log', 'info', 'warn', 'error'].forEach(function (level) {
       var original = console[level].bind(console);
       console[level] = function () {
         try {
           var parts = Array.prototype.map.call(arguments, function (arg) {
-            if (arg instanceof Error) return arg.stack || String(arg);
-            if (typeof arg === 'object' && arg !== null) {
-              var seen = new WeakSet();
-              return JSON.stringify(arg, function (k, v) {
-                if (typeof v === 'object' && v !== null) {
-                  if (seen.has(v)) return '[circular]';
-                  seen.add(v);
-                }
-                return v;
-              });
-            }
-            return String(arg);
+            return describe(arg, 0, new WeakSet());
           });
           log.push({ level: level, text: parts.join(' ') });
           if (log.length > 5000) log.shift();
