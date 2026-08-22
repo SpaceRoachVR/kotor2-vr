@@ -286,16 +286,19 @@ the genuinely-absent set.
 - **Still open:** confirm on screen that no white boxes remain, and decide
   whether any of the 14 absent names need a substitute.
 
-### 1.11 — Ebon Hawk module and save sidecar 404s ☐ new evidence (2026-08-22)
-The same harvest surfaced three read failures that are not textures:
-- `modules/001EBO.mod` — ranged read returned 404 rather than 206, so the Ebon
-  Hawk module file is not being served at all;
-- `Saves/000001 - Game0/pifo.ifo` — absent from the save;
-- `swkotor2.ini` — absent; the engine falls back, long-standing.
+### 1.11 — Console 404s that are probes, not faults ✅ explained (2026-08-22)
+The harvest surfaced three read failures that are **not** bugs, recorded here so
+the next reader does not chase them:
+- `modules/001EBO.mod` — the install ships `001EBO.rim`, `001EBO_s.rim` and
+  `001EBO_dlg.erf`; vanilla TSL has no `.mod` for this module. The engine probes
+  `.mod` first and falls back to `.rim`, and the module demonstrably loads.
+- `Saves/000001 - Game0/pifo.ifo` — an optional save sidecar.
+- `swkotor2.ini` — absent; the engine falls back. Long-standing.
 
-The first is the interesting one: a missing module read is a progression risk,
-not cosmetic. Worth establishing whether `001EBO.mod` exists in the install and
-whether the asset service is serving `.mod` paths correctly.
+They are logged at error level despite being expected, which is why they read as
+faults. Demoting these specific probes to a debug-level message would make the
+console meaningfully easier to trust; not done, since it touches the shared
+`GameFileSystem` error path.
 
 ### 1.3 — Player is an appearance-less human instead of T3-M4
 `ModuleArea.loadPlayer()` finds `PartyManager.Player` unset and invents a placeholder
