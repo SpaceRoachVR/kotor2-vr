@@ -139,6 +139,19 @@ describe('XRInputRouter', () => {
     expect(actions.find((action) => action.action === SemanticXRAction.Turn)?.hand).toBe('left');
   });
 
+  test('rebuilds dominant-hand routing when the persisted preference changes', () => {
+    const router = new XRInputRouter();
+    router.setDominantHand('left');
+
+    const actions = router.route(
+      [questController('left'), questController('right')],
+      new Set(['locomotion'])
+    );
+
+    expect(actions.find((action) => action.action === SemanticXRAction.Move)?.hand).toBe('right');
+    expect(actions.find((action) => action.action === SemanticXRAction.Turn)?.hand).toBe('left');
+  });
+
   test('uses the first supported WebXR interaction profile', () => {
     const router = new XRInputRouter();
 

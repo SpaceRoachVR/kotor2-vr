@@ -12,6 +12,17 @@ const createRenderer = () => ({
 });
 
 describe('PerfSampler XR cadence integration', () => {
+  test('does not manufacture a runtime refresh rate when WebXR leaves it unreported', () => {
+    const sampler = new PerfSampler(() => 0);
+
+    expect(sampler.runtimeRates).toEqual({
+      runtimeReportedHz: null,
+      runtimeSupportedHz: [],
+      requestedHz: null,
+      observedCallbackHz: null,
+    });
+  });
+
   test('defaults rollover to a complete one-minute walking evidence window', () => {
     let now = 1000;
     const sampler = new PerfSampler(() => now);

@@ -171,6 +171,10 @@ contextBridge.exposeInMainWorld(
     launchProfile: (profile: any) => {
       ipcRenderer.send('launch_profile', profile);
     },
+    inspectXRRuntime: (request: {
+      browser: 'chrome' | 'edge';
+      expectedRuntime: 'steamvr' | 'vdxr' | 'unknown';
+    }) => ipcRenderer.invoke('xr-runtime-preflight', request),
     openExternal: (src: string, options: any) => {
       shell.openExternal(src, options);
     },

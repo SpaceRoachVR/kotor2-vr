@@ -43,4 +43,19 @@ describe('XRGamepadReader', () => {
       source({ gamepad: undefined }),
     ])).toEqual([]);
   });
+
+  test('captures actual topology metadata without reading live button values', () => {
+    const [capability] = XRGamepadReader.readCapabilities([source()]);
+
+    expect(capability).toEqual({
+      hand: 'left',
+      profiles: ['oculus-touch-v3'],
+      targetRayMode: 'tracked-pointer',
+      gamepadMapping: 'xr-standard',
+      buttonCount: 2,
+      axisCount: 4,
+      hasGripSpace: true,
+      haptics: 'none',
+    });
+  });
 });

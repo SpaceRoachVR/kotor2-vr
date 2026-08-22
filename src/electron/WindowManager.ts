@@ -4,11 +4,13 @@ import { LauncherWindow } from "./LauncherWindow";
 import * as path from "path";
 //exec & execFile are used for launching the original games from the launcher
 import { execFile, exec } from "child_process";
+import { WindowsXRRuntimePreflight, XRRuntimePreflightRequest } from "./XRRuntimePreflight";
 
 export class WindowManager {
 
   static launcherWindow: LauncherWindow;
   static windows: ApplicationWindow[] = [];
+  private static readonly xrRuntimePreflight = new WindowsXRRuntimePreflight();
 
   static createLauncherWindow(){
     if(!WindowManager.launcherWindow){
@@ -54,6 +56,9 @@ export class WindowManager {
   }
 
   static initIPC(ipcMain: Electron.IpcMain) {
+    ipcMain.handle('xr-runtime-preflight', (_event, request: XRRuntimePreflightRequest) =>
+      WindowManager.xrRuntimePreflight.inspect(request)
+    );
     ipcMain.on('config-changed', (event, data) => {
       for(let i = 0, len = WindowManager.windows.length; i < len; i++){
         WindowManager.windows[i].send('config-changed', data);

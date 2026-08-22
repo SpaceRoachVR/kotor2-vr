@@ -6,8 +6,7 @@ import {
   SUSTAINED_VR_MINIMUM_FPS,
   Sustained50GateVerdict,
 } from "./Sustained50Gate";
-
-const DEFAULT_XR_RUNTIME_HZ = 72;
+import { EMPTY_XR_RUNTIME_RATES, XRRuntimeRates } from './compatibility/XRRuntimeContracts';
 
 /**
  * Frametime and render-load sampler for the Phase 0.1 stereo perf spike.
@@ -116,8 +115,20 @@ export class PerfSampler {
   /** User-approved continuation floor: sustained 50 FPS minimum. */
   targetHz = SUSTAINED_VR_MINIMUM_FPS;
 
-  /** Actual refresh requested by the active XR runtime, used for cadence auditing. */
-  xrRuntimeHz = DEFAULT_XR_RUNTIME_HZ;
+  /** Runtime claims remain distinct from the observed callback cadence. */
+  runtimeRates: XRRuntimeRates = EMPTY_XR_RUNTIME_RATES;
+
+  /** Cadence auditing needs a finite hypothesis even when the runtime omits frameRate. */
+  get xrRuntimeHz(): number {
+    return this.runtimeRates.runtimeReportedHz ?? this.targetHz;
+  }
+
+  set xrRuntimeHz(value: number) {
+    this.runtimeRates = {
+      ...this.runtimeRates,
+      runtimeReportedHz: Number.isFinite(value) && value > 0 ? value : null,
+    };
+  }
 
   /** Emit a report to the console every N seconds. 0 disables auto-reporting. */
   autoReportSec = 60;
@@ -140,6 +151,9 @@ export class PerfSampler {
   }> = [];
   private lastWorldSample = Number.NEGATIVE_INFINITY;
   private currentRunId = 0;
+  private firstXRCallbackTimestamp: number | null = null;
+  private lastXRCallbackTimestamp: number | null = null;
+  private xrCallbackCount = 0;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -169,6 +183,10 @@ export class PerfSampler {
     this.cadence.start(this.windowStart);
     this.worldSamples = [];
     this.lastWorldSample = Number.NEGATIVE_INFINITY;
+    this.firstXRCallbackTimestamp = null;
+    this.lastXRCallbackTimestamp = null;
+    this.xrCallbackCount = 0;
+    this.runtimeRates = { ...this.runtimeRates, observedCallbackHz: null };
     this.running = true;
     console.log(`[PerfSampler] window '${this.label}' started`);
   }
@@ -176,6 +194,17 @@ export class PerfSampler {
   recordXRCallback(timestamp: number, hasXRFrame: boolean): void {
     if (!this.running) return;
     this.cadence?.recordXRCallback(timestamp, hasXRFrame);
+    if (!hasXRFrame || !Number.isFinite(timestamp)) return;
+    if (this.firstXRCallbackTimestamp === null) this.firstXRCallbackTimestamp = timestamp;
+    this.lastXRCallbackTimestamp = timestamp;
+    this.xrCallbackCount += 1;
+    const elapsed = this.lastXRCallbackTimestamp - this.firstXRCallbackTimestamp;
+    if (elapsed > 0 && this.xrCallbackCount > 1) {
+      this.runtimeRates = {
+        ...this.runtimeRates,
+        observedCallbackHz: round(((this.xrCallbackCount - 1) * 1000) / elapsed),
+      };
+    }
   }
 
   recordBrowserCallback(): void {

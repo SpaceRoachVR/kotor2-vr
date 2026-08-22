@@ -1,5 +1,10 @@
 import { XRButtonState, XRHandRole } from './XRTypes';
 import { XRControllerSnapshot } from './XRInputRouter';
+import { XRInputCapabilitySnapshot } from '../input/XRInputCapabilityValidator';
+
+type CapabilityGamepad = Gamepad & {
+  readonly hapticActuators?: readonly { pulse?: unknown }[];
+};
 
 /** Copies transient WebXR Gamepad state into an immutable per-frame snapshot. */
 export class XRGamepadReader {
@@ -28,5 +33,30 @@ export class XRGamepadReader {
       });
     }
     return controllers;
+  }
+
+  static readCapabilities(inputSources: readonly XRInputSource[]): readonly XRInputCapabilitySnapshot[] {
+    const capabilities: XRInputCapabilitySnapshot[] = [];
+    for (const source of inputSources) {
+      if ((source.handedness !== 'left' && source.handedness !== 'right') || !source.gamepad) continue;
+      const gamepad = source.gamepad as CapabilityGamepad;
+      const vibrationActuator = (gamepad as Gamepad & { readonly vibrationActuator?: unknown }).vibrationActuator;
+      const hasPulseActuator = gamepad.hapticActuators?.some((actuator) =>
+        typeof actuator?.pulse === 'function'
+      ) ?? false;
+      capabilities.push({
+        hand: source.handedness,
+        profiles: [...source.profiles],
+        targetRayMode: source.targetRayMode,
+        gamepadMapping: gamepad.mapping,
+        buttonCount: gamepad.buttons.length,
+        axisCount: gamepad.axes.length,
+        hasGripSpace: source.gripSpace !== undefined,
+        haptics: hasPulseActuator || vibrationActuator !== null && vibrationActuator !== undefined
+          ? 'pulse'
+          : 'none',
+      });
+    }
+    return capabilities;
   }
 }

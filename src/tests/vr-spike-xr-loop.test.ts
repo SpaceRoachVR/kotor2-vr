@@ -15,6 +15,7 @@ import {
   VRWorldPromptCandidate,
 } from '@/vr/runtime/VRWorldActionPromptModel';
 import { XRHandRole, XRWorldPose } from '@/vr/runtime/XRTypes';
+import { GamePad } from '@/controls/GamePad';
 import { afterEach, beforeEach, describe, expect, jest, test } from "@jest/globals";
 
 type CapturedXRCallback = (timestamp: number, frame?: XRFrame) => void;
@@ -35,7 +36,8 @@ describe('VRSpike XR loop ownership', () => {
   /** Property descriptors restored after each test (see the prompt-enable note). */
   const afterEachRestore: Array<() => void> = [];
 
-  afterEach(() => {
+  afterEach(async () => {
+    await (VRSpike as any).sessionController.end().catch((): undefined => undefined);
     while (afterEachRestore.length) afterEachRestore.pop()!();
     VRSpike.perf.stop();
     VRSpike.renderer = null;
@@ -116,6 +118,18 @@ describe('VRSpike XR loop ownership', () => {
     harness.invokeXRFrame(1000, undefined);
 
     expect(harness.engineUpdates).toEqual([]);
+  });
+
+  test('restores legacy gamepad ownership when XR renderer binding fails', async () => {
+    const originalSuppressed = GamePad.suppressed;
+    afterEachRestore.push(() => { GamePad.suppressed = originalSuppressed; });
+    GamePad.suppressed = false;
+    createXRLoopHarness({ setSessionError: new Error('SteamVR binding failed') });
+
+    await VRSpike.enter();
+
+    expect(GamePad.suppressed).toBe(false);
+    expect(VRSpike.session).toBeNull();
   });
 
   test('defers browser handoff until native session end listeners finish', async () => {
@@ -1957,7 +1971,7 @@ function xrPose(x: number, y: number, z: number): XRPose {
   } as unknown as XRPose;
 }
 
-function createXRLoopHarness(): {
+function createXRLoopHarness(options: { setSessionError?: Error } = {}): {
   engineUpdates: Array<{ timestamp: number; source: string }>;
   configurationEvents: string[];
   invokeXRFrame: (timestamp: number, frame?: XRFrame) => void;
@@ -1976,8 +1990,12 @@ function createXRLoopHarness(): {
 
   const createSession = (): XRSession => ({
     frameRate: 90,
+    inputSources: [],
     addEventListener: (type: string, listener: () => void): void => {
       if (type === 'end') rawSessionEndListeners.push(listener);
+    },
+    removeEventListener: (type: string, listener: () => void): void => {
+      if (type === 'end') rawSessionEndListeners = rawSessionEndListeners.filter((candidate) => candidate !== listener);
     },
     end: (): void => {
       for (const listener of rawSessionEndListeners) listener();
@@ -1990,6 +2008,7 @@ function createXRLoopHarness(): {
       xrCallback = callback;
     },
     setSession: async () => {
+      if (options.setSessionError) throw options.setSessionError;
       configurationEvents.push('session-start');
       xrManager.isPresenting = true;
     },

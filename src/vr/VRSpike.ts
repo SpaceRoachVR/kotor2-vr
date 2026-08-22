@@ -53,6 +53,8 @@ import {
 import { CombatWeaponMode, SemanticXRAction, VRComfortSettings, XRHandRole, XRInputFrame, XRWorldPose } from "./runtime/XRTypes";
 import { PerfSampler, PerfWorldSnapshot } from "./PerfSampler";
 import type { EngineFrameSource } from "./XRFrameCadence";
+import { XRSessionController } from './runtime/XRSessionController';
+import { XRInputCapabilityValidator } from './input/XRInputCapabilityValidator';
 
 /**
  * Phase 0.1 — stereo perf spike.
@@ -253,6 +255,23 @@ export class VRSpike {
   private static traceXRStartup = false;
   private static xrFrameRenderTarget: THREE.WebGLRenderTarget | null = null;
   private static readonly inputRouter = new XRInputRouter();
+  private static inputCapabilityValidator = new XRInputCapabilityValidator();
+  private static readonly sessionController = new XRSessionController({
+    requestSession: async () => (navigator as any).xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'bounded-floor'],
+    }),
+    prepareSession: (session) => VRSpike.prepareXRSession(session),
+    bindSession: async (session) => {
+      if (!VRSpike.renderer) throw new Error('XR renderer is unavailable');
+      await VRSpike.renderer.xr.setSession(session as any);
+    },
+    setAnimationLoopActive: (active) => {
+      VRSpike.renderer?.xr.setAnimationLoop(active ? VRSpike.frame : null);
+    },
+    getInputSuppressed: () => GamePad.suppressed,
+    setInputSuppressed: (suppressed) => { GamePad.suppressed = suppressed; },
+    cleanupSession: (session) => VRSpike.cleanupXRSession(session),
+  });
   private static readonly locomotionController = new LocomotionController();
   private static readonly snapTurnController = new VRSnapTurnController();
   private static readonly teleportController = new VRTeleportController();
@@ -369,6 +388,7 @@ export class VRSpike {
     (window as any).VRSpike = VRSpike;
 
     if (typeof navigator === 'undefined' || !(navigator as any).xr) {
+      VRSpike.sessionController.markUnavailable();
       console.warn('[VRSpike] navigator.xr is undefined — no WebXR in this runtime.');
       return;
     }
@@ -382,6 +402,7 @@ export class VRSpike {
       try {
         await gl.makeXRCompatible();
       } catch (e) {
+        VRSpike.sessionController.markUnavailable();
         // Usually means the GL context is on a different adapter than the HMD.
         const error = e instanceof Error
           ? `${e.name}: ${e.message}`
@@ -418,14 +439,18 @@ export class VRSpike {
         ` (secureContext=${window.isSecureContext}, ua=${navigator.userAgent})`
       );
       if (!supported) {
+        VRSpike.sessionController.markUnavailable();
         console.warn(
           '[VRSpike] the browser reports no immersive-vr support. This is usually the ' +
           'active OpenXR runtime rather than the page: confirm the headset runtime ' +
           '(SteamVR / Oculus / VDXR) is running AND set as the active OpenXR runtime, ' +
           'then reload.'
         );
+      } else {
+        VRSpike.sessionController.markReady();
       }
     } catch (error) {
+      VRSpike.sessionController.markUnavailable();
       console.error('[VRSpike] isSessionSupported threw — treating VR as unavailable', error);
     }
     VRSpike.addButton(supported);
@@ -476,77 +501,23 @@ export class VRSpike {
     if (VRSpike.session) return;
 
     try {
-      const session: XRSession = await (navigator as any).xr.requestSession('immersive-vr', {
-        optionalFeatures: ['local-floor', 'bounded-floor'],
-      });
-      VRSpike.session = session;
-      // XR controllers are visible to the Gamepad API too. Silence the legacy
-      // pad bindings for the whole session so a VR press cannot also run the
-      // flatscreen keymap behind it (see GamePad.suppressed).
-      GamePad.suppressed = true;
-      VRSpike.traceXRStartup = true;
-      VRSpike.previousXRInputTimestamp = null;
-      VRSpike.locomotionInputErrorReported = false;
-      VRSpike.trackedInputErrorReported = false;
-      VRSpike.panelInputErrorReported = false;
-      VRSpike.movieInputErrorReported = false;
-      VRSpike.worldInteractionInputErrorReported = false;
-      VRSpike.combatInputErrorReported = false;
-      VRSpike.forceGestureErrorReported = false;
-      VRSpike.panelPresentationErrorReported = false;
-      VRSpike.worldTargetLabelErrorReported = false;
-      VRSpike.syncRigFallbackReported = false;
-      VRSpike.missingMovieRenderPrerequisiteReported = false;
-      VRSpike.latestXRFrame = null;
-      VRSpike.latestXRFrameTimestamp = 0;
-      VRSpike.movieCancelHeld = false;
-      VRSpike.movieOrCutsceneActiveLastFrame = false;
-      VRSpike.keyboardSelectHeld = false;
-      VRSpike.keyboardCancelHeld = false;
-      VRSpike.keyboardGrabHeld = false;
-      VRSpike.turnYaw = 0;
-      VRSpike.turnOriginOffset.set(0, 0, 0);
-      VRSpike.interactionTargetSet.clear();
-      VRSpike.interactionSystem.cancelTransientState();
-      VRSpike.clearWorldActionPrompt(false);
-      VRSpike.worldPromptModule = null;
-      VRSpike.worldPromptModuleInitialized = false;
-      VRSpike.worldPromptSelectHeld = { left: true, right: true };
-      VRSpike.interactionAimedTargetId = null;
-      VRSpike.combatInputController.reset();
-      VRSpike.forceGestureController.reset();
-      VRSpike.snapTurnController.reset();
-      VRSpike.teleportController.reset();
-      VRSpike.locomotionModeToggleHeld = false;
-      VRSpike.panelInputController.cancel();
-      VRSpike.panelHost?.clear();
-      VRSpike.keyboardHost?.clear();
-      VRSpike.movieHost?.clear();
-      VRSpike.panelPointerHost?.clear();
-      VRSpike.worldTargetLabelHost?.clear();
-      VRSpike.latestPanelPointerPosition = null;
-      session.addEventListener('end', VRSpike.onSessionEnd);
-      session.addEventListener('visibilitychange', VRSpike.onVisibilityChange);
-
-      // Register directly with WebXR before the manager starts its session
-      // animation source. WebGLRenderer.setAnimationLoop() also starts a
-      // window.requestAnimationFrame loop; calling it after setSession() would
-      // drive the engine from both schedulers and render outside XRFrame.
-      VRSpike.renderer.xr.setAnimationLoop(VRSpike.frame);
-      await VRSpike.renderer.xr.setSession(session as any);
+      const session = await VRSpike.sessionController.enter();
 
       const btn = document.getElementById('vr-spike-button');
       if (btn) btn.textContent = 'Exit VR (spike)';
 
-      // Keep the runtime cadence separate from the sustained-50 acceptance budget.
-      // A faster runtime must not silently tighten the project's minimum gate.
-      const rate = (session as any).frameRate;
-      VRSpike.perf.xrRuntimeHz = rate || VRSpike.perf.targetHz;
+      const diagnostic = VRSpike.sessionController.diagnosticSnapshot;
+      VRSpike.perf.runtimeRates = {
+        runtimeReportedHz: diagnostic.runtimeReportedHz,
+        runtimeSupportedHz: diagnostic.runtimeSupportedHz,
+        requestedHz: diagnostic.requestedHz,
+        observedCallbackHz: diagnostic.observedCallbackHz,
+      };
 
       VRSpike.perf.beginXRSession();
       VRSpike.perf.start('stereo');
       console.log(
-        `[VRSpike] presenting at runtime ${VRSpike.perf.xrRuntimeHz} Hz; ` +
+        `[VRSpike] runtime-reported cadence ${diagnostic.runtimeReportedHz ?? 'unreported'} Hz; ` +
         `acceptance minimum ${VRSpike.perf.targetHz} Hz`
       );
     } catch (e) {
@@ -558,21 +529,14 @@ export class VRSpike {
         'bounded-floor as optional features, which every runtime supports.',
         e
       );
-      VRSpike.renderer.xr.setAnimationLoop(null);
-      VRSpike.session = null;
     }
   }
 
   static exit(): void {
-    if (VRSpike.session) VRSpike.session.end();
+    void VRSpike.sessionController.end().catch((error) => {
+      console.error('[VRSpike] XR session end failed after local cleanup', error);
+    });
   }
-
-  private static onSessionEnd = (): void => {
-    // Three.js registers its own raw-session end listener after ours. Defer
-    // the desktop handoff until every synchronous end listener has run, so its
-    // WebXR animation source is fully stopped before we clear the callback.
-    queueMicrotask(VRSpike.finishSessionEnd);
-  };
 
   private static onVisibilityChange = (): void => {
     if (VRSpike.session?.visibilityState !== 'visible') {
@@ -580,10 +544,82 @@ export class VRSpike {
     }
   };
 
+  private static onInputSourcesChange = (): void => {
+    const session = VRSpike.session;
+    if (!session) return;
+    const update = VRSpike.inputCapabilityValidator.update(
+      XRGamepadReader.readCapabilities(Array.from(session.inputSources ?? []))
+    );
+    if (update.changed && !update.validation.valid) {
+      console.warn('[VRSpike] XR controller topology is missing required semantic actions', update);
+    }
+  };
+
+  static setDominantHand(hand: XRHandRole): void {
+    VRSpike.inputRouter.setDominantHand(hand);
+    VRSpike.inputCapabilityValidator = new XRInputCapabilityValidator(undefined, hand);
+    VRSpike.onInputSourcesChange();
+  }
+
+  private static prepareXRSession(session: XRSession): void {
+    VRSpike.session = session;
+    VRSpike.traceXRStartup = true;
+    VRSpike.previousXRInputTimestamp = null;
+    VRSpike.locomotionInputErrorReported = false;
+    VRSpike.trackedInputErrorReported = false;
+    VRSpike.panelInputErrorReported = false;
+    VRSpike.movieInputErrorReported = false;
+    VRSpike.worldInteractionInputErrorReported = false;
+    VRSpike.combatInputErrorReported = false;
+    VRSpike.forceGestureErrorReported = false;
+    VRSpike.panelPresentationErrorReported = false;
+    VRSpike.worldTargetLabelErrorReported = false;
+    VRSpike.syncRigFallbackReported = false;
+    VRSpike.missingMovieRenderPrerequisiteReported = false;
+    VRSpike.latestXRFrame = null;
+    VRSpike.latestXRFrameTimestamp = 0;
+    VRSpike.movieCancelHeld = false;
+    VRSpike.movieOrCutsceneActiveLastFrame = false;
+    VRSpike.keyboardSelectHeld = false;
+    VRSpike.keyboardCancelHeld = false;
+    VRSpike.keyboardGrabHeld = false;
+    VRSpike.turnYaw = 0;
+    VRSpike.turnOriginOffset.set(0, 0, 0);
+    VRSpike.interactionTargetSet.clear();
+    VRSpike.interactionSystem.cancelTransientState();
+    VRSpike.clearWorldActionPrompt(false);
+    VRSpike.worldPromptModule = null;
+    VRSpike.worldPromptModuleInitialized = false;
+    VRSpike.worldPromptSelectHeld = { left: true, right: true };
+    VRSpike.interactionAimedTargetId = null;
+    VRSpike.combatInputController.reset();
+    VRSpike.forceGestureController.reset();
+    VRSpike.snapTurnController.reset();
+    VRSpike.teleportController.reset();
+    VRSpike.locomotionModeToggleHeld = false;
+    VRSpike.panelInputController.cancel();
+    VRSpike.panelHost?.clear();
+    VRSpike.keyboardHost?.clear();
+    VRSpike.movieHost?.clear();
+    VRSpike.panelPointerHost?.clear();
+    VRSpike.worldTargetLabelHost?.clear();
+    VRSpike.latestPanelPointerPosition = null;
+    session.addEventListener('visibilitychange', VRSpike.onVisibilityChange);
+    session.addEventListener('inputsourceschange', VRSpike.onInputSourcesChange);
+    VRSpike.onInputSourcesChange();
+  }
+
+  private static cleanupXRSession(session: XRSession | null): Promise<void> {
+    session?.removeEventListener('visibilitychange', VRSpike.onVisibilityChange);
+    session?.removeEventListener('inputsourceschange', VRSpike.onInputSourcesChange);
+    return new Promise((resolve) => queueMicrotask(() => {
+      VRSpike.finishSessionEnd();
+      resolve();
+    }));
+  }
+
   private static finishSessionEnd = (): void => {
     VRSpike.perf.stop();
-    // Hand the flatscreen pad layer back now that VR no longer owns input.
-    GamePad.suppressed = false;
     VRSpike.session = null;
     VRSpike.xrFrameRenderTarget = null;
     VRSpike.previousXRInputTimestamp = null;
@@ -656,6 +692,7 @@ export class VRSpike {
    */
   private static frame = (timestamp: number, frame?: XRFrame): void => {
     VRSpike.perf.recordXRCallback(timestamp, !!frame);
+    VRSpike.sessionController.updateObservedCallbackHz(VRSpike.perf.runtimeRates.observedCallbackHz);
     if (!frame) return;
     VRSpike.latestXRFrame = frame;
     VRSpike.latestXRFrameTimestamp = timestamp;

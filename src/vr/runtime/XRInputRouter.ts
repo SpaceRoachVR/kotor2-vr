@@ -49,7 +49,7 @@ export interface XRInputRouterOptions {
   readonly requiredActions?: readonly SemanticXRAction[];
 }
 
-const DEFAULT_REQUIRED_ACTIONS: readonly SemanticXRAction[] = [
+export const DEFAULT_REQUIRED_XR_ACTIONS: readonly SemanticXRAction[] = [
   SemanticXRAction.Move,
   SemanticXRAction.Turn,
   SemanticXRAction.Select,
@@ -113,18 +113,24 @@ export const BUILT_IN_XR_PROFILES: readonly XRInputBindingProfile[] = [
 export class XRInputRouter {
   private readonly requiredActions: readonly SemanticXRAction[];
   private readonly reportedUnmatchedProfiles = new Set<string>();
+  private dominantHand: XRHandRole;
 
   constructor(
     private readonly profiles: readonly XRInputBindingProfile[] = BUILT_IN_XR_PROFILES,
     private readonly options: XRInputRouterOptions = { dominantHand: 'right' }
   ) {
-    this.requiredActions = options.requiredActions ?? DEFAULT_REQUIRED_ACTIONS;
+    this.requiredActions = options.requiredActions ?? DEFAULT_REQUIRED_XR_ACTIONS;
+    this.dominantHand = options.dominantHand;
     if (profiles.length === 0) {
       throw new Error('At least one XR input binding profile is required');
     }
     for (const profile of profiles) {
       XRInputRouter.validateProfile(profile, this.requiredActions);
     }
+  }
+
+  setDominantHand(hand: XRHandRole): void {
+    this.dominantHand = hand;
   }
 
   route(
@@ -168,7 +174,7 @@ export class XRInputRouter {
 
   static validateProfile(
     profile: XRInputBindingProfile,
-    requiredActions: readonly SemanticXRAction[] = DEFAULT_REQUIRED_ACTIONS
+    requiredActions: readonly SemanticXRAction[] = DEFAULT_REQUIRED_XR_ACTIONS
   ): void {
     if (!profile.id.trim()) throw new Error('XR input profile id cannot be empty');
     if (profile.interactionProfiles.length === 0) {
@@ -214,8 +220,8 @@ export class XRInputRouter {
   private matchesHand(bindingHand: XRBindingHand, controllerHand: XRHandRole): boolean {
     if (bindingHand === 'either') return true;
     if (bindingHand === 'left' || bindingHand === 'right') return controllerHand === bindingHand;
-    if (bindingHand === 'dominant') return controllerHand === this.options.dominantHand;
-    return controllerHand !== this.options.dominantHand;
+    if (bindingHand === 'dominant') return controllerHand === this.dominantHand;
+    return controllerHand !== this.dominantHand;
   }
 
   private readBinding(

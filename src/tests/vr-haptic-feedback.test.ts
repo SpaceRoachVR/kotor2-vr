@@ -28,6 +28,30 @@ describe('VRHapticFeedback', () => {
     expect(pulse).toHaveBeenCalledWith(0, 1_000);
   });
 
+  test('uses the standard vibration actuator when a pulse actuator is absent', async () => {
+    const playEffect = jest.fn<(effect: string, parameters: GamepadEffectParameters) => Promise<GamepadHapticsResult>>()
+      .mockResolvedValue('complete');
+    const standardSession = {
+      inputSources: [{
+        handedness: 'right',
+        gamepad: { vibrationActuator: { playEffect } },
+      }],
+    } as unknown as XRSession;
+
+    await new VRHapticFeedback().pulse(
+      standardSession,
+      'right',
+      { durationMs: 40, amplitude: 0.35 },
+    );
+
+    expect(playEffect).toHaveBeenCalledWith('dual-rumble', {
+      duration: 40,
+      startDelay: 0,
+      strongMagnitude: 0.35,
+      weakMagnitude: 0.35,
+    });
+  });
+
   test('reports a rejected actuator once per session and hand without rejecting the frame caller', async () => {
     const logger = { warn: jest.fn() };
     const feedback = new VRHapticFeedback(logger);

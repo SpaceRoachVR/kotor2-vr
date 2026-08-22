@@ -13,8 +13,16 @@ interface XRGamepadHapticActuator {
   pulse(amplitude: number, duration: number): Promise<boolean>;
 }
 
+interface StandardGamepadHapticActuator {
+  playEffect(
+    effect: 'dual-rumble',
+    parameters: GamepadEffectParameters,
+  ): Promise<GamepadHapticsResult>;
+}
+
 type HapticGamepad = Gamepad & {
   readonly hapticActuators?: readonly XRGamepadHapticActuator[];
+  readonly vibrationActuator?: StandardGamepadHapticActuator;
 };
 
 const MIN_DURATION_MS = 1;
@@ -30,16 +38,25 @@ export class VRHapticFeedback {
     try {
       const source = Array.from(session.inputSources ?? [])
         .find((candidate) => candidate.handedness === hand);
-      const actuator = (source?.gamepad as HapticGamepad | undefined)?.hapticActuators?.[0];
-      if (!actuator || typeof actuator.pulse !== 'function') {
+      const gamepad = source?.gamepad as HapticGamepad | undefined;
+      const pulseActuator = gamepad?.hapticActuators?.[0];
+      const vibrationActuator = gamepad?.vibrationActuator;
+      if (typeof pulseActuator?.pulse !== 'function' && typeof vibrationActuator?.playEffect !== 'function') {
         this.reportFailureOnce(session, hand, new Error('haptic actuator is unavailable'));
         return;
       }
 
       const amplitude = clampFinite(pattern.amplitude, 0, 1);
       const durationMs = clampFinite(pattern.durationMs, MIN_DURATION_MS, MAX_DURATION_MS);
-      const accepted = await actuator.pulse(amplitude, durationMs);
-      if (accepted !== true) {
+      const accepted = typeof pulseActuator?.pulse === 'function'
+        ? await pulseActuator.pulse(amplitude, durationMs)
+        : await vibrationActuator!.playEffect('dual-rumble', {
+          duration: durationMs,
+          startDelay: 0,
+          strongMagnitude: amplitude,
+          weakMagnitude: amplitude,
+        });
+      if (accepted === false || accepted === 'preempted') {
         this.reportFailureOnce(session, hand, new Error('haptic actuator declined the pulse'));
       }
     } catch (error) {
