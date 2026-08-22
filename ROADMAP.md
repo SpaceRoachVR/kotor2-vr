@@ -254,12 +254,48 @@ are already in place; the next mine attempt names the culprit.
 - **Watch for:** id `0` being mapped to `OBJECT_INVALID`, and inventory items not
   being registered in `ObjectList`.
 
-### 1.2 — Missing textures / white boxes ☐ blocked on user log
-White boxes appear in fixed world locations and on inventory and ability icons. The
-shared `TextureLoader` path explains both. A once-per-name warning is in place.
-- **Done when:** the failing texture names are known and either loaded correctly or
-  explained (genuinely absent vs. a TPC/TXI parsing gap).
-- **Files:** `src/loaders/TextureLoader.ts`, `src/loaders/TPCLoader.ts`.
+### 1.2 — Missing textures / white boxes ✅ named and explained (2026-08-22)
+No longer blocked: `tools/vr-emulator/phase1-diagnostics.js` harvests
+`TextureLoader.getDiagnostics()` from a real save. A Peragus load produces
+**3,673 resolutions, 86 missing across 20 distinct resrefs**, and cross-checking
+those names against the retail texture packs and the TSLRCM Override splits them
+in two — which is exactly the "genuinely absent vs. parsing gap" this item asked
+for.
+
+**Genuinely absent (14).** `pmhc04`, `po_no`, `bluefill`, `yellowfill`,
+`po_pcarth`, `invent1/2`, `boxline3/4`, `confirm1/2`, `lbl_wupitems`,
+`1600x1200back`, `uparrow`. In neither the packs nor Override. Several are K1
+asset names — `po_pcarth` is Carth's portrait — so these are references the
+engine makes to things TSL does not ship. Not a loader fault. Whether they
+matter visually is a headset/flat observation, not a log question.
+
+**A real loader bug (6), now fixed.** `innermenu`, `loadscreen3`,
+`gui_galxy_1..3` and `gui_sun_1` all exist in `swpc_tex_gui.erf` and still
+resolved as `missing-required-texture`: the GUI pack was searched only for the
+`gui` and `font` semantics, and these arrive as `diffuse` and `particle`. TSL
+genuinely ships non-GUI assets in that pack. The pack is now searched for every
+semantic, with gui/font still preferring it and other semantics treating it as a
+late fallback after `texture-pack`.
+
+**Verified against the real install:** re-harvesting after the fix moved missing
+resolutions from **86 to 78** and distinct failing resrefs from **20 to 14** —
+all six formerly-unfound textures now resolve, and the remaining 14 are exactly
+the genuinely-absent set.
+
+- **Files:** `src/loaders/TextureResolution.ts`.
+- **Still open:** confirm on screen that no white boxes remain, and decide
+  whether any of the 14 absent names need a substitute.
+
+### 1.11 — Ebon Hawk module and save sidecar 404s ☐ new evidence (2026-08-22)
+The same harvest surfaced three read failures that are not textures:
+- `modules/001EBO.mod` — ranged read returned 404 rather than 206, so the Ebon
+  Hawk module file is not being served at all;
+- `Saves/000001 - Game0/pifo.ifo` — absent from the save;
+- `swkotor2.ini` — absent; the engine falls back, long-standing.
+
+The first is the interesting one: a missing module read is a progression risk,
+not cosmetic. Worth establishing whether `001EBO.mod` exists in the install and
+whether the asset service is serving `.mod` paths correctly.
 
 ### 1.3 — Player is an appearance-less human instead of T3-M4
 `ModuleArea.loadPlayer()` finds `PartyManager.Player` unset and invents a placeholder
@@ -322,8 +358,15 @@ The lazy room resolve in `ModuleCreature.update()` is a mitigation, not a fix. F
 the spawn path that omits it.
 - **Done when:** the spawn sets the room directly and the mitigation can be removed.
 
-### 1.9 — Galaxy map display ☐ needs a description of the symptom
+### 1.9 — Galaxy map display ☐ retest after the 1.2 fix
 The `invalid guitag null` ×4 warning is `planetary.2da` padding and not the fault.
+
+**Likely cause found via 1.2.** The galaxy map's own particle textures —
+`gui_galxy_1`, `gui_galxy_2`, `gui_galxy_3` and `gui_sun_1` — were among the six
+that exist in `swpc_tex_gui.erf` but never resolved, because the GUI pack was
+not searched for the `particle` semantic. That is a concrete mechanism for "the
+galaxy map didn't display correctly" without needing the symptom described
+first. Retest before chasing anything else here.
 - **Blocked on:** what "didn't display correctly" actually looked like.
 
 ### 1.10 — Full Peragus playthrough
@@ -369,10 +412,17 @@ unit/integration-tested only.
 - **3.1** ✅ Controller input mapping for Quest 3 controllers (`XRInputRouter`,
   `quest-touch` profile).
 - **3.2** ✅ Hand presence and grab (`XRControllerAnchorHost`).
-- **3.3** ☐ partial — One- and two-handed lightsaber; left-hand grab promotes to
-  two-handed. Real mode-flag promotion exists (`VRCombatInputController`), but it's a
-  mode flag on a single-hand swing detector, not physically dual-wielded tracking —
-  the left hand's own pose doesn't contribute to the swing.
+- **3.3** ✅ implemented / ☐ headset-accepted — One- and two-handed lightsaber.
+  The off hand now genuinely contributes. A two-handed grip requires the off hand
+  to be *tracked and within 0.35 m* of the dominant hand, not merely the grip
+  button held, and the swing is measured at a point 0.6 m along the blade with
+  the blade direction taken from dominant-hand to off-hand. That is what makes
+  the off hand matter: rotating the grip about the rear hand sweeps the blade
+  through a wide arc while barely moving either hand, so the old dominant-hand
+  sampling saw almost no speed. Double-bladed and dual-wield stances are never
+  promoted. One-handed sampling and thresholds are untouched, so 3.4's governor
+  tuning still holds. Swing events carry `gripSeparationMetres` for on-device
+  tuning of the separation threshold.
 - **3.4** ✅ Swing detection feeding the d20 round — governor option (c): every swing
   animates and connects visually, only on-tempo swings roll. Fixed this session: combat
   targeting no longer reads stale flatscreen-mouse state, Cancel no longer gets skipped
