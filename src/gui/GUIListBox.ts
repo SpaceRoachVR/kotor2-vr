@@ -20,6 +20,7 @@ import {
 import { applyCustomProtoRowSkin } from "@/gui/listrow/applyProtoTemplateSkin";
 import { renderGuiSceneToTexture } from "@/gui/renderGuiSceneToTexture";
 import type { LegacyGUIVRPointerSemanticTarget } from "@/vr/runtime/LegacyGUIVRPointerAdapter";
+import { getGUIListBoxVRPointerTargetsAtPointer } from "@/vr/runtime/GUIListBoxVRPointerTargets";
 
 /**
  * GUIListBox class.
@@ -720,44 +721,7 @@ export class GUIListBox extends GUIControl {
    * `onSelected` callback.
    */
   getVRPointerTargetsAtPointer(): readonly LegacyGUIVRPointerSemanticTarget[] {
-    if (!this.isVisible()) return [];
-
-    const targets: LegacyGUIVRPointerSemanticTarget[] = [];
-    for (let index = 0; index < this.children.length; index++) {
-      const row = this.children[index];
-      if (!row.isVisible() || row.disableSelection || !row.box.containsPoint(Mouse.positionUI)) continue;
-      targets.push({
-        name: `${this.name} row ${index + 1}`,
-        control: row,
-        isAvailable: () => row.isVisible() && !row.disableSelection && row.box.containsPoint(Mouse.positionUI),
-        activate: () => this.select(row),
-      });
-    }
-
-    const scrollbarVisible = this.maxScroll > 0 && !!this.scrollWrapper?.visible;
-    const upArrow = this.scrollbar?.upArrow;
-    if (scrollbarVisible && upArrow?.visible && upArrow.userData.box?.containsPoint(Mouse.positionUI)) {
-      targets.push({
-        name: `${this.name} scroll up`,
-        control: this,
-        isAvailable: () => this.maxScroll > 0 && !!this.scrollWrapper?.visible &&
-          !!upArrow.visible && !!upArrow.userData.box?.containsPoint(Mouse.positionUI),
-        activate: () => this.scrollUp(),
-      });
-    }
-
-    const downArrow = this.scrollbar?.downArrow;
-    if (scrollbarVisible && downArrow?.visible && downArrow.userData.box?.containsPoint(Mouse.positionUI)) {
-      targets.push({
-        name: `${this.name} scroll down`,
-        control: this,
-        isAvailable: () => this.maxScroll > 0 && !!this.scrollWrapper?.visible &&
-          !!downArrow.visible && !!downArrow.userData.box?.containsPoint(Mouse.positionUI),
-        activate: () => this.scrollDown(),
-      });
-    }
-
-    return targets;
+    return getGUIListBoxVRPointerTargetsAtPointer(this, () => Mouse.positionUI);
   }
 
   calculateBox(){

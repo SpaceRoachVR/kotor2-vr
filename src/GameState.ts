@@ -51,6 +51,7 @@ import {
   LegacyGUIVRPointerControl,
   LegacyGUIVRPointerSemanticTarget,
 } from "@/vr/runtime/LegacyGUIVRPointerAdapter";
+import { getLegacyGUIVRPointerSemanticTargets as discoverLegacyGUIVRPointerSemanticTargets } from "@/vr/runtime/LegacyGUIVRPointerDiscovery";
 import {
   describeDirectVRWorldUse,
   getVRInteractionRange,
@@ -915,13 +916,9 @@ function findVRForceGestureSpell(actor: ModuleCreature, kind: 'push' | 'pull'): 
 }
 
 function getLegacyGUIVRPointerSemanticTargets(): readonly LegacyGUIVRPointerSemanticTarget[] {
-  const controls = GameState.controls?.MenuGetActiveUIElements() ?? [];
-  const lists = new Set<any>();
-  for (const control of controls) {
-    const list = (control as any).list;
-    if (list && typeof list.getVRPointerTargetsAtPointer === 'function') lists.add(list);
-  }
-  return [...lists].flatMap((list) => list.getVRPointerTargetsAtPointer());
+  return discoverLegacyGUIVRPointerSemanticTargets(
+    () => GameState.controls?.MenuGetActiveUIElements() ?? [],
+  );
 }
 
 const vrLegacyGUIPointerAdapter = new LegacyGUIVRPointerAdapter({
