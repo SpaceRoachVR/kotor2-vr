@@ -57,6 +57,7 @@ import type { Module } from "@/module/Module";
 import { IVISRoom } from "@/interface/module/IVISRoom";
 import { BackgroundMusicMode } from "@/enums/audio/BackgroundMusicMode";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { detachPartyForModuleTransition } from "@/module/transition/detachPartyForModuleTransition";
 
 type AreaScriptKeys = 'OnEnter'|'OnExit'|'OnHeartbeat'|'OnUserDefined';
 
@@ -390,16 +391,10 @@ export class ModuleArea extends ModuleObject {
       this.sounds[0].destroy();
     }
 
-    while (GameState.PartyManager.party.length){
-      const pm = GameState.PartyManager.party.shift();
-      if(pm === GameState.PartyManager.Player){
-        //The player object is reused across module transitions (see ModuleArea.loadPlayer),
-        //so only detach it from this area's scene graph instead of tearing down its state.
-        pm.container.removeFromParent();
-        continue;
-      }
-      pm.destroy();
-    }
+    detachPartyForModuleTransition(
+      GameState.PartyManager.party,
+      GameState.PartyManager.Player,
+    );
 
     this.weather.destroy();
   }

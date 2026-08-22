@@ -145,7 +145,7 @@ describe('VRPanelHost', () => {
     );
   });
 
-  test('composites authored cutscene and caption layers into one theater target', () => {
+  test('composites cutscene and caption layers after clearing retained depth and restores renderer state', () => {
     const cutsceneScene = new THREE.Scene();
     const cutsceneCamera = new THREE.PerspectiveCamera();
     const captionScene = new THREE.Scene();
@@ -161,8 +161,17 @@ describe('VRPanelHost', () => {
     expect(renderer.setRenderTarget).toHaveBeenCalledWith(host.renderTarget);
     expect(renderer.render).toHaveBeenNthCalledWith(1, cutsceneScene, cutsceneCamera);
     expect(renderer.render).toHaveBeenNthCalledWith(2, captionScene, captionCamera);
+    expect(renderer.clearDepth).toHaveBeenCalledTimes(1);
+    expect(renderer.clearDepth.mock.invocationCallOrder[0]).toBeGreaterThan(
+      (renderer.render as jest.Mock).mock.invocationCallOrder[0]
+    );
+    expect(renderer.clearDepth.mock.invocationCallOrder[0]).toBeLessThan(
+      (renderer.render as jest.Mock).mock.invocationCallOrder[1]
+    );
     expect(renderer.setRenderTarget).toHaveBeenCalledTimes(2);
     expect(renderer.xr.enabled).toBe(true);
+    expect(renderer.autoClear).toBe(false);
+    expect(renderer.getClearAlpha()).toBe(1);
   });
 
   test('hides and releases panel ownership when presentation is cancelled', () => {
@@ -196,6 +205,7 @@ function createRenderer(previousTarget: THREE.WebGLRenderTarget) {
     getClearAlpha: jest.fn(() => clearAlpha),
     setClearAlpha: jest.fn((value: number) => { clearAlpha = value; }),
     clear: jest.fn(),
+    clearDepth: jest.fn(),
     render: jest.fn(),
   };
 }

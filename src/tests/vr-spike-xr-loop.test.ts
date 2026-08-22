@@ -249,6 +249,7 @@ describe('VRSpike XR loop ownership', () => {
       getClearAlpha: () => 1,
       setClearAlpha: (): void => undefined,
       clear: (): void => undefined,
+      clearDepth: (): void => undefined,
       render: (scene: THREE.Scene, camera: THREE.Camera) => {
         renderCalls.push({ scene, camera, xrEnabled: (VRSpike.renderer as any).xr.enabled });
       },
@@ -290,6 +291,7 @@ describe('VRSpike XR loop ownership', () => {
       getClearAlpha: () => 1,
       setClearAlpha: (): void => undefined,
       clear: (): void => undefined,
+      clearDepth: (): void => undefined,
       render: (scene: THREE.Scene, camera: THREE.Camera) => {
         renderCalls.push({ scene, camera, xrEnabled: (VRSpike.renderer as any).xr.enabled });
       },

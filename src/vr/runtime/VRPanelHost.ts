@@ -182,8 +182,10 @@ export class VRPanelHost {
 
   /**
    * Renders one or more legacy-camera layers into this panel's single target.
-   * This deliberately clears once before the first layer, then relies on the
-   * engine's authored draw order for later overlays such as dialogue captions.
+   * This deliberately clears color and depth once before the first layer. Each
+   * later legacy GUI layer retains that authored color, but starts with a clean
+   * depth buffer so a previous perspective cutscene cannot occlude ordinary
+   * depth-tested GUI captions or replies.
    */
   renderGuiLayers(
     renderer: THREE.WebGLRenderer,
@@ -215,7 +217,11 @@ export class VRPanelHost {
       renderer.setRenderTarget(this.renderTarget);
       renderer.setClearAlpha(0);
       renderer.clear(true, true, true);
-      for (const layer of layers) {
+      for (let index = 0; index < layers.length; index++) {
+        const layer = layers[index];
+        if (index > 0) {
+          renderer.clearDepth();
+        }
         layer.renderPass?.render(renderer);
         renderer.render(layer.scene, layer.camera);
       }
