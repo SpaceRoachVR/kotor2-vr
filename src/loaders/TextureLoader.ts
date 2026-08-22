@@ -324,6 +324,26 @@ export class TextureLoader {
     return TextureLoader.diagnosticFallbackTexture;
   }
 
+  /**
+   * Releases a GUI texture acquired by a short-lived UI consumer.
+   *
+   * Normal LoadGUI calls return a borrowed shared-cache texture.  Individual
+   * effects and screens therefore must not dispose it, because another UI
+   * consumer may still be using the same GPU resource.  A no-cache caller
+   * receives an uncached texture and remains responsible for its disposal.
+   */
+  static releaseGUITexture(texture: OdysseyTexture | undefined): void {
+    if (!texture || texture === TextureLoader.diagnosticFallbackTexture) {
+      return;
+    }
+    for (const sharedTexture of TextureLoader.guiTextures.values()) {
+      if (sharedTexture === texture) {
+        return;
+      }
+    }
+    texture.dispose();
+  }
+
   static resetRoutingForTests(): void {
     TextureLoader.sourceProvider = TextureLoader.createDefaultSourceProvider();
     TextureLoader.resolver = TextureLoader.createResolver(TextureLoader.sourceProvider);

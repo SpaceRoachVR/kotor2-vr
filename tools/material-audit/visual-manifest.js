@@ -6,6 +6,12 @@ const path = require('path');
 const REQUIRED_MODULES = Object.freeze(['001ebo', '101per', '102per']);
 const RUNTIMES = new Set(['electron', 'chrome']);
 const STATUSES = new Set(['resolved', 'missing', 'invalid', 'decode-error']);
+const SEMANTICS = new Set([
+  'diffuse', 'lightmap', 'normal', 'bump', 'environment', 'gui', 'font', 'particle', 'other',
+]);
+const VISUAL_CATEGORIES = new Set([
+  'doors', 'ui-icons', 'holograms', 'force-fields', 'lightmaps', 'held-models',
+]);
 const SOURCES = new Set([
   'none', 'override-tga', 'override-tpc', 'active-module',
   'gui-pack', 'texture-pack', 'key-bif',
@@ -14,6 +20,16 @@ const RECORD_KEYS = Object.freeze([
   'requestedResref', 'resolvedResref', 'semantic', 'activeModule', 'status',
   'searchedSources', 'selectedSource', 'txiSource', 'fallback',
   'diagnosticCode', 'cacheGeneration', 'aliasEvidence', 'width', 'height', 'sha256',
+  'visualCategory', 'required',
+]);
+const REQUIRED_COVERAGE = Object.freeze([
+  Object.freeze({ module: '001ebo', visualCategory: 'doors' }),
+  Object.freeze({ module: '001ebo', visualCategory: 'ui-icons' }),
+  Object.freeze({ module: '001ebo', visualCategory: 'held-models' }),
+  Object.freeze({ module: '101per', visualCategory: 'holograms' }),
+  Object.freeze({ module: '101per', visualCategory: 'force-fields' }),
+  Object.freeze({ module: '101per', visualCategory: 'lightmaps' }),
+  Object.freeze({ module: '102per', visualCategory: 'doors' }),
 ]);
 
 function createVisualManifest(input) {
@@ -47,13 +63,16 @@ function createVisualManifest(input) {
     throw new TypeError(`Material audit contains unexpected modules: ${unexpectedModules.join(', ')}`);
   }
 
+  const modules = REQUIRED_MODULES.map((moduleName) => Object.freeze({
+    module: moduleName,
+    records: Object.freeze(normalizedModules.get(moduleName).map((record) => sanitizeRecord(record, moduleName))),
+  }));
+  validateCoverage(modules);
+
   return Object.freeze({
     schemaVersion: 1,
     runtime: input.runtime,
-    modules: Object.freeze(REQUIRED_MODULES.map((moduleName) => Object.freeze({
-      module: moduleName,
-      records: Object.freeze(normalizedModules.get(moduleName).map((record) => sanitizeRecord(record, moduleName))),
-    }))),
+    modules: Object.freeze(modules),
   });
 }
 
@@ -68,12 +87,26 @@ function sanitizeRecord(record, moduleName) {
   if (!STATUSES.has(record.status) || !SOURCES.has(record.selectedSource)) {
     throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has invalid status or source`);
   }
+  if (!SEMANTICS.has(record.semantic)) {
+    throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has invalid semantic`);
+  }
+  if (!VISUAL_CATEGORIES.has(record.visualCategory)) {
+    throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has invalid visual category`);
+  }
+  if (typeof record.required !== 'boolean') {
+    throw new TypeError(`Material audit '${moduleName}:${requestedResref}' must explicitly state whether it is required`);
+  }
+  if (normalizeResref(record.activeModule) !== moduleName) {
+    throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has a mismatched active module`);
+  }
   if (!Number.isSafeInteger(record.cacheGeneration) || record.cacheGeneration < 1) {
     throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has invalid cache generation`);
   }
   if (!Array.isArray(record.searchedSources) || record.searchedSources.some((source) => !SOURCES.has(source) || source === 'none')) {
     throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has invalid searched sources`);
   }
+
+  validateResolutionMetadata(record, moduleName, requestedResref);
 
   const sanitized = {};
   for (const key of RECORD_KEYS) {
@@ -86,6 +119,59 @@ function sanitizeRecord(record, moduleName) {
     }
   }
   return Object.freeze(sanitized);
+}
+
+function validateResolutionMetadata(record, moduleName, requestedResref) {
+  const recordName = `Material audit '${moduleName}:${requestedResref}'`;
+  const hasDimensions = Number.isSafeInteger(record.width) && record.width > 0
+    && Number.isSafeInteger(record.height) && record.height > 0;
+  const hasHash = typeof record.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(record.sha256);
+
+  if (record.required && record.status !== 'resolved') {
+    throw new TypeError(`${recordName} required material did not resolve`);
+  }
+  if (record.status === 'resolved') {
+    if (record.selectedSource === 'none' || !normalizeResref(record.resolvedResref)) {
+      throw new TypeError(`${recordName} resolved record is missing source identity`);
+    }
+    if (!hasDimensions || !hasHash) {
+      throw new TypeError(`${recordName} resolved record requires dimensions and sha256 metadata`);
+    }
+    return;
+  }
+  if (record.required) {
+    throw new TypeError(`${recordName} required material must not be absent`);
+  }
+  if (typeof record.diagnosticCode !== 'string' || !record.diagnosticCode.trim()) {
+    throw new TypeError(`${recordName} absent optional map requires a resolver diagnostic code`);
+  }
+  if (record.status === 'decode-error') {
+    if (record.selectedSource === 'none' || !normalizeResref(record.resolvedResref)) {
+      throw new TypeError(`${recordName} decode error requires the attempted source identity`);
+    }
+    if (hasDimensions || hasHash) {
+      throw new TypeError(`${recordName} decode error must not claim decoded metadata`);
+    }
+    return;
+  }
+  if (record.selectedSource !== 'none') {
+    throw new TypeError(`${recordName} absent optional map must select no source`);
+  }
+  if (hasDimensions || hasHash || normalizeResref(record.resolvedResref)) {
+    throw new TypeError(`${recordName} absent optional map must not claim loaded metadata`);
+  }
+}
+
+function validateCoverage(modules) {
+  for (const requirement of REQUIRED_COVERAGE) {
+    const module = modules.find((candidate) => candidate.module === requirement.module);
+    const covered = module?.records.some((record) => (
+      record.visualCategory === requirement.visualCategory && record.required === true
+    ));
+    if (!covered) {
+      throw new TypeError(`Material audit is missing required visual coverage '${requirement.module}:${requirement.visualCategory}'`);
+    }
+  }
 }
 
 function normalizeResref(value) {

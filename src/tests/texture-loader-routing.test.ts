@@ -162,6 +162,22 @@ describe('production texture resolver routing', () => {
     expect(disposeGui).not.toHaveBeenCalled();
     await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(guiTexture);
   });
+
+  test('keeps a borrowed GUI texture live when a consumer releases it and reloads it', async () => {
+    const guiTexture = texture('effect-icon');
+    const disposeGui = jest.spyOn(guiTexture, 'dispose');
+    const provider = new SyntheticTextureProvider(new Map([
+      ['gui-pack:effect_icon', { texture: guiTexture, txiSource: 'embedded-tpc' }],
+    ]));
+    TextureLoader.setSourceProvider(provider);
+
+    const consumerTexture = await TextureLoader.LoadGUI('effect_icon');
+    TextureLoader.releaseGUITexture(consumerTexture);
+
+    await expect(TextureLoader.LoadGUI('effect_icon')).resolves.toBe(guiTexture);
+    expect(disposeGui).not.toHaveBeenCalled();
+  });
+
 });
 
 describe('Odyssey texture source provider', () => {

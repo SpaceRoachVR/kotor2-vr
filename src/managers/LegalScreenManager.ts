@@ -63,6 +63,6 @@ export class LegalScreenManager {
   static Dispose(){
     this.geometry.dispose();
     this.material.dispose();
-    this.texture.dispose();
+    TextureLoader.releaseGUITexture(this.texture);
   }
 }
