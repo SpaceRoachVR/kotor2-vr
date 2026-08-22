@@ -10,6 +10,7 @@ import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 import { OdysseyMaterialBuilder } from "@/three/odyssey/OdysseyMaterialBuilder";
 import { GameFileSystem } from "@/utility/GameFileSystem";
 import { GameEngineType } from "@/enums/engine";
+import { isTextureResrefUsable, normalizeTextureResref } from "@/loaders/TextureResolution";
 
 type onProgressCallback = (ref: ITextureLoaderQueuedRef, index: number, total: number) => void;
 
@@ -51,7 +52,10 @@ export class TextureLoader {
   static NOCACHE = true;
 
   static async Load(resRef: string, noCache: boolean = false): Promise<OdysseyTexture> {
-    resRef = resRef.toLowerCase();
+    resRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(resRef)) {
+      return undefined;
+    }
     if(!noCache && (TextureLoader.textures.has(resRef) || TextureLoader.guiTextures.has(resRef))){
       return TextureLoader.textures.get(resRef) ?? TextureLoader.guiTextures.get(resRef);
     }

@@ -528,13 +528,20 @@ export class TPCObject {
       cloned.format = this.format;
       cloned.needsUpdate = true;
       cloned.bumpMapType = this.bumpMapType;
-      cloned.header = this.header;
-      cloned.txi = this.txi;
-      return this;
+      cloned.header = this.header ? { ...this.header } : this.header;
+      cloned.pack = this.pack;
+      if (this.txi) {
+        cloned.txi = Object.assign(new TXI(''), this.txi, {
+          upperleftcoords: this.txi.upperleftcoords.map((coordinate: {x: number, y: number, z: number}) => ({ ...coordinate })),
+          lowerrightcoords: this.txi.lowerrightcoords.map((coordinate: {x: number, y: number, z: number}) => ({ ...coordinate })),
+        });
+      } else {
+        cloned.txi = this.txi;
+      }
+      return cloned;
     };
 
     return _texture;
   }
 
 }
-
