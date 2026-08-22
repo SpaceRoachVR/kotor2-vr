@@ -54,6 +54,23 @@ export class MenuContainer extends K1_MenuContainer {
         this.close();
       });
       this._button_a = this.BTN_OK;
+
+      // Dropped the same way BTN_EXIT was in MenuJournal: the parent's
+      // registration is skipped and this one was never re-added, so the
+      // take/give toggle did nothing in either flatscreen or VR.
+      this.BTN_GIVEITEMS.addEventListener('click', (e) => {
+        e.stopPropagation();
+        switch(this.mode){
+          case MenuContainerMode.TAKE_ITEMS:
+            this.setMode(MenuContainerMode.GIVE_ITEMS);
+          break;
+          case MenuContainerMode.GIVE_ITEMS:
+            this.setMode(MenuContainerMode.TAKE_ITEMS);
+          break;
+        }
+      });
+      this._button_x = this.BTN_GIVEITEMS;
+
       resolve();
     });
   }
