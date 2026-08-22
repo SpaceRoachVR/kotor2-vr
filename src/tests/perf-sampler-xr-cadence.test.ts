@@ -21,6 +21,33 @@ describe('PerfSampler XR cadence integration', () => {
       requestedHz: null,
       observedCallbackHz: null,
     });
+    expect(sampler.xrRuntimeHz).toBeNull();
+  });
+
+  test('does not feed the acceptance threshold into native cadence when frameRate is missing', () => {
+    let now = 1000;
+    const sampler = new PerfSampler(() => now);
+    sampler.autoReportSec = 0;
+    sampler.targetHz = 50;
+    sampler.attach(createRenderer() as any);
+    sampler.start('stereo-rest');
+
+    sampler.recordXRCallback(now, true);
+    sampler.recordEngineUpdate('xr', now);
+    sampler.recordXRRender(now);
+    sampler.tick();
+    now += 100;
+    sampler.recordXRCallback(now, true);
+    sampler.recordEngineUpdate('xr', now);
+    sampler.recordXRRender(now);
+    sampler.tick();
+
+    const report = sampler.report();
+
+    expect(report?.overBudget.budgetMs).toBe(20);
+    expect(report?.xrCadence?.runtimeReportedHz).toBeNull();
+    expect(report?.xrCadence?.runtimeBudgetMs).toBeNull();
+    expect(report?.xrCadence?.callbacks.estimatedMissed).toBeNull();
   });
 
   test('defaults rollover to a complete one-minute walking evidence window', () => {
@@ -189,8 +216,8 @@ describe('PerfSampler XR cadence integration', () => {
       memory: { geometries: 20, textures: 30, programs: 4 },
       jsHeapMB: 100,
       xrCadence: {
-        targetHz: 72,
-        budgetMs: 13.89,
+        runtimeReportedHz: 72,
+        runtimeBudgetMs: 13.89,
         durationSec: 60,
         callbacks: {
           xr: 4320,

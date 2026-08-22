@@ -256,6 +256,7 @@ export class VRSpike {
   private static xrFrameRenderTarget: THREE.WebGLRenderTarget | null = null;
   private static readonly inputRouter = new XRInputRouter();
   private static inputCapabilityValidator = new XRInputCapabilityValidator();
+  private static desktopLoopNeedsRestart = false;
   private static readonly sessionController = new XRSessionController({
     requestSession: async () => (navigator as any).xr.requestSession('immersive-vr', {
       optionalFeatures: ['local-floor', 'bounded-floor'],
@@ -264,6 +265,7 @@ export class VRSpike {
     bindSession: async (session) => {
       if (!VRSpike.renderer) throw new Error('XR renderer is unavailable');
       await VRSpike.renderer.xr.setSession(session as any);
+      VRSpike.desktopLoopNeedsRestart = true;
     },
     setAnimationLoopActive: (active) => {
       VRSpike.renderer?.xr.setAnimationLoop(active ? VRSpike.frame : null);
@@ -612,10 +614,41 @@ export class VRSpike {
   private static cleanupXRSession(session: XRSession | null): Promise<void> {
     session?.removeEventListener('visibilitychange', VRSpike.onVisibilityChange);
     session?.removeEventListener('inputsourceschange', VRSpike.onInputSourcesChange);
-    return new Promise((resolve) => queueMicrotask(() => {
-      VRSpike.finishSessionEnd();
-      resolve();
+    return new Promise<void>((resolve, reject) => queueMicrotask(() => {
+      let detachError: unknown = null;
+      try {
+        // Let Three's native raw-session end listener run first when there is
+        // an actual end event. The local dispatch is only needed if that owner
+        // is still bound after the event turn.
+        VRSpike.detachThreeXRSession(session);
+      } catch (error) {
+        detachError = error;
+      } finally {
+        VRSpike.finishSessionEnd();
+      }
+      if (detachError) reject(detachError);
+      else resolve();
     }));
+  }
+
+  /**
+   * Three r149 has no public local-detach method. Its private `end` listener is
+   * the owner that removes controller listeners, restores the pre-XR render
+   * target, clears the bound session, stops its WebXR animation, and flips
+   * `isPresenting`. Dispatching a local end event invokes that teardown when a
+   * runtime `end()` rejection (or a partial `setSession()` failure) does not.
+   */
+  private static detachThreeXRSession(session: XRSession | null): void {
+    if (!session || !VRSpike.renderer) return;
+    const xrManager = VRSpike.renderer.xr as THREE.WebXRManager & {
+      getSession?: () => XRSession | null;
+    };
+    const boundSession = xrManager.getSession?.() ?? null;
+    if (boundSession !== session && !xrManager.isPresenting) return;
+    session.dispatchEvent(new Event('end'));
+    if ((xrManager.getSession?.() ?? null) === session || xrManager.isPresenting) {
+      throw new Error('Three XR manager did not release the ended session locally');
+    }
   }
 
   private static finishSessionEnd = (): void => {
@@ -664,10 +697,15 @@ export class VRSpike {
     const btn = document.getElementById('vr-spike-button');
     if (btn) btn.textContent = 'Enter VR (spike)';
 
-    // Hand the loop back to requestAnimationFrame, exactly once.
-    VRSpike.renderer?.xr.setAnimationLoop(null);
+    // A successful XR bind lets the queued desktop callback drain while Three
+    // presents. Failed binds leave that existing desktop chain intact and must
+    // not start a second chain during rollback.
+    const restartDesktopLoop = VRSpike.desktopLoopNeedsRestart;
+    VRSpike.desktopLoopNeedsRestart = false;
     const update = VRSpike.hooks?.update;
-    if (update) requestAnimationFrame((timestamp) => update(timestamp, 'browser'));
+    if (restartDesktopLoop && update) {
+      requestAnimationFrame((timestamp) => update(timestamp, 'browser'));
+    }
 
     // The engine ignores resizes while an immersive session owns the canvas
     // (GameState.EventOnResize early-returns on xr.isPresenting), so a desktop

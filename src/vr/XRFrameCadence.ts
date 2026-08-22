@@ -13,15 +13,17 @@ export function shouldProcessEngineFrame(
 }
 
 export interface XRFrameCadenceReport {
-  targetHz: number;
-  budgetMs: number;
+  /** Native cadence reported by WebXR. Null means the runtime did not expose it. */
+  runtimeReportedHz: number | null;
+  /** Native frame budget derived only from runtimeReportedHz. */
+  runtimeBudgetMs: number | null;
   durationSec: number;
   callbacks: {
     xr: number;
     browser: number;
     withXRFrame: number;
     duplicateTimestamps: number;
-    estimatedMissed: number;
+    estimatedMissed: number | null;
     perFrameMismatches: number;
   };
   engineUpdates: { xr: number; browser: number; total: number };
@@ -61,15 +63,15 @@ const percentile = (sorted: number[], percent: number): number => {
  * XR timestamps are authoritative; wall-clock time inside the engine is not.
  */
 export class XRFrameCadence {
-  readonly targetHz: number;
-  readonly budgetMs: number;
+  readonly runtimeReportedHz: number | null;
+  readonly runtimeBudgetMs: number | null;
 
   private windowStart = 0;
   private xrCallbacks = 0;
   private browserCallbacks = 0;
   private callbacksWithXRFrame = 0;
   private duplicateTimestamps = 0;
-  private estimatedMissed = 0;
+  private estimatedMissed: number | null;
   private xrUpdates = 0;
   private browserUpdates = 0;
   private xrRenders = 0;
@@ -79,12 +81,13 @@ export class XRFrameCadence {
   private finalizedFrameMismatches = 0;
   private outOfFrameEvents = 0;
 
-  constructor(targetHz: number) {
-    if (!Number.isFinite(targetHz) || targetHz <= 0) {
-      throw new RangeError('XRFrameCadence targetHz must be a positive finite number');
+  constructor(runtimeReportedHz: number | null) {
+    if (runtimeReportedHz !== null && (!Number.isFinite(runtimeReportedHz) || runtimeReportedHz <= 0)) {
+      throw new RangeError('XRFrameCadence runtimeReportedHz must be null or a positive finite number');
     }
-    this.targetHz = targetHz;
-    this.budgetMs = 1000 / targetHz;
+    this.runtimeReportedHz = runtimeReportedHz;
+    this.runtimeBudgetMs = runtimeReportedHz === null ? null : 1000 / runtimeReportedHz;
+    this.estimatedMissed = this.runtimeBudgetMs === null ? null : 0;
   }
 
   start(timestamp: number): void {
@@ -93,7 +96,7 @@ export class XRFrameCadence {
     this.browserCallbacks = 0;
     this.callbacksWithXRFrame = 0;
     this.duplicateTimestamps = 0;
-    this.estimatedMissed = 0;
+    this.estimatedMissed = this.runtimeBudgetMs === null ? null : 0;
     this.xrUpdates = 0;
     this.browserUpdates = 0;
     this.xrRenders = 0;
@@ -115,8 +118,10 @@ export class XRFrameCadence {
         this.duplicateTimestamps++;
       } else {
         this.callbackIntervals.push(interval);
-        const representedFrames = Math.max(1, Math.round(interval / this.budgetMs));
-        this.estimatedMissed += Math.max(0, representedFrames - 1);
+        if (this.runtimeBudgetMs !== null && this.estimatedMissed !== null) {
+          const representedFrames = Math.max(1, Math.round(interval / this.runtimeBudgetMs));
+          this.estimatedMissed += Math.max(0, representedFrames - 1);
+        }
       }
     }
     this.lastXRTimestamp = timestamp;
@@ -173,8 +178,8 @@ export class XRFrameCadence {
       hasUniqueXRTimestamps;
 
     return {
-      targetHz: this.targetHz,
-      budgetMs: round(this.budgetMs),
+      runtimeReportedHz: this.runtimeReportedHz,
+      runtimeBudgetMs: this.runtimeBudgetMs === null ? null : round(this.runtimeBudgetMs),
       durationSec: round(Math.max(0, timestamp - this.windowStart) / 1000),
       callbacks: {
         xr: this.xrCallbacks,

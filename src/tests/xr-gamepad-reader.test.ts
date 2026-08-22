@@ -58,4 +58,30 @@ describe('XRGamepadReader', () => {
       haptics: 'none',
     });
   });
+
+  test('captures handed tracked sources even when they expose no gamepad', () => {
+    const [capability] = XRGamepadReader.readCapabilities([
+      source({ handedness: 'right', gamepad: undefined }),
+    ]);
+
+    expect(capability).toEqual({
+      hand: 'right',
+      profiles: ['oculus-touch-v3'],
+      targetRayMode: 'tracked-pointer',
+      gamepadMapping: '',
+      buttonCount: 0,
+      axisCount: 0,
+      hasGripSpace: true,
+      haptics: 'none',
+    });
+  });
+
+  test('does not advertise a non-callable standard vibration actuator', () => {
+    const gamepad = source().gamepad as Gamepad & { vibrationActuator?: unknown };
+    Object.defineProperty(gamepad, 'vibrationActuator', { value: {}, configurable: true });
+
+    const [capability] = XRGamepadReader.readCapabilities([source({ gamepad })]);
+
+    expect(capability.haptics).toBe('none');
+  });
 });

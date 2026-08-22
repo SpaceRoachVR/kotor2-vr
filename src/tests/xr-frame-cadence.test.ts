@@ -84,6 +84,8 @@ describe('XRFrameCadence', () => {
     const report = cadence.report(4 * (1000 / 90));
 
     expect(report.callbacks.estimatedMissed).toBe(2);
+    expect(report.runtimeReportedHz).toBe(90);
+    expect(report.runtimeBudgetMs).toBe(11.11);
     expect(report.callbackIntervalMs).toEqual({
       min: 11.11,
       p50: 11.11,
@@ -91,6 +93,24 @@ describe('XRFrameCadence', () => {
       p99: 33.33,
       max: 33.33,
     });
+  });
+
+  test('keeps missed-frame estimates and runtime budget unavailable without a reported runtime rate', () => {
+    const cadence = new XRFrameCadence(null);
+
+    cadence.start(0);
+    cadence.recordXRCallback(0, true);
+    cadence.recordEngineUpdate('xr', 0);
+    cadence.recordXRRender(0);
+    cadence.recordXRCallback(100, true);
+    cadence.recordEngineUpdate('xr', 100);
+    cadence.recordXRRender(100);
+
+    const report = cadence.report(100);
+
+    expect(report.runtimeReportedHz).toBeNull();
+    expect(report.runtimeBudgetMs).toBeNull();
+    expect(report.callbacks.estimatedMissed).toBeNull();
   });
 
   test('does not produce a trustworthy report without XR callbacks', () => {

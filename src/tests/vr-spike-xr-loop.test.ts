@@ -124,12 +124,30 @@ describe('VRSpike XR loop ownership', () => {
     const originalSuppressed = GamePad.suppressed;
     afterEachRestore.push(() => { GamePad.suppressed = originalSuppressed; });
     GamePad.suppressed = false;
-    createXRLoopHarness({ setSessionError: new Error('SteamVR binding failed') });
+    const harness = createXRLoopHarness({ setSessionError: new Error('SteamVR binding failed') });
 
     await VRSpike.enter();
 
     expect(GamePad.suppressed).toBe(false);
     expect(VRSpike.session).toBeNull();
+    expect(harness.isPresenting()).toBe(false);
+    expect(harness.boundSession()).toBeNull();
+    expect(harness.currentRenderTarget()).toBe(harness.desktopRenderTarget);
+    expect(harness.sessionListenerCount()).toBe(0);
+    expect(harness.engineUpdates).toEqual([]);
+  });
+
+  test('detaches Three XR locally when the runtime rejects explicit session end', async () => {
+    const harness = createXRLoopHarness({ sessionEndError: new Error('runtime disconnected') });
+
+    await VRSpike.enter();
+    await expect((VRSpike as any).sessionController.end()).rejects.toThrow('runtime disconnected');
+
+    expect(VRSpike.isPresenting).toBe(false);
+    expect(VRSpike.session).toBeNull();
+    expect(harness.boundSession()).toBeNull();
+    expect(harness.currentRenderTarget()).toBe(harness.desktopRenderTarget);
+    expect(harness.sessionListenerCount()).toBe(0);
   });
 
   test('defers browser handoff until native session end listeners finish', async () => {
@@ -1971,12 +1989,17 @@ function xrPose(x: number, y: number, z: number): XRPose {
   } as unknown as XRPose;
 }
 
-function createXRLoopHarness(options: { setSessionError?: Error } = {}): {
+function createXRLoopHarness(options: { setSessionError?: Error; sessionEndError?: Error } = {}): {
   engineUpdates: Array<{ timestamp: number; source: string }>;
   configurationEvents: string[];
   invokeXRFrame: (timestamp: number, frame?: XRFrame) => void;
   endRawSession: () => void;
   xrRenderTarget: object;
+  desktopRenderTarget: object;
+  currentRenderTarget: () => unknown;
+  boundSession: () => XRSession | null;
+  isPresenting: () => boolean;
+  sessionListenerCount: () => number;
   renderTargetsAtRender: unknown[];
   resetRenderTargetToDesktop: () => void;
 } {
@@ -1984,33 +2007,70 @@ function createXRLoopHarness(options: { setSessionError?: Error } = {}): {
   const configurationEvents: string[] = [];
   let xrCallback: CapturedXRCallback | null = null;
   const xrRenderTarget = { isXRRenderTarget: true };
-  let currentRenderTarget: unknown = xrRenderTarget;
+  const desktopRenderTarget = { isXRRenderTarget: false };
+  let currentRenderTarget: unknown = desktopRenderTarget;
   const renderTargetsAtRender: unknown[] = [];
-  let rawSessionEndListeners: Array<() => void> = [];
+  let rawSessionListeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
+  let boundXRSession: XRSession | null = null;
 
-  const createSession = (): XRSession => ({
-    frameRate: 90,
-    inputSources: [],
-    addEventListener: (type: string, listener: () => void): void => {
-      if (type === 'end') rawSessionEndListeners.push(listener);
-    },
-    removeEventListener: (type: string, listener: () => void): void => {
-      if (type === 'end') rawSessionEndListeners = rawSessionEndListeners.filter((candidate) => candidate !== listener);
-    },
-    end: (): void => {
-      for (const listener of rawSessionEndListeners) listener();
-    },
-  } as unknown as XRSession);
+  const dispatchSessionEvent = (type: string): void => {
+    const event = new Event(type);
+    for (const listener of [...(rawSessionListeners.get(type) ?? [])]) {
+      if (typeof listener === 'function') listener(event);
+      else listener.handleEvent(event);
+    }
+  };
+
+  const createSession = (): XRSession => {
+    const session = {
+      frameRate: 90,
+      inputSources: [],
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject): void => {
+        const listeners = rawSessionListeners.get(type) ?? new Set<EventListenerOrEventListenerObject>();
+        listeners.add(listener);
+        rawSessionListeners.set(type, listeners);
+      },
+      removeEventListener: (type: string, listener: EventListenerOrEventListenerObject): void => {
+        rawSessionListeners.get(type)?.delete(listener);
+      },
+      dispatchEvent: (event: Event): boolean => {
+        dispatchSessionEvent(event.type);
+        return true;
+      },
+      end: async (): Promise<void> => {
+        if (options.sessionEndError) throw options.sessionEndError;
+        dispatchSessionEvent('end');
+      },
+    } as unknown as XRSession;
+    return session;
+  };
 
   const xrManager = {
     isPresenting: false,
     setAnimationLoop: (callback: CapturedXRCallback | null) => {
       xrCallback = callback;
     },
-    setSession: async () => {
+    getSession: (): XRSession | null => boundXRSession,
+    setSession: async (session: XRSession) => {
+      boundXRSession = session;
+      const threeOwnedEvents = [
+        'select', 'selectstart', 'selectend', 'squeeze', 'squeezestart',
+        'squeezeend', 'inputsourceschange',
+      ];
+      const onThreeInput = (): void => undefined;
+      const onThreeSessionEnd = (): void => {
+        for (const eventType of threeOwnedEvents) session.removeEventListener(eventType, onThreeInput);
+        session.removeEventListener('end', onThreeSessionEnd);
+        boundXRSession = null;
+        currentRenderTarget = desktopRenderTarget;
+        xrManager.isPresenting = false;
+      };
+      for (const eventType of threeOwnedEvents) session.addEventListener(eventType, onThreeInput);
+      session.addEventListener('end', onThreeSessionEnd);
+      currentRenderTarget = xrRenderTarget;
+      xrManager.isPresenting = true;
       if (options.setSessionError) throw options.setSessionError;
       configurationEvents.push('session-start');
-      xrManager.isPresenting = true;
     },
   };
 
@@ -2041,7 +2101,7 @@ function createXRLoopHarness(options: { setSessionError?: Error } = {}): {
     value: {
       xr: {
         requestSession: async () => {
-          rawSessionEndListeners = [];
+          rawSessionListeners = new Map();
           return createSession();
         },
       },
@@ -2077,12 +2137,15 @@ function createXRLoopHarness(options: { setSessionError?: Error } = {}): {
       xrCallback(timestamp, frame);
     },
     endRawSession: () => {
-      for (const listener of rawSessionEndListeners) listener();
-      // Models Three.js's later raw-session listener completing its teardown
-      // synchronously before queued microtasks are allowed to run.
-      xrManager.isPresenting = false;
+      dispatchSessionEvent('end');
     },
     xrRenderTarget,
+    desktopRenderTarget,
+    currentRenderTarget: () => currentRenderTarget,
+    boundSession: () => boundXRSession,
+    isPresenting: () => xrManager.isPresenting,
+    sessionListenerCount: () => [...rawSessionListeners.values()]
+      .reduce((count, listeners) => count + listeners.size, 0),
     renderTargetsAtRender,
     resetRenderTargetToDesktop: () => {
       currentRenderTarget = null;

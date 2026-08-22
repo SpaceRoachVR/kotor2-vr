@@ -19,8 +19,8 @@ const passingReport = (): PerfWindowReport => ({
   memory: { geometries: 100, textures: 200, programs: 20 },
   jsHeapMB: 800,
   xrCadence: {
-    targetHz: 72,
-    budgetMs: 13.89,
+    runtimeReportedHz: 72,
+    runtimeBudgetMs: 13.89,
     durationSec: 60,
     callbacks: {
       xr: 3119,

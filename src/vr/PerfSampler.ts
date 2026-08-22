@@ -40,7 +40,7 @@ export interface PerfWindowReport {
     simulation: PerfPercentiles;
     render: PerfPercentiles;
   };
-  /** Frames over the target budget, as a count and a share of the window. */
+  /** Frames over the separately configured acceptance budget. */
   overBudget: { budgetMs: number; frames: number; percent: number };
   /** THREE.WebGLRenderer.info at the end of the window. */
   render: { calls: number; triangles: number; points: number; lines: number };
@@ -112,21 +112,33 @@ export class PerfSampler {
    */
   label = 'unlabelled';
 
-  /** User-approved continuation floor: sustained 50 FPS minimum. */
-  targetHz = SUSTAINED_VR_MINIMUM_FPS;
+  /** User-approved acceptance floor. This is not a native runtime cadence claim. */
+  acceptanceThresholdHz = SUSTAINED_VR_MINIMUM_FPS;
+
+  /** Backward-compatible DevTools alias for the acceptance threshold. */
+  get targetHz(): number {
+    return this.acceptanceThresholdHz;
+  }
+
+  set targetHz(value: number) {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new RangeError('PerfSampler targetHz must be a positive finite number');
+    }
+    this.acceptanceThresholdHz = value;
+  }
 
   /** Runtime claims remain distinct from the observed callback cadence. */
   runtimeRates: XRRuntimeRates = EMPTY_XR_RUNTIME_RATES;
 
-  /** Cadence auditing needs a finite hypothesis even when the runtime omits frameRate. */
-  get xrRuntimeHz(): number {
-    return this.runtimeRates.runtimeReportedHz ?? this.targetHz;
+  /** Native cadence is unavailable when WebXR omits XRSession.frameRate. */
+  get xrRuntimeHz(): number | null {
+    return this.runtimeRates.runtimeReportedHz;
   }
 
-  set xrRuntimeHz(value: number) {
+  set xrRuntimeHz(value: number | null) {
     this.runtimeRates = {
       ...this.runtimeRates,
-      runtimeReportedHz: Number.isFinite(value) && value > 0 ? value : null,
+      runtimeReportedHz: typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null,
     };
   }
 
@@ -179,7 +191,7 @@ export class PerfSampler {
     this.renderCpuTimes = [];
     this.windowStart = this.now();
     this.lastFrame = this.windowStart;
-    this.cadence = new XRFrameCadence(this.xrRuntimeHz);
+    this.cadence = new XRFrameCadence(this.runtimeRates.runtimeReportedHz);
     this.cadence.start(this.windowStart);
     this.worldSamples = [];
     this.lastWorldSample = Number.NEGATIVE_INFINITY;
@@ -261,7 +273,7 @@ export class PerfSampler {
     const sorted = [...this.frametimes].sort((a, b) => a - b);
     const reportTimestamp = this.now();
     const durationSec = (reportTimestamp - this.windowStart) / 1000;
-    const budgetMs = 1000 / this.targetHz;
+    const budgetMs = 1000 / this.acceptanceThresholdHz;
     const over = sorted.filter((t) => t > budgetMs).length;
 
     const info = this.renderer.info;

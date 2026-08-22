@@ -4,6 +4,7 @@ import { XRInputCapabilitySnapshot } from '../input/XRInputCapabilityValidator';
 
 type CapabilityGamepad = Gamepad & {
   readonly hapticActuators?: readonly { pulse?: unknown }[];
+  readonly vibrationActuator?: { readonly playEffect?: unknown } | null;
 };
 
 /** Copies transient WebXR Gamepad state into an immutable per-frame snapshot. */
@@ -38,23 +39,21 @@ export class XRGamepadReader {
   static readCapabilities(inputSources: readonly XRInputSource[]): readonly XRInputCapabilitySnapshot[] {
     const capabilities: XRInputCapabilitySnapshot[] = [];
     for (const source of inputSources) {
-      if ((source.handedness !== 'left' && source.handedness !== 'right') || !source.gamepad) continue;
-      const gamepad = source.gamepad as CapabilityGamepad;
-      const vibrationActuator = (gamepad as Gamepad & { readonly vibrationActuator?: unknown }).vibrationActuator;
-      const hasPulseActuator = gamepad.hapticActuators?.some((actuator) =>
+      if (source.handedness !== 'left' && source.handedness !== 'right') continue;
+      const gamepad = source.gamepad as CapabilityGamepad | undefined;
+      const hasPulseActuator = gamepad?.hapticActuators?.some((actuator) =>
         typeof actuator?.pulse === 'function'
       ) ?? false;
+      const hasStandardActuator = typeof gamepad?.vibrationActuator?.playEffect === 'function';
       capabilities.push({
         hand: source.handedness,
         profiles: [...source.profiles],
         targetRayMode: source.targetRayMode,
-        gamepadMapping: gamepad.mapping,
-        buttonCount: gamepad.buttons.length,
-        axisCount: gamepad.axes.length,
+        gamepadMapping: gamepad?.mapping ?? '',
+        buttonCount: gamepad?.buttons.length ?? 0,
+        axisCount: gamepad?.axes.length ?? 0,
         hasGripSpace: source.gripSpace !== undefined,
-        haptics: hasPulseActuator || vibrationActuator !== null && vibrationActuator !== undefined
-          ? 'pulse'
-          : 'none',
+        haptics: hasPulseActuator || hasStandardActuator ? 'pulse' : 'none',
       });
     }
     return capabilities;
