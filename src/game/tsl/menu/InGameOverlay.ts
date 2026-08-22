@@ -374,7 +374,7 @@ export class InGameOverlay extends K1_InGameOverlay {
       //this.lbl_combatbg2.visible = false;
 
       for(const texture of preloadTextures){
-        const tex = await TextureLoader.Load(texture);
+        const tex = await TextureLoader.LoadGUI(texture);
         preloadTexturesMap.set(texture, tex);
       }
 

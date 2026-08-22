@@ -1,6 +1,7 @@
 import type {
   TextureRequest,
   TextureResolution,
+  TextureResolutionSource,
   TextureTxiSource,
 } from '../../src/loaders/TextureResolution';
 import {
@@ -16,6 +17,7 @@ export interface MaterialAuditInput<TTexture> {
   width?: number;
   height?: number;
   sha256?: string;
+  fallback?: string;
 }
 
 export interface MaterialAuditRecord {
@@ -25,6 +27,8 @@ export interface MaterialAuditRecord {
   activeModule?: string;
   status: TextureResolution<unknown>['status'];
   source: TextureResolution<unknown>['source'];
+  selectedSource: TextureResolution<unknown>['source'];
+  searchedSources: readonly TextureResolutionSource[];
   txiSource?: TextureTxiSource;
   diagnosticCode?: string;
   cacheGeneration: number;
@@ -32,6 +36,7 @@ export interface MaterialAuditRecord {
   width?: number;
   height?: number;
   sha256?: string;
+  fallback?: string;
 }
 
 export function createMaterialAuditRecord<TTexture>(
@@ -46,6 +51,7 @@ export function createMaterialAuditRecord<TTexture>(
   const width = validateDimension(input.width, 'width');
   const height = validateDimension(input.height, 'height');
   const sha256 = validateSha256(input.sha256);
+  const fallback = validateFallback(input.fallback);
   validateResolvedMetadata(resolution, width, height, sha256);
   const activeModule = normalizeTextureResref(input.request.activeModule);
   const diagnosticCode = resolution.diagnostic?.code;
@@ -59,6 +65,8 @@ export function createMaterialAuditRecord<TTexture>(
     ...(activeModule ? { activeModule } : {}),
     status: resolution.status,
     source: resolution.source,
+    selectedSource: resolution.source,
+    searchedSources: Object.freeze([...(resolution.searchedSources ?? [])]),
     ...(resolution.txiSource ? { txiSource: resolution.txiSource } : {}),
     ...(diagnosticCode ? { diagnosticCode } : {}),
     cacheGeneration: resolution.cacheGeneration,
@@ -66,7 +74,19 @@ export function createMaterialAuditRecord<TTexture>(
     ...(width !== undefined ? { width } : {}),
     ...(height !== undefined ? { height } : {}),
     ...(sha256 ? { sha256 } : {}),
+    ...(fallback ? { fallback } : {}),
   });
+}
+
+function validateFallback(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = normalizeTextureResref(value);
+  if (!normalized) {
+    throw new TypeError('Material audit fallback must be a non-empty resref');
+  }
+  return normalized;
 }
 
 function validateDimension(value: number | undefined, label: string): number | undefined {

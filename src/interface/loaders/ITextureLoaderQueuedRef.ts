@@ -1,5 +1,6 @@
 import type * as THREE from "three";
 import type { TextureType } from "@/enums/loaders/TextureType";
+import type { TextureSemantic } from "@/loaders/TextureResolution";
 
 /**
  * ITextureLoaderQueuedRef interface.
@@ -14,8 +15,9 @@ import type { TextureType } from "@/enums/loaders/TextureType";
 export interface ITextureLoaderQueuedRef {
   name: string,
   type: TextureType,
-  material?: THREE.ShaderMaterial,
+  material?: THREE.Material,
   partGroup?: any,
   fallback?: string,
+  semantic?: TextureSemantic,
   onLoad?: Function,
 }

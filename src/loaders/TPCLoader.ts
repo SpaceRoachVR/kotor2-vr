@@ -26,6 +26,65 @@ const GUI_TEXTURE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
  * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
  */
 export class TPCLoader {
+
+  decode(buffer: Uint8Array, resRef: string, pack: number = TextureLoaderState.TextureQuality || 2): OdysseyCompressedTexture {
+    const normalizedResRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(normalizedResRef)) {
+      throw new TypeError(`Invalid texture resref '${normalizedResRef || '<empty>'}'`);
+    }
+    if (!(buffer instanceof Uint8Array) || buffer.length === 0) {
+      throw new TypeError(`TPC '${normalizedResRef}' requires a non-empty buffer`);
+    }
+    return new TPCObject({
+      filename: normalizedResRef,
+      file: buffer,
+      pack,
+    }).toCompressedTexture();
+  }
+
+  async findInGuiPack(resRef: string): Promise<IFindTPCResult | undefined> {
+    return this.findInPack('swpc_tex_gui', resRef, 0);
+  }
+
+  async findInTexturePack(resRef: string): Promise<IFindTPCResult | undefined> {
+    const packName = TextureLoaderState.TextureQuality === 1
+      ? 'swpc_tex_tpb'
+      : TextureLoaderState.TextureQuality === 0
+        ? 'swpc_tex_tpc'
+        : 'swpc_tex_tpa';
+    return this.findInPack(packName, resRef, TextureLoaderState.TextureQuality || 2);
+  }
+
+  async findInKeyTable(resRef: string): Promise<IFindTPCResult | undefined> {
+    const normalizedResRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(normalizedResRef)) {
+      throw new TypeError(`Invalid texture resref '${normalizedResRef || '<empty>'}'`);
+    }
+    const resourceKey = KEYManager.Key?.getFileKey(normalizedResRef, ResourceTypes.tpc);
+    if (!resourceKey) {
+      return undefined;
+    }
+    return {
+      pack: TextureLoaderState.TextureQuality || 2,
+      buffer: await KEYManager.Key.getFileBuffer(resourceKey),
+    };
+  }
+
+  private async findInPack(packName: string, resRef: string, pack: number): Promise<IFindTPCResult | undefined> {
+    const normalizedResRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(normalizedResRef)) {
+      throw new TypeError(`Invalid texture resref '${normalizedResRef || '<empty>'}'`);
+    }
+    const archive = ERFManager.ERFs.get(packName);
+    if (!archive) {
+      return undefined;
+    }
+    const resource = archive.getResourceInfo(normalizedResRef, ResourceTypes.tpc);
+    if (!resource) {
+      return undefined;
+    }
+    return { pack, buffer: await archive.getResourceBuffer(resource) };
+  }
   
   async findTPC( resRef: string ): Promise<IFindTPCResult> {
     resRef = normalizeTextureResref(resRef);
@@ -86,13 +145,7 @@ export class TPCLoader {
   async fetch(resRef: string = ''): Promise<OdysseyCompressedTexture>{
     try{
       const result = await this.findTPC(resRef);
-      const tpc = new TPCObject({
-        filename: resRef,
-        file: result.buffer,
-        pack: result.pack,
-      });
-
-      let texture = tpc.toCompressedTexture();
+      const texture = this.decode(result.buffer, resRef, result.pack);
       //console.log("loaded texture", resRef);
 
       return texture;

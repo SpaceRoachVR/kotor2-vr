@@ -158,21 +158,21 @@ export class LBL_MapView {
     this.scene.add(this.mapGroup);
     this.scene.add(this.fogGroup);
 
-    TextureLoader.Load('blackdot').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('blackdot').then((texture: OdysseyTexture) => {
       fogPlaneMaterial.uniforms.map.value = texture;
       this.fogTexture = texture;
     });
 
-    TextureLoader.Load('mm_barrow').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('mm_barrow').then((texture: OdysseyTexture) => {
       this.arrowTexture = texture;
       (this.arrowPlane.material as THREE.MeshBasicMaterial).map = texture;
     });
 
-    TextureLoader.Load('whitetarget').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('whitetarget').then((texture: OdysseyTexture) => {
       this.noteTexture = texture;
     });
 
-    TextureLoader.Load('lbl_mapcircle').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('lbl_mapcircle').then((texture: OdysseyTexture) => {
       this.pmTexture = pmCircleMaterial.map = texture;
     });
   }

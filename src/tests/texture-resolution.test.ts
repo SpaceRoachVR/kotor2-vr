@@ -180,6 +180,7 @@ describe('TextureResolver', () => {
       resolvedResref: 'panel',
       source: 'override-tga',
       cacheGeneration: 1,
+      searchedSources: ['override-tga'],
       diagnostic: {
         code: 'decode-error',
         message: "Failed to decode diffuse texture 'panel' from override-tga: invalid TGA header",
@@ -349,6 +350,8 @@ describe('material audit records', () => {
       activeModule: '101per',
       status: 'resolved',
       source: 'gui-pack',
+      selectedSource: 'gui-pack',
+      searchedSources: [],
       cacheGeneration: 4,
       width: 64,
       height: 32,
@@ -381,6 +384,8 @@ describe('material audit records', () => {
       semantic: 'diffuse',
       status: 'resolved',
       source: 'override-tga',
+      selectedSource: 'override-tga',
+      searchedSources: [],
       txiSource: 'override-txi',
       cacheGeneration: 2,
     });

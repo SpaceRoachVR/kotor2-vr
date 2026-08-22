@@ -44,7 +44,7 @@ const DEFAULT_CAPACITY = 64;
 
 export const DEFAULT_VR_ACTION_ICON_TEXTURE_LOADER: VRActionIconTextureLoader = {
   async load(resref: string): Promise<THREE.Texture | null> {
-    const sharedTexture = await TextureLoader.Load(resref);
+    const sharedTexture = await TextureLoader.LoadGUI(resref);
     if (!sharedTexture) return null;
     const ownedTexture = sharedTexture.clone();
     ownedTexture.needsUpdate = true;

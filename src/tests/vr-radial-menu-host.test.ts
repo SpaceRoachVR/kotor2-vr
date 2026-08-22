@@ -198,10 +198,10 @@ describe('VRRadialMenuHost', () => {
   });
 
   test('clones overlapping shared engine icon results and disposes only host-owned textures', async () => {
-    const deferred = createDeferred<Awaited<ReturnType<typeof TextureLoader.Load>>>();
-    const sharedEngineTexture = new THREE.Texture() as Awaited<ReturnType<typeof TextureLoader.Load>>;
+    const deferred = createDeferred<Awaited<ReturnType<typeof TextureLoader.LoadGUI>>>();
+    const sharedEngineTexture = new THREE.Texture() as Awaited<ReturnType<typeof TextureLoader.LoadGUI>>;
     const sharedDispose = jest.spyOn(sharedEngineTexture, 'dispose');
-    jest.spyOn(TextureLoader, 'Load').mockImplementation(() => deferred.promise);
+    jest.spyOn(TextureLoader, 'LoadGUI').mockImplementation(() => deferred.promise);
     const first = createHostWithDefaultLoader();
     const second = createHostWithDefaultLoader();
     const iconMenu = menu('root', [action('attack', 'Attack', 'shared-icon')]);

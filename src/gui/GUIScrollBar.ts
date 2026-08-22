@@ -58,7 +58,7 @@ export class GUIScrollBar extends GUIControl{
     if(this.control.hasField('DIR')){
       this._dir = this.control.getFieldByLabel('DIR')?.getChildStructs()[0];
       if(this._dir?.hasField('IMAGE')){
-        TextureLoader.tpcLoader.fetch(this._dir.getFieldByLabel('IMAGE')?.getValue()).then((texture: OdysseyTexture) => {
+        TextureLoader.LoadGUI(this._dir.getFieldByLabel('IMAGE')?.getValue()).then((texture: OdysseyTexture) => {
           this.arrowTex = texture;
           
           //Up Arrow

@@ -172,7 +172,7 @@ export class GameMenu {
      * Background texture of the menu
      */
     if(this.background){
-      const texture: OdysseyTexture = await TextureLoader.tpcLoader.fetch(this.background);
+      const texture: OdysseyTexture = await TextureLoader.LoadGUI(this.background);
       const geometry = new THREE.PlaneGeometry( 1600, 1200, 1 );
       this.backgroundMaterial = new THREE.ShaderMaterial({
         uniforms: THREE.UniformsUtils.merge([
@@ -190,7 +190,7 @@ export class GameMenu {
   }
 
   async loadTexture( resRef: string ): Promise<OdysseyTexture> {
-    return await TextureLoader.Load(resRef);
+    return await TextureLoader.LoadGUI(resRef);
   }
 
   getControlByName(name: string): GUIControl {

@@ -231,7 +231,7 @@ export class CharGenPortCust extends GameMenu {
     this.LBL_PORTRAIT.show();
     if (this.LBL_PORTRAIT.getFillTextureName() != portraitResRef) {
       this.LBL_PORTRAIT.setFillTextureName(portraitResRef);
-      TextureLoader.tpcLoader.fetch(portraitResRef).then((texture: OdysseyTexture) => {
+      TextureLoader.LoadGUI(portraitResRef).then((texture: OdysseyTexture) => {
         this.LBL_PORTRAIT.setFillTexture(texture);
       });
     }

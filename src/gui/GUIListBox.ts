@@ -894,18 +894,18 @@ GUIListBox.InitTextures = function(){
       }else{
         name = 'lbl_hex_'+(i+1);
       }
-      TextureLoader.Load(name).then((texture: OdysseyTexture) => {
+      TextureLoader.LoadGUI(name).then((texture: OdysseyTexture) => {
         GUIListBox.hexTextures.set(texture?.name, texture);
       });
     }
   }else{
-    TextureLoader.Load('uibit_eqp_itm1').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('uibit_eqp_itm1').then((texture: OdysseyTexture) => {
       GUIListBox.hexTextures.set(texture?.name, texture);
     });
-    TextureLoader.Load('uibit_eqp_itm2').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('uibit_eqp_itm2').then((texture: OdysseyTexture) => {
       GUIListBox.hexTextures.set(texture?.name, texture);
     });
-    TextureLoader.Load('uibit_eqp_itm3').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('uibit_eqp_itm3').then((texture: OdysseyTexture) => {
       GUIListBox.hexTextures.set(texture?.name, texture);
     });
   }

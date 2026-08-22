@@ -129,7 +129,7 @@ export class MenuMap extends GameMenu {
 
   SetMapTexture(sTexture = '') {
     try {
-      TextureLoader.Load(sTexture).then((texture: OdysseyTexture) => {
+      TextureLoader.LoadGUI(sTexture).then((texture: OdysseyTexture) => {
         this.miniMap.setTexture(texture);
       });
     } catch (e: any) {

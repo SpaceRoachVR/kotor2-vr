@@ -53,6 +53,8 @@ export interface TextureDiagnostic {
 interface TextureResolutionBase {
   requestedResref: string;
   cacheGeneration: number;
+  /** Ordered sources actually consulted for this resolution. */
+  searchedSources?: readonly ResolvedTextureSource[];
 }
 
 export interface ResolvedTextureResolution<TTexture> extends TextureResolutionBase {
@@ -125,6 +127,11 @@ type ExactResolution<TTexture> =
   | { status: 'resolved'; artifact: TextureSourceArtifact<TTexture>; source: ResolvedTextureSource }
   | { status: 'decode-error'; source: ResolvedTextureSource; error: unknown };
 
+interface ExactResolutionAttempt<TTexture> {
+  exact?: ExactResolution<TTexture>;
+  searchedSources: ResolvedTextureSource[];
+}
+
 const TEXTURE_SEMANTICS = new Set<TextureSemantic>([
   'diffuse', 'lightmap', 'normal', 'bump', 'environment',
   'gui', 'font', 'particle', 'other',
@@ -182,6 +189,7 @@ export class TextureResolver<TTexture> {
         requestedResref,
         source: 'none',
         cacheGeneration,
+        searchedSources: [],
         diagnostic: {
           code: 'invalid-resref',
           message: `Rejected texture sentinel '${requestedResref || '<empty>'}' before resource lookup`,
@@ -190,23 +198,32 @@ export class TextureResolver<TTexture> {
     }
 
     const direct = await this.resolveExact(requestedResref, request.semantic, activeModule);
-    if (direct) {
-      return this.toResolution(direct, request, requestedResref, requestedResref, cacheGeneration);
+    if (direct.exact) {
+      return this.toResolution(
+        direct.exact,
+        request,
+        requestedResref,
+        requestedResref,
+        cacheGeneration,
+        direct.searchedSources,
+      );
     }
 
     const alias = request.allowAlias ? this.aliases.get(requestedResref) : undefined;
     if (alias) {
       const aliased = await this.resolveExact(alias.resolvedResref, request.semantic, activeModule);
-      if (aliased) {
+      if (aliased.exact) {
         return this.toResolution(
-          aliased,
+          aliased.exact,
           request,
           requestedResref,
           alias.resolvedResref,
           cacheGeneration,
+          [...direct.searchedSources, ...aliased.searchedSources],
           alias.evidence,
         );
       }
+      direct.searchedSources.push(...aliased.searchedSources);
     }
 
     const isOptional = isOptionalTextureSemantic(request.semantic);
@@ -215,6 +232,7 @@ export class TextureResolver<TTexture> {
       requestedResref,
       source: 'none',
       cacheGeneration,
+      searchedSources: direct.searchedSources,
       diagnostic: {
         code: isOptional ? 'missing-optional-texture' : 'missing-required-texture',
         message: isOptional
@@ -230,6 +248,7 @@ export class TextureResolver<TTexture> {
     requestedResref: string,
     resolvedResref: string,
     cacheGeneration: number,
+    searchedSources: readonly ResolvedTextureSource[],
     aliasEvidence?: string,
   ): ResolvedTextureResolution<TTexture> | DecodeErrorTextureResolution {
     if (exact.status === 'decode-error') {
@@ -239,6 +258,7 @@ export class TextureResolver<TTexture> {
         resolvedResref,
         source: exact.source,
         cacheGeneration,
+        searchedSources,
         ...(aliasEvidence ? { aliasEvidence } : {}),
         diagnostic: {
           code: 'decode-error',
@@ -253,6 +273,7 @@ export class TextureResolver<TTexture> {
       resolvedResref,
       source: exact.source,
       cacheGeneration,
+      searchedSources,
       ...(exact.artifact.txiSource ? { txiSource: exact.artifact.txiSource } : {}),
       ...(aliasEvidence ? { aliasEvidence } : {}),
       texture: exact.artifact.texture,
@@ -263,7 +284,7 @@ export class TextureResolver<TTexture> {
     resref: string,
     semantic: TextureSemantic,
     activeModule?: string,
-  ): Promise<ExactResolution<TTexture> | undefined> {
+  ): Promise<ExactResolutionAttempt<TTexture>> {
     const sources: ResolvedTextureSource[] = ['override-tga', 'override-tpc'];
     if (activeModule) {
       sources.push('active-module');
@@ -273,18 +294,20 @@ export class TextureResolver<TTexture> {
     }
     sources.push('texture-pack', 'key-bif');
 
+    const searchedSources: ResolvedTextureSource[] = [];
     for (const source of sources) {
+      searchedSources.push(source);
       try {
         const artifact = await this.provider.load(source, resref, activeModule);
         if (artifact !== undefined && artifact !== null) {
           validateTextureSourceArtifact(artifact, source, resref);
-          return { status: 'resolved', source, artifact };
+          return { exact: { status: 'resolved', source, artifact }, searchedSources };
         }
       } catch (error) {
-        return { status: 'decode-error', source, error };
+        return { exact: { status: 'decode-error', source, error }, searchedSources };
       }
     }
-    return undefined;
+    return { searchedSources };
   }
 
   private readCacheGeneration(): number {
@@ -401,6 +424,13 @@ export function validateTextureResolution<TTexture>(
   }
   if (resolution.requestedResref !== normalizeTextureResref(resolution.requestedResref)) {
     throw new TypeError('Texture resolution requested resref must be normalized');
+  }
+  if (resolution.searchedSources !== undefined) {
+    if (!Array.isArray(resolution.searchedSources) || resolution.searchedSources.some(
+      (source) => !RESOLVED_TEXTURE_SOURCES.has(source),
+    )) {
+      throw new TypeError('Texture resolution searched sources must contain only concrete sources');
+    }
   }
 
   switch (resolution.status) {

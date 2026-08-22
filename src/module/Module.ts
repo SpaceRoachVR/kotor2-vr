@@ -532,11 +532,9 @@ export class Module {
       }
     }
 
-    //Cleanup texture cache
-    Array.from(TextureLoader.textures.keys()).forEach( (key) => {
-      TextureLoader.textures.get(key).dispose();
-      TextureLoader.textures.delete(key); 
-    });
+    //Dispose only resources owned by the departing module generation. Shared
+    //GUI and global pack textures survive transitions and remain valid.
+    TextureLoader.endModule();
 
     //Clear walkmesh list
     while (GameState.walkmeshList.length){
@@ -871,6 +869,7 @@ export class Module {
     module.transWP = waypoint;
     if(!modName){ return module; }
     try{
+      TextureLoader.beginModule(modName);
       GameState.ModuleObjectManager.Reset();
       const archives = await Module.GetModuleArchives(modName);
       await ResourceLoader.InitModuleCache(archives);
@@ -902,6 +901,7 @@ export class Module {
 
       return module;
     }catch(e){
+      TextureLoader.endModule();
       console.log(`Module.Load: failed to load module.`);
       console.error(e);
     }

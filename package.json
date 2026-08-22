@@ -19,7 +19,8 @@
     "typedoc": "typedoc --out ./wiki ./src/KotOR.ts",
     "test": "jest --verbose --coverage --no-cache ./src/tests",
     "xr:benchmark:build": "node tools/xr-benchmark/build.js",
-    "xr:benchmark:check": "tsc --noEmit -p tools/xr-benchmark/tsconfig.json && node tools/xr-benchmark/build.js"
+    "xr:benchmark:check": "tsc --noEmit -p tools/xr-benchmark/tsconfig.json && node tools/xr-benchmark/build.js",
+    "material:audit": "node tools/material-audit/visual-manifest.js"
   },
   "author": "KobaltBlu",
   "license": "GPL-3.0",

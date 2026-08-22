@@ -2190,7 +2190,10 @@ export class GameState implements EngineContext {
        */
       TextureLoader.enQueue(GameState.preloadTextures,
         undefined,
-        TextureType.TEXTURE
+        TextureType.TEXTURE,
+        undefined,
+        undefined,
+        'particle'
       );
 
       if(GameState.GameKey == GameEngineType.KOTOR){

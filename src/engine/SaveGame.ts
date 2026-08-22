@@ -747,10 +747,10 @@ export class SaveGame {
     }catch(e){
       console.error(e);
       try{
-        this.thumbnail = await TextureLoader.Load('load_'+this.getLastModule());
+        this.thumbnail = await TextureLoader.LoadGUI('load_'+this.getLastModule());
       }catch(e){
         try{
-          this.thumbnail = await TextureLoader.Load('whitefill');
+          this.thumbnail = await TextureLoader.LoadGUI('whitefill');
         }catch(e){
           console.error(e);
         }
@@ -787,7 +787,7 @@ export class SaveGame {
     }
 
     if(typeof name === 'string'){
-      return await TextureLoader.Load(name);
+      return await TextureLoader.LoadGUI(name);
     }
     
     return undefined

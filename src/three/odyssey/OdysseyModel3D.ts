@@ -954,7 +954,7 @@ export class OdysseyModel3D extends OdysseyObject3D {
 
       if(typeof shieldTexName == 'string' && shieldTexName.length){
         skinMaterial.userData.shield = shieldTexName;
-        TextureLoader.enQueue(shieldTexName, skinMaterial, TextureType.TEXTURE);
+        TextureLoader.enQueue(shieldTexName, skinMaterial, TextureType.TEXTURE, undefined, undefined, 'diffuse');
       }
 
       //Reuse the same skeleton
@@ -1606,7 +1606,7 @@ export class OdysseyModel3D extends OdysseyObject3D {
 
       if(!!tMap1 && tMap1 != 'toolcolors'){
         material.userData.map = tMap1;
-        TextureLoader.enQueue(tMap1, material, TextureType.TEXTURE, undefined, fallbackTexture);
+        TextureLoader.enQueue(tMap1, material, TextureType.TEXTURE, undefined, fallbackTexture, 'diffuse');
       }else{
         if(material instanceof THREE.ShaderMaterial){
           material.uniforms.diffuse.value.copy(odysseyNode.diffuse);
@@ -1729,7 +1729,7 @@ export class OdysseyModel3D extends OdysseyObject3D {
       for(let i = 0, len = odysseyNode.flare.textures.length; i < len; i++){
         TextureLoader.enQueue(odysseyNode.flare.textures[i], null, TextureType.TEXTURE, (texture: OdysseyTexture) => {
           lensFlare.addElement( new LensflareElement( texture, odysseyNode.flare.sizes[i],  odysseyNode.flare.positions[i],  odysseyNode.flare.colorShifts[i] ) );
-        });
+        }, undefined, 'particle');
       }
 
       if(!options.manageLighting){

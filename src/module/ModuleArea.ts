@@ -866,11 +866,13 @@ export class ModuleArea extends ModuleObject {
     GameState.MenuManager.LoadScreen.open();
     GameState.MenuManager.LoadScreen.LBL_HINT.setText('');
     GameState.loadingTextures = true;
-    //Cleanup texture cache
-    Array.from(TextureLoader.textures.keys()).forEach( (key) => {
-      TextureLoader.textures.get(key).dispose();
-      TextureLoader.textures.delete(key); 
-    });
+    //Refresh only module-owned material resources. Shared GUI/global textures
+    //remain live while the current module receives a new cache generation.
+    const moduleName = this.module?.filename;
+    TextureLoader.endModule();
+    if (moduleName) {
+      TextureLoader.beginModule(moduleName);
+    }
 
 
     for(let i = 0; i < this.rooms.length; i++){

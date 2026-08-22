@@ -58,6 +58,11 @@ export class OdysseyMaterialBuilder {
     delete material.defines.RANDOM;
     delete material.defines.RINGTEXDISTORT;
     delete material.defines.USE_ENVMAP;
+    delete material.defines.USE_NORMALMAP;
+    delete material.defines.USE_BUMPMAP;
+    delete material.defines.USE_DISPLACEMENTMAP;
+    delete material.defines.TANGENTSPACE_NORMALMAP;
+    delete material.defines.OBJECTSPACE_NORMALMAP;
     delete material.defines.ENVMAP_TYPE_CUBE;
     delete material.defines.ENVMAP_MODE_REFLECTION;
     delete material.defines.ENVMAP_BLENDING_ADD;
@@ -71,6 +76,12 @@ export class OdysseyMaterialBuilder {
     }
     if(material.uniforms.envMap){
       material.uniforms.envMap.value = null;
+    }
+    if(material.uniforms.normalMap){
+      material.uniforms.normalMap.value = null;
+    }
+    if(material.uniforms.bumpMap){
+      material.uniforms.bumpMap.value = null;
     }
     if(material.uniforms.waterAlpha){
       material.uniforms.waterAlpha.value = 1;
@@ -130,8 +141,6 @@ export class OdysseyMaterialBuilder {
             material.uniformsNeedUpdate = true;
           }
         }
-      }else{
-        console.error(`Envmap missing: ${texture.txi.envMapTexture}`);
       }
     }
 

@@ -878,7 +878,7 @@ export class ModuleRoom extends ModuleObject {
       }
       
       // Load lightmap texture
-      TextureLoader.Load(lm_texture).then((lightMap: OdysseyTexture) => {
+      TextureLoader.LoadLightmap(lm_texture).then((lightMap: OdysseyTexture) => {
         if(!lightMap) return;
         
         lightMap.minFilter = THREE.LinearFilter;
