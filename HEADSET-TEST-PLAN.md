@@ -96,6 +96,7 @@ physically unpleasant rather than merely wrong.
 | D13 | Screens → **Messages** | Opens; feedback log readable |
 | D14 | Screens → **Options** | Opens; distinct from Comfort Settings, which stays on the top level |
 | D15 | Look at every wedge icon on the wheel | Real KOTOR icons, **not** generic fallback shapes. All wheel icons were wrong names until this session |
+| D16 | Queue some actions, then wheel → **Clear Actions** | Wedge appears only while something is queued or combat is live; clears the queue and drops combat |
 
 ## E. Interaction and world prompts (Phase 3.9)
 
@@ -116,7 +117,8 @@ physically unpleasant rather than merely wrong.
 |---|---|---|
 | F1 | Swing a lightsaber at an enemy | Every swing animates and connects visually |
 | F2 | Watch the hilt round timer | Only on-tempo swings roll; timer reads clearly |
-| F3 | Grab with the left hand mid-swing | Promotes to two-handed. **Known partial** — the left hand's own pose does not contribute to the swing |
+| F3 | Grab with the left hand **near the hilt** mid-swing | Promotes to two-handed. Then hold the dominant hand still and swing with the **left hand alone** — the blade should still register a swing |
+| F9 | Hold the grip with your hands **far apart** | Does *not* promote — that isn't two hands on one hilt |
 | F4 | Fire a blaster | Laser pointer aims; damage is stat-rolled; roll cooldown respected |
 | F5 | Get shot at while wielding a saber | Automatic deflection fires per the Jedi Defense feats |
 | F6 | Force push / pull flick | Gesture registers; targets the thing you are looking at, not a stale target |
@@ -139,7 +141,8 @@ physically unpleasant rather than merely wrong.
 
 | # | What to do | What "pass" looks like |
 |---|---|---|
-| H1 | Look for white boxes / missing textures | None on world surfaces or on inventory and ability icons |
+| H1 | Look for white boxes / missing textures | Far fewer than before — a GUI-pack search bug was fixed, taking distinct failures from 20 to 14. The remaining 14 are genuinely absent from the install (several are K1 names), so note *where* any white box appears |
+| H6 | Open the **galaxy map** | Its particle textures (`gui_galxy_1..3`, `gui_sun_1`) were among those fixed — this is the most likely resolution of the long-open 1.9 |
 | H2 | Watch for menu mirroring artefacts | Never root-caused; a diagnostic is in place — capture the console |
 | H3 | Run the perf window in `101PER` | Sustained ≥ 50 FPS, p90 ≤ 33.33 ms, p99 < 50 ms |
 | H4 | Play ten minutes without reloading | Memory stable; no climbing load times |
@@ -147,7 +150,9 @@ physically unpleasant rather than merely wrong.
 
 ## I. Known-unfinished — confirm the gap, do not treat as a bug
 
-- **3.3** Two-handed saber is a mode flag, not dual-wielded tracking.
+- **3.3** Now genuine: the grip requires the hands within 0.35 m and the swing is
+  measured 0.6 m along the blade. Thresholds may need tuning against real hand
+  poses — swing events carry `gripSeparationMetres` for exactly that.
 - **4.2** No distinct physical/3D inventory; the flat 2D one reprojects.
 - **4.4** Resolved: skill checks are ordinary dialogue reply rows, not a panel,
   and the generic list adapter already covers them. Only G6 confirmation is left.
