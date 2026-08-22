@@ -28,6 +28,7 @@ import { VRTeleportController } from "./runtime/VRTeleportController";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
+import { VRRecenterHoldGate } from "./runtime/VRRecenterHoldGate";
 import { VRHiltTimerHost } from "./runtime/VRHiltTimerHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
@@ -121,6 +122,19 @@ export interface VRSpikeHooks {
   /** Comfort settings (ROADMAP 2.5/2.6): locomotion/turn mode and vignette. */
   getComfortSettings?: () => VRComfortSettings;
   setComfortSettings?: (patch: Partial<VRComfortSettings>) => void;
+  /**
+   * Flips the player between the engine's walk and run rates. The rates and the
+   * `walk` flag already exist on the creature and already feed
+   * `getMovementSpeed()`; only VR had no way to reach them.
+   */
+  toggleWalkRun?: () => void;
+  /** Toggles the engine's own pause, as the flatscreen pause control does. */
+  togglePause?: () => void;
+  /**
+   * Cycles the party leader to the next member. The action wheel's Party
+   * submenu remains the way to pick a specific one.
+   */
+  cyclePartyLeader?: () => boolean;
   /** Instantly relocates the player, e.g. for a committed blink-teleport. */
   teleportPlayer?: (point: THREE.Vector3) => void;
   /** Follower camera facing, radians about the world Z axis. */
@@ -285,7 +299,11 @@ export class VRSpike {
   private static readonly snapTurnController = new VRSnapTurnController();
   private static readonly teleportController = new VRTeleportController();
   private static locomotionModeToggleHeld = false;
-  private static recenterHeld = false;
+  private static readonly recenterHoldGate = new VRRecenterHoldGate();
+  private static walkRunToggleHeld = false;
+  private static walkRunToggleErrorReported = false;
+  private static pauseToggleHeld = false;
+  private static partyCommandHeld = false;
   private static comfortVignetteHost: VRComfortVignetteHost | null = null;
   private static hiltTimerHost: VRHiltTimerHost | null = null;
   private static blasterLaserHost: VRBlasterLaserHost | null = null;
@@ -617,7 +635,10 @@ export class VRSpike {
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
     VRSpike.locomotionModeToggleHeld = false;
-    VRSpike.recenterHeld = false;
+    VRSpike.recenterHoldGate.reset();
+    VRSpike.walkRunToggleHeld = false;
+    VRSpike.pauseToggleHeld = false;
+    VRSpike.partyCommandHeld = false;
     VRSpike.panelInputController.cancel();
     VRSpike.panelHost?.clear();
     VRSpike.keyboardHost?.clear();
@@ -691,7 +712,10 @@ export class VRSpike {
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
     VRSpike.locomotionModeToggleHeld = false;
-    VRSpike.recenterHeld = false;
+    VRSpike.recenterHoldGate.reset();
+    VRSpike.walkRunToggleHeld = false;
+    VRSpike.pauseToggleHeld = false;
+    VRSpike.partyCommandHeld = false;
     VRSpike.panelHost?.clear();
     VRSpike.keyboardHost?.clear();
     VRSpike.movieHost?.clear();
@@ -2053,12 +2077,71 @@ export class VRSpike {
       }
       VRSpike.locomotionModeToggleHeld = togglePressed;
 
-      // Recenter is edge-triggered: holding the button must not recentre every
-      // frame, which would pin the head to the origin and fight real movement.
+      // Recenter is a long press, matching how recentring works on the Meta
+      // platform. The system's own recenter is a long press of the Meta button,
+      // but that button is reserved by the OS for the universal menu and is
+      // never delivered to WebXR — the right controller exposes only trigger,
+      // squeeze, thumbstick, A, B, and thumbrest — so the gesture lives on the
+      // dominant thumbstick click instead.
+      //
+      // The hold is not just convention here. That stick is also Turn, so a
+      // press-triggered recenter would fire on any stray click mid-turn, and an
+      // unwanted recenter is a genuine comfort event. Requiring the hold makes
+      // that essentially impossible while keeping the control discoverable.
+      //
+      // It fires once when the threshold is crossed, not repeatedly while held:
+      // recentring every frame would pin the head to the origin and fight the
+      // player's real movement.
       const recenterPressed = routedActions.some((action) =>
         action.action === SemanticXRAction.Recenter && action.pressed
       );
-      if (recenterPressed && !VRSpike.recenterHeld) {
+      // Walk/run, on the offhand thumbstick click. The engine has carried walk
+      // and run rates and an `isWalking()` flag all along — only the VR path had
+      // no way to reach them, which is why this looked like it had nothing to
+      // toggle. Edge-triggered so a held click does not oscillate every frame.
+      const walkRunPressed = routedActions.some((action) =>
+        action.action === SemanticXRAction.ToggleWalkRun && action.pressed
+      );
+      if (walkRunPressed && !VRSpike.walkRunToggleHeld) {
+        try {
+          VRSpike.hooks?.toggleWalkRun?.();
+        } catch (error) {
+          if (!VRSpike.walkRunToggleErrorReported) {
+            VRSpike.walkRunToggleErrorReported = true;
+            console.error('[VRSpike] walk/run toggle rejected', error);
+          }
+        }
+      }
+      VRSpike.walkRunToggleHeld = walkRunPressed;
+
+      // Pause and PartyCommand are 'global' context, routed here alongside
+      // Recenter for the same reason: this path already runs every XR frame
+      // that gameplay owns. Both are edge-triggered.
+      const pausePressed = routedActions.some((action) =>
+        action.action === SemanticXRAction.Pause && action.pressed
+      );
+      if (pausePressed && !VRSpike.pauseToggleHeld) {
+        try {
+          VRSpike.hooks?.togglePause?.();
+        } catch (error) {
+          console.error('[VRSpike] pause toggle rejected', error);
+        }
+      }
+      VRSpike.pauseToggleHeld = pausePressed;
+
+      const partyPressed = routedActions.some((action) =>
+        action.action === SemanticXRAction.PartyCommand && action.pressed
+      );
+      if (partyPressed && !VRSpike.partyCommandHeld) {
+        try {
+          VRSpike.hooks?.cyclePartyLeader?.();
+        } catch (error) {
+          console.error('[VRSpike] party leader cycle rejected', error);
+        }
+      }
+      VRSpike.partyCommandHeld = partyPressed;
+
+      if (VRSpike.recenterHoldGate.update(recenterPressed, timestamp)) {
         VRSpike.applyRecenter(
           viewerPose.transform.position,
           rig.quaternion.clone().multiply(
@@ -2071,7 +2154,6 @@ export class VRSpike {
           )
         );
       }
-      VRSpike.recenterHeld = recenterPressed;
 
       const rawMoveAxes = new THREE.Vector2(move.axes[0], -move.axes[1]);
       const inputDirection = rawMoveAxes.clone();

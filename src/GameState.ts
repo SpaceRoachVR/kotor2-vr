@@ -1716,6 +1716,39 @@ export class GameState implements EngineContext {
       getCurrentRoomWalkmesh: () => GameState.getCurrentPlayer()?.room?.collisionManager?.walkmesh ?? null,
       getComfortSettings: () => ({ ...vrComfortSettings }),
       setComfortSettings: (patch) => Object.assign(vrComfortSettings, patch),
+      // Walk/run already exists on the creature: `getMovementSpeed()` picks
+      // between the walkrate and runrate columns of creaturespeed.2da based on
+      // `isWalking()`. VR simply had no route to the flag.
+      toggleWalkRun: () => {
+        const player = GameState.getCurrentPlayer();
+        if (!player) return;
+        player.walk = !player.walk;
+      },
+      togglePause: () => {
+        GameState.State = GameState.State === EngineState.PAUSED
+          ? EngineState.RUNNING
+          : EngineState.PAUSED;
+      },
+      // Cycles the party leader to the next member.
+      //
+      // PartyCommand had no defined intent, and the obvious reading — open the
+      // party wheel — is not the cheap option it looks like: the wheel is a
+      // state machine keyed on the Menu button being held, with no imperative
+      // "open this submenu" entry point, so forcing one open would mean surgery
+      // on the ownership boundaries 3.8 deliberately separated. Cycling the
+      // leader gives the button a real job using the same `SwitchLeaderAtIndex`
+      // route the wheel's Party submenu already calls, and the wheel remains
+      // the way to pick a *specific* member.
+      cyclePartyLeader: () => {
+        const members = snapshotVRPartyMembers();
+        for (const member of members) {
+          const index = member.resolveCurrentIndex();
+          if (!Number.isInteger(index) || index <= 0) continue;
+          member.switchLeader(index);
+          return true;
+        }
+        return false;
+      },
       teleportPlayer: (point) => {
         const player = GameState.getCurrentPlayer();
         if (!player) return;

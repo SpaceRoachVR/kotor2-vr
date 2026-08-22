@@ -198,3 +198,67 @@ describe('XRInputRouter', () => {
     expect(move?.value).toBe(1);
   });
 });
+
+describe('previously dead semantic actions', () => {
+  function pressed(hand: 'left' | 'right', index: number): XRControllerSnapshot {
+    const buttons = Array.from({ length: 7 }, () => RELEASED_BUTTON);
+    buttons[index] = { pressed: true, touched: true, value: 1 };
+    return { hand, profiles: ['oculus-touch-v3'], buttons, axes: [0, 0, 0, 0] };
+  }
+
+  test('ToggleWalkRun routes from the offhand thumbstick click', () => {
+    const router = new XRInputRouter();
+
+    const routed = router.route([pressed('left', 3)], new Set(['locomotion']));
+
+    expect(routed.some((action) =>
+      action.action === SemanticXRAction.ToggleWalkRun && action.pressed)).toBe(true);
+  });
+
+  test('Recenter routes from the dominant thumbstick click', () => {
+    // The gesture is a long press, but the routing is the same; the hold lives
+    // in VRRecenterHoldGate.
+    const router = new XRInputRouter();
+
+    const routed = router.route([pressed('right', 3)], new Set(['global']));
+
+    expect(routed.some((action) =>
+      action.action === SemanticXRAction.Recenter && action.pressed)).toBe(true);
+  });
+
+  test('Pause routes from the dominant B button', () => {
+    const router = new XRInputRouter();
+
+    const routed = router.route([pressed('right', 5)], new Set(['global']));
+
+    expect(routed.some((action) =>
+      action.action === SemanticXRAction.Pause && action.pressed)).toBe(true);
+  });
+
+  test('PartyCommand routes from the offhand Y button on Quest', () => {
+    // Quest puts Menu on left X (4), which leaves left Y (5) free. It stays
+    // unbound on profiles whose Menu already occupies offhand 5.
+    const router = new XRInputRouter();
+
+    const routed = router.route([pressed('left', 5)], new Set(['global']));
+
+    expect(routed.some((action) =>
+      action.action === SemanticXRAction.PartyCommand && action.pressed)).toBe(true);
+  });
+
+  test('PartyCommand does not collide with Menu on profiles that share offhand 5', () => {
+    const router = new XRInputRouter();
+
+    for (const profile of ['valve-index', 'htc-vive', 'generic-trigger-squeeze-thumbstick']) {
+      const routed = router.route(
+        [{ hand: 'left', profiles: [profile], buttons: Array.from({ length: 7 }, (_, i) =>
+          i === 5 ? { pressed: true, touched: true, value: 1 } : RELEASED_BUTTON), axes: [0, 0, 0, 0] }],
+        new Set(['global']),
+      );
+      const actions = routed.filter((action) => action.pressed).map((action) => action.action);
+
+      expect(actions).toContain(SemanticXRAction.Menu);
+      expect(actions).not.toContain(SemanticXRAction.PartyCommand);
+    }
+  });
+});

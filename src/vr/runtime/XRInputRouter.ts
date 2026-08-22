@@ -67,6 +67,10 @@ function standardBindings(
     hand: 'offhand',
     input: { kind: 'button', index: 5 },
   },
+  // Left unbound by default. On profiles whose Menu already sits on offhand
+  // button 5 there is no free face button to give this, and a collision would
+  // be worse than the action staying unreachable.
+  partyCommandBinding: Pick<SemanticXRBinding, 'hand' | 'input'> | null = null,
 ): readonly SemanticXRBinding[] {
   return [
     { action: SemanticXRAction.Move, context: 'locomotion', hand: 'offhand', input: { kind: 'axis2d', xIndex: stickAxes[0], yIndex: stickAxes[1] } },
@@ -84,6 +88,9 @@ function standardBindings(
     { action: SemanticXRAction.WeaponAction, context: 'combat', hand: 'dominant', input: { kind: 'button', index: 0 } },
     { action: SemanticXRAction.ToggleWalkRun, context: 'locomotion', hand: 'offhand', input: { kind: 'button', index: 3 } },
     { action: SemanticXRAction.ToggleLocomotionMode, context: 'gameplay', hand: 'offhand', input: { kind: 'button', index: 0 } },
+    ...(partyCommandBinding === null
+      ? []
+      : [{ action: SemanticXRAction.PartyCommand, context: 'global', ...partyCommandBinding } as SemanticXRBinding]),
   ];
 }
 
@@ -91,7 +98,12 @@ export const BUILT_IN_XR_PROFILES: readonly XRInputBindingProfile[] = [
   {
     id: 'quest-touch',
     interactionProfiles: ['oculus-touch-v3', 'oculus-touch-v2', 'oculus-touch'],
-    bindings: standardBindings([2, 3], { hand: 'left', input: { kind: 'button', index: 4 } }),
+    // Quest: Menu is left X (4), so left Y (5) is free for PartyCommand.
+    bindings: standardBindings(
+      [2, 3],
+      { hand: 'left', input: { kind: 'button', index: 4 } },
+      { hand: 'left', input: { kind: 'button', index: 5 } },
+    ),
   },
   {
     id: 'valve-index',

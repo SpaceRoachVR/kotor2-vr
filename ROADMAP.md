@@ -496,6 +496,15 @@ Every button reachable in flatscreen needs a VR route.
   up) is ignored rather than recentred on a degenerate reading.
   `src/tests/vr-recenter.test.ts` asserts the invariants — not the feel.
 
+  **Now a long press** (~700 ms), matching how recentring works on the Meta
+  platform. The system's own recenter is a long press of the Meta button, but
+  that button is reserved by the OS for the universal menu and is never
+  delivered to WebXR — the right controller exposes only trigger, squeeze,
+  thumbstick, A, B, and thumbrest — so the gesture lives on the dominant
+  thumbstick click. The hold is not only convention: that stick is also Turn, so
+  a press-triggered recenter would fire on any stray click mid-turn.
+  `VRRecenterHoldGate` owns the timing.
+
   **Verified under the emulator (2026-08-22):** with the emulated head yawed
   0.9 rad off-axis in a loaded `101PER` save, pressing the dominant thumbstick
   moved `yawOffset` from `0` to `-0.9000000060058315` — an exact cancellation of
@@ -506,12 +515,31 @@ Every button reachable in flatscreen needs a VR route.
   plan. **A12 matters:** Recenter shares the dominant thumbstick with Turn, and
   implementing it made a previously inert stray click able to cause a comfort
   event.
-- **Found, not implemented:** `Pause`, `PartyCommand`, and `ToggleWalkRun` are
-  bound to physical buttons in `XRInputRouter.ts` but never consumed anywhere.
-  `Pause`/`PartyCommand` have no defined intent to build against, and
-  `ToggleWalkRun` has no underlying walk/run distinction anywhere in the movement
-  system to hook into (creature movement always applies full force). These need a
-  decision about intent, not a headset.
+- **4.7** ✅ implemented / ☐ headset-accepted — **The last dead actions**
+  (2026-08-22). Two of the standing claims about them were wrong.
+
+  *`ToggleWalkRun` had something to toggle all along.* `ModuleCreature` already
+  reads walkrate and runrate from `creaturespeed.2da` and already picks between
+  them in `getMovementSpeed()` via `isWalking()`. What "always applies full
+  force" described was `CreatureLocomotionAdapter` pinning `force = 1` — which
+  is acceleration, not speed, and a separate axis. VR simply had no route to the
+  `walk` flag. It now toggles on the offhand thumbstick click, the binding that
+  was already declared.
+
+  *`PartyCommand` was not bound at all*, despite being listed as bound. Quest
+  puts Menu on left X, so left Y was free and it now lives there; it stays
+  unbound on profiles whose Menu already occupies offhand 5, since a collision
+  would be worse than the action staying unreachable.
+
+  Its meaning is a judgement call: it cycles the party leader rather than
+  opening the party wheel. The wheel is a state machine keyed on the Menu button
+  being held, with no imperative open-this-submenu entry point, so forcing one
+  open would mean surgery on the ownership boundaries 3.8 deliberately
+  separated. Cycling reuses the same `SwitchLeaderAtIndex` route the wheel's
+  Party submenu already calls, and the wheel stays the way to pick a *specific*
+  member.
+
+  `Pause` toggles the engine's own pause on the dominant B button.
 
 ---
 
