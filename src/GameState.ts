@@ -109,6 +109,7 @@ import type { IPCMessage } from "@/server/ipc/IPCMessage";
 import { IPCMessageType } from "@/enums/server/ipc/IPCMessageType";
 import { IPCMessageTypeDebug } from "@/enums/server/ipc/IPCMessageTypeDebug";
 import { PerformanceMonitor } from "@/utility/PerformanceMonitor";
+import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 
 export interface GameStateInitializeOptions {
   Game: GameEngineType,
@@ -544,7 +545,7 @@ function reportVRWorldPromptPanelsOnce(
     const key = `${target.id}:${entries.length}:${entries.join('|')}`;
     if (reportedVRWorldPromptPanels.has(key)) return;
     reportedVRWorldPromptPanels.add(key);
-    // canAttemptSecurityUnlock = locked && lockable && !keyRequired. If that is
+    // canAttemptSecurityUnlock = locked && !keyRequired. If that is
     // false, ActionMenuManager emits neither Security nor tunnelers and only
     // i_attack survives. Dump its exact inputs, whether the template even
     // carried a Lockable field, and the actor-side requirements alongside.
@@ -674,7 +675,18 @@ function hasPotentialVRWorldPromptActions(
       return isDirectVRWorldUseTarget(target);
     }
     if (!Boolean(lockTarget.notBlastable)) return true;
-    const securityAllowed = Boolean(lockTarget.lockable) && !Boolean(lockTarget.keyRequired);
+    // Use the shared rule, not a local copy. This branch previously inlined
+    // `lockable && !keyRequired`, which survived the ObjectLockRules fix and
+    // kept vetoing on `lockable` — a field that means "can be re-locked" in
+    // Odyssey, not "can be picked". Because the branch is only reached when
+    // notBlastable is true, it stayed hidden on a save where the doors were
+    // blastable and then dropped every locked door out of candidacy on a new
+    // game: no menu, no hover, no interaction at all.
+    const securityAllowed = canAttemptSecurityUnlock({
+      locked: true,
+      lockable: Boolean(lockTarget.lockable),
+      keyRequired: Boolean(lockTarget.keyRequired),
+    });
     return securityAllowed && (
       actorState.securitySkill >= 1 || actorState.securityTunnelerCount > 0
     );
@@ -1704,21 +1716,43 @@ export class GameState implements EngineContext {
        */
       setVRSelectedObject: (targetId) => {
         try {
+          const cursor = GameState.CursorManager;
           const actor = GameState.getCurrentPlayer();
           if (!actor) return false;
           const target = resolveVRAimedObject(targetId);
           if (!target) {
-            // Only surrender a selection this hook established, so a flatscreen
-            // or script-driven selection is never stomped by VR aim drift.
             if (vrCursorSelectedTargetId !== null) {
-              GameState.CursorManager.selected = undefined;
-              GameState.CursorManager.selectedObject = undefined;
+              cursor.selected = undefined;
+              cursor.selectedObject = undefined;
               vrCursorSelectedTargetId = null;
             }
             return false;
           }
-          if (vrCursorSelectedTargetId === target.id) return true;
-          GameState.CursorManager.setReticleSelectedObject(target);
+
+          // Compare against the ENGINE's state, never a cached id.
+          // `CursorManager.updateCursor()` clears selected/selectedObject on
+          // its own whenever the object is briefly out of maxSelectableDistance
+          // or reports !isUseable(). An id cache treats that as "still set" and
+          // never re-establishes it, so the overlay's target UI — gated on
+          // reticle2.visible, which follows CursorManager.selected — silently
+          // stopped appearing for every object.
+          if (cursor.selectedObject === target && cursor.selected) {
+            vrCursorSelectedTargetId = target.id;
+            return true;
+          }
+
+          // Assign directly rather than via setReticleSelectedObject: that
+          // helper also calls getCurrentPlayer().lookAt(target), which would
+          // now fire on every re-assert and fight VR locomotion for the body's
+          // facing. updateCursor() already positions the reticle and picks its
+          // texture from selectedObject each frame.
+          const reticleNode = (target as any).getReticleNode?.();
+          if (!reticleNode) {
+            vrCursorSelectedTargetId = null;
+            return false;
+          }
+          cursor.selected = reticleNode;
+          cursor.selectedObject = target;
           vrCursorSelectedTargetId = target.id;
           return true;
         } catch (error) {

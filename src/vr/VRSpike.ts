@@ -907,7 +907,14 @@ export class VRSpike {
     if (!context || !session || !inputFrame || !worldScene) {
       VRSpike.inGameOverlayPointerHost?.clear();
       VRSpike.inGameOverlayInputController.cancel();
-      context?.pointerSink.setPointerPosition(null);
+      VRSpike.latestInGameOverlayPointerPosition = null;
+      // `context?.` short-circuits exactly when context is null — which is the
+      // case that needs clearing. GameState hides the legacy cursor during XR
+      // play, so a pointer left set here keeps drawing the flatscreen 2D UI
+      // into the headset after the overlay is gone (seen when a computer
+      // console dialog took over). Reach the same adapter via the panel
+      // context, which shares it.
+      VRSpike.hooks?.getPanelContext?.().pointerSink.setPointerPosition(null);
       return false;
     }
 
@@ -2307,6 +2314,7 @@ export class VRSpike {
     const context = VRSpike.hooks?.getInGameOverlayContext?.() ?? null;
     if (!renderer || !worldScene || !inputFrame || !context) {
       VRSpike.inGameOverlayHost?.clear();
+      VRSpike.latestInGameOverlayPointerPosition = null;
       return;
     }
     try {

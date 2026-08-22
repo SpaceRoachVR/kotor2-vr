@@ -558,15 +558,43 @@ export class InGameOverlay extends GameMenu {
     }
   }
 
+  /**
+   * TEMPORARY (VR-PLAYTEST-FIX-PLAN.md phase G): the whole target UI — name
+   * plate, health bar, the three action columns — hinges on this predicate,
+   * and every input is flatscreen mouse state that VR has to drive itself.
+   * When it returns false nothing is drawn and nothing is logged, which is
+   * indistinguishable from "no object nearby". Report each distinct outcome
+   * once so a headset pass names the failing condition.
+   */
+  private static _vrTargetUiTrace = '';
+
+  _traceCanShowTargetUI(result: boolean) {
+    try {
+      const cursor = GameState.CursorManager;
+      const trace = `result=${result}` +
+        ` container=${!!this.manager.MenuContainer.bVisible}` +
+        ` reticle2Visible=${!!cursor.reticle2?.visible}` +
+        ` selected=${!!cursor.selected}` +
+        ` selectedObject=${cursor.selectedObject ? cursor.selectedObject.getName?.() ?? 'yes' : 'none'}`;
+      if (trace === InGameOverlay._vrTargetUiTrace) return;
+      InGameOverlay._vrTargetUiTrace = trace;
+      console.info(`[VR targetUI] ${trace}`);
+    } catch (e) {
+      // Diagnostics must never break the overlay.
+    }
+  }
+
   _canShowTargetUI() {
     if (BitWise.InstanceOfObject(GameState.CursorManager.selectedObject, ModuleObjectType.ModuleCreature) && GameState.CursorManager.selectedObject.isDead())
       return false;
-    return (
+    const result = (
       !this.manager.MenuContainer.bVisible && 
       GameState.CursorManager.reticle2.visible && 
       BitWise.InstanceOfObject(GameState.CursorManager.selectedObject, ModuleObjectType.ModuleObject) &&
       !BitWise.InstanceOfObject(GameState.CursorManager.selectedObject, ModuleObjectType.ModuleRoom)
     );
+    this._traceCanShowTargetUI(result);
+    return result;
   }
 
   UpdateTargetUIIcon(index = 0) {

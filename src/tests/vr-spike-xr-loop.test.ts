@@ -2374,6 +2374,34 @@ describe('GameState proactive world-prompt assembly', () => {
       .toEqual(['Bash', 'Use: Bulkhead']);
   });
 
+  test.each([
+    ['pickable', { keyRequired: false }, true],
+    ['key-required', { keyRequired: true }, false],
+  ] as const)(
+    'keeps a locked non-blastable %s door in candidacy on the security route',
+    (_reason, lockState, expected) => {
+      const harness = createGameStateWorldPromptHarness();
+      // The branch below `notBlastable` inlined its own `lockable && !keyRequired`
+      // rule, which survived the ObjectLockRules fix. Because it is only reached
+      // when notBlastable is true, it stayed hidden on a save whose doors were
+      // blastable, then dropped every locked door out of candidacy on a new game.
+      const door = harness.target({
+        id: 35,
+        name: 'Low Security Door',
+        objectType: harness.objectTypes.ModuleDoor,
+        locked: true,
+        notBlastable: true,
+        lockable: false,
+        ...lockState,
+      });
+      harness.setTargets([door], []);
+
+      const [candidate] = harness.buildCandidates();
+
+      expect(candidate?.hasActions).toBe(expected);
+    },
+  );
+
   test('changes candidate state when an authored inventory source identity changes', () => {
     const harness = createGameStateWorldPromptHarness();
     const door = harness.target({
@@ -2467,6 +2495,8 @@ function createGameStateWorldPromptHarness(): {
     readonly keyRequired?: boolean;
     readonly plot?: boolean;
     readonly storyScript?: boolean;
+    readonly notBlastable?: boolean;
+    readonly lockable?: boolean;
     readonly tag?: string;
     readonly templateResRef?: string;
     readonly x?: number;
@@ -2561,6 +2591,8 @@ function createGameStateWorldPromptHarness(): {
       keyRequired = false,
       plot = false,
       storyScript = false,
+      notBlastable = false,
+      lockable = false,
       tag = '',
       templateResRef = '',
       x = 0,
@@ -2574,6 +2606,8 @@ function createGameStateWorldPromptHarness(): {
         willDestroy: false,
         keyRequired,
         plot,
+        notBlastable,
+        lockable,
         scripts: storyScript ? { OnFailToOpen: { name: 'a_compdlg' } } : {},
         tag,
         templateResRef,

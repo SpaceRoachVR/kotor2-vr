@@ -28,7 +28,12 @@ prologue** (`001EBO`).
 | 10 | Bash opens doors that should be indestructible | ☐ reproduces flatscreen — engine-level, out of VR scope |
 | 11 | Security offer vs. skill-check execution | ☐ needs verification |
 | 12 | Lift plays wrong cutscene, then stops working | ☐ not investigated |
-| 13 | Doors invisible in VR, normal in flatscreen | ☐ not investigated |
+| 13 | Doors invisible in VR, normal in flatscreen | ◐ XR-camera culling fixed, still reproduces |
+| 14 | Doors had no action menu (new game only) | ✅ fixed, ☐ headset-accepted |
+| 15 | Engine overlay target UI never appears | ◐ fix in flight, traced |
+| 16 | 2D UI stuck on screen after a computer console | ✅ fixed, ☐ headset-accepted |
+| 17 | Intro-skip leaves a stuck black screen | ☐ not investigated |
+| 18 | Camera spawns inside a T-posed body on new game | ☐ not investigated |
 
 Two regressions were introduced and fixed within this effort; both are recorded
 below under Phase A/B rather than hidden, because both came from changes that
@@ -517,6 +522,97 @@ its replacement is confirmed in the headset.
 **Exit:** approaching a door, container, or console shows the engine's own
 action menu in VR with correct actions and name plate; Cancel Combat is visible
 and clickable during combat; no bespoke prompt code remains.
+
+---
+
+## Issue 14 — Doors had no action menu at all (new game) ✅ fixed
+
+`hasPotentialVRWorldPromptActions` carried its **own inline copy** of the
+security rule:
+
+```ts
+const securityAllowed = Boolean(lockTarget.lockable) && !Boolean(lockTarget.keyRequired);
+```
+
+That copy survived the `ObjectLockRules` fix (Phase B-bis) and still vetoed on
+`lockable`, which is `false` on every door in `001EBO`. Result: `hasActions=false`,
+so locked doors never became candidates — no menu, no hover, no interaction.
+
+**This is also why the loaded save worked and a new game did not**, a split
+previously logged as a separate mystery. The branch is only reached when
+`notBlastable` is true; the save's doors were blastable and returned true
+earlier, never touching the broken line.
+
+Now calls the shared `canAttemptSecurityUnlock`. Confirmed in-headset:
+`id=199 hasActions=true … rawActions=1 :: icon="isk_security"`, with key-required
+Blast Doors still correctly excluded.
+
+**Process note:** the test harness did not model `notBlastable` or `lockable` at
+all, which is exactly why a duplicated rule could rot unnoticed. Harness
+extended; two regression tests now cover the branch.
+
+---
+
+## Issue 15 — Engine overlay target UI never appears ◐ fix in flight
+
+With the bespoke prompt disabled (G4), **all** object action menus vanished —
+the overlay never drew its target UI even though selection was demonstrably
+working (`model-ok` for every object, doors included).
+
+Root cause identified in `setVRSelectedObject`: it compared against a **cached
+id** rather than the engine's actual state.
+
+```ts
+if (vrCursorSelectedTargetId === target.id) return true;   // never re-asserts
+```
+
+`CursorManager.updateCursor()` clears `selected`/`selectedObject` on its own
+whenever an object is briefly beyond `maxSelectableDistance` or reports
+`!isUseable()`. Once that happened, the cache believed the selection was still
+set and never re-established it — and `reticle2.visible`, which
+`_canShowTargetUI()` gates on, follows `CursorManager.selected`.
+
+Now compares against `CursorManager.selectedObject` directly and re-asserts
+whenever it differs. Also assigns the fields directly instead of calling
+`setReticleSelectedObject`, whose `getCurrentPlayer().lookAt(target)` side
+effect would otherwise fire on every re-assert and fight VR locomotion for the
+body's facing — the risk flagged when G1 landed.
+
+A `[VR targetUI] result=… container=… reticle2Visible=… selected=… selectedObject=…`
+trace was added to the predicate so the failing condition is named directly if
+this is not the whole story.
+
+---
+
+## Issue 16 — 2D UI stuck on screen after a computer console ✅ fixed
+
+Self-inflicted in G3:
+
+```ts
+context?.pointerSink.setPointerPosition(null);
+```
+
+The optional chain short-circuits *exactly when `context` is null* — the one
+case that needs clearing. When a console dialog took over and the overlay
+context vanished, the legacy GUI cursor stayed set, and `GameState` normally
+hides that during XR play, so the flatscreen 2D UI kept drawing into the
+headset. Now cleared through the panel context, which shares the adapter.
+
+---
+
+## Issue 17 — Intro-skip leaves a stuck black screen ☐ not investigated
+
+Skipping a sequence in the opening cutscene crashed the intro and left a black
+screen. Not reproduced or traced yet.
+
+---
+
+## Issue 18 — Camera spawns inside a T-posed body on new game ☐ not investigated
+
+On a new game the camera starts inside the pre-swap player model, which is
+T-posed, until the intro movie loads and `DoSpecialSpawnInT3M4` runs. Likely
+related to the T-posed medbay body already noted under issue 13's family
+(animations not applied to a model VR is rendering).
 
 ---
 
