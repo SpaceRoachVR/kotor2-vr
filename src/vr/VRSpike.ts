@@ -1187,6 +1187,11 @@ export class VRSpike {
         if (aimedKey === VR_KEYBOARD_DONE_KEY) {
           VRSpike.keyboardDismissed = true;
           VRSpike.keyboardHost.clear();
+          // A recalled keyboard can return while the panel still retains its
+          // input edge history. Reset that handoff before yielding ownership so
+          // this Select is observed as held until release, never as a panel
+          // activation on the next XR frame.
+          VRSpike.clearLegacyPanelPointer();
         } else {
           VRSpike.keyboardInputController.press(aimedKey, sink);
         }

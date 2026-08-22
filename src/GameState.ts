@@ -909,13 +909,19 @@ function resolveVRCombatWeaponMode(actor: ModuleCreature): CombatWeaponMode {
   }
 }
 
-interface VREquippedHeldItem {
+export interface VREquippedHeldItem {
   readonly model?: unknown;
   readonly baseItemId?: unknown;
   readonly baseItem?: {
     readonly itemClass?: unknown;
     readonly rangedWeapon?: unknown;
   };
+}
+
+/** The engine equipment slots consumed by the VR held-item presentation bridge. */
+export interface VRHeldItemEquipment {
+  readonly LEFTHAND?: VREquippedHeldItem | null;
+  readonly RIGHTHAND?: VREquippedHeldItem | null;
 }
 
 function resolveHeldItemClassFallback(item: VREquippedHeldItem): HeldItemClassFallbackTransform {
@@ -973,6 +979,20 @@ function describeHeldItemVisual(item: VREquippedHeldItem | null | undefined): He
     baseItemClass,
     authoredGripNode: findHeldItemGripNode(model),
     classFallback: resolveHeldItemClassFallback(item),
+  };
+}
+
+/**
+ * Builds presentation descriptors without mutating engine equipment or models.
+ * Keeping the slots explicit prevents item models from crossing controller
+ * hands when a party member uses an unusual weapon class.
+ */
+export function describeVRHeldItemVisuals(
+  equipment: VRHeldItemEquipment | null | undefined
+): Readonly<{ left: HeldItemVisualDescriptor | null; right: HeldItemVisualDescriptor | null }> {
+  return {
+    left: describeHeldItemVisual(equipment?.LEFTHAND),
+    right: describeHeldItemVisual(equipment?.RIGHTHAND),
   };
 }
 
@@ -1682,10 +1702,7 @@ export class GameState implements EngineContext {
       getPlayerFacing: () => GameState.getCurrentPlayer()?.rotation.z ?? null,
       getHeldVisuals: () => {
         const player = GameState.getCurrentPlayer();
-        return {
-          left: describeHeldItemVisual(player?.equipment.LEFTHAND),
-          right: describeHeldItemVisual(player?.equipment.RIGHTHAND),
-        };
+        return describeVRHeldItemVisuals(player?.equipment);
       },
       applyLocomotion: (locomotion) => {
         if (GameState.State !== EngineState.RUNNING || GameState.Mode !== EngineMode.INGAME) return;

@@ -65,6 +65,11 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).keyboardOwner = null;
     (VRSpike as any).keyboardDismissed = false;
     (VRSpike as any).keyboardInputController?.reset();
+    (VRSpike as any).panelInputController?.cancel();
+    (VRSpike as any).panelHost?.dispose?.();
+    (VRSpike as any).panelHost = null;
+    (VRSpike as any).panelPointerHost?.dispose?.();
+    (VRSpike as any).panelPointerHost = null;
     (VRSpike as any).combatCancelHeld = false;
     (VRSpike as any).combatInputController?.reset();
     (VRSpike as any).forceGestureController?.reset();
@@ -527,6 +532,85 @@ describe('VRSpike XR loop ownership', () => {
     expect((VRSpike as any).keyboardDismissed).toBe(false);
     (VRSpike as any).renderKeyboard();
     expect(host.present).toHaveBeenCalled();
+  });
+
+  test('[runtime=emulated] requires release and a fresh Select after keyboard DONE before activating the underlying panel', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const owner = {};
+    const panelMenu = {
+      triggerControllerAPress: jest.fn(),
+      triggerControllerBPress: jest.fn(),
+      triggerControllerXPress: jest.fn(),
+      triggerControllerYPress: jest.fn(),
+    };
+    const pointerSink = {
+      setPointerPosition: jest.fn(),
+      activatePointer: jest.fn(() => true),
+    };
+    VRSpike.scene = new THREE.Scene();
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+      hands: {
+        right: {
+          pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+          targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+        },
+      },
+    };
+    (VRSpike as any).keyboardHost = {
+      clear: jest.fn(), present: jest.fn(), moveTo: jest.fn(), keyAtRay: jest.fn(() => 'DONE'), isVisible: true,
+    };
+    (VRSpike as any).panelHost = { owner: panelMenu, isVisible: true, object: new THREE.Group() };
+    (VRSpike as any).panelPointerHost = {
+      clear: jest.fn(),
+      update: jest.fn(() => ({ guiPosition: new THREE.Vector2(320, 240) })),
+    };
+    VRSpike.hooks = {
+      update: (): void => undefined,
+      getPlayerPosition: (): THREE.Vector3 | null => null,
+      getFacing: (): number => 0,
+      getWorldContext: (): { module: string | null; position: THREE.Vector3 | null; room: string | null; roomsVisible: number; roomsTotal: number } =>
+        ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getKeyboardContext: (): { owner: object; onKeyDown: () => void; cancel: () => void } =>
+        ({ owner, onKeyDown: (): void => undefined, cancel: (): void => undefined }),
+      getPanelContext: () => ({ menu: panelMenu, viewportWidth: 640, viewportHeight: 480, pointerSink }),
+    } as any;
+
+    // The existing panel owns no button edge before keyboard focus takes over.
+    expect((VRSpike as any).processPanelInput()).toBe(true);
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    expect((VRSpike as any).processKeyboardInput()).toBe(true);
+    expect((VRSpike as any).keyboardDismissed).toBe(true);
+
+    buttons[0] = { pressed: false, touched: false, value: 0 };
+    expect((VRSpike as any).processKeyboardInput()).toBe(false);
+    // The underlying panel reacquires ownership after the completed entry.
+    expect((VRSpike as any).processPanelInput()).toBe(true);
+
+    // Explicit recall retains keyboard focus state, which previously skipped
+    // the first-focus panel cancellation path.
+    VRSpike.recallKeyboard();
+    expect((VRSpike as any).processKeyboardInput()).toBe(true);
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    expect((VRSpike as any).processKeyboardInput()).toBe(true);
+    expect((VRSpike as any).keyboardDismissed).toBe(true);
+
+    // The same physical Select remains held for another XR frame. It must not
+    // become a panel click while DONE hands keyboard ownership back.
+    expect((VRSpike as any).processKeyboardInput()).toBe(false);
+    expect((VRSpike as any).processPanelInput()).toBe(true);
+    expect(pointerSink.activatePointer).not.toHaveBeenCalled();
+
+    buttons[0] = { pressed: false, touched: false, value: 0 };
+    expect((VRSpike as any).processKeyboardInput()).toBe(false);
+    expect((VRSpike as any).processPanelInput()).toBe(true);
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    expect((VRSpike as any).processKeyboardInput()).toBe(false);
+    expect((VRSpike as any).processPanelInput()).toBe(true);
+    expect(pointerSink.activatePointer).toHaveBeenCalledTimes(1);
   });
 
   test('forwards a physical saber swing to the combat bridge while preserving its d20 eligibility', () => {
@@ -2232,6 +2316,35 @@ describe('GameState proactive world-prompt assembly', () => {
     jest.restoreAllMocks();
   });
 
+  test('routes a T3-like ranged item descriptor to its equipped hand without retail assets', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const leftModel = harness.createEngineGroup();
+    const t3IntegratedBlasterModel = harness.createEngineGroup();
+    const grip = harness.createEngineGroup();
+    grip.name = 'weapon_grip';
+    t3IntegratedBlasterModel.add(grip);
+
+    const descriptors = harness.describeHeldItemVisuals({
+      LEFTHAND: {
+        model: leftModel,
+        baseItemId: 12,
+        baseItem: { itemClass: 'w_lghtsbr_001' },
+      },
+      RIGHTHAND: {
+        model: t3IntegratedBlasterModel,
+        baseItemId: 999,
+        baseItem: { itemClass: 't3_integrated_blaster', rangedWeapon: true },
+      },
+    });
+
+    expect(descriptors.left?.model).toBe(leftModel);
+    expect(descriptors.right?.model).toBe(t3IntegratedBlasterModel);
+    expect(descriptors.right?.baseItemClass).toBe('t3_integrated_blaster');
+    expect(descriptors.right?.authoredGripNode).toBe(grip);
+    expect(descriptors.right?.classFallback.rotation?.y).toBeCloseTo(Math.PI / 2);
+    expect(descriptors.right?.classFallback.position?.toArray()).toEqual([0.035, -0.02, -0.09]);
+  });
+
   test('describes an unlocked door without using it during model creation', () => {
     const harness = createGameStateWorldPromptHarness();
     const door = harness.target({
@@ -2640,8 +2753,10 @@ function createGameStateWorldPromptHarness(): {
   setTargets(targets: readonly GameStatePromptTestTarget[], actions: readonly Record<string, unknown>[]): void;
   setInventory(items: readonly Record<string, unknown>[]): void;
   setActionMenuFailure(error: Error | null): void;
+  createEngineGroup(): THREE.Group;
   buildCandidates(): readonly any[];
   buildPrompt(target: unknown): any;
+  describeHeldItemVisuals(equipment: unknown): any;
   actionMenuCalls(): { readonly setPC: number; readonly setTarget: number; readonly update: number };
 } {
   const EmptyClass = class {};
@@ -2771,11 +2886,13 @@ function createGameStateWorldPromptHarness(): {
     },
     setInventory: (items) => { inventory = items; },
     setActionMenuFailure: (error) => { actionMenuFailure = error; },
+    createEngineGroup: () => new engineThree.Group(),
     buildCandidates: () => buildVRWorldPromptCandidates(
       actor,
       GameState.ModuleObjectManager.playerSelectableObjects,
     ),
     buildPrompt: (target) => buildVRWorldActionPrompt(target),
+    describeHeldItemVisuals: (equipment) => loaded.describeVRHeldItemVisuals(equipment),
     actionMenuCalls: () => ({
       setPC: actionMenuManager.SetPC.mock.calls.length,
       setTarget: actionMenuManager.SetTarget.mock.calls.length,
