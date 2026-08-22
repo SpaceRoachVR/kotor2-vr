@@ -163,6 +163,32 @@ describe('production texture resolver routing', () => {
     await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(guiTexture);
   });
 
+  test('does not hand a disposed module GUI texture to queued consumers after module unload', async () => {
+    const moduleGuiTexture = texture('module-panel');
+    const sharedGuiTexture = texture('shared-panel');
+    const disposeModuleGui = jest.spyOn(moduleGuiTexture, 'dispose');
+    const provider = new SyntheticTextureProvider(new Map([
+      ['active-module:panel', { texture: moduleGuiTexture }],
+      ['gui-pack:panel', { texture: sharedGuiTexture, txiSource: 'embedded-tpc' }],
+    ]));
+    TextureLoader.setSourceProvider(provider);
+    TextureLoader.beginModule('101PER');
+
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(moduleGuiTexture);
+    TextureLoader.endModule();
+
+    const material = new THREE.MeshBasicMaterial();
+    const delivered = jest.fn();
+    TextureLoader.enQueue('panel', material, TextureType.TEXTURE, delivered, undefined, 'gui');
+    await TextureLoader.LoadQueue();
+
+    expect(disposeModuleGui).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveBeenCalledWith(sharedGuiTexture, expect.any(Object));
+    expect(material.map).toBe(sharedGuiTexture);
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(sharedGuiTexture);
+  });
+
   test('keeps a borrowed GUI texture live when a consumer releases it and reloads it', async () => {
     const guiTexture = texture('effect-icon');
     const disposeGui = jest.spyOn(guiTexture, 'dispose');

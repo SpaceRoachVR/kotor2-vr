@@ -17,6 +17,7 @@ function resolvedRecord(
     activeModule,
     required: true,
     status: 'resolved',
+    source: 'active-module',
     searchedSources: ['override-tga', 'override-tpc', 'active-module'],
     selectedSource: 'active-module',
     txiSource: 'active-module-txi',
@@ -61,6 +62,7 @@ describe('material visual manifest', () => {
       activeModule: '001ebo',
       required: true,
       status: 'resolved',
+      source: 'active-module',
       searchedSources: ['override-tga', 'override-tpc', 'active-module'],
       selectedSource: 'active-module',
       txiSource: 'active-module-txi',
@@ -88,7 +90,11 @@ describe('material visual manifest', () => {
     modules['001EBO'][0] = {
       ...modules['001EBO'][0],
       status: 'missing',
+      source: 'none',
       selectedSource: 'none',
+      searchedSources: ['override-tga', 'override-tpc', 'active-module', 'texture-pack', 'key-bif'],
+      diagnosticCode: 'missing-required-texture',
+      resolvedResref: undefined,
       sha256: undefined,
       width: undefined,
       height: undefined,
@@ -106,9 +112,10 @@ describe('material visual manifest', () => {
       activeModule: '102per',
       required: false,
       status: 'missing',
+      source: 'none',
       searchedSources: ['override-tga', 'override-tpc', 'active-module', 'texture-pack', 'key-bif'],
       selectedSource: 'none',
-      diagnosticCode: 'texture-not-found',
+      diagnosticCode: 'missing-optional-texture',
       cacheGeneration: 2,
     });
 
@@ -125,6 +132,7 @@ describe('material visual manifest', () => {
       activeModule: '102per',
       required: false,
       status: 'decode-error',
+      source: 'active-module',
       searchedSources: ['override-tga', 'override-tpc', 'active-module'],
       selectedSource: 'active-module',
       diagnosticCode: 'decode-error',
@@ -132,5 +140,62 @@ describe('material visual manifest', () => {
     });
 
     expect(() => createVisualManifest({ runtime: 'chrome', modules })).not.toThrow();
+  });
+
+  test.each([
+    {
+      name: 'the typed resolution source contradicts the selected source',
+      patch: { source: 'override-tpc' },
+      error: /source.*selected/i,
+    },
+    {
+      name: 'the selected source was not reached through the eligible precedence path',
+      patch: { searchedSources: ['override-tga', 'active-module'] },
+      error: /searched sources.*precedence/i,
+    },
+    {
+      name: 'a missing diagnostic contradicts an optional environment request',
+      patch: {
+        requestedResref: 'optional_envmap',
+        resolvedResref: undefined,
+        semantic: 'environment',
+        required: false,
+        status: 'missing',
+        source: 'none',
+        selectedSource: 'none',
+        searchedSources: ['override-tga', 'override-tpc', 'active-module', 'texture-pack', 'key-bif'],
+        diagnosticCode: 'missing-required-texture',
+        width: undefined,
+        height: undefined,
+        sha256: undefined,
+      },
+      error: /missing-optional-texture/i,
+    },
+    {
+      name: 'an invalid result claims a resolver search',
+      patch: {
+        requestedResref: '0',
+        resolvedResref: undefined,
+        required: false,
+        status: 'invalid',
+        source: 'none',
+        selectedSource: 'none',
+        searchedSources: ['override-tga'],
+        diagnosticCode: 'invalid-resref',
+        width: undefined,
+        height: undefined,
+        sha256: undefined,
+      },
+      error: /invalid.*searched sources/i,
+    },
+  ])('rejects an impossible resolver provenance claim when $name', ({ patch, error }) => {
+    const modules = coveredModules();
+    modules['102PER'].push({
+      ...resolvedRecord('optional_manifest_record', 'doors', '102per'),
+      required: false,
+      ...patch,
+    });
+
+    expect(() => createVisualManifest({ runtime: 'chrome', modules })).toThrow(error);
   });
 });

@@ -298,6 +298,9 @@ export class TextureLoader {
           if (TextureLoader.lightmaps[resref] === entry.resolution.texture) {
             delete TextureLoader.lightmaps[resref];
           }
+          if (TextureLoader.guiTextures.get(resref) === entry.resolution.texture) {
+            TextureLoader.guiTextures.delete(resref);
+          }
         }
       }
     }

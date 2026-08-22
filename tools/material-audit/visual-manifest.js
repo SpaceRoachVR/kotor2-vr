@@ -16,9 +16,11 @@ const SOURCES = new Set([
   'none', 'override-tga', 'override-tpc', 'active-module',
   'gui-pack', 'texture-pack', 'key-bif',
 ]);
+const OPTIONAL_SEMANTICS = new Set(['lightmap', 'normal', 'bump', 'environment']);
+const INVALID_RESREFS = new Set(['', '0', '****']);
 const RECORD_KEYS = Object.freeze([
   'requestedResref', 'resolvedResref', 'semantic', 'activeModule', 'status',
-  'searchedSources', 'selectedSource', 'txiSource', 'fallback',
+  'source', 'searchedSources', 'selectedSource', 'txiSource', 'fallback',
   'diagnosticCode', 'cacheGeneration', 'aliasEvidence', 'width', 'height', 'sha256',
   'visualCategory', 'required',
 ]);
@@ -84,8 +86,8 @@ function sanitizeRecord(record, moduleName) {
   if (!requestedResref) {
     throw new TypeError(`Material audit '${moduleName}' record requires requestedResref`);
   }
-  if (!STATUSES.has(record.status) || !SOURCES.has(record.selectedSource)) {
-    throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has invalid status or source`);
+  if (!STATUSES.has(record.status) || !SOURCES.has(record.source) || !SOURCES.has(record.selectedSource)) {
+    throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has invalid status or source provenance`);
   }
   if (!SEMANTICS.has(record.semantic)) {
     throw new TypeError(`Material audit '${moduleName}:${requestedResref}' has invalid semantic`);
@@ -127,6 +129,8 @@ function validateResolutionMetadata(record, moduleName, requestedResref) {
     && Number.isSafeInteger(record.height) && record.height > 0;
   const hasHash = typeof record.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(record.sha256);
 
+  validateResolverProvenance(record, recordName, requestedResref);
+
   if (record.required && record.status !== 'resolved') {
     throw new TypeError(`${recordName} required material did not resolve`);
   }
@@ -159,6 +163,124 @@ function validateResolutionMetadata(record, moduleName, requestedResref) {
   }
   if (hasDimensions || hasHash || normalizeResref(record.resolvedResref)) {
     throw new TypeError(`${recordName} absent optional map must not claim loaded metadata`);
+  }
+}
+
+function validateResolverProvenance(record, recordName, requestedResref) {
+  const eligibleSources = getEligibleSources(record.semantic, record.activeModule);
+  const usableResref = !INVALID_RESREFS.has(requestedResref);
+
+  if (record.source !== record.selectedSource) {
+    throw new TypeError(`${recordName} source must match selected source`);
+  }
+
+  switch (record.status) {
+    case 'resolved':
+      if (!usableResref) {
+        throw new TypeError(`${recordName} resolved material has an invalid requested resref`);
+      }
+      validateConcreteSourcePath(record, recordName, eligibleSources);
+      if (record.diagnosticCode !== undefined) {
+        throw new TypeError(`${recordName} resolved material must not carry a diagnostic code`);
+      }
+      validateTxiProvenance(record, recordName);
+      return;
+    case 'decode-error':
+      if (!usableResref) {
+        throw new TypeError(`${recordName} decode failure has an invalid requested resref`);
+      }
+      validateConcreteSourcePath(record, recordName, eligibleSources);
+      if (record.diagnosticCode !== 'decode-error') {
+        throw new TypeError(`${recordName} decode failure requires diagnostic code decode-error`);
+      }
+      validateTxiProvenance(record, recordName);
+      return;
+    case 'missing':
+      if (!usableResref) {
+        throw new TypeError(`${recordName} missing material has an invalid requested resref`);
+      }
+      validateEmptySourcePath(record, recordName, eligibleSources);
+      {
+        const expectedCode = OPTIONAL_SEMANTICS.has(record.semantic)
+          ? 'missing-optional-texture'
+          : 'missing-required-texture';
+        if (record.diagnosticCode !== expectedCode) {
+          throw new TypeError(`${recordName} missing material requires diagnostic code ${expectedCode}`);
+        }
+      }
+      return;
+    case 'invalid':
+      if (usableResref) {
+        throw new TypeError(`${recordName} invalid material must name an invalid requested resref`);
+      }
+      if (record.source !== 'none' || record.selectedSource !== 'none') {
+        throw new TypeError(`${recordName} invalid material must select no source`);
+      }
+      if (record.searchedSources.length !== 0) {
+        throw new TypeError(`${recordName} invalid material must have empty searched sources`);
+      }
+      if (record.diagnosticCode !== 'invalid-resref') {
+        throw new TypeError(`${recordName} invalid material requires diagnostic code invalid-resref`);
+      }
+      return;
+    default:
+      throw new TypeError(`${recordName} has an unsupported resolver status`);
+  }
+}
+
+function getEligibleSources(semantic, activeModule) {
+  const sources = ['override-tga', 'override-tpc'];
+  if (normalizeResref(activeModule)) {
+    sources.push('active-module');
+  }
+  if (semantic === 'gui' || semantic === 'font') {
+    sources.push('gui-pack');
+  }
+  sources.push('texture-pack', 'key-bif');
+  return sources;
+}
+
+function validateConcreteSourcePath(record, recordName, eligibleSources) {
+  if (record.source === 'none') {
+    throw new TypeError(`${recordName} resolved source must be concrete`);
+  }
+  const sourceIndex = eligibleSources.indexOf(record.source);
+  if (sourceIndex === -1) {
+    throw new TypeError(`${recordName} selected source is ineligible for ${record.semantic}`);
+  }
+  const expectedSources = eligibleSources.slice(0, sourceIndex + 1);
+  if (!sameSourceSequence(record.searchedSources, expectedSources)) {
+    throw new TypeError(`${recordName} searched sources must be the ordered resolver precedence path to its selected source`);
+  }
+}
+
+function validateEmptySourcePath(record, recordName, eligibleSources) {
+  if (record.source !== 'none' || record.selectedSource !== 'none') {
+    throw new TypeError(`${recordName} missing material must select no source`);
+  }
+  if (!sameSourceSequence(record.searchedSources, eligibleSources)) {
+    throw new TypeError(`${recordName} missing material searched sources must be the full ordered resolver precedence path`);
+  }
+}
+
+function sameSourceSequence(actual, expected) {
+  return actual.length === expected.length && actual.every((source, index) => source === expected[index]);
+}
+
+function validateTxiProvenance(record, recordName) {
+  if (record.txiSource === undefined) {
+    return;
+  }
+  const permittedSources = {
+    'override-tga': new Set(['override-txi']),
+    'override-tpc': new Set(['embedded-tpc']),
+    'active-module': new Set(['active-module-txi', 'embedded-tpc']),
+    'gui-pack': new Set(['gui-pack-txi', 'embedded-tpc']),
+    'texture-pack': new Set(['texture-pack-txi', 'embedded-tpc']),
+    'key-bif': new Set(['key-bif-txi', 'embedded-tpc']),
+  };
+  if (!permittedSources[record.source]?.has(record.txiSource)) {
+    throw new TypeError(`${recordName} TXI source is incompatible with its selected source`);
   }
 }
 
