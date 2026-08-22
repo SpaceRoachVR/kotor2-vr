@@ -42,12 +42,13 @@ physically unpleasant rather than merely wrong.
 | A3 | Smooth turn, then snap turn (Comfort Settings → turnMode) | Snap turn pivots about **your head**, not the avatar's feet |
 | A4 | Set snap turn to each of its degree steps | Each step matches its label |
 | A5 | Enable the comfort vignette and move | Vignette closes on motion, opens at rest |
-| A6 | **Recenter** (dominant controller, button 3) — new this session | Your physical forward becomes the game's forward; head ends up over the avatar; **no vertical jump** |
+| A6 | **Recenter — click the dominant thumbstick in** (not a face button) | Your physical forward becomes the game's forward; head ends up over the avatar; **no vertical jump** |
 | A7 | Recenter repeatedly, including while turned by snap turn | Idempotent — no creeping drift, and deliberate turning is preserved |
 | A8 | Recenter while looking straight up | Ignored rather than throwing you sideways |
 | A9 | Walk into a wall physically (roomscale), not on the stick | Soft push-back, no fade, no hard stop, no falling through |
 | A10 | Stand, then crouch, then stand | Eye height stays canonical; no sinking into the floor |
 | A11 | Play seated | Everything above still reachable |
+| A12 | **Turn hard with the dominant stick for a minute without meaning to recenter** | No accidental recenter. Recenter shares the dominant thumbstick with Turn, and it only became live this session — if a stray click recentres you mid-turn, that is a comfort hazard and the binding should move |
 
 ## B. Session lifecycle
 
@@ -85,6 +86,13 @@ physically unpleasant rather than merely wrong.
 | D6 | Scroll a long list (inventory, dialogue) with the ray | List scrolls; the right row is picked |
 | D7 | Open a panel, then move | Panel world-locks to its first placement |
 | D8 | VR keyboard: name a character or a save | Keys register; done handoff latches once |
+| D9 | Wheel → **Screens** submenu | Opens; lists Equipment, Abilities, Journal, Messages, Options |
+| D10 | Screens → **Equipment** | Opens and gear can actually be swapped — this had no VR route at all before |
+| D11 | Screens → **Abilities** | Opens; powers and feats listed |
+| D12 | Screens → **Journal** | Opens; quests readable |
+| D13 | Screens → **Messages** | Opens; feedback log readable |
+| D14 | Screens → **Options** | Opens; distinct from Comfort Settings, which stays on the top level |
+| D15 | Look at every wedge icon on the wheel | Real KOTOR icons, **not** generic fallback shapes. All wheel icons were wrong names until this session |
 
 ## E. Interaction and world prompts (Phase 3.9)
 
@@ -139,8 +147,12 @@ physically unpleasant rather than merely wrong.
 - **3.3** Two-handed saber is a mode flag, not dual-wielded tracking.
 - **4.2** No distinct physical/3D inventory; the flat 2D one reprojects.
 - **4.4** Dialogue skill-check panels unverified.
-- **4.5** `gui/` has not been audited for unreachable controls, and TSL menus are
-  frequently stubs where K1 is complete.
+- **4.5** Audited this session. Every TSL menu extends its K1 counterpart with no
+  empty overrides and no TODO markers, so the "TSL menus are frequently stubs"
+  worry is retired. The real gap was reachability, now closed — see D9-D14.
+  Remaining: the overlay's non-menu controls (action-queue clear, target
+  cycling) still have no VR route, and the minigame menus (Pazaak, swoop) are
+  unexamined.
 - **5.3** No comfort pass over the prologue.
 - `Pause`, `PartyCommand`, and `ToggleWalkRun` are bound to buttons but consumed
   nowhere. `Pause`/`PartyCommand` have no defined intent; `ToggleWalkRun` has no

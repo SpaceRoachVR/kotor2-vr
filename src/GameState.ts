@@ -1911,6 +1911,13 @@ export class GameState implements EngineContext {
           openCharacter: () => GameState.MenuManager.MenuCharacter.open(),
           openMap: () => GameState.MenuManager.MenuMap.open(),
           openComfortSettings: () => { vrComfortSettingsPanelOpen = true; },
+          // The rest of InGameOverlay's screens (ROADMAP 4.5). Equipment,
+          // Abilities, Journal, Messages, and Options had no VR route at all.
+          openEquipment: () => GameState.MenuManager.MenuEquipment.open(),
+          openAbilities: () => GameState.MenuManager.MenuAbilities.open(),
+          openJournal: () => GameState.MenuManager.MenuJournal.open(),
+          openMessages: () => GameState.MenuManager.MenuMessages.open(),
+          openOptions: () => GameState.MenuManager.MenuOptions.open(),
         });
       },
       getComfortSettingsPanelContext: () => {

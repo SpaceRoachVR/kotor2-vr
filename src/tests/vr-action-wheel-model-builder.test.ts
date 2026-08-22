@@ -53,6 +53,11 @@ function context(overrides: Partial<VRActionWheelBuildContext> = {}): VRActionWh
     openCharacter: jest.fn(),
     openMap: jest.fn(),
     openComfortSettings: jest.fn(),
+    openEquipment: jest.fn(),
+    openAbilities: jest.fn(),
+    openJournal: jest.fn(),
+    openMessages: jest.fn(),
+    openOptions: jest.fn(),
     ...overrides,
   };
 }
@@ -95,9 +100,58 @@ test('orders combat, self, menus, conditional level-up, party, and comfort setti
     'menu:map',
     'menu:level-up',
     'submenu:party',
+    'submenu:screens',
     'menu:comfort-settings',
   ]);
   expect(contentIds(menu)).not.toContain('menu:galaxy-map');
+});
+
+test('routes the rest of the in-game overlay through the Screens submenu', () => {
+  // InGameOverlay offers eight screens; the wheel used to reach three of them,
+  // leaving Equipment, Abilities, Journal, Messages, and Options with no VR
+  // route at all (ROADMAP 4.5).
+  const openEquipment = jest.fn();
+  const openAbilities = jest.fn();
+  const openJournal = jest.fn();
+  const openMessages = jest.fn();
+  const openOptions = jest.fn();
+  const screens = findSubmenu(
+    buildVRActionWheel(context({
+      openEquipment, openAbilities, openJournal, openMessages, openOptions,
+    })),
+    'submenu:screens',
+  ).buildMenu();
+
+  expect(contentIds(screens)).toEqual([
+    'menu:equipment',
+    'menu:abilities',
+    'menu:journal',
+    'menu:messages',
+    'menu:options',
+  ]);
+
+  findAction(screens, 'menu:equipment').activate();
+  findAction(screens, 'menu:abilities').activate();
+  findAction(screens, 'menu:journal').activate();
+  findAction(screens, 'menu:messages').activate();
+  findAction(screens, 'menu:options').activate();
+
+  expect(openEquipment).toHaveBeenCalledTimes(1);
+  expect(openAbilities).toHaveBeenCalledTimes(1);
+  expect(openJournal).toHaveBeenCalledTimes(1);
+  expect(openMessages).toHaveBeenCalledTimes(1);
+  expect(openOptions).toHaveBeenCalledTimes(1);
+});
+
+test('rejects a build context missing any screen route', () => {
+  for (const missing of [
+    'openEquipment', 'openAbilities', 'openJournal', 'openMessages', 'openOptions',
+  ] as const) {
+    const broken = context();
+    delete (broken as unknown as Record<string, unknown>)[missing];
+
+    expect(() => buildVRActionWheel(broken)).toThrow(`${missing} must be callable`);
+  }
 });
 
 test('omits malformed engine descriptors without losing valid actions', () => {

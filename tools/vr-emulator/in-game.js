@@ -103,10 +103,15 @@ const WORLD_STATE = `(() => {
 
   try {
     await harness.waitFor(
+      // A module plus a placed player is the real signal. `GameState.Mode` stays
+      // at GUI (0) through a save load even once the world is live, so gating on
+      // INGAME here waits forever on a load that already succeeded.
       `(() => {
         const gs = window.KotOR.GameState;
         const party = window.KotOR.PartyManager;
-        return !!(gs && gs.module && gs.Mode === 1 && party && party.Player);
+        const player = party && party.Player;
+        return !!(gs && gs.module && player && player.position &&
+          Number.isFinite(player.position.x));
       })()`,
       300000, 3000
     );
@@ -137,13 +142,16 @@ const WORLD_STATE = `(() => {
   // --- Recenter -----------------------------------------------------------
   // Turn the emulated head well off-axis, then press the dominant-hand
   // recenter button and confirm the engine's yaw offset absorbs it.
-  await harness.evaluate(`(() => {
+  const headTurn = await harness.evaluate(`(() => {
     const d = window.__xrDevice;
-    d.quaternion.setFromAxisAngle
-      ? d.quaternion.setFromAxisAngle({ x: 0, y: 1, z: 0 }, 0.9)
-      : null;
-    return true;
-  })()`).catch(() => undefined);
+    // IWER's device quaternion is a gl-matrix-backed THREE-alike; build the
+    // rotation with its own constructor rather than a plain object literal.
+    const q = d.quaternion;
+    const half = 0.45; // ~51 degrees of yaw about the XR up axis
+    q.set(0, Math.sin(half), 0, Math.cos(half));
+    return { x: q.x, y: q.y, z: q.z, w: q.w };
+  })()`);
+  log('5a emulated head yawed off-axis', headTurn);
   await new Promise((r) => setTimeout(r, 1500));
 
   const beforeRecenter = await harness.evaluate(`({
@@ -151,13 +159,15 @@ const WORLD_STATE = `(() => {
   })`).catch(() => ({ yawOffset: null }));
 
   await harness.evaluate(`(() => {
-    // Recenter is bound to the dominant hand's button 3 (default right).
-    window.__xrDevice.controllers.right.updateButtonValue('b-button', 1);
+    // Recenter is dominant-hand button index 3, which in the xr-standard
+    // mapping is the THUMBSTICK CLICK — not a face button. Pressing 'b-button'
+    // (index 5) hits Cancel/Pause instead and silently proves nothing.
+    window.__xrDevice.controllers.right.updateButtonValue('thumbstick', 1);
     return true;
   })()`);
   await new Promise((r) => setTimeout(r, 1200));
   await harness.evaluate(`(() => {
-    window.__xrDevice.controllers.right.updateButtonValue('b-button', 0);
+    window.__xrDevice.controllers.right.updateButtonValue('thumbstick', 0);
     return true;
   })()`);
   await new Promise((r) => setTimeout(r, 1200));

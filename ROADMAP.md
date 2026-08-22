@@ -409,8 +409,31 @@ Every button reachable in flatscreen needs a VR route.
 - **4.4** ❓ Dialogue skill checks as floating panels. Genuinely unconfirmed — may
   already work via generic reprojection if skill checks are authored as ordinary GUI
   screens, or may need bespoke handling. Not chased down this pass.
-- **4.5** ☐ Audit `gui/` for anything still unreachable — check `game/tsl/` against
-  `game/kotor/` for stubs while doing it. Not done.
+- **4.5** ✅ audited / ☐ headset-accepted — **Reachability audit (2026-08-22).**
+
+  *The TSL-stub worry is retired.* All 63 K1 menus have TSL counterparts, every
+  one of them `extends` its K1 class, and none contains an empty override or a
+  TODO marker. TSL files are smaller because they override only what differs,
+  not because they are stubs.
+
+  *The real gap was reachability.* `InGameOverlay` offers eight screens —
+  Messages, Journal, Map, Options, Character, Abilities, Inventory, Equipment —
+  and the wheel routed **three**. Equipment, Abilities, Journal, Messages, and
+  Options had no VR route at all; Equipment is where gear is swapped, so that
+  was a functional hole, not a convenience one. All five now open through a
+  nested `Screens` submenu, keeping Inventory/Character/Map a single press.
+
+  *Every wheel icon was also a wrong resref.* `inv_bag01`, `iattackr`, `imap`,
+  `iopts`, `iparty`, `ilevelup` — none exist. Verified against the retail
+  `swpc_tex_gui.erf` key list: TSL names these `lbl_icn_<screen>2`
+  (`lbl_icn_inv2`, `lbl_icn_equ2`, `lbl_icn_que2`, `lbl_icn_prty2`, …) plus
+  `lbl_levelup`. Every wedge was logging a load failure and drawing the generic
+  fallback. Fixed, and VR-only entries (Comfort Settings, the Screens submenu)
+  now omit the icon so they take the fallback deliberately and silently.
+
+  *Still open:* the overlay's non-menu controls (action-queue clear/clear-all,
+  target cycling) have no VR route, and the minigame menus (Pazaak, swoop) are
+  unexamined.
 - **4.6** ✅ implemented / ☐ headset-accepted — **Recenter** (2026-08-22). Was the
   one "bound but dead" action deferred specifically because a bad recenter is a
   real comfort hazard and there was no way to verify it without a device; the
