@@ -76,3 +76,8 @@ export * from "@/effects/GameEffectFactory";
 export * from "@/events/GameEventFactory";
 
 
+
+// VR runtime state. Exported so the emulated-headset harness in
+// `tools/vr-emulator/` can read rig/session state from the page; the VR layer
+// is otherwise reachable only through GameState's hooks.
+export * from "@/vr/VRSpike";
