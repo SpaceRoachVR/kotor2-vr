@@ -118,6 +118,21 @@ export class MenuCharacter extends GameMenu {
       });
       this._button_y = this.BTN_AUTO;
 
+      // BTN_LEVELUP had no handler in either game — K1 only ever calls
+      // `.hide()` on it — so pressing Level Up did nothing at all. Reported
+      // from the second headset session. `MenuLevelUp` is a 48-line shell with
+      // no handlers in either game, so there is no manual screen to open;
+      // routing to the same guarded auto route BTN_AUTO uses at least lets the
+      // player actually level up. Manual point-spend remains unimplemented.
+      this.BTN_LEVELUP?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if(GameState.getCurrentPlayer().canLevelUp()){
+          GameState.getCurrentPlayer().autoLevelUp();
+          this.updateCharacterStats(GameState.getCurrentPlayer());
+        }
+      });
+
+
       this.BTN_CHANGE1?.addEventListener('click', (e) => {
         e.stopPropagation();
         if (GameState.PartyManager.party.length > 1) {

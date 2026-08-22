@@ -17,6 +17,7 @@ import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 import { SignalEventType } from "@/enums/events/SignalEventType";
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionUnlockObject class.
@@ -76,7 +77,10 @@ export class ActionUnlockObject extends Action {
     }
 
     let distance = Utility.Distance2D(this.owner.position, this.target.position);
-    if(distance > 1.5){
+    // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if(distance > 1.5 &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
         
       // this.owner.openSpot = undefined;
       let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();

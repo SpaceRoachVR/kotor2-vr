@@ -1719,6 +1719,7 @@ export class GameState implements EngineContext {
       // Walk/run already exists on the creature: `getMovementSpeed()` picks
       // between the walkrate and runrate columns of creaturespeed.2da based on
       // `isWalking()`. VR simply had no route to the flag.
+      getControlledActor: () => GameState.getCurrentPlayer(),
       toggleWalkRun: () => {
         const player = GameState.getCurrentPlayer();
         if (!player) return;

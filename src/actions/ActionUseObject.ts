@@ -42,7 +42,7 @@ export class ActionUseObject extends Action {
     // anchored to the avatar, so walking the actor here drags the player
     // through the world. See ActionApproachPolicy.
     let distance = Utility.Distance2D(this.owner.position, this.target.position);
-    if(distance > 1.5 && !ActionApproachPolicy.isApproachSuppressed()){
+    if(distance > 1.5 && !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
         
       // this.owner.openSpot = undefined;
       let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();

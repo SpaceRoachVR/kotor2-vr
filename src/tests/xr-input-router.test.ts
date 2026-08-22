@@ -262,3 +262,27 @@ describe('previously dead semantic actions', () => {
     }
   });
 });
+
+test('movement mode is not bound to any physical button', () => {
+  // ToggleLocomotionMode shared the offhand trigger with radial-wheel Select,
+  // and having smooth/blink on a button as well as in Comfort Settings made the
+  // offhand controls hard to predict — reported from the second headset
+  // session. Movement mode now lives only on the Comfort Settings panel, which
+  // already exposes it as its "Movement" row.
+  const router = new XRInputRouter();
+  const allPressed = Array.from({ length: 7 }, () => ({ pressed: true, touched: true, value: 1 }));
+  const everyContext = new Set([
+    'gameplay', 'locomotion', 'global', 'ui', 'interaction', 'combat',
+    'radial-wheel', 'world-prompt',
+  ] as const);
+
+  for (const hand of ['left', 'right'] as const) {
+    const routed = router.route(
+      [{ hand, profiles: ['oculus-touch-v3'], buttons: allPressed, axes: [0, 0, 0, 0] }],
+      everyContext,
+    );
+
+    expect(routed.map((action) => action.action))
+      .not.toContain(SemanticXRAction.ToggleLocomotionMode);
+  }
+});

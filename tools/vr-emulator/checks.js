@@ -168,9 +168,43 @@ const CHECKS = [
     // ROADMAP 3.10. If this regresses, world interaction drags the player
     // through the level — the single worst thing reported from session one.
     run: (m) => ({
-      ok: m.approachSuppression?.policySuppressed === true,
-      detail: `suppressed=${m.approachSuppression?.policySuppressed} ` +
+      ok: m.approachSuppression?.policySuppressed === true &&
+        m.approachSuppression?.companionStillWalks === true,
+      detail: `player=${m.approachSuppression?.policySuppressed} ` +
+        `companionStillWalks=${m.approachSuppression?.companionStillWalks} ` +
         `queuedMoves=${m.approachSuppression?.movesQueued}`,
+    }),
+  },
+  {
+    id: 'recenter-refuses-vertical-head',
+    describe: 'a near-vertical head pose does not recentre',
+    // Yaw read from a nearly-vertical forward is mostly tracking noise, and
+    // recentring on it throws the player's world sideways. The first guard
+    // relied on the facing conversion throwing, which only happens for an
+    // exactly-vertical forward, so it never fired on device.
+    run: (m) => ({
+      ok: m.recenterVerticalRefused === true,
+      detail: `refused=${m.recenterVerticalRefused} (head pitched ~85 degrees up)`,
+    }),
+  },
+  {
+    id: 'movement-mode-not-on-a-button',
+    describe: 'smooth/blink lives only on the Comfort Settings panel',
+    // Having it on the offhand trigger as well made the offhand controls hard
+    // to predict.
+    run: (m) => ({
+      ok: m.locomotionModeUnbound === true,
+      detail: `unbound=${m.locomotionModeUnbound}`,
+    }),
+  },
+  {
+    id: 'level-up-button-wired',
+    describe: 'the Level Up button has a click handler',
+    // Neither K1 nor TSL ever registered one — K1 only calls `.hide()` on it —
+    // so pressing Level Up did nothing at all.
+    run: (m) => ({
+      ok: m.levelUpClickable === true,
+      detail: `clickable=${m.levelUpClickable}`,
     }),
   },
   {

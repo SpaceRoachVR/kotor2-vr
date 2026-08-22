@@ -1033,52 +1033,6 @@ describe('VRSpike XR loop ownership', () => {
     expect(closed).toBe(true);
   });
 
-  test('toggles the comfort locomotion mode on an offhand button press edge, once per press', () => {
-    const settingsPatches: Array<Record<string, unknown>> = [];
-    let locomotionMode: 'smooth' | 'blink' = 'smooth';
-    const referenceSpace = {} as XRReferenceSpace;
-    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
-    const offhand = {
-      handedness: 'left',
-      profiles: ['oculus-touch-v3'],
-      gamepad: { buttons, axes: [0, 0, 0, 0] },
-    } as unknown as XRInputSource;
-    VRSpike.renderer = { xr: { getReferenceSpace: () => referenceSpace } } as never;
-    VRSpike.session = { inputSources: [offhand] } as unknown as XRSession;
-    VRSpike.rig = new THREE.Group();
-    XRCoordinateConverter.applyXRToGameBasis(VRSpike.rig);
-    VRSpike.hooks = {
-      update: () => undefined,
-      getPlayerPosition: () => null,
-      getFacing: () => 0,
-      getPlayerFacing: () => 0,
-      applyLocomotion: () => undefined,
-      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
-      getComfortSettings: () => ({ locomotionMode, turnMode: 'smooth', snapTurnDegrees: 45, vignetteEnabled: false }),
-      setComfortSettings: (patch) => {
-        settingsPatches.push(patch);
-        if (patch.locomotionMode) locomotionMode = patch.locomotionMode;
-      },
-    };
-    const frame = {
-      getViewerPose: () => ({
-        transform: { orientation: { x: 0, y: 0, z: 0, w: 1 }, position: { x: 0, y: 0, z: 0 } },
-      }),
-    } as unknown as XRFrame;
-
-    buttons[0] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processLocomotionInput(1000, frame);
-    (VRSpike as any).processLocomotionInput(1016, frame);
-
-    expect(settingsPatches).toEqual([{ locomotionMode: 'blink' }]);
-
-    buttons[0] = { pressed: false, touched: false, value: 0 };
-    (VRSpike as any).processLocomotionInput(1032, frame);
-    buttons[0] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processLocomotionInput(1048, frame);
-
-    expect(settingsPatches).toEqual([{ locomotionMode: 'blink' }, { locomotionMode: 'smooth' }]);
-  });
 
   test('snap turn applies one fixed increment per deflection instead of a continuous rotation', () => {
     const referenceSpace = {} as XRReferenceSpace;

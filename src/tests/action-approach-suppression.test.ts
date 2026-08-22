@@ -79,6 +79,7 @@ describe('ActionUseObject approach suppression', () => {
   test('acts from where the actor stands when approach is suppressed', () => {
     // The exact case reported from the headset: prompts offer use at 2.5-3 m,
     // well beyond the 1.5 m the engine would otherwise walk.
+    ActionApproachPolicy.setControlledActorProbe(() => true);
     ActionApproachPolicy.setApproachSuppressed(true);
     const { action, used } = useObjectAt(2.25);
 
@@ -104,6 +105,7 @@ describe('ActionUseObject approach suppression', () => {
   test('desktop walking returns once suppression is cleared', () => {
     // Leaving VR must restore click-to-walk; a leaked flag would quietly break
     // flatscreen play.
+    ActionApproachPolicy.setControlledActorProbe(() => true);
     ActionApproachPolicy.setApproachSuppressed(true);
     useObjectAt(4).action.update(0);
     expect(queuedFront).toEqual([]);

@@ -16,6 +16,7 @@ import {
   canExecuteObjectDestruction,
   isObjectDestructionTarget,
 } from "@/engine/interaction/ObjectLockRules";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionPhysicalAttacks class.
@@ -72,7 +73,10 @@ export class ActionPhysicalAttacks extends Action {
       return ActionStatus.FAILED;
     }else{
       let distance = Utility.Distance2D(owner.position, target.position);
-      if( distance > range ){
+      // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if( distance > range &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner) ){
 
         // owner.openSpot = undefined;
         let target_position = target.position.clone();

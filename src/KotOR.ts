@@ -86,3 +86,8 @@ export * from "@/vr/VRSpike";
 // approach-suppression policy (ROADMAP 3.10) directly rather than inferring it
 // from avatar motion, which would be timing-dependent.
 export * from "@/engine/interaction/ActionApproachPolicy";
+
+// XR input bindings. Exported so the emulated-headset harness can assert which
+// semantic actions are bound to physical buttons without reaching into the
+// bundle internals.
+export * from "@/vr/runtime/XRInputRouter";

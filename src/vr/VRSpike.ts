@@ -87,6 +87,13 @@ import { XRInputCapabilityValidator } from './input/XRInputCapabilityValidator';
  * What the spike needs from the engine. Passed in rather than imported:
  * GameState already imports VRSpike, and importing it back would close a cycle.
  */
+/**
+ * Minimum horizontal length of the head's forward vector for a recenter to
+ * be trusted. 0.26 is roughly 75 degrees of pitch: beyond that the yaw a
+ * forward vector reports is mostly tracking noise.
+ */
+const RECENTER_MIN_HORIZONTAL_FORWARD = 0.26;
+
 const DEFAULT_COMFORT_SETTINGS: VRComfortSettings = {
   locomotionMode: 'smooth',
   turnMode: 'smooth',
@@ -136,6 +143,11 @@ export interface VRSpikeHooks {
    * submenu remains the way to pick a specific one.
    */
   cyclePartyLeader?: () => boolean;
+  /**
+   * The creature the player is currently driving. Used to scope approach
+   * suppression, so only the player stops walking to targets.
+   */
+  getControlledActor?: () => unknown;
   /** Instantly relocates the player, e.g. for a committed blink-teleport. */
   teleportPlayer?: (point: THREE.Vector3) => void;
   /** Follower camera facing, radians about the world Z axis. */
@@ -603,7 +615,11 @@ export class VRSpike {
     VRSpike.session = session;
     // While VR owns the player's position, queued actions must never walk the
     // actor to a target — the rig is anchored to the avatar, so an engine-driven
-    // approach drags the player through the world.
+    // approach drags the player through the world. Scoped to the actor the
+    // player is driving, so party and NPC movement is untouched.
+    ActionApproachPolicy.setControlledActorProbe(
+      (actor) => actor != null && actor === VRSpike.hooks?.getControlledActor?.()
+    );
     ActionApproachPolicy.setApproachSuppressed(true);
     VRSpike.traceXRStartup = true;
     VRSpike.traceXRStartupCallbacksSeen = 0;
@@ -2059,10 +2075,9 @@ export class VRSpike {
       if (!viewerPose) return;
       const routedActions = VRSpike.inputRouter.route(
         controllers,
-        // 'gameplay' is only needed here for ToggleLocomotionMode, which is
-        // bound in that context rather than 'locomotion'. 'global' carries
-        // Recenter, which belongs with locomotion for the same reason: it is a
-        // comfort control, and this path already owns the rig's placement.
+        // 'global' carries Recenter, Pause and PartyCommand, which belong with
+        // locomotion because this path already owns the rig's placement and
+        // runs on every XR frame gameplay owns.
         allowGameplayActions
           ? new Set(['locomotion', 'gameplay', 'global'])
           : new Set(['locomotion', 'global'])
@@ -2073,16 +2088,6 @@ export class VRSpike {
 
       const comfortSettings = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
 
-      const togglePressed = routedActions.some((action) =>
-        action.action === SemanticXRAction.ToggleLocomotionMode && action.pressed
-      );
-      if (togglePressed && !VRSpike.locomotionModeToggleHeld) {
-        VRSpike.hooks?.setComfortSettings?.({
-          locomotionMode: comfortSettings.locomotionMode === 'smooth' ? 'blink' : 'smooth',
-        });
-        VRSpike.teleportController.reset();
-      }
-      VRSpike.locomotionModeToggleHeld = togglePressed;
 
       // Recenter is a long press, matching how recentring works on the Meta
       // platform. The system's own recenter is a long press of the Meta button,
@@ -2293,10 +2298,21 @@ export class VRSpike {
     const rig = VRSpike.rig;
     if (!rig) return;
 
-    // Looking straight up or down leaves no horizontal forward to align, and
-    // the conversion throws rather than guessing at one. Keep the existing
-    // centring rather than recentring on a degenerate pose — a wrong recenter
-    // is a comfort hazard, an ignored one is merely a no-op.
+    // Refuse to recentre on a near-vertical head pose.
+    //
+    // The first attempt relied on `worldOrientationToCreatureFacing` throwing,
+    // but that only fires when the forward vector is *exactly* vertical
+    // (lengthSq < 1e-10). A real headset looking up is a few degrees off, which
+    // leaves a horizontal component thousands of times larger, so the guard
+    // never fired on device — reported from the second headset session as
+    // "recenter still worked while looking straight up". Yaw read from a
+    // near-vertical forward is dominated by tracking noise, and recentring on
+    // it throws the player's whole world sideways.
+    const headForward = new THREE.Vector3(0, 0, -1).applyQuaternion(headWorldOrientation);
+    if (Math.hypot(headForward.x, headForward.y) < RECENTER_MIN_HORIZONTAL_FORWARD) {
+      return;
+    }
+
     let headFacing: number;
     let rigFacing: number;
     try {

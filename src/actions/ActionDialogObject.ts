@@ -11,6 +11,7 @@ import { DLGObject } from "@/resource/DLGObject";
 import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionDialogObject class.
@@ -83,7 +84,10 @@ export class ActionDialogObject extends Action {
     }
 
     let distance = Utility.Distance2D(this.owner.position, this.target.position);
-    if(distance > 4.5 && !ignoreStartRange){
+    // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if(distance > 4.5 && !ignoreStartRange &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
       // this.owner.openSpot = undefined;
       let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();
       actionMoveToTarget.setParameter(0, ActionParameterType.FLOAT, this.target.position.x);

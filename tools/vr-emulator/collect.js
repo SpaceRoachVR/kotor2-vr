@@ -275,18 +275,112 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     metrics.approachSuppression = await harness.evaluate(`(() => {
       const K = window.KotOR;
       const player = K.PartyManager.Player;
+      // Actor-scoped: suppression applies only to the creature the player is
+      // driving, so party members and NPCs keep walking to their targets.
       const policySuppressed = K.ActionApproachPolicy
-        ? K.ActionApproachPolicy.isApproachSuppressed() : null;
+        ? K.ActionApproachPolicy.isApproachSuppressedFor(player) : null;
+      const companionStillWalks = K.ActionApproachPolicy
+        ? K.ActionApproachPolicy.isApproachSuppressedFor({ id: 'not-the-player' }) === false
+        : null;
       const queuedTypes = player && player.actionQueue
         ? Array.from(player.actionQueue).map(a => (a && a.constructor && a.constructor.name) || '?')
         : null;
       return {
         policySuppressed,
+        companionStillWalks,
         queuedTypes,
         movesQueued: queuedTypes ? queuedTypes.filter(n => /MoveToPoint/.test(n)).length : null,
       };
     })()`);
     onProgress('approach suppression');
+
+    // --- recenter refuses a near-vertical head (ROADMAP 4.6) ----------------
+    // The first guard relied on the facing conversion throwing, which only
+    // happens for an exactly-vertical forward. A real headset looking up is a
+    // few degrees off, so it never fired — reported from the second headset
+    // session as "recenter still worked while looking straight up".
+    await harness.evaluate(`(() => {
+      window.KotOR.VRSpike.yawOffset = 0;
+      // Pitch the head ~85 degrees up: forward is nearly vertical, so the yaw
+      // it reports is mostly noise.
+      const half = ${(85 * Math.PI / 180) / 2};
+      window.__xrDevice.quaternion.set(-Math.sin(half), 0, 0, Math.cos(half));
+      return true;
+    })()`);
+    await wait(1200);
+    await harness.evaluate(
+      `(() => { window.__xrDevice.controllers.right.updateButtonValue('thumbstick', 1); return true; })()`
+    );
+    await wait(1600);
+    await harness.evaluate(
+      `(() => { window.__xrDevice.controllers.right.updateButtonValue('thumbstick', 0); return true; })()`
+    );
+    await wait(600);
+    metrics.recenterVerticalRefused = await harness.evaluate(
+      `window.KotOR.VRSpike.yawOffset === 0`
+    );
+    // Restore a level head so later checks are not run from a silly pose.
+    await harness.evaluate(`(() => { window.__xrDevice.quaternion.set(0, 0, 0, 1); return true; })()`);
+    onProgress('recenter vertical guard');
+
+    // --- movement mode is not on a physical button --------------------------
+    metrics.locomotionModeUnbound = await harness.evaluate(`(() => {
+      const profiles = window.KotOR.BUILT_IN_XR_PROFILES;
+      if (!profiles) return null;
+      return !profiles.some(p => p.bindings.some(b => b.action === 'toggle-locomotion-mode'));
+    })()`);
+
+    // --- level-up button is actually clickable ------------------------------
+    metrics.levelUpClickable = await harness.evaluate(`(() => {
+      const menu = window.KotOR.GameState.MenuManager.MenuCharacter;
+      if (!menu) return 'no-menu';
+      const button = menu.BTN_LEVELUP;
+      if (!button) return 'no-button';
+      const listeners = button.eventListeners && button.eventListeners['click'];
+      return Array.isArray(listeners) && listeners.length > 0;
+    })()`);
+    onProgress('menu wiring');
+
+    // --- world prompt survey ------------------------------------------------
+    // Builds the prompt for every selectable object in the module and records
+    // what it offers. Reported from the second headset session: "doors with no
+    // security option show bash but not use", and Security/tunneler failing on
+    // containers that should accept them. A survey answers both with data
+    // instead of guesswork about which object misbehaved.
+    metrics.promptSurvey = await harness.evaluate(`(() => {
+      const V = window.KotOR.VRSpike;
+      const context = V && V.hooks && V.hooks.getWorldActionPromptContext
+        ? V.hooks.getWorldActionPromptContext() : null;
+      if (!context) return { error: 'no world prompt context' };
+
+      const rows = [];
+      for (const candidate of context.candidates || []) {
+        let labels = [];
+        let error = null;
+        try {
+          const model = context.createPrompt(candidate);
+          const pages = (model && model.pages) || [];
+          labels = pages.flatMap(page => (page.entries || [])
+            .filter(e => e && e.kind === 'action')
+            .map(e => e.label));
+        } catch (e) {
+          error = String(e && e.message || e);
+        }
+        const t = candidate && candidate.target;
+        rows.push({
+          id: t && t.id,
+          name: (t && t.getName && (() => { try { return t.getName(); } catch (e) { return null; } })()) || null,
+          isDoor: !!(t && t.objectType && (t.objectType & 8)),
+          locked: !!(t && t.isLocked && (() => { try { return t.isLocked(); } catch (e) { return false; } })()),
+          keyRequired: !!(t && t.keyRequired),
+          notBlastable: !!(t && t.notBlastable),
+          labels,
+          ...(error ? { error } : {}),
+        });
+      }
+      return { total: rows.length, rows };
+    })()`, { timeoutMs: 60000 });
+    onProgress('world prompt survey');
 
     // --- wheel menu routes open without throwing ----------------------------
     // The action wheel's Screens submenu opens real legacy menus. Two of them

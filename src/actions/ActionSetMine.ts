@@ -11,6 +11,7 @@ import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
 import { canExecuteObjectDestruction } from "@/engine/interaction/ObjectLockRules";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionSetMine class.
@@ -58,7 +59,10 @@ export class ActionSetMine extends Action {
     if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
       const distance = Utility.Distance2D(this.owner.position, this.target.position);
             
-      if(distance > 2 && !this.target.box.intersectsBox(this.owner.box)){
+      // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if(distance > 2 && !this.target.box.intersectsBox(this.owner.box) &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
         const actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();
         actionMoveToTarget.setParameter(0, ActionParameterType.FLOAT, this.target.position.x);
         actionMoveToTarget.setParameter(1, ActionParameterType.FLOAT, this.target.position.y);

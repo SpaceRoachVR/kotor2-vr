@@ -48,7 +48,7 @@ export class ActionOpenDoor extends Action {
       // Same reasoning as ActionUseObject: never walk the actor while VR owns
       // the player's position.
       if(distance > 2 && !this.target.box.intersectsBox(this.owner.box) &&
-        !ActionApproachPolicy.isApproachSuppressed()){
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
         
         this.owner.openSpot = undefined;
         let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();

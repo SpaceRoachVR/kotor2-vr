@@ -87,7 +87,11 @@ function standardBindings(
     { action: SemanticXRAction.Pause, context: 'global', hand: 'dominant', input: { kind: 'button', index: 5 } },
     { action: SemanticXRAction.WeaponAction, context: 'combat', hand: 'dominant', input: { kind: 'button', index: 0 } },
     { action: SemanticXRAction.ToggleWalkRun, context: 'locomotion', hand: 'offhand', input: { kind: 'button', index: 3 } },
-    { action: SemanticXRAction.ToggleLocomotionMode, context: 'gameplay', hand: 'offhand', input: { kind: 'button', index: 0 } },
+    // ToggleLocomotionMode is deliberately unbound. It shared the offhand
+    // trigger with radial-wheel Select, and having smooth/blink on a physical
+    // button as well as in Comfort Settings made the offhand controls hard to
+    // predict — reported from the second headset session. Movement mode now
+    // lives only on the Comfort Settings panel, which already exposes it.
     ...(partyCommandBinding === null
       ? []
       : [{ action: SemanticXRAction.PartyCommand, context: 'global', ...partyCommandBinding } as SemanticXRBinding]),
