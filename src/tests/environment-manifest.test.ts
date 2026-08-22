@@ -4,7 +4,7 @@ import * as path from 'path';
 import { afterEach, describe, expect, test } from '@jest/globals';
 
 const {
-  REDACTED_VALUE,
+  QA_EVIDENCE_DIRECTORY,
   collectEnvironmentManifest,
   parseArguments,
   writeManifest,
@@ -19,7 +19,7 @@ describe('environment manifest collector', () => {
     }
   });
 
-  test('redacts every environment value while retaining auditable runtime metadata', () => {
+  test('reports an environment count without persisting variable names or values', () => {
     const manifest = collectEnvironmentManifest({
       environment: {
         API_TOKEN: 'must-not-leak',
@@ -32,23 +32,23 @@ describe('environment manifest collector', () => {
     expect(manifest).toMatchObject({
       schemaVersion: 1,
       collectedAt: '2026-08-22T00:00:00.000Z',
-      workspace: { path: REDACTED_VALUE, packageManifestPresent: true },
+      workspace: { path: '[redacted]', packageManifestPresent: true },
       environment: {
         variableCount: 2,
-        values: {
-          API_TOKEN: REDACTED_VALUE,
-          NODE_ENV: REDACTED_VALUE,
-        },
       },
     });
     expect(JSON.stringify(manifest)).not.toContain('must-not-leak');
+    expect(JSON.stringify(manifest)).not.toContain('API_TOKEN');
+    expect(JSON.stringify(manifest)).not.toContain('NODE_ENV');
     expect(Object.isFrozen(manifest)).toBe(true);
-    expect(Object.isFrozen(manifest.environment.values)).toBe(true);
+    expect(Object.isFrozen(manifest.environment)).toBe(true);
   });
 
-  test('accepts only the documented output option and writes valid redacted JSON', () => {
+  test('writes only a new manifest file inside the approved QA evidence directory', () => {
     const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'kotor2-vr-manifest-'));
     temporaryDirectories.push(temporaryDirectory);
+    const evidenceDirectory = path.join(temporaryDirectory, QA_EVIDENCE_DIRECTORY);
+    fs.mkdirSync(evidenceDirectory, { recursive: true });
     const manifest = collectEnvironmentManifest({
       environment: { ACCESS_KEY: 'must-not-leak' },
       now: new Date('2026-08-22T00:00:00.000Z'),
@@ -62,7 +62,18 @@ describe('environment manifest collector', () => {
     const outputPath = writeManifest('environment.json', manifest, temporaryDirectory);
     const output = fs.readFileSync(outputPath, 'utf8');
 
+    expect(outputPath).toBe(path.join(evidenceDirectory, 'environment.json'));
     expect(output).not.toContain('must-not-leak');
     expect(JSON.parse(output)).toEqual(manifest);
+    expect(() => writeManifest('environment.json', manifest, temporaryDirectory)).toThrow(/exist/i);
+
+    for (const invalidPath of [
+      '../environment.json',
+      '..\\environment.json',
+      path.join(temporaryDirectory, 'environment.json'),
+      path.join(QA_EVIDENCE_DIRECTORY, 'nested', 'environment.json'),
+    ]) {
+      expect(() => writeManifest(invalidPath, manifest, temporaryDirectory)).toThrow(/output path/i);
+    }
   });
 });

@@ -45,12 +45,30 @@ describe('checkpoint snapshots', () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.inventory)).toBe(true);
     expect(Object.isFrozen(snapshot.inventory[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.partyIds)).toBe(true);
+    expect(Object.isFrozen(snapshot.plotState)).toBe(true);
+    expect(Object.isFrozen(snapshot.journal)).toBe(true);
+    expect(Object.isFrozen(snapshot.journal[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.effects)).toBe(true);
+    expect(Object.isFrozen(snapshot.effects[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.actions)).toBe(true);
+    expect(Object.isFrozen(snapshot.actions[0])).toBe(true);
 
     input.inventory[0].quantity = 99;
     input.equipment.rightHand = null;
+    input.partyIds[0] = 'mutated-player';
+    input.plotState.peragusAwake = false;
+    input.journal[0].state = 'completed';
+    input.effects[0].remainingSeconds = 0;
+    input.actions[0].state = 'executed';
 
     expect(snapshot.inventory[0].quantity).toBe(3);
     expect(snapshot.equipment.rightHand).toBe('plasma-cutter');
+    expect(snapshot.partyIds[0]).toBe('player-1');
+    expect(snapshot.plotState.peragusAwake).toBe(true);
+    expect(snapshot.journal[0].state).toBe('active');
+    expect(snapshot.effects[0].remainingSeconds).toBe(12);
+    expect(snapshot.actions[0].state).toBe('queued');
   });
 
   test.each([

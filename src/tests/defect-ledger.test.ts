@@ -37,11 +37,14 @@ describe('defect ledger records', () => {
   test.each([
     ['id', (input: DefectRecordInput) => { input.id = ''; }],
     ['title', (input: DefectRecordInput) => { input.title = ' '; }],
+    ['module', (input: DefectRecordInput) => { input.module = ''; }],
+    ['room', (input: DefectRecordInput) => { input.room = ' '; }],
     ['expected behavior', (input: DefectRecordInput) => { input.expected = ''; }],
     ['observed behavior', (input: DefectRecordInput) => { input.observed = ''; }],
     ['reproduction step', (input: DefectRecordInput) => { input.reproductionSteps = ['']; }],
     ['evidence reference', (input: DefectRecordInput) => { input.evidenceRefs = ['']; }],
     ['severity', (input: DefectRecordInput) => { input.severity = 'urgent' as never; }],
+    ['status', (input: DefectRecordInput) => { input.status = 'triaged' as never; }],
   ])('rejects an invalid or empty %s', (_field, mutate) => {
     const input = completeDefect();
     mutate(input);

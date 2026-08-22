@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const REDACTED_VALUE = '[redacted]';
+const QA_EVIDENCE_DIRECTORY = path.join('tools', 'qa', 'evidence');
 
 function collectEnvironmentManifest(options = {}) {
   const environment = options.environment ?? process.env;
@@ -20,11 +21,6 @@ function collectEnvironmentManifest(options = {}) {
     throw new TypeError('workingDirectory must be a non-empty string');
   }
 
-  const environmentVariables = {};
-  for (const name of Object.keys(environment).sort()) {
-    environmentVariables[name] = REDACTED_VALUE;
-  }
-
   return Object.freeze({
     schemaVersion: 1,
     collectedAt: now.toISOString(),
@@ -38,8 +34,7 @@ function collectEnvironmentManifest(options = {}) {
       packageManifestPresent: fs.existsSync(path.join(workingDirectory, 'package.json')),
     }),
     environment: Object.freeze({
-      variableCount: Object.keys(environmentVariables).length,
-      values: Object.freeze(environmentVariables),
+      variableCount: Object.keys(environment).length,
     }),
   });
 }
@@ -58,24 +53,38 @@ function parseArguments(args) {
 }
 
 function writeManifest(outputPath, manifest, workingDirectory = process.cwd()) {
-  if (typeof outputPath !== 'string' || outputPath.trim().length === 0) {
-    throw new TypeError('outputPath must be a non-empty string');
-  }
+  const outputFileName = validateOutputFileName(outputPath);
   if (typeof workingDirectory !== 'string' || workingDirectory.trim().length === 0) {
     throw new TypeError('workingDirectory must be a non-empty string');
   }
 
-  const resolvedPath = path.resolve(workingDirectory, outputPath);
-  const parentDirectory = path.dirname(resolvedPath);
-  if (!fs.existsSync(parentDirectory) || !fs.statSync(parentDirectory).isDirectory()) {
-    throw new Error(`output directory does not exist: ${parentDirectory}`);
-  }
-  if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isDirectory()) {
-    throw new Error(`output path is a directory: ${resolvedPath}`);
+  const evidenceDirectory = path.resolve(workingDirectory, QA_EVIDENCE_DIRECTORY);
+  if (!fs.existsSync(evidenceDirectory) || !fs.statSync(evidenceDirectory).isDirectory()) {
+    throw new Error(`approved QA evidence directory does not exist: ${evidenceDirectory}`);
   }
 
-  fs.writeFileSync(resolvedPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  const resolvedPath = path.resolve(evidenceDirectory, outputFileName);
+  if (fs.existsSync(resolvedPath)) {
+    throw new Error(`output path already exists: ${resolvedPath}`);
+  }
+
+  fs.writeFileSync(resolvedPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
   return resolvedPath;
+}
+
+function validateOutputFileName(outputPath) {
+  if (typeof outputPath !== 'string' || outputPath.trim().length === 0) {
+    throw new TypeError('output path must be a non-empty file name');
+  }
+  if (path.isAbsolute(outputPath) || path.win32.isAbsolute(outputPath) || path.posix.isAbsolute(outputPath)) {
+    throw new TypeError('output path must be relative to the approved QA evidence directory');
+  }
+
+  const pathSegments = outputPath.split(/[\\/]+/);
+  if (pathSegments.length !== 1 || pathSegments[0] === '.' || pathSegments[0] === '..') {
+    throw new TypeError('output path must name a file directly under the approved QA evidence directory');
+  }
+  return pathSegments[0];
 }
 
 function main(args = process.argv.slice(2)) {
@@ -104,6 +113,7 @@ if (require.main === module) {
 
 module.exports = {
   REDACTED_VALUE,
+  QA_EVIDENCE_DIRECTORY,
   collectEnvironmentManifest,
   main,
   parseArguments,
