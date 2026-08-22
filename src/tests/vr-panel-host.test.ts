@@ -145,6 +145,26 @@ describe('VRPanelHost', () => {
     );
   });
 
+  test('composites authored cutscene and caption layers into one theater target', () => {
+    const cutsceneScene = new THREE.Scene();
+    const cutsceneCamera = new THREE.PerspectiveCamera();
+    const captionScene = new THREE.Scene();
+    const captionCamera = new THREE.OrthographicCamera();
+    const host = new VRPanelHost(new THREE.Scene());
+    const renderer = createRenderer({} as THREE.WebGLRenderTarget);
+
+    host.renderGuiLayers(renderer as unknown as THREE.WebGLRenderer, [
+      { scene: cutsceneScene, camera: cutsceneCamera },
+      { scene: captionScene, camera: captionCamera },
+    ]);
+
+    expect(renderer.setRenderTarget).toHaveBeenCalledWith(host.renderTarget);
+    expect(renderer.render).toHaveBeenNthCalledWith(1, cutsceneScene, cutsceneCamera);
+    expect(renderer.render).toHaveBeenNthCalledWith(2, captionScene, captionCamera);
+    expect(renderer.setRenderTarget).toHaveBeenCalledTimes(2);
+    expect(renderer.xr.enabled).toBe(true);
+  });
+
   test('hides and releases panel ownership when presentation is cancelled', () => {
     const host = new VRPanelHost(new THREE.Scene());
     host.present({}, pose(new THREE.Vector3(), new THREE.Quaternion()), 1280, 720);

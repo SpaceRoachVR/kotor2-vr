@@ -13,6 +13,17 @@ export interface LegacyPanelRenderPass {
   render(renderer: THREE.WebGLRenderer): void;
 }
 
+/**
+ * One engine-owned layer composited into a stable VR panel texture. Layers
+ * share a target so cutscene imagery and its authored captions cannot drift
+ * apart as separate world-space meshes.
+ */
+export interface LegacyPanelRenderLayer {
+  readonly scene: THREE.Scene;
+  readonly camera: THREE.Camera;
+  readonly renderPass?: LegacyPanelRenderPass | null;
+}
+
 const DEFAULT_OPTIONS: VRPanelHostOptions = {
   distanceMetres: 1.5,
   widthMetres: 1.6,
@@ -162,6 +173,35 @@ export class VRPanelHost {
     guiCamera: THREE.Camera,
     legacyPanelRenderPass: LegacyPanelRenderPass | null = null
   ): void {
+    this.renderGuiLayers(renderer, [{
+      scene: guiScene,
+      camera: guiCamera,
+      renderPass: legacyPanelRenderPass,
+    }]);
+  }
+
+  /**
+   * Renders one or more legacy-camera layers into this panel's single target.
+   * This deliberately clears once before the first layer, then relies on the
+   * engine's authored draw order for later overlays such as dialogue captions.
+   */
+  renderGuiLayers(
+    renderer: THREE.WebGLRenderer,
+    layers: readonly LegacyPanelRenderLayer[],
+  ): void {
+    if (!renderer) throw new TypeError('VR panel renderer is required');
+    if (!Array.isArray(layers) || layers.length === 0) {
+      throw new RangeError('VR panel requires at least one render layer');
+    }
+    for (const layer of layers) {
+      if (!(layer?.scene instanceof THREE.Scene) || !(layer.camera instanceof THREE.Camera)) {
+        throw new TypeError('VR panel render layers require a THREE scene and camera');
+      }
+      if (layer.renderPass !== undefined && layer.renderPass !== null && typeof layer.renderPass.render !== 'function') {
+        throw new TypeError('VR panel render layer pass must expose render(renderer)');
+      }
+    }
+
     const previousTarget = renderer.getRenderTarget();
     const previousXREnabled = renderer.xr.enabled;
     const previousAutoClear = renderer.autoClear;
@@ -175,8 +215,10 @@ export class VRPanelHost {
       renderer.setRenderTarget(this.renderTarget);
       renderer.setClearAlpha(0);
       renderer.clear(true, true, true);
-      legacyPanelRenderPass?.render(renderer);
-      renderer.render(guiScene, guiCamera);
+      for (const layer of layers) {
+        layer.renderPass?.render(renderer);
+        renderer.render(layer.scene, layer.camera);
+      }
     } finally {
       renderer.setClearAlpha(previousClearAlpha);
       renderer.setRenderTarget(previousTarget);

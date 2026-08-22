@@ -272,6 +272,58 @@ describe('VRSpike XR loop ownership', () => {
     expect(renderTarget).toBe(xrRenderTarget);
   });
 
+  test('composites authored dialogue captions into the cutscene theater instead of creating a floating panel', () => {
+    const worldScene = new THREE.Scene();
+    const captionScene = new THREE.Scene();
+    const worldCamera = new THREE.PerspectiveCamera();
+    const captionCamera = new THREE.OrthographicCamera();
+    const xrRenderTarget = { isXRRenderTarget: true };
+    let renderTarget: unknown = xrRenderTarget;
+    const renderCalls: Array<{ scene: THREE.Scene; camera: THREE.Camera; xrEnabled: boolean }> = [];
+    const menu = {};
+    VRSpike.renderer = {
+      xr: { enabled: true },
+      autoClear: false,
+      domElement: { width: 1280, height: 720 },
+      getRenderTarget: () => renderTarget,
+      setRenderTarget: (target: unknown) => { renderTarget = target; },
+      getClearAlpha: () => 1,
+      setClearAlpha: (): void => undefined,
+      clear: (): void => undefined,
+      render: (scene: THREE.Scene, camera: THREE.Camera) => {
+        renderCalls.push({ scene, camera, xrEnabled: (VRSpike.renderer as any).xr.enabled });
+      },
+    } as never;
+    VRSpike.scene = worldScene;
+    VRSpike.camera = new THREE.PerspectiveCamera();
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(0, 0, 1.7), orientation: new THREE.Quaternion() },
+    };
+    (VRSpike as any).xrFrameRenderTarget = xrRenderTarget;
+    VRSpike.hooks = basicHooks({
+      getCutsceneContext: () => ({ canSkip: false, skip: (): void => undefined }),
+      getPanelContext: () => ({
+        menu,
+        guiScene: captionScene,
+        guiCamera: captionCamera,
+        viewportWidth: 1280,
+        viewportHeight: 720,
+        pointerSink: { setPointerPosition: (): void => undefined },
+      }),
+    });
+
+    (VRSpike as any).renderCutscene(worldCamera, 1000);
+
+    expect(renderCalls).toEqual([
+      { scene: worldScene, camera: worldCamera, xrEnabled: false },
+      { scene: captionScene, camera: captionCamera, xrEnabled: false },
+      { scene: worldScene, camera: VRSpike.camera, xrEnabled: true },
+    ]);
+    expect((VRSpike as any).movieHost?.isVisible).toBe(true);
+    expect((VRSpike as any).panelHost).toBeNull();
+    expect(renderTarget).toBe(xrRenderTarget);
+  });
+
   test('routes a Quest B press to a skippable movie exactly once', () => {
     const buttons = Array.from({ length: 6 }, () => ({
       pressed: false,

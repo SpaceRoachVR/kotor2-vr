@@ -9,6 +9,7 @@ import { InteractionSystem } from "./runtime/InteractionSystem";
 import { InteractionTargetRegistry } from "./runtime/InteractionTargetRegistry";
 import { LocomotionController, ResolvedLocomotion } from "./runtime/LocomotionController";
 import { VRPanelHost } from "./runtime/VRPanelHost";
+import type { LegacyPanelRenderLayer } from "./runtime/VRPanelHost";
 import { VRPanelPointerHost } from "./runtime/VRPanelPointerHost";
 import { VRKeyboardHost } from "./runtime/VRKeyboardHost";
 import { VRKeyboardInputController } from "./runtime/VRKeyboardInputController";
@@ -922,7 +923,8 @@ export class VRSpike {
     try {
       const worldScene = VRSpike.scene;
       if (!worldScene) return true;
-      if (!VRSpike.panelHost) {
+      const cutsceneOwnsTheater = (VRSpike.hooks?.getCutsceneContext?.() ?? null) !== null;
+      if (!cutsceneOwnsTheater && !VRSpike.panelHost) {
         VRSpike.panelHost = new VRPanelHost(worldScene);
       }
       if (!VRSpike.panelPointerHost) {
@@ -937,10 +939,16 @@ export class VRSpike {
         controllers,
         new Set(['gameplay', 'ui', 'global'])
       );
+      // Dialogue replies are drawn into the same theater texture as the
+      // authored camera shot. Re-use that surface for hit testing once its
+      // presentation frame exists; creating a second panel makes captions
+      // visibly drift away from the cutscene.
+      const presentationHost = cutsceneOwnsTheater ? VRSpike.movieHost : VRSpike.panelHost;
+      const expectedOwner = cutsceneOwnsTheater ? VRSpike.cutsceneOwner : menu;
       const dominantHand = VRSpike.latestInputFrame.hands.right;
-      const pointerHit = dominantHand && VRSpike.panelHost?.owner === menu && VRSpike.panelHost.isVisible
+      const pointerHit = dominantHand && presentationHost?.owner === expectedOwner && presentationHost.isVisible
         ? VRSpike.panelPointerHost?.update(
-          VRSpike.panelHost.object,
+          presentationHost.object,
           dominantHand.targetRayPose,
           context.viewportWidth,
           context.viewportHeight
@@ -2322,9 +2330,10 @@ export class VRSpike {
   }
 
   /**
-   * Captures the authored dialogue camera into the theater while leaving the
-   * headset camera under player control. The legacy dialogue panel is then
-   * rendered independently as the static subtitle/reply surface.
+   * Captures the authored dialogue camera and its authored caption/reply GUI
+   * into one theater texture while leaving the headset camera under player
+   * control. Keeping both layers on one surface prevents floating captions
+   * and letterbox geometry from diverging from a camera cut.
    */
   private static renderCutscene(worldCamera: THREE.Camera, frameTimestamp: number): void {
     const renderer = VRSpike.renderer;
@@ -2349,6 +2358,8 @@ export class VRSpike {
     }
     VRSpike.cutsceneFadeHost.setOpacity(VRSpike.cutsceneFadeEnvelope.sample(frameTimestamp));
 
+    const captionContext = VRSpike.hooks?.getPanelContext?.();
+
     try {
       if (!VRSpike.movieHost) {
         VRSpike.movieHost = new VRPanelHost(worldScene, { distanceMetres: 2.25, widthMetres: 2.4 });
@@ -2362,15 +2373,36 @@ export class VRSpike {
       const movieVisible = VRSpike.movieHost.object.visible;
       const panelVisible = VRSpike.panelHost?.object.visible ?? false;
       try {
-        // Do not recursively capture the theater or reply surface.
+        // Do not recursively capture a prior theater/panel surface. The
+        // authored GUI below is rendered directly into movieHost's target.
         VRSpike.movieHost.object.visible = false;
         if (VRSpike.panelHost) VRSpike.panelHost.object.visible = false;
-        VRSpike.movieHost.renderGui(renderer, worldScene, worldCamera);
+        const layers: LegacyPanelRenderLayer[] = [{
+          scene: worldScene,
+          camera: worldCamera,
+        }];
+        if (captionContext?.menu) {
+          // Reapply the ray-derived legacy cursor immediately before the GUI
+          // layer so an available reply remains visibly and semantically tied
+          // to its row in the theater.
+          captionContext.pointerSink.setPointerPosition(VRSpike.latestPanelPointerPosition);
+          layers.push({
+            scene: captionContext.guiScene,
+            camera: captionContext.guiCamera,
+            renderPass: captionContext.menu.getLegacyPanelRenderPass?.() ?? null,
+          });
+        } else {
+          captionContext?.pointerSink.setPointerPosition(null);
+        }
+        VRSpike.movieHost.renderGuiLayers(renderer, layers);
       } finally {
         VRSpike.movieHost.object.visible = movieVisible;
         if (VRSpike.panelHost) VRSpike.panelHost.object.visible = panelVisible;
       }
-      VRSpike.renderPanel();
+      // A previously-open generic panel must not remain as a second caption
+      // plane beneath the theater. Its legacy menu state remains untouched;
+      // only the duplicate VR presentation is released.
+      VRSpike.panelHost?.clear();
       if (VRSpike.xrFrameRenderTarget) renderer.setRenderTarget(VRSpike.xrFrameRenderTarget);
       const previousAutoClear = renderer.autoClear;
       renderer.autoClear = true;
