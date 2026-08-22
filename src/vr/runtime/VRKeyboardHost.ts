@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { XRWorldPose } from './XRTypes';
 import { resolveVRKeyboardKeyAtUV, VR_KEYBOARD_DONE_KEY, VR_KEYBOARD_LAYOUT } from './VRKeyboardLayout';
+import { VRKeyboardState } from './VRKeyboardInputController';
 
 /** A controller-ray-selectable keyboard surface for legacy editable labels. */
 export class VRKeyboardHost {
@@ -11,11 +12,22 @@ export class VRKeyboardHost {
   private readonly cursor: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
   private positioned = false;
   private highlightedKey: string | null = null;
+  private modifierState: VRKeyboardState = Object.freeze({ shift: false, capsLock: false });
 
   get isVisible(): boolean { return this.object.visible; }
 
   /** The key currently under the aiming ray, for tests and callers. */
   get hoveredKey(): string | null { return this.highlightedKey; }
+
+  /** Synchronizes modifier latches with the input controller without moving the surface. */
+  setModifierState(state: VRKeyboardState): void {
+    if (!state || typeof state.shift !== 'boolean' || typeof state.capsLock !== 'boolean') {
+      throw new TypeError('VR keyboard modifier state must contain boolean shift and capsLock values');
+    }
+    if (state.shift === this.modifierState.shift && state.capsLock === this.modifierState.capsLock) return;
+    this.modifierState = Object.freeze({ shift: state.shift, capsLock: state.capsLock });
+    this.draw();
+  }
 
   constructor(scene: THREE.Scene) {
     if (typeof document === 'undefined') throw new Error('VR keyboard requires a browser document');
@@ -147,11 +159,14 @@ export class VRKeyboardHost {
       const height = key.height * 120 - 10;
       const aimed = key.value === this.highlightedKey;
       const done = key.value === VR_KEYBOARD_DONE_KEY;
+      const modifierActive = (key.value === 'SHIFT' && this.modifierState.shift) ||
+        (key.value === 'CAPS' && this.modifierState.capsLock);
       context.fillStyle = aimed
         ? 'rgba(96, 232, 255, 0.92)'
+        : modifierActive ? 'rgba(251, 183, 64, 0.96)'
         : done ? 'rgba(14, 74, 52, 0.96)' : 'rgba(8, 48, 58, 0.96)';
       context.fillRect(x, y, width, height);
-      context.strokeStyle = aimed ? '#ffffff' : done ? '#6dffb0' : '#62e8ff';
+      context.strokeStyle = aimed ? '#ffffff' : modifierActive ? '#fff1a2' : done ? '#6dffb0' : '#62e8ff';
       context.lineWidth = aimed ? 6 : 3;
       context.strokeRect(x, y, width, height);
       context.fillStyle = aimed ? '#02222b' : '#f4feff';

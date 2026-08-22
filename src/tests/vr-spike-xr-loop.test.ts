@@ -62,6 +62,9 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).keyboardSelectHeld = false;
     (VRSpike as any).keyboardCancelHeld = false;
     (VRSpike as any).keyboardWasActive = false;
+    (VRSpike as any).keyboardOwner = null;
+    (VRSpike as any).keyboardDismissed = false;
+    (VRSpike as any).keyboardInputController?.reset();
     (VRSpike as any).combatCancelHeld = false;
     (VRSpike as any).combatInputController?.reset();
     (VRSpike as any).forceGestureController?.reset();
@@ -468,6 +471,62 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).processKeyboardInput();
 
     expect(keys).toEqual([{ which: 65, shiftKey: false }]);
+  });
+
+  test('[runtime=emulated] keeps DONE dismissed through an ordinary grip and recalls only after explicit focus', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const firstOwner = {};
+    const secondOwner = {};
+    let owner = firstOwner;
+    const host = {
+      clear: jest.fn(),
+      present: jest.fn(),
+      moveTo: jest.fn(),
+      keyAtRay: jest.fn(() => 'DONE'),
+      isVisible: true,
+    };
+    VRSpike.scene = new THREE.Scene();
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+      hands: {
+        right: {
+          pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+          targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+        },
+      },
+    };
+    (VRSpike as any).keyboardHost = host;
+    const hooks = {
+      update: (): void => undefined,
+      getPlayerPosition: (): THREE.Vector3 | null => null,
+      getFacing: (): number => 0,
+      getWorldContext: (): { module: string | null; position: THREE.Vector3 | null; room: string | null; roomsVisible: number; roomsTotal: number } =>
+        ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getKeyboardContext: (): { owner: object; onKeyDown: () => void; cancel: () => void } =>
+        ({ owner, onKeyDown: (): void => undefined, cancel: (): void => undefined }),
+    } as any;
+    VRSpike.hooks = hooks;
+
+    (VRSpike as any).processKeyboardInput();
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    expect((VRSpike as any).processKeyboardInput()).toBe(true);
+    expect((VRSpike as any).keyboardDismissed).toBe(true);
+
+    buttons[0] = { pressed: false, touched: false, value: 0 };
+    buttons[1] = { pressed: true, touched: true, value: 1 };
+    expect((VRSpike as any).processKeyboardInput()).toBe(false);
+    expect((VRSpike as any).keyboardDismissed).toBe(true);
+    expect(host.moveTo).not.toHaveBeenCalled();
+
+    buttons[1] = { pressed: false, touched: false, value: 0 };
+    owner = secondOwner;
+    expect((VRSpike as any).processKeyboardInput()).toBe(true);
+    expect((VRSpike as any).keyboardDismissed).toBe(false);
+    (VRSpike as any).renderKeyboard();
+    expect(host.present).toHaveBeenCalled();
   });
 
   test('forwards a physical saber swing to the combat bridge while preserving its d20 eligibility', () => {

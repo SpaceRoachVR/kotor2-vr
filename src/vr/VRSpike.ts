@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { XRCoordinateConverter } from "./runtime/XRCoordinateConverter";
 import { XRControllerAnchorHost } from "./runtime/XRControllerAnchorHost";
+import type { HeldItemVisualDescriptor } from "./runtime/XRControllerAnchorHost";
 import { XRGamepadReader } from "./runtime/XRGamepadReader";
 import { XRInputFrameBuilder } from "./runtime/XRInputFrameBuilder";
 import { RoutedXRAction, XRInputRouter } from "./runtime/XRInputRouter";
@@ -186,10 +187,10 @@ export interface VRSpikeHooks {
     onCombatSwing(event: VRCombatSwingEvent): void;
     cancel?(): void;
   } | null;
-  /** Engine-owned models to present while the corresponding controller holds an item. */
+  /** Engine-owned held-item descriptors; the anchor host creates presentation-only clones. */
   getHeldVisuals?: () => Readonly<{
-    readonly left: THREE.Object3D | null;
-    readonly right: THREE.Object3D | null;
+    readonly left: HeldItemVisualDescriptor | null;
+    readonly right: HeldItemVisualDescriptor | null;
   }>;
   /**
    * Available Force powers and the engine action bridge for a recognized
@@ -231,6 +232,10 @@ export interface VRSpikeHooks {
   getCutsceneContext?: () => VRCutsceneInputContext | null;
   /** Currently focused editable legacy control, if any. */
   getKeyboardContext?: () => {
+    /** Stable editable-control identity; a new owner is an explicit focus change. */
+    readonly owner?: object;
+    /** A caller may deliberately recall the keyboard without changing focus. */
+    readonly recallRequested?: boolean;
     onKeyDown(event: { readonly which: number; readonly shiftKey: boolean }): void;
     cancel(): void;
   } | null;
@@ -322,7 +327,8 @@ export class VRSpike {
   private static keyboardCancelHeld = false;
   private static keyboardGrabHeld = false;
   private static keyboardWasActive = false;
-  /** Set by the keyboard's DONE key; cleared on grip or on leaving the screen. */
+  private static keyboardOwner: object | null = null;
+  /** Set by DONE; cleared only by focus ownership change, explicit recall, or leaving the screen. */
   private static keyboardDismissed = false;
   private static movieHost: VRPanelHost | null = null;
   private static readonly movieOwner = {};
@@ -1124,13 +1130,22 @@ export class VRSpike {
       VRSpike.keyboardHost?.clear();
       VRSpike.keyboardSelectHeld = false;
       VRSpike.keyboardCancelHeld = false;
+      VRSpike.keyboardGrabHeld = false;
       VRSpike.keyboardWasActive = false;
+      VRSpike.keyboardOwner = null;
+      VRSpike.keyboardInputController.reset();
       // Leaving the screen that owned the keyboard also retires its dismissal,
       // so the next name-entry screen opens with a keyboard again.
       VRSpike.keyboardDismissed = false;
       return false;
     }
     try {
+      if (sink.owner && sink.owner !== VRSpike.keyboardOwner) {
+        VRSpike.keyboardOwner = sink.owner;
+        VRSpike.keyboardDismissed = false;
+        VRSpike.keyboardInputController.reset();
+      }
+      if (sink.recallRequested) VRSpike.keyboardDismissed = false;
       if (!VRSpike.keyboardHost) VRSpike.keyboardHost = new VRKeyboardHost(scene);
       if (!VRSpike.keyboardWasActive) {
         VRSpike.clearLegacyPanelPointer();
@@ -1145,12 +1160,11 @@ export class VRSpike {
       );
       const cancelPressed = actions.some((action) => action.action === SemanticXRAction.Cancel && action.pressed);
       const grabAction = actions.find((action) => action.action === SemanticXRAction.Grab && action.pressed);
-      if (grabAction) {
+      if (grabAction && !VRSpike.keyboardDismissed) {
         const hand = inputFrame.hands[grabAction.hand];
-        // Grabbing both repositions the keyboard and recalls a dismissed one,
-        // so finishing entry is never a one-way door if more typing is needed.
-        if (VRSpike.keyboardDismissed && !VRSpike.keyboardGrabHeld) VRSpike.keyboardDismissed = false;
-        if (hand && !VRSpike.keyboardDismissed) VRSpike.keyboardHost.moveTo(hand.pose, inputFrame.head);
+        // Grip repositions an active keyboard only. DONE hands the ray back to
+        // the panel; grip must not silently steal that ownership back.
+        if (hand) VRSpike.keyboardHost.moveTo(hand.pose, inputFrame.head);
       }
       VRSpike.keyboardGrabHeld = !!grabAction;
 
@@ -1177,6 +1191,7 @@ export class VRSpike {
           VRSpike.keyboardInputController.press(aimedKey, sink);
         }
       }
+      VRSpike.keyboardHost.setModifierState?.(VRSpike.keyboardInputController.state);
       VRSpike.keyboardSelectHeld = selectPressed;
       if (cancelPressed && !VRSpike.keyboardCancelHeld) sink.cancel();
       VRSpike.keyboardCancelHeld = cancelPressed;
@@ -1188,6 +1203,11 @@ export class VRSpike {
       console.error('[VRSpike] virtual keyboard input rejected', error);
     }
     return true;
+  }
+
+  /** Deliberately restores a keyboard dismissed with DONE for the current focused control. */
+  static recallKeyboard(): void {
+    VRSpike.keyboardDismissed = false;
   }
 
   /** Comfort settings panel (ROADMAP 2.6), opened from the all-purpose action wheel. */
@@ -2369,7 +2389,7 @@ export class VRSpike {
     if (!VRSpike.keyboardHost && VRSpike.scene) {
       VRSpike.keyboardHost = new VRKeyboardHost(VRSpike.scene);
     }
-    VRSpike.keyboardHost?.present(inputFrame.head);
+    if (!VRSpike.keyboardDismissed) VRSpike.keyboardHost?.present(inputFrame.head);
   }
 
   /**
@@ -2449,7 +2469,7 @@ export class VRSpike {
     const worldScene = VRSpike.scene;
     const inputFrame = VRSpike.latestInputFrame;
     const context = VRSpike.hooks?.getPanelContext?.();
-    if (VRSpike.hooks?.getKeyboardContext?.()) {
+    if (VRSpike.hooks?.getKeyboardContext?.() && !VRSpike.keyboardDismissed) {
       // Keyboard owns input while it has focus, but the panel underneath —
       // e.g. a name-entry popup — must stay visible so the player can see
       // what they're typing; hiding it here made typing look unresponsive

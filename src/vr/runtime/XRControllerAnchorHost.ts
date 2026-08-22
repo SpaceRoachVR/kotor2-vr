@@ -1,6 +1,24 @@
 import * as THREE from 'three';
 import { XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
+/** Explicit, physical-space correction used only when an authored grip is absent. */
+export interface HeldItemClassFallbackTransform {
+  readonly position?: THREE.Vector3;
+  readonly rotation?: THREE.Euler;
+  readonly scale?: number;
+}
+
+/**
+ * Engine ownership stays with `model`; the hand host owns only its flattened
+ * presentation copy. Authored grip nodes win over per-class fallbacks.
+ */
+export interface HeldItemVisualDescriptor {
+  readonly model: THREE.Object3D;
+  readonly baseItemClass: string;
+  readonly authoredGripNode?: THREE.Object3D | null;
+  readonly classFallback: HeldItemClassFallbackTransform;
+}
+
 /**
  * Builds a render-only copy of an engine model for the hand anchor.
  *
@@ -16,10 +34,14 @@ import { XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
  * (never copy) their geometry and material. Nothing engine-owned is mutated,
  * and there is no `userData` to serialize.
  */
-function createPresentationClone(source: THREE.Object3D): THREE.Object3D {
+function createPresentationClone(
+  source: THREE.Object3D,
+  authoredGripNode: THREE.Object3D | null
+): THREE.Object3D {
   const root = new THREE.Group();
   source.updateWorldMatrix(true, true);
-  const inverseSourceMatrix = new THREE.Matrix4().copy(source.matrixWorld).invert();
+  const presentationOrigin = authoredGripNode ?? source;
+  const inversePresentationMatrix = new THREE.Matrix4().copy(presentationOrigin.matrixWorld).invert();
 
   source.traverseVisible((node) => {
     const mesh = node as THREE.Mesh;
@@ -29,9 +51,9 @@ function createPresentationClone(source: THREE.Object3D): THREE.Object3D {
     // the module still renders with.
     const copy = new THREE.Mesh(mesh.geometry, mesh.material);
     copy.matrixAutoUpdate = false;
-    // Re-express each mesh relative to the source root so the flattened result
-    // keeps the original model's internal layout.
-    copy.matrix.multiplyMatrices(inverseSourceMatrix, mesh.matrixWorld);
+    // Re-express each mesh relative to the authored grip (or model root) so
+    // the flattened result keeps the original internal layout at the hand.
+    copy.matrix.multiplyMatrices(inversePresentationMatrix, mesh.matrixWorld);
     copy.frustumCulled = false;
     root.add(copy);
   });
@@ -48,6 +70,7 @@ export class XRControllerAnchorHost {
   private readonly heldVisuals: Record<XRHandRole, THREE.Object3D | null> = { left: null, right: null };
   /** Sources are cached so an equipped model is cloned only when equipment changes. */
   private readonly heldSources: Record<XRHandRole, THREE.Object3D | null> = { left: null, right: null };
+  private readonly heldDescriptorKeys: Record<XRHandRole, string | null> = { left: null, right: null };
   private readonly disposableGeometries: THREE.BufferGeometry[] = [];
   private readonly disposableMaterials: THREE.Material[] = [];
 
@@ -101,30 +124,24 @@ export class XRControllerAnchorHost {
     }
   }
 
-  /** Attaches a cloned, engine-owned weapon/item model to the tracked hand. */
-  setHeldVisual(hand: XRHandRole, source: THREE.Object3D | null): void {
-    if (this.heldSources[hand] === source) return;
+  /** Attaches a flattened presentation-only engine model to the tracked hand. */
+  setHeldVisual(hand: XRHandRole, descriptor: HeldItemVisualDescriptor | null): void {
+    const descriptorKey = descriptor ? XRControllerAnchorHost.getDescriptorKey(descriptor) : null;
+    if (descriptor && this.heldSources[hand] === descriptor.model && this.heldDescriptorKeys[hand] === descriptorKey) return;
     const anchor = this.anchors[hand];
     const existing = this.heldVisuals[hand];
     if (existing) anchor.remove(existing);
-    this.heldSources[hand] = source;
-    if (!source) {
+    this.heldSources[hand] = descriptor?.model ?? null;
+    this.heldDescriptorKeys[hand] = descriptorKey;
+    if (!descriptor) {
       this.heldVisuals[hand] = null;
       return;
     }
 
-    const visual = createPresentationClone(source);
+    const authoredGripNode = XRControllerAnchorHost.resolveAuthoredGripNode(descriptor);
+    const visual = createPresentationClone(descriptor.model, authoredGripNode);
     visual.name = `Kotor2VR.${hand}HeldItem`;
-    visual.updateWorldMatrix(true, true);
-    const size = new THREE.Box3().setFromObject(visual).getSize(new THREE.Vector3());
-    const longestDimension = Math.max(size.x, size.y, size.z);
-    // Odyssey models span wildly different source-unit sizes. Normalize the
-    // cloned presentation model to a physical, readable 28 cm held item.
-    const normalizedScale = Number.isFinite(longestDimension) && longestDimension > 0.0001
-      ? 0.28 / longestDimension
-      : 0.01;
-    visual.scale.multiplyScalar(normalizedScale);
-    visual.rotation.set(Math.PI / 2, 0, 0);
+    if (!authoredGripNode) this.applyClassFallback(visual, descriptor.classFallback);
     anchor.add(visual);
     this.heldVisuals[hand] = visual;
   }
@@ -152,6 +169,60 @@ export class XRControllerAnchorHost {
     );
     for (const geometry of this.disposableGeometries) geometry.dispose();
     for (const material of this.disposableMaterials) material.dispose();
+  }
+
+  private applyClassFallback(
+    visual: THREE.Object3D,
+    fallback: HeldItemClassFallbackTransform
+  ): void {
+    if (!fallback || typeof fallback !== 'object') {
+      throw new TypeError('held-item class fallback must be an object');
+    }
+    if (fallback.position) {
+      if (!Number.isFinite(fallback.position.x) || !Number.isFinite(fallback.position.y) || !Number.isFinite(fallback.position.z)) {
+        throw new RangeError('held-item class fallback position must be finite');
+      }
+      visual.position.copy(fallback.position);
+    }
+    if (fallback.rotation) {
+      if (!Number.isFinite(fallback.rotation.x) || !Number.isFinite(fallback.rotation.y) || !Number.isFinite(fallback.rotation.z)) {
+        throw new RangeError('held-item class fallback rotation must be finite');
+      }
+      visual.rotation.copy(fallback.rotation);
+    }
+    if (fallback.scale !== undefined) {
+      if (!Number.isFinite(fallback.scale) || fallback.scale <= 0) {
+        throw new RangeError('held-item class fallback scale must be finite and positive');
+      }
+      visual.scale.setScalar(fallback.scale);
+    }
+  }
+
+  private static resolveAuthoredGripNode(descriptor: HeldItemVisualDescriptor): THREE.Object3D | null {
+    const candidate = descriptor.authoredGripNode;
+    if (!candidate) return null;
+    let belongsToModel = candidate === descriptor.model;
+    if (!belongsToModel) {
+      descriptor.model.traverse((node) => { if (node === candidate) belongsToModel = true; });
+    }
+    return belongsToModel ? candidate : null;
+  }
+
+  private static getDescriptorKey(descriptor: HeldItemVisualDescriptor): string {
+    if (!(descriptor.model instanceof THREE.Object3D)) {
+      throw new TypeError('held-item descriptor model must be a THREE.Object3D');
+    }
+    if (typeof descriptor.baseItemClass !== 'string' || !descriptor.baseItemClass.trim()) {
+      throw new TypeError('held-item descriptor baseItemClass must be a non-empty string');
+    }
+    const fallback = descriptor.classFallback;
+    if (!fallback || typeof fallback !== 'object') {
+      throw new TypeError('held-item descriptor classFallback must be an object');
+    }
+    const position = fallback.position ? `${fallback.position.x},${fallback.position.y},${fallback.position.z}` : '';
+    const rotation = fallback.rotation ? `${fallback.rotation.x},${fallback.rotation.y},${fallback.rotation.z},${fallback.rotation.order}` : '';
+    const scale = fallback.scale ?? '';
+    return `${descriptor.baseItemClass.trim()}|${descriptor.authoredGripNode?.uuid ?? ''}|${position}|${rotation}|${scale}`;
   }
 
   private applyWorldPose(

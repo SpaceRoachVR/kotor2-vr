@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, jest, test } from '@jest/globals';
 import { XRControllerAnchorHost } from '@/vr/runtime/XRControllerAnchorHost';
 import { XRInputFrame, XRWorldPose } from '@/vr/runtime/XRTypes';
 
@@ -58,7 +58,11 @@ describe('XRControllerAnchorHost', () => {
     expect(host.getAnchor('right').getObjectByName('Kotor2VR.rightHandVisual')).toBeUndefined();
     expect(host.getRayAnchor('right').visible).toBe(true);
     const source = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1));
-    host.setHeldVisual('right', source);
+    host.setHeldVisual('right', {
+      model: source,
+      baseItemClass: 'blaster-pistol',
+      classFallback: { scale: 0.01 },
+    });
     host.update(inputFrame(worldPose(new THREE.Vector3(0.2, 1.2, -0.4))));
     expect(host.getAnchor('right').getObjectByName('Kotor2VR.rightHeldItem')).toBeDefined();
     expect(host.getRayAnchor('right').visible).toBe(false);
@@ -66,6 +70,78 @@ describe('XRControllerAnchorHost', () => {
     host.setHeldVisual('right', null);
     host.update(inputFrame(worldPose(new THREE.Vector3(0.2, 1.2, -0.4))));
     expect(host.getRayAnchor('right').visible).toBe(true);
+  });
+
+  test('[runtime=emulated] aligns a flattened presentation model at an authored grip node', () => {
+    const rig = new THREE.Group();
+    const host = new XRControllerAnchorHost(rig);
+    const source = new THREE.Group();
+    const grip = new THREE.Group();
+    grip.name = 'grip';
+    grip.position.set(2, 0, 0);
+    const modelMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    modelMesh.position.set(3, 0, 0);
+    source.add(grip, modelMesh);
+
+    host.setHeldVisual('right', {
+      model: source,
+      baseItemClass: 'lightsaber',
+      authoredGripNode: grip,
+      classFallback: { position: new THREE.Vector3(9, 0, 0), scale: 0.01 },
+    });
+
+    const visual = host.getAnchor('right').getObjectByName('Kotor2VR.rightHeldItem')!;
+    const mesh = visual.children[0] as THREE.Mesh;
+    expect(visual.position.toArray()).toEqual([0, 0, 0]);
+    expect(visual.scale.toArray()).toEqual([1, 1, 1]);
+    expect(mesh.matrix.elements[12]).toBeCloseTo(1);
+  });
+
+  test('[runtime=emulated] uses the descriptor class fallback when no authored grip exists without disposing shared resources', () => {
+    const rig = new THREE.Group();
+    const host = new XRControllerAnchorHost(rig);
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshBasicMaterial();
+    const source = new THREE.Mesh(geometry, material);
+    const disposeGeometry = jest.spyOn(geometry, 'dispose');
+    const disposeMaterial = jest.spyOn(material, 'dispose');
+
+    host.setHeldVisual('right', {
+      model: source,
+      baseItemClass: 't3-integrated-blaster',
+      classFallback: {
+        position: new THREE.Vector3(0.04, -0.02, -0.11),
+        rotation: new THREE.Euler(0, Math.PI / 4, 0),
+        scale: 0.015,
+      },
+    });
+
+    const visual = host.getAnchor('right').getObjectByName('Kotor2VR.rightHeldItem')!;
+    expect(visual.visible).toBe(true);
+    expect(visual.position.toArray()).toEqual([0.04, -0.02, -0.11]);
+    expect(visual.scale.toArray()).toEqual([0.015, 0.015, 0.015]);
+    expect(visual.rotation.y).toBeCloseTo(Math.PI / 4);
+
+    host.dispose();
+    expect(disposeGeometry).not.toHaveBeenCalled();
+    expect(disposeMaterial).not.toHaveBeenCalled();
+  });
+
+  test('does not rebuild a held presentation when an equivalent descriptor snapshot is refreshed', () => {
+    const rig = new THREE.Group();
+    const host = new XRControllerAnchorHost(rig);
+    const source = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    const descriptor = () => ({
+      model: source,
+      baseItemClass: 'blaster-pistol',
+      classFallback: { position: new THREE.Vector3(0, 0, -0.1), scale: 0.01 },
+    });
+
+    host.setHeldVisual('right', descriptor());
+    const firstVisual = host.getAnchor('right').getObjectByName('Kotor2VR.rightHeldItem');
+    host.setHeldVisual('right', descriptor());
+
+    expect(host.getAnchor('right').getObjectByName('Kotor2VR.rightHeldItem')).toBe(firstVisual);
   });
 });
 

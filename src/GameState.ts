@@ -68,6 +68,8 @@ import {
 } from "@/vr/runtime/VRWorldActionPromptModel";
 import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
+import type { HeldItemClassFallbackTransform, HeldItemVisualDescriptor } from "@/vr/runtime/XRControllerAnchorHost";
+import { BaseItemType } from "@/enums/combat/BaseItemType";
 import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
 import {
   buildVRActionWheel,
@@ -907,6 +909,73 @@ function resolveVRCombatWeaponMode(actor: ModuleCreature): CombatWeaponMode {
   }
 }
 
+interface VREquippedHeldItem {
+  readonly model?: unknown;
+  readonly baseItemId?: unknown;
+  readonly baseItem?: {
+    readonly itemClass?: unknown;
+    readonly rangedWeapon?: unknown;
+  };
+}
+
+function resolveHeldItemClassFallback(item: VREquippedHeldItem): HeldItemClassFallbackTransform {
+  const baseItemId = typeof item.baseItemId === 'number' ? item.baseItemId : -1;
+  const itemClass = typeof item.baseItem?.itemClass === 'string'
+    ? item.baseItem.itemClass.toLocaleLowerCase()
+    : '';
+  const isLightsaber = baseItemId === BaseItemType.LIGHTSABER ||
+    baseItemId === BaseItemType.DOUBLE_BLADED_LIGHTSABER ||
+    baseItemId === BaseItemType.SHORT_LIGHTSABER ||
+    itemClass.includes('lghtsbr');
+  const isBlaster = item.baseItem?.rangedWeapon === true || itemClass.includes('blaster') ||
+    (baseItemId >= BaseItemType.BLASTER_PISTOL && baseItemId <= BaseItemType.HEAVY_REPEATING_BLASTER) ||
+    baseItemId === BaseItemType.BLASTER_RIFLE;
+
+  if (isLightsaber) {
+    return {
+      position: new THREE.Vector3(0, -0.015, -0.065),
+      rotation: new THREE.Euler(0, 0, -Math.PI / 2),
+      scale: 0.012,
+    };
+  }
+  if (isBlaster) {
+    return {
+      position: new THREE.Vector3(0.035, -0.02, -0.09),
+      rotation: new THREE.Euler(0, Math.PI / 2, 0),
+      scale: 0.012,
+    };
+  }
+  return {
+    position: new THREE.Vector3(0, -0.02, -0.06),
+    rotation: new THREE.Euler(0, 0, 0),
+    scale: 0.01,
+  };
+}
+
+function findHeldItemGripNode(model: THREE.Object3D): THREE.Object3D | null {
+  let match: THREE.Object3D | null = null;
+  model.traverse((node) => {
+    if (match) return;
+    const name = node.name.trim().toLocaleLowerCase();
+    if (name === 'grip' || name === 'grip_hook' || name === 'weapon_grip') match = node;
+  });
+  return match;
+}
+
+function describeHeldItemVisual(item: VREquippedHeldItem | null | undefined): HeldItemVisualDescriptor | null {
+  const model = item?.model;
+  if (!(model instanceof THREE.Object3D)) return null;
+  const baseItemClass = typeof item.baseItem?.itemClass === 'string' && item.baseItem.itemClass.trim()
+    ? item.baseItem.itemClass.trim()
+    : typeof item.baseItemId === 'number' ? `base-item-${item.baseItemId}` : 'unknown';
+  return {
+    model,
+    baseItemClass,
+    authoredGripNode: findHeldItemGripNode(model),
+    classFallback: resolveHeldItemClassFallback(item),
+  };
+}
+
 function findVRForceGestureSpell(actor: ModuleCreature, kind: 'push' | 'pull'): TalentSpell | null {
   const keyword = kind.toLowerCase();
   return actor.getSpells().find((spell) => {
@@ -1613,11 +1682,9 @@ export class GameState implements EngineContext {
       getPlayerFacing: () => GameState.getCurrentPlayer()?.rotation.z ?? null,
       getHeldVisuals: () => {
         const player = GameState.getCurrentPlayer();
-        const left = player?.equipment.LEFTHAND?.model;
-        const right = player?.equipment.RIGHTHAND?.model;
         return {
-          left: left instanceof THREE.Object3D ? left : null,
-          right: right instanceof THREE.Object3D ? right : null,
+          left: describeHeldItemVisual(player?.equipment.LEFTHAND),
+          right: describeHeldItemVisual(player?.equipment.RIGHTHAND),
         };
       },
       applyLocomotion: (locomotion) => {
@@ -1965,6 +2032,7 @@ export class GameState implements EngineContext {
           : findVREditableControl(GameState.MenuManager.GetForegroundMenu());
         return control
           ? {
+            owner: control,
             onKeyDown: control.onKeyDown.bind(control) as (event: { readonly which: number; readonly shiftKey: boolean }) => void,
             cancel: () => control.menu?.triggerControllerBPress?.(),
           }
