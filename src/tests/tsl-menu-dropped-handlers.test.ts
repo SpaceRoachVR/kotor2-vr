@@ -115,3 +115,25 @@ describe('TSL menus vs their K1 parents', () => {
     expect(registeredListeners(container).has('BTN_GIVEITEMS')).toBe(true);
   });
 });
+
+describe('TSL menu method-name typos', () => {
+  test('no menu calls a capitalised model loader that does not exist', () => {
+    // `MenuPartySelection` called `this.char.LoadModel()`; ModuleCreature only
+    // defines `loadModel`. It threw on every party-selection portrait build as
+    // an uncaught promise rejection, leaving the character with no model —
+    // reported from a headset session as an invisible player.
+    const offenders: string[] = [];
+    for (const dir of [K1_MENU_DIR, TSL_MENU_DIR]) {
+      for (const file of fs.readdirSync(dir)) {
+        if (!file.endsWith('.ts')) continue;
+        const source = fs.readFileSync(path.join(dir, file), 'utf8');
+        for (const line of source.split('\n')) {
+          if (line.trim().startsWith('//')) continue;
+          if (/\.LoadModel\s*\(/.test(line)) offenders.push(`${file}: ${line.trim()}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
