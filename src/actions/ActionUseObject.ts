@@ -8,6 +8,7 @@ import type { ModuleObject } from "@/module/ModuleObject";
 import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionUseObject class.
@@ -37,8 +38,11 @@ export class ActionUseObject extends Action {
       return ActionStatus.FAILED;
     }
 
+    // In VR the player has already positioned themselves and the rig is
+    // anchored to the avatar, so walking the actor here drags the player
+    // through the world. See ActionApproachPolicy.
     let distance = Utility.Distance2D(this.owner.position, this.target.position);
-    if(distance > 1.5){
+    if(distance > 1.5 && !ActionApproachPolicy.isApproachSuppressed()){
         
       // this.owner.openSpot = undefined;
       let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();

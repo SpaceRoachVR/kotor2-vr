@@ -163,6 +163,17 @@ const CHECKS = [
     },
   },
   {
+    id: 'approach-suppressed-in-session',
+    describe: 'an immersive session suppresses the engine approach-walk',
+    // ROADMAP 3.10. If this regresses, world interaction drags the player
+    // through the level — the single worst thing reported from session one.
+    run: (m) => ({
+      ok: m.approachSuppression?.policySuppressed === true,
+      detail: `suppressed=${m.approachSuppression?.policySuppressed} ` +
+        `queuedMoves=${m.approachSuppression?.movesQueued}`,
+    }),
+  },
+  {
     id: 'wheel-menu-routes-open',
     describe: 'every menu the action wheel can open does so without throwing',
     // MenuMap touched a control TSL's GUI lacks, and GUIFeatItem dereferenced a

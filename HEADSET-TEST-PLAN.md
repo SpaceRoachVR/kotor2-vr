@@ -20,7 +20,7 @@ came out of the console; three are fixed and want a retest:
 | Player invisible in the med bay, fine in flatscreen | `MenuPartySelection` called `LoadModel` instead of `loadModel` — threw on every portrait build | J1, and look at the med bay PC |
 | 2D UI stayed up after any interaction | TSL menus dropped their K1 click handlers; the journal's own Exit button was never wired | D9–D16, G4 |
 | Map and Abilities threw when opened from the wheel | `MenuMap` touched a control TSL lacks; `GUIFeatItem` hit a `feats.2da` padding hole | D3, D11 |
-| **Interacting drags the avatar around** | **Not fixed — needs a decision.** `ActionUseObject` walks the avatar when it is >1.5 m away, but prompts offer use at 2.5–3 m | E1–E8 will keep doing this until it is settled |
+| Interacting drags the avatar around | **Fixed.** Approach-walk is suppressed while a VR session owns the player's position — the avatar acts from where it stands | E9–E13 |
 
 **Performance, first real numbers since Phase 0:** 32–36 FPS in stereo through
 the busier Ebon Hawk rooms, p90 ~32 ms, 74–100% of frames over 20 ms; lighter
@@ -149,6 +149,11 @@ physically unpleasant rather than merely wrong.
 | E6 | Walk out of range / break line of sight | Prompt clears immediately |
 | E7 | Trigger a prompt with each controller's ray | Either works, activates **once** |
 | E8 | Ebon Hawk galaxy map console | Opens via its world `Use` route, and is **never** on the wheel |
+| E9 | **Activate a prompt from the far edge of its range** (~2.5 m placeable, ~3 m door) | **You do not move.** The avatar acts from where it stands. Previously the engine walked it to 1.5 m and dragged you with it |
+| E10 | Activate several things in a row without moving | No accumulated drift; you end where you started |
+| E11 | Open a door from the far edge of its range | Same — no approach walk, door still opens |
+| E12 | Watch the avatar as you activate | It may turn to face the object. That is expected and should **not** spin your view, since the rig follows the camera rather than the avatar's facing |
+| E13 | Exit VR, then click something across the room with the mouse | Desktop click-to-walk still works — suppression must not leak out of the session |
 
 ## F. Combat (Phase 3.3–3.7)
 

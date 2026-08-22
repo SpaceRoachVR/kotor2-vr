@@ -267,6 +267,27 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       onProgress('action wheel');
     }
 
+    // --- approach suppression (ROADMAP 3.10) --------------------------------
+    // Activating a world object beyond the engine's own use distance must not
+    // enqueue an ActionMoveToPoint: the rig is anchored to the avatar, so an
+    // engine-driven walk drags the player. Checked by inspecting the queue
+    // rather than by watching for motion, which would be timing-dependent.
+    metrics.approachSuppression = await harness.evaluate(`(() => {
+      const K = window.KotOR;
+      const player = K.PartyManager.Player;
+      const policySuppressed = K.ActionApproachPolicy
+        ? K.ActionApproachPolicy.isApproachSuppressed() : null;
+      const queuedTypes = player && player.actionQueue
+        ? Array.from(player.actionQueue).map(a => (a && a.constructor && a.constructor.name) || '?')
+        : null;
+      return {
+        policySuppressed,
+        queuedTypes,
+        movesQueued: queuedTypes ? queuedTypes.filter(n => /MoveToPoint/.test(n)).length : null,
+      };
+    })()`);
+    onProgress('approach suppression');
+
     // --- wheel menu routes open without throwing ----------------------------
     // The action wheel's Screens submenu opens real legacy menus. Two of them
     // threw on first headset use: MenuMap touched BTN_PRTYSLCT, which TSL's GUI

@@ -9,6 +9,7 @@ import type { ModuleObject } from "@/module/ModuleObject";
 import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionOpenDoor class.
@@ -44,7 +45,10 @@ export class ActionOpenDoor extends Action {
     if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
       let distance = Utility.Distance2D(this.owner.position, this.target.position);
             
-      if(distance > 2 && !this.target.box.intersectsBox(this.owner.box)){
+      // Same reasoning as ActionUseObject: never walk the actor while VR owns
+      // the player's position.
+      if(distance > 2 && !this.target.box.intersectsBox(this.owner.box) &&
+        !ActionApproachPolicy.isApproachSuppressed()){
         
         this.owner.openSpot = undefined;
         let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();

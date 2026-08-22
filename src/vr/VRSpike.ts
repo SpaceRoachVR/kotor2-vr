@@ -29,6 +29,7 @@ import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
 import { VRRecenterHoldGate } from "./runtime/VRRecenterHoldGate";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 import { VRHiltTimerHost } from "./runtime/VRHiltTimerHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
@@ -600,6 +601,10 @@ export class VRSpike {
 
   private static prepareXRSession(session: XRSession): void {
     VRSpike.session = session;
+    // While VR owns the player's position, queued actions must never walk the
+    // actor to a target — the rig is anchored to the avatar, so an engine-driven
+    // approach drags the player through the world.
+    ActionApproachPolicy.setApproachSuppressed(true);
     VRSpike.traceXRStartup = true;
     VRSpike.traceXRStartupCallbacksSeen = 0;
     VRSpike.previousXRInputTimestamp = null;
@@ -765,6 +770,8 @@ export class VRSpike {
         console.warn('[VRSpike] could not replay resize after session end', error);
       }
     });
+    // Desktop click-to-walk is correct again once the headset is off.
+    ActionApproachPolicy.setApproachSuppressed(false);
     console.log('[VRSpike] session ended, back on requestAnimationFrame');
   };
 

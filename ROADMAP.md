@@ -106,7 +106,7 @@ Partial pass/fail marks live in the tester's own copy of the plan.
   so only opening them catches it — `vr:check` now does, and reports all eight
   wheel-reachable menus opening cleanly after the fix (18/18, page exceptions
   zero).
-- **Interacting drags the avatar (open).** See 3.10.
+- **Interacting drags the avatar.** Fixed — see 3.10.
 
 **Observed performance:** 32-36 FPS in stereo through the busier Ebon Hawk
 rooms, p50 ~31 ms, p90 ~32 ms, 74-100% of frames over 20 ms, 250-720 draw calls,
@@ -491,7 +491,28 @@ unit/integration-tested only.
   exact Ebon Hawk Galaxy Map console exception delegates to its existing world
   `Use` route; it is never added to the all-purpose wheel.
 
-- **3.10** ☐ **open decision — world use drags the avatar.** `ActionUseObject`
+- **3.10** ✅ implemented / ☐ headset-accepted — **world use no longer drags the
+  avatar** (2026-08-22). Resolved by option (b): suppress the approach-walk for
+  VR-initiated use, on the user's call that being pulled around felt unnatural.
+
+  `ActionApproachPolicy` carries the rule as a session-scoped statement of
+  intent — *the player positions themselves* — rather than a per-action flag,
+  since that is the actual rule and cannot be forgotten at a call site.
+  `VRSpike` sets it on immersive session start and clears it on session end, so
+  desktop click-to-walk is unaffected the moment the headset is off.
+  `ActionUseObject` (1.5 m) and `ActionOpenDoor` (2 m) both consult it.
+
+  The prompt ranges stay at 2.5 m / 3 m — widening them was a deliberate
+  playtest call and the walk, not the range, was the problem. Tests cover both
+  directions, including that suppression does not leak out of a session, since a
+  stuck flag would quietly break flatscreen play.
+
+  One thing to watch on device: the now-reachable branch calls
+  `setFacingObject`, so the avatar turns toward the target. That should not spin
+  the view — rig yaw follows `FollowerCamera.facing`, not creature rotation —
+  but it is E12 on the test plan.
+
+  *Superseded:* the original open decision read — `ActionUseObject`
   enqueues an `ActionMoveToPoint` whenever the actor is more than **1.5 m** from
   the target, and `ActionOpenDoor` does the same beyond **2 m**. The VR prompts
   offer activation at 2.5 m (placeables) and 3 m (doors), so activations at
