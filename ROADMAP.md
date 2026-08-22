@@ -30,6 +30,47 @@ TypeScript project pass,
 but every phase exit below still needs the same device-evidence bar the rest
 of this roadmap holds itself to before being called done.
 
+**2026-08-22 integration and emulated-headset harness.** The
+`codex/studio-remediation` stack (22 commits: QA controls, gameplay activation,
+XR runtime lifecycle, material/texture routing, legacy panels, VR keyboard,
+theater captions) fast-forwarded onto `spike/stereo-perf` with no divergence.
+Verified before and after: `tsc --noEmit -p tsconfig.kotorjs.json` clean, 79
+suites / 653 tests green, and `webpack:dev` compiles all five bundles.
+
+`tools/vr-emulator/` now boots the browser build against an **emulated Quest 3**,
+so VR behaviour can be exercised without a headset. The Immersive Web Emulator
+Chrome extension cannot serve this: its control surface is a DevTools panel,
+which cannot be driven programmatically, and until that panel is selected the
+extension never injects — `navigator.xr` stays native and the engine sees no
+device. The extension is a GUI over Meta's IWER runtime, so the harness injects
+that runtime (`iwer`) itself over CDP, before page scripts, since `VRSpike`
+builds its Enter VR button once at startup from a single `isSessionSupported`
+probe. `installRuntime` needs `{ forceInstall: true }` because Chrome exposes a
+native `XRSystem` even with no headset and no OpenXR runtime.
+
+Confirmed end to end: EULA, engine boot, `immersive-vr` supported, Enter VR
+enabled, session entry with two `meta-quest-touch-plus` sources (7 buttons,
+4 axes, grip, haptics), 90 XR frames delivered, clean exit.
+
+**What the emulator does and does not settle.** It can exercise session
+lifecycle, frame ownership, input routing, the action wheel, world prompts,
+panels, and locomotion maths. It cannot speak to comfort, compositor cadence, or
+reprojection: IWER renders through the ordinary page WebGL context, so
+frametimes measured there are not headset frametimes. Every ☐ headset-accepted
+item below still needs the headset.
+
+Two defects it surfaced on its first run, both of which would occur on a real
+headset too, now fixed and re-verified:
+
+- The "one-shot" startup trace never terminated — `completeStartupTrace` is only
+  reached on the fully-successful update path, but entering VR from the main
+  menu leaves the engine in MOVIE/LEGAL mode, whose early return precedes it.
+  Two console lines per frame for the whole session, measured at 603 lines per
+  5 seconds; now 3.
+- Entering VR always warned that controller topology was missing all nine
+  required semantic actions, because entry validates once before the runtime
+  delivers its first `inputsourceschange` (observed `topologyKey: "[]"`).
+
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
 

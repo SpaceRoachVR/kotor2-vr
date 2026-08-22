@@ -285,6 +285,7 @@ export class VRSpike {
   private static readonly snapTurnController = new VRSnapTurnController();
   private static readonly teleportController = new VRTeleportController();
   private static locomotionModeToggleHeld = false;
+  private static recenterHeld = false;
   private static comfortVignetteHost: VRComfortVignetteHost | null = null;
   private static hiltTimerHost: VRHiltTimerHost | null = null;
   private static blasterLaserHost: VRBlasterLaserHost | null = null;
@@ -616,6 +617,7 @@ export class VRSpike {
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
     VRSpike.locomotionModeToggleHeld = false;
+    VRSpike.recenterHeld = false;
     VRSpike.panelInputController.cancel();
     VRSpike.panelHost?.clear();
     VRSpike.keyboardHost?.clear();
@@ -689,6 +691,7 @@ export class VRSpike {
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
     VRSpike.locomotionModeToggleHeld = false;
+    VRSpike.recenterHeld = false;
     VRSpike.panelHost?.clear();
     VRSpike.keyboardHost?.clear();
     VRSpike.movieHost?.clear();
@@ -2026,10 +2029,12 @@ export class VRSpike {
       const routedActions = VRSpike.inputRouter.route(
         controllers,
         // 'gameplay' is only needed here for ToggleLocomotionMode, which is
-        // bound in that context rather than 'locomotion'.
+        // bound in that context rather than 'locomotion'. 'global' carries
+        // Recenter, which belongs with locomotion for the same reason: it is a
+        // comfort control, and this path already owns the rig's placement.
         allowGameplayActions
-          ? new Set(['locomotion', 'gameplay'])
-          : new Set(['locomotion'])
+          ? new Set(['locomotion', 'gameplay', 'global'])
+          : new Set(['locomotion', 'global'])
       );
       const move = routedActions.find((action) => action.action === SemanticXRAction.Move);
       const turn = routedActions.find((action) => action.action === SemanticXRAction.Turn);
@@ -2047,6 +2052,26 @@ export class VRSpike {
         VRSpike.teleportController.reset();
       }
       VRSpike.locomotionModeToggleHeld = togglePressed;
+
+      // Recenter is edge-triggered: holding the button must not recentre every
+      // frame, which would pin the head to the origin and fight real movement.
+      const recenterPressed = routedActions.some((action) =>
+        action.action === SemanticXRAction.Recenter && action.pressed
+      );
+      if (recenterPressed && !VRSpike.recenterHeld) {
+        VRSpike.applyRecenter(
+          viewerPose.transform.position,
+          rig.quaternion.clone().multiply(
+            new THREE.Quaternion(
+              viewerPose.transform.orientation.x,
+              viewerPose.transform.orientation.y,
+              viewerPose.transform.orientation.z,
+              viewerPose.transform.orientation.w
+            ).normalize()
+          )
+        );
+      }
+      VRSpike.recenterHeld = recenterPressed;
 
       const rawMoveAxes = new THREE.Vector2(move.axes[0], -move.axes[1]);
       const inputDirection = rawMoveAxes.clone();
@@ -2160,6 +2185,71 @@ export class VRSpike {
       ? candidate
       : walkmesh.getNearestWalkablePoint(candidate);
     teleportPlayer(target);
+  }
+
+  /**
+   * Recenter: make the player's current physical forward the game's forward,
+   * and put their head over the avatar's position.
+   *
+   * Deliberately stateless — it *sets* the yaw offset and origin offset from
+   * the pose observed this frame rather than accumulating a correction, so
+   * repeated recentres cannot drift. This is the opposite pivot to snap turn:
+   * `applyTurnAroundHead` rotates the world while pinning the head where it is,
+   * whereas recenter moves the head onto the rig origin.
+   */
+  private static applyRecenter(
+    xrHeadPosition: DOMPointReadOnly,
+    headWorldOrientation: THREE.Quaternion
+  ): void {
+    const rig = VRSpike.rig;
+    if (!rig) return;
+
+    // Looking straight up or down leaves no horizontal forward to align, and
+    // the conversion throws rather than guessing at one. Keep the existing
+    // centring rather than recentring on a degenerate pose — a wrong recenter
+    // is a comfort hazard, an ignored one is merely a no-op.
+    let headFacing: number;
+    let rigFacing: number;
+    try {
+      headFacing = LocomotionController.worldOrientationToCreatureFacing(headWorldOrientation);
+      rigFacing = LocomotionController.worldOrientationToCreatureFacing(rig.quaternion);
+    } catch {
+      return;
+    }
+
+    const wrap = (radians: number): number =>
+      Math.atan2(Math.sin(radians), Math.cos(radians));
+
+    // Rotating the rig turns the head with it, so the head's yaw *relative to*
+    // the rig cannot be changed here — aligning the head to the rig's current
+    // forward is not achievable and not what recenter means. What we can do is
+    // choose the rig yaw that puts the head's world forward onto the game's
+    // natural forward, i.e. the rig's own bearing with this offset removed
+    // (`facing + 90 degrees + turnYaw`). Deliberate in-game turning stays in
+    // `turnYaw` and is preserved; only the physical offset is cancelled.
+    //
+    // `rigFacing` already carries the previous offset, so the correction
+    // collapses to a direct assignment rather than an accumulation, which is
+    // what makes repeat presses idempotent.
+    const previousYawOffset = VRSpike.yawOffset;
+    VRSpike.yawOffset = wrap(rigFacing - headFacing);
+    const yawDelta = wrap(VRSpike.yawOffset - previousYawOffset);
+
+    // Measure the head offset against the orientation `syncRig` will actually
+    // build next frame, not the one standing now.
+    const recenteredRigOrientation = new THREE.Quaternion()
+      .setFromAxisAngle(new THREE.Vector3(0, 0, 1), yawDelta)
+      .multiply(rig.quaternion);
+    const headOffset = new THREE.Vector3(
+      xrHeadPosition.x,
+      xrHeadPosition.y,
+      xrHeadPosition.z
+    ).applyQuaternion(recenteredRigOrientation);
+
+    // Horizontal only. The rig's floor stays on the world floor and vertical
+    // placement comes from the headset's own local-floor tracking, so moving
+    // the rig in Z here would break the canonical eye height.
+    VRSpike.turnOriginOffset.set(-headOffset.x, -headOffset.y, 0);
   }
 
   private static applyTurnAroundHead(
