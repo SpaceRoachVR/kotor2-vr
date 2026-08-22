@@ -247,7 +247,10 @@ export class TextureLoader {
       return inflight;
     }
     const resolutionPromise = TextureLoader.resolver.resolve(normalizedRequest).then((result) => {
-      const resolution = validateTextureResolution(result);
+      const validatedResolution = validateTextureResolution(result);
+      const resolution = noCache
+        ? validatedResolution
+        : TextureLoader.retainSharedResolution(normalizedRequest, validatedResolution);
       if (resolution.status === 'resolved') {
         TextureLoader.prepareTexture(resolution.texture);
         if (!noCache) {
@@ -422,36 +425,10 @@ export class TextureLoader {
     semantic: TextureSemantic = type === TextureType.LIGHTMAP ? 'lightmap' : 'gui',
   ){
     if(typeof name == 'string' && name.length){
-      name = name.toLowerCase();
-      const obj = { name: name, material: material, type: type, fallback: fallback, semantic, onLoad: onLoad } as ITextureLoaderQueuedRef;
-      const cached = TextureLoader.textures.get(name) ?? TextureLoader.guiTextures.get(name);
-      if(cached){
-        TextureLoader.UpdateMaterial(obj);
-        if(typeof onLoad == 'function')
-          onLoad(cached, obj);
-      }else if(type === TextureType.TEXTURE && TextureLoader.pendingSubscribers.has(name)){
-        TextureLoader.pendingSubscribers.get(name).push(obj);
-      }else{
-        if(type === TextureType.TEXTURE)
-          TextureLoader.pendingSubscribers.set(name, [obj]);
-        TextureLoader.queue.push(obj);
-      }
+      TextureLoader.enqueueTypedTextureRequest(name, material, type, onLoad, fallback, semantic);
     }else if(Array.isArray(name)){
       for(let i = 0, len = name.length; i < len; i++){
-        const texName = name[i].toLowerCase();
-        const obj = { name: texName, material: material, type: type, fallback: fallback, semantic, onLoad: onLoad } as ITextureLoaderQueuedRef;
-        const cached = TextureLoader.textures.get(texName) ?? TextureLoader.guiTextures.get(texName);
-        if(cached){
-          TextureLoader.UpdateMaterial(obj);
-          if(typeof onLoad == 'function')
-            onLoad(cached, obj);
-        }else if(type === TextureType.TEXTURE && TextureLoader.pendingSubscribers.has(texName)){
-          TextureLoader.pendingSubscribers.get(texName).push(obj);
-        }else{
-          if(type === TextureType.TEXTURE)
-            TextureLoader.pendingSubscribers.set(texName, [obj]);
-          TextureLoader.queue.push(obj);
-        }
+        TextureLoader.enqueueTypedTextureRequest(name[i], material, type, onLoad, fallback, semantic);
       }
     }else{
       console.warn('unhandled enQueue', name);
@@ -472,7 +449,7 @@ export class TextureLoader {
 
     const promises = queue.map(async (primaryTex) => {
       await TextureLoader.UpdateMaterial(primaryTex);
-      const allSubs = subscriberMap.get(primaryTex.name);
+      const allSubs = subscriberMap.get(TextureLoader.getQueuedRequestKey(primaryTex));
       if(allSubs && allSubs.length > 1){
         await Promise.all(allSubs.slice(1).map(sub => TextureLoader.UpdateMaterial(sub)));
       }
@@ -493,6 +470,7 @@ export class TextureLoader {
           resref: tex.name,
           semantic,
           allowAlias: semantic === 'gui' || semantic === 'font',
+          ...(tex.activeModule ? { activeModule: tex.activeModule } : {}),
         };
         const primaryResolution = await TextureLoader.Resolve(request, TextureLoader.CACHE);
         let appliedTexture = TextureLoader.unwrap(primaryResolution);
@@ -538,7 +516,12 @@ export class TextureLoader {
         break;
       }
       case TextureType.LIGHTMAP:
-        let lightmap: OdysseyTexture = await TextureLoader.LoadLightmap(tex.name, TextureLoader.CACHE);
+        let lightmap = TextureLoader.unwrap(await TextureLoader.Resolve({
+          resref: tex.name,
+          semantic: 'lightmap',
+          allowAlias: false,
+          ...(tex.activeModule ? { activeModule: tex.activeModule } : {}),
+        }, TextureLoader.CACHE));
         if(!!lightmap){
           if(tex.material instanceof THREE.RawShaderMaterial || tex.material instanceof THREE.ShaderMaterial){
             tex.material.uniforms.lightMap.value = lightmap;
@@ -624,6 +607,7 @@ export class TextureLoader {
             resref: resRef,
             semantic,
             allowAlias: false,
+            ...(tex.activeModule ? { activeModule: tex.activeModule } : {}),
           }, !!noCache));
         },
       },
@@ -682,6 +666,42 @@ export class TextureLoader {
     }
   }
 
+  /**
+   * Reuses an already-live shared source after every module-specific lookup.
+   * The lookup still runs, so an active module can shadow it, but a fresh
+   * decode of the same GUI/global source must not replace textures held by a
+   * material created for a previous module.
+   */
+  private static retainSharedResolution(
+    request: TextureRequest,
+    resolution: TextureResolution<OdysseyTexture>,
+  ): TextureResolution<OdysseyTexture> {
+    if (resolution.status !== 'resolved' || resolution.source === 'active-module') {
+      return resolution;
+    }
+    const sharedCacheKey = TextureLoader.getCacheKey({
+      ...request,
+      activeModule: undefined,
+    });
+    const existing = TextureLoader.resolutionCache.get(sharedCacheKey);
+    if (
+      !existing
+      || existing.ownership === 'module'
+      || existing.resolution.status !== 'resolved'
+      || existing.resolution.source !== resolution.source
+      || existing.resolution.resolvedResref !== resolution.resolvedResref
+    ) {
+      return resolution;
+    }
+    if (resolution.texture !== existing.resolution.texture) {
+      resolution.texture.dispose();
+    }
+    return {
+      ...resolution,
+      texture: existing.resolution.texture,
+    };
+  }
+
   private static getOwnership(
     semantic: TextureSemantic,
     source: ResolvedTextureSource,
@@ -698,6 +718,48 @@ export class TextureLoader {
       normalizeTextureResref(request.activeModule),
       request.allowAlias ? 'alias' : 'exact',
       normalizeTextureResref(request.resref),
+    ].join(':');
+  }
+
+  private static enqueueTypedTextureRequest(
+    name: unknown,
+    material: THREE.Material,
+    type: TextureType,
+    onLoad: Function | undefined,
+    fallback: string | undefined,
+    semantic: TextureSemantic,
+  ): void {
+    const normalizedName = normalizeTextureResref(name);
+    if (!isTextureResrefUsable(normalizedName)) {
+      console.warn('TextureLoader.enQueue rejected invalid texture resref', name);
+      return;
+    }
+    const request: ITextureLoaderQueuedRef = {
+      name: normalizedName,
+      material,
+      type,
+      fallback,
+      semantic,
+      ...(TextureLoader.activeModule ? { activeModule: TextureLoader.activeModule } : {}),
+      onLoad,
+    };
+    const requestKey = TextureLoader.getQueuedRequestKey(request);
+    const subscribers = TextureLoader.pendingSubscribers.get(requestKey);
+    if (subscribers) {
+      subscribers.push(request);
+      return;
+    }
+    TextureLoader.pendingSubscribers.set(requestKey, [request]);
+    TextureLoader.queue.push(request);
+  }
+
+  private static getQueuedRequestKey(request: ITextureLoaderQueuedRef): string {
+    return [
+      request.type,
+      request.semantic ?? (request.type === TextureType.LIGHTMAP ? 'lightmap' : 'gui'),
+      normalizeTextureResref(request.activeModule),
+      normalizeTextureResref(request.name),
+      normalizeTextureResref(request.fallback),
     ].join(':');
   }
 

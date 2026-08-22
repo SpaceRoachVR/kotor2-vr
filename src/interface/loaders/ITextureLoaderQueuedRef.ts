@@ -19,5 +19,7 @@ export interface ITextureLoaderQueuedRef {
   partGroup?: any,
   fallback?: string,
   semantic?: TextureSemantic,
+  /** Module context captured when this request was queued. */
+  activeModule?: string,
   onLoad?: Function,
 }

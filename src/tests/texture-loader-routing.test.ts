@@ -302,11 +302,93 @@ describe('production texture resolver routing', () => {
     await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(sharedGuiTexture);
   });
 
-  test('does not reuse a disposed shared GUI texture through a previous module cache key', async () => {
+  test('revalidates module shadows without replacing a shared GUI texture still used by the previous module', async () => {
+    const firstSharedGuiTexture = texture('101-shared-panel');
+    const returningSharedCandidate = texture('101-returning-panel');
+    const moduleGuiTexture = texture('102-panel');
+    const disposeFirstSharedGui = jest.spyOn(firstSharedGuiTexture, 'dispose');
+    const disposeReturningCandidate = jest.spyOn(returningSharedCandidate, 'dispose');
+    let sharedCandidateLoads = 0;
+    const provider: TextureSourceProvider<OdysseyTexture> = {
+      async load(source, resref, activeModule) {
+        if (resref !== 'panel') {
+          return undefined;
+        }
+        if (source === 'active-module' && activeModule === '102per') {
+          return { texture: moduleGuiTexture };
+        }
+        if (source === 'gui-pack') {
+          // A real decode path may construct a new candidate on every lookup.
+          // The resolver must retain the original shared instance for 101PER.
+          sharedCandidateLoads += 1;
+          return {
+            texture: sharedCandidateLoads === 1 ? firstSharedGuiTexture : returningSharedCandidate,
+            txiSource: 'embedded-tpc',
+          };
+        }
+        return undefined;
+      },
+    };
+    TextureLoader.setSourceProvider(provider);
+
+    TextureLoader.beginModule('101PER');
+    const firstModuleMaterial = new THREE.MeshBasicMaterial();
+    const firstSharedTexture = await TextureLoader.LoadGUI('panel');
+    firstModuleMaterial.map = firstSharedTexture;
+    TextureLoader.endModule();
+
+    TextureLoader.beginModule('102PER');
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(moduleGuiTexture);
+    TextureLoader.endModule();
+
+    TextureLoader.beginModule('101PER');
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(firstSharedTexture);
+
+    expect(firstModuleMaterial.map).toBe(firstSharedTexture);
+    expect(disposeFirstSharedGui).not.toHaveBeenCalled();
+    expect(disposeReturningCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    { label: 'a scalar request', names: 'panel' as string | string[] },
+    { label: 'an array request', names: ['panel'] as string | string[] },
+  ])('routes $label through the active-module resolver and not a raw legacy cache', async ({ names }) => {
+    const sharedGuiTexture = texture('shared-panel');
+    const moduleGuiTexture = texture('102-panel');
+    const provider: TextureSourceProvider<OdysseyTexture> = {
+      async load(source, resref, activeModule) {
+        if (resref !== 'panel') {
+          return undefined;
+        }
+        if (source === 'active-module' && activeModule === '102per') {
+          return { texture: moduleGuiTexture };
+        }
+        return source === 'gui-pack'
+          ? { texture: sharedGuiTexture, txiSource: 'embedded-tpc' }
+          : undefined;
+      },
+    };
+    TextureLoader.setSourceProvider(provider);
+
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(sharedGuiTexture);
+    TextureLoader.beginModule('102PER');
+
+    const material = new THREE.MeshBasicMaterial();
+    const delivered = jest.fn();
+    TextureLoader.enQueue(names, material, TextureType.TEXTURE, delivered, undefined, 'gui');
+    await TextureLoader.LoadQueue();
+
+    expect(material.map).toBe(moduleGuiTexture);
+    expect(delivered).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveBeenCalledWith(moduleGuiTexture, expect.any(Object));
+  });
+
+  test('retains a shared GUI identity when no module shadows it across transitions', async () => {
     const firstModuleTexture = texture('101-first-panel');
     const secondModuleTexture = texture('102-panel');
     const returningModuleTexture = texture('101-returning-panel');
-    const disposeFirst = jest.spyOn(firstModuleTexture, 'dispose');
+    const disposeSecondCandidate = jest.spyOn(secondModuleTexture, 'dispose');
+    const disposeReturningCandidate = jest.spyOn(returningModuleTexture, 'dispose');
     let firstModuleLoads = 0;
     const provider: TextureSourceProvider<OdysseyTexture> = {
       async load(source, resref, activeModule) {
@@ -333,14 +415,15 @@ describe('production texture resolver routing', () => {
     TextureLoader.endModule();
 
     TextureLoader.beginModule('102PER');
-    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(secondModuleTexture);
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(firstModuleTexture);
     TextureLoader.endModule();
 
     TextureLoader.beginModule('101PER');
-    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(returningModuleTexture);
+    await expect(TextureLoader.LoadGUI('panel')).resolves.toBe(firstModuleTexture);
 
     expect(firstModuleLoads).toBe(2);
-    expect(disposeFirst).toHaveBeenCalledTimes(1);
+    expect(disposeSecondCandidate).toHaveBeenCalledTimes(1);
+    expect(disposeReturningCandidate).toHaveBeenCalledTimes(1);
   });
 
 });

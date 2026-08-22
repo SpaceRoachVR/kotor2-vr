@@ -226,6 +226,28 @@ describe('material visual manifest', () => {
     }
   });
 
+  test('rejects an evidence-root link that redirects manifest output into a retail path', () => {
+    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'kotor2-vr-material-manifest-link-'));
+    const evidenceRoot = path.join(temporaryDirectory, 'evidence-link');
+    const userDataRoot = path.join(temporaryDirectory, 'user-data');
+    const retailRoot = path.join(temporaryDirectory, 'retail-install');
+    const json = JSON.stringify(createVisualManifest({ runtime: 'electron', modules: coveredModules() }));
+
+    try {
+      fs.mkdirSync(retailRoot, { recursive: true });
+      fs.symlinkSync(retailRoot, evidenceRoot, process.platform === 'win32' ? 'junction' : 'dir');
+
+      expect(() => writeVisualManifest(path.join(evidenceRoot, 'peragus.json'), json, {
+        evidenceRoots: [evidenceRoot],
+        userDataRoots: [userDataRoot],
+        retailRoots: [retailRoot],
+      })).toThrow(/symbolic link|retail installation/i);
+      expect(fs.existsSync(path.join(retailRoot, 'peragus.json'))).toBe(false);
+    } finally {
+      fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     {
       name: 'the typed resolution source contradicts the selected source',

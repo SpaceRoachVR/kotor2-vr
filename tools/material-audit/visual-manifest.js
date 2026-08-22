@@ -372,6 +372,11 @@ function writeVisualManifest(outputPath, json, options = {}) {
   const retailRoots = (options.retailRoots ?? getConfiguredRetailRoots()).map(resolveUsableRoot);
   const resolvedOutput = path.resolve(outputPath);
 
+  for (const root of [...approvedRoots, ...retailRoots]) {
+    assertPathHasNoRedirectingParents(root);
+  }
+  assertPathHasNoRedirectingParents(path.dirname(resolvedOutput));
+
   if (retailRoots.some((root) => isPathInside(resolvedOutput, root))) {
     throw new TypeError('Material visual manifest output must not be inside a retail installation');
   }
@@ -380,6 +385,10 @@ function writeVisualManifest(outputPath, json, options = {}) {
   }
 
   fs.mkdirSync(path.dirname(resolvedOutput), { recursive: true });
+  // mkdir can create missing path components, so repeat the complete parent
+  // audit before the exclusive write.  This rejects symlink/junction routes
+  // rather than relying on lexical containment alone.
+  assertPathHasNoRedirectingParents(path.dirname(resolvedOutput));
   fs.writeFileSync(resolvedOutput, json, { encoding: 'utf8', flag: 'wx' });
   return resolvedOutput;
 }
@@ -416,6 +425,33 @@ function resolveUsableRoot(root) {
 function isPathInside(candidate, root) {
   const relative = path.relative(root, candidate);
   return relative === '' || (!!relative && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function assertPathHasNoRedirectingParents(candidate) {
+  const resolvedPath = path.resolve(candidate);
+  const parsedPath = path.parse(resolvedPath);
+  let currentPath = parsedPath.root;
+  const relativeSegments = resolvedPath.slice(parsedPath.root.length).split(path.sep).filter(Boolean);
+
+  for (const segment of relativeSegments) {
+    currentPath = path.join(currentPath, segment);
+    if (!fs.existsSync(currentPath)) {
+      break;
+    }
+    const metadata = fs.lstatSync(currentPath);
+    if (metadata.isSymbolicLink()) {
+      throw new TypeError(`Material visual manifest output must not traverse symbolic link '${currentPath}'`);
+    }
+    const realPath = fs.realpathSync.native(currentPath);
+    if (!sameFilesystemPath(currentPath, realPath)) {
+      throw new TypeError(`Material visual manifest output must not traverse redirected path '${currentPath}'`);
+    }
+  }
+}
+
+function sameFilesystemPath(left, right) {
+  return path.resolve(left).replace(/[\\/]+$/, '').toLowerCase()
+    === path.resolve(right).replace(/[\\/]+$/, '').toLowerCase();
 }
 
 if (require.main === module) {
