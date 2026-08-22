@@ -10,6 +10,23 @@ settle comfort, cadence, or whether anything actually *reads* correctly through
 lenses, because IWER renders through the ordinary page WebGL context. So every
 item below still needs the device.
 
+## Session 1 findings (2026-08-22)
+
+The first device run ended early when the game glitched badly. Four root causes
+came out of the console; three are fixed and want a retest:
+
+| Was | Now | Retest |
+|---|---|---|
+| Player invisible in the med bay, fine in flatscreen | `MenuPartySelection` called `LoadModel` instead of `loadModel` — threw on every portrait build | J1, and look at the med bay PC |
+| 2D UI stayed up after any interaction | TSL menus dropped their K1 click handlers; the journal's own Exit button was never wired | D9–D16, G4 |
+| Map and Abilities threw when opened from the wheel | `MenuMap` touched a control TSL lacks; `GUIFeatItem` hit a `feats.2da` padding hole | D3, D11 |
+| **Interacting drags the avatar around** | **Not fixed — needs a decision.** `ActionUseObject` walks the avatar when it is >1.5 m away, but prompts offer use at 2.5–3 m | E1–E8 will keep doing this until it is settled |
+
+**Performance, first real numbers since Phase 0:** 32–36 FPS in stereo through
+the busier Ebon Hawk rooms, p90 ~32 ms, 74–100% of frames over 20 ms; lighter
+windows reached 52–54. Below the sustained-50 gate for much of the run. That is
+H3, and it is now the largest open risk.
+
 ## Current focus: sections A and B only
 
 21 checks, roughly half an hour. These are the items automation fundamentally

@@ -163,6 +163,23 @@ const CHECKS = [
     },
   },
   {
+    id: 'wheel-menu-routes-open',
+    describe: 'every menu the action wheel can open does so without throwing',
+    // MenuMap touched a control TSL's GUI lacks, and GUIFeatItem dereferenced a
+    // feats.2da padding hole. Both built fine and threw on use, so only opening
+    // them catches it.
+    run: (m) => {
+      const routes = m.menuRoutes ?? {};
+      const broken = Object.entries(routes).filter(([, status]) => status !== 'ok');
+      return {
+        ok: Object.keys(routes).length > 0 && broken.length === 0,
+        detail: broken.length
+          ? broken.map(([name, status]) => `${name} ${status}`).join('; ')
+          : `${Object.keys(routes).length} routes open cleanly`,
+      };
+    },
+  },
+  {
     id: 'no-page-exceptions',
     describe: 'no uncaught page exceptions',
     run: (m) => ({

@@ -267,6 +267,33 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       onProgress('action wheel');
     }
 
+    // --- wheel menu routes open without throwing ----------------------------
+    // The action wheel's Screens submenu opens real legacy menus. Two of them
+    // threw on first headset use: MenuMap touched BTN_PRTYSLCT, which TSL's GUI
+    // does not have, and GUIFeatItem dereferenced a padding hole in feats.2da.
+    // Opening each here catches a route that builds but explodes on use.
+    metrics.menuRoutes = await harness.evaluate(`(async () => {
+      const gs = window.KotOR.GameState;
+      const routes = ['MenuMap', 'MenuAbilities', 'MenuJournal', 'MenuMessages',
+                      'MenuEquipment', 'MenuOptions', 'MenuInventory', 'MenuCharacter'];
+      const results = {};
+      for (const name of routes) {
+        const menu = gs.MenuManager[name];
+        if (!menu) { results[name] = 'missing'; continue; }
+        try {
+          menu.open();
+          await new Promise(r => setTimeout(r, 400));
+          results[name] = 'ok';
+        } catch (error) {
+          results[name] = 'threw: ' + String(error && error.message || error);
+        }
+        try { menu.close(); } catch (e) { /* closing is not what we are testing */ }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      return results;
+    })()`, { timeoutMs: 60000 });
+    onProgress('menu routes');
+
     // --- console health -----------------------------------------------------
     metrics.console = await harness.evaluate(`(() => {
       const log = window.__xrHarness.log;

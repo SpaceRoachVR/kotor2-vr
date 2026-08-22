@@ -84,6 +84,33 @@ headset too, now fixed and re-verified:
   required semantic actions, because entry validates once before the runtime
   delivers its first `inputsourceschange` (observed `topologyKey: "[]"`).
 
+**2026-08-22 first headset session.** The first real device run of the VR stack.
+It ended early when the game glitched badly, but the console was captured and it
+named four distinct root causes — three fixed, one needing a design decision.
+Partial pass/fail marks live in the tester's own copy of the plan.
+
+- **Player invisible in the med bay, fine in flatscreen.** `MenuPartySelection`
+  called `this.char.LoadModel()`; `ModuleCreature` defines only `loadModel`.
+  The sole such call site in the codebase, throwing on every party-selection
+  portrait build as an uncaught rejection, which leaves the character with no
+  model. Fixed, with a test rejecting any `.LoadModel(` call site.
+- **2D UI stays up after any interaction.** TSL menus call
+  `super.menuControlInitializer(true)`; the `true` makes the K1 parent return
+  before registering any listeners, and the subclass re-registers only some.
+  `MenuJournal.BTN_EXIT` was declared and never wired, so the journal could not
+  be closed from its own Exit button — with a mouse as much as a VR ray. Fixed,
+  along with `MenuContainer.BTN_GIVEITEMS`. See 4.5 for the other 41.
+- **Opening Map or Abilities from the wheel threw.** `MenuMap.show` touched
+  `BTN_PRTYSLCT`, which TSL's map GUI does not contain, and `GUIFeatItem`
+  dereferenced a padding hole in `feats.2da`. Both built fine and threw on use,
+  so only opening them catches it — `vr:check` now does.
+- **Interacting drags the avatar (open).** See 3.10.
+
+**Observed performance:** 32-36 FPS in stereo through the busier Ebon Hawk
+rooms, p50 ~31 ms, p90 ~32 ms, 74-100% of frames over 20 ms, 250-720 draw calls,
+heap 670-860 MB. Lighter windows reached 52-54 FPS. That is below the sustained-50
+gate for much of the run and is the first real evidence for H3 since Phase 0.
+
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
 
@@ -462,6 +489,22 @@ unit/integration-tested only.
   exact Ebon Hawk Galaxy Map console exception delegates to its existing world
   `Use` route; it is never added to the all-purpose wheel.
 
+- **3.10** ☐ **open decision — world use drags the avatar.** `ActionUseObject`
+  enqueues an `ActionMoveToPoint` whenever the actor is more than **1.5 m** from
+  the target, and `ActionOpenDoor` does the same beyond **2 m**. The VR prompts
+  offer activation at 2.5 m (placeables) and 3 m (doors), so activations at
+  1.97-2.25 m were observed queueing a walk. The rig is welded to the avatar, so
+  the engine drags the player — reported as "glitches into different positions
+  uncontrollably, and stays glitched".
+
+  This is not a simple revert: those ranges were widened from 1.5/2 on the
+  user's own playtest call (2026-08-21) precisely because tighter ones gave no
+  prompt at a natural standing distance. The options are (a) narrow the prompt
+  ranges back to what the engine will honour without walking, (b) suppress the
+  approach-walk for VR-initiated use, since the player is physically adjacent
+  already, or (c) reconcile the avatar to the player's own head position before
+  activating. Needs a decision before implementing.
+
 **Exit:** a Peragus combat encounter completable in VR with the d20 layer intact.
 **Not yet verified on-device** — implemented and unit/integration-tested only.
 
@@ -540,7 +583,28 @@ Every button reachable in flatscreen needs a VR route.
   would add a control that steps through a list the player can already see in
   full.
 
-  *Still open:* the minigame menus (Pazaak, swoop) are unexamined.
+  **Correction (2026-08-22 headset session).** The "no TSL menu is a stub"
+  conclusion above was wrong in an important way. It came from checking class
+  inheritance and empty method bodies, and this kind of stub is invisible to
+  both: the override exists and is non-empty, it just registers a *subset* of
+  the parent's listeners after calling `super.menuControlInitializer(true)`.
+
+  A structural audit across every TSL menu finds **43 dropped click handlers
+  across 15 menus**, and they are dead in flatscreen too — VR only made it
+  obvious, because the ray has nothing to fall back on. Two that trapped the
+  player in a UI are fixed (`MenuJournal.BTN_EXIT`,
+  `MenuContainer.BTN_GIVEITEMS`); 41 remain, catalogued in
+  `src/tests/tsl-menu-dropped-handlers.test.ts`, which fails on any new
+  divergence and on any ledger entry that has since been fixed.
+
+  Player-visible among the remainder: the Pazaak table is entirely unwired,
+  character generation cannot go back or accept, the upgrade screens cannot go
+  back, and saves cannot be deleted. Note the ledger records *divergence*, not
+  necessarily *bug* — `MenuMap.BTN_PRTYSLCT` is listed, but TSL's map GUI has no
+  such control at all, which is a different problem (it crashed `MenuMap.show`).
+
+  *Still open:* the minigame menus (Pazaak, swoop) are unexamined beyond the
+  handler audit.
 - **4.6** ✅ implemented / ☐ headset-accepted — **Recenter** (2026-08-22). Was the
   one "bound but dead" action deferred specifically because a bad recenter is a
   real comfort hazard and there was no way to verify it without a device; the

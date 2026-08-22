@@ -39,6 +39,12 @@ export class GUIFeatItem extends GUIProtoItem {
       for(let i = 0; i < featList.length; i++){
         let feat = featList[i];
 
+        // feats.2da carries padding rows, so a filtered list can contain holes.
+        // One undefined entry threw here and aborted the whole list build,
+        // leaving the Abilities screen empty — reported from a headset session
+        // opening Abilities from the VR action wheel.
+        if(!feat) continue;
+
         let hasPrereqfeat1 = (feat.prereqfeat1 == '****' || GameState.getCurrentPlayer().getHasFeat(feat.prereqfeat1));
         let hasPrereqfeat2 = (feat.prereqfeat2 == '****' || GameState.getCurrentPlayer().getHasFeat(feat.prereqfeat2));
         let hasFeat = GameState.getCurrentPlayer().getHasFeat(feat.__index);

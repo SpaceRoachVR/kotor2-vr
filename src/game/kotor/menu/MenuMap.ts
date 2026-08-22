@@ -149,8 +149,14 @@ export class MenuMap extends GameMenu {
       this.LBL_MapNote.setText(this.miniMap.mapNoteSelected.mapNote.getValue());
     }
 
-    this.BTN_PRTYSLCT.disableSelection = (GameState.module.area.unescapable);
-    this.BTN_RETURN.disableSelection = (GameState.module.area.unescapable);
+    // TSL's map GUI has no BTN_PRTYSLCT, and `show()` is shared by both games
+    // through inheritance, so touching it unconditionally threw the moment the
+    // map was opened in TSL — reported from a headset session opening Map from
+    // the VR action wheel. Guarded rather than overridden, because the same
+    // hazard applies to any control one game's GUI omits.
+    const unescapable = GameState.module.area.unescapable;
+    if(this.BTN_PRTYSLCT) this.BTN_PRTYSLCT.disableSelection = unescapable;
+    if(this.BTN_RETURN) this.BTN_RETURN.disableSelection = unescapable;
   }
 
   triggerControllerBumperLPress() {
