@@ -475,9 +475,19 @@ Every button reachable in flatscreen needs a VR route.
   fallback. Fixed, and VR-only entries (Comfort Settings, the Screens submenu)
   now omit the icon so they take the fallback deliberately and silently.
 
-  *Still open:* the overlay's non-menu controls (action-queue clear/clear-all,
-  target cycling) have no VR route, and the minigame menus (Pazaak, swoop) are
-  unexamined.
+  *Non-menu controls, resolved.* `BTN_CLEARALL` now has a VR route — a
+  conditional `Clear Actions` wedge that appears only when the queue is
+  non-empty or combat is live, and performs the same three steps the button
+  does (`clearAllActions`, drop `combatState`, `cancelCombat`).
+
+  Its sibling `BTN_TARGETUP`/`BTN_TARGETDOWN` controls are deliberately **not**
+  ported. They do not cycle targets — they cycle *which action a target panel
+  shows*, one at a time, because the flat panel has room for one. The wheel
+  already enumerates every action from every panel at once, so porting them
+  would add a control that steps through a list the player can already see in
+  full.
+
+  *Still open:* the minigame menus (Pazaak, swoop) are unexamined.
 - **4.6** ✅ implemented / ☐ headset-accepted — **Recenter** (2026-08-22). Was the
   one "bound but dead" action deferred specifically because a bad recenter is a
   real comfort hazard and there was no way to verify it without a device; the

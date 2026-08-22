@@ -42,13 +42,16 @@ physically unpleasant rather than merely wrong.
 | A3 | Smooth turn, then snap turn (Comfort Settings → turnMode) | Snap turn pivots about **your head**, not the avatar's feet |
 | A4 | Set snap turn to each of its degree steps | Each step matches its label |
 | A5 | Enable the comfort vignette and move | Vignette closes on motion, opens at rest |
-| A6 | **Recenter — click the dominant thumbstick in** (not a face button) | Your physical forward becomes the game's forward; head ends up over the avatar; **no vertical jump** |
+| A6 | **Recenter — hold the dominant thumbstick in for ~0.7s** | Fires once on the hold; your physical forward becomes the game's forward, head ends up over the avatar, **no vertical jump**. (The Meta button can't be used — the OS reserves it and WebXR never sees it) |
 | A7 | Recenter repeatedly, including while turned by snap turn | Idempotent — no creeping drift, and deliberate turning is preserved |
 | A8 | Recenter while looking straight up | Ignored rather than throwing you sideways |
 | A9 | Walk into a wall physically (roomscale), not on the stick | Soft push-back, no fade, no hard stop, no falling through |
 | A10 | Stand, then crouch, then stand | Eye height stays canonical; no sinking into the floor |
 | A11 | Play seated | Everything above still reachable |
-| A12 | **Turn hard with the dominant stick for a minute without meaning to recenter** | No accidental recenter. Recenter shares the dominant thumbstick with Turn, and it only became live this session — if a stray click recentres you mid-turn, that is a comfort hazard and the binding should move |
+| A12 | **Turn hard with the dominant stick for a minute, clicking it accidentally** | No recenter. The ~0.7s hold exists specifically to stop this — a stray click must never be long enough to qualify. If one gets through, the hold needs lengthening |
+| A13 | Toggle **walk/run** — click the offhand thumbstick | Movement speed visibly changes between the engine's walkrate and runrate |
+| A14 | **Pause** — dominant B | Engine pauses and unpauses; VR view stays stable while paused |
+| A15 | **Cycle party leader** — offhand Y | Control passes to the next party member; the wheel's Party submenu still picks a specific one |
 
 ## B. Session lifecycle
 
@@ -155,9 +158,9 @@ physically unpleasant rather than merely wrong.
   cycling) still have no VR route, and the minigame menus (Pazaak, swoop) are
   unexamined.
 - **5.3** No comfort pass over the prologue.
-- `Pause`, `PartyCommand`, and `ToggleWalkRun` are bound to buttons but consumed
-  nowhere. `Pause`/`PartyCommand` have no defined intent; `ToggleWalkRun` has no
-  walk/run distinction in the movement system to hook into.
+- All three formerly dead actions are now live — see A13-A15. `ToggleWalkRun`
+  turned out to have engine walk/run rates behind it all along; `PartyCommand`
+  was never actually bound, and now cycles the party leader.
 
 ## J. Flatscreen regressions to spot-check
 

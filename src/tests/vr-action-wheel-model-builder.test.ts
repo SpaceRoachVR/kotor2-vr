@@ -58,6 +58,8 @@ function context(overrides: Partial<VRActionWheelBuildContext> = {}): VRActionWh
     openJournal: jest.fn(),
     openMessages: jest.fn(),
     openOptions: jest.fn(),
+    canClearActions: false,
+    clearQueuedActions: jest.fn(),
     ...overrides,
   };
 }
@@ -314,4 +316,27 @@ test('source keys include every identity-bearing engine field', () => {
   for (const mutation of mutations) {
     expect(createVRActionSourceKey('target', 1, mutation)).not.toBe(baseline);
   }
+});
+
+
+test('offers Clear Actions only when something is queued', () => {
+  // BTN_CLEARALL's VR counterpart. Offering it with an empty queue would be a
+  // control that visibly does nothing.
+  const clearQueuedActions = jest.fn();
+
+  expect(contentIds(buildVRActionWheel(context({ canClearActions: false }))))
+    .not.toContain('action:clear-queue');
+
+  const menu = buildVRActionWheel(context({ canClearActions: true, clearQueuedActions }));
+  expect(contentIds(menu)).toContain('action:clear-queue');
+
+  findAction(menu, 'action:clear-queue').activate();
+  expect(clearQueuedActions).toHaveBeenCalledTimes(1);
+});
+
+test('rejects a build context without a clear-queue route', () => {
+  const broken = context();
+  delete (broken as unknown as Record<string, unknown>).clearQueuedActions;
+
+  expect(() => buildVRActionWheel(broken)).toThrow('clearQueuedActions must be callable');
 });

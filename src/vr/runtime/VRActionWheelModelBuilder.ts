@@ -37,6 +37,14 @@ export interface VRActionWheelBuildContext {
   readonly openJournal: () => void;
   readonly openMessages: () => void;
   readonly openOptions: () => void;
+  /**
+   * True when the player has queued actions or is in combat — the only state in
+   * which clearing is meaningful. The wheel omits the route otherwise rather
+   * than offering a control that would do nothing.
+   */
+  readonly canClearActions: boolean;
+  /** Clears the action queue and cancels combat, as BTN_CLEARALL does. */
+  readonly clearQueuedActions: () => void;
 }
 
 export interface VRActionMenuEntry {
@@ -134,6 +142,19 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
       revalidate: () => partyMembers.some(isSwitchablePartyMember),
       buildMenu: () => buildPartyMenu(context.id, partyMembers),
     });
+  }
+
+  // The flatscreen overlay's BTN_CLEARALL (ROADMAP 4.5). Its sibling target
+  // up/down controls have no VR counterpart by design: they exist because the
+  // flat panel shows one action at a time, and the wheel already enumerates
+  // every panel action at once.
+  if (context.canClearActions === true) {
+    items.push(createStaticAction(
+      'action:clear-queue',
+      'Clear Actions',
+      'i_noaction',
+      context.clearQueuedActions,
+    ));
   }
 
   items.push({
@@ -292,6 +313,9 @@ function validateBuildContext(context: VRActionWheelBuildContext): void {
     if (typeof context[callback] !== 'function') {
       throw new TypeError(`${callback} must be callable`);
     }
+  }
+  if (typeof context.clearQueuedActions !== 'function') {
+    throw new TypeError('clearQueuedActions must be callable');
   }
 }
 

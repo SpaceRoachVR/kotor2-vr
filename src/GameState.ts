@@ -1951,6 +1951,18 @@ export class GameState implements EngineContext {
           openJournal: () => GameState.MenuManager.MenuJournal.open(),
           openMessages: () => GameState.MenuManager.MenuMessages.open(),
           openOptions: () => GameState.MenuManager.MenuOptions.open(),
+          // BTN_CLEARALL's exact behaviour, offered only when there is
+          // something to clear.
+          canClearActions: actor.actionQueue.length > 0 ||
+            actor.combatData.combatState === true ||
+            actor.combatData.combatQueue.length > 0,
+          clearQueuedActions: () => {
+            const player = GameState.getCurrentPlayer();
+            if (!player) return;
+            player.clearAllActions();
+            player.combatData.combatState = false;
+            player.cancelCombat();
+          },
         });
       },
       getComfortSettingsPanelContext: () => {
