@@ -113,6 +113,36 @@ rooms, p50 ~31 ms, p90 ~32 ms, 74-100% of frames over 20 ms, 250-720 draw calls,
 heap 670-860 MB. Lighter windows reached 52-54 FPS. That is below the sustained-50
 gate for much of the run and is the first real evidence for H3 since Phase 0.
 
+**2026-08-22 second headset session.** Got further into the Ebon Hawk but could
+not finish the scenario. Nineteen issues reported; four fixed and confirmed
+under `npm run vr:check` (22/22) before being called fixed, per the standing
+instruction that anything emulator-testable is proven there first.
+
+- **Approach suppression was only applied to 2 of 13 actions.** Last session's
+  entry claimed 3.10 fixed; it was not. `ActionUnlockObject` — Security, the
+  most-used action of the session — still walked the player, as did mines,
+  attacks, dialogue and lock/close-door. All eleven player-initiated actions now
+  consult the policy, and the policy is **actor-scoped**: as written it was
+  global and would have stopped party members and NPCs walking too.
+- **Recenter's vertical guard never fired.** It relied on the facing conversion
+  throwing, which only happens for an exactly-vertical forward vector. Replaced
+  with a ~75° pitch limit.
+- **Level Up was never wired in either game.** Not a TSL drop — K1 only calls
+  `.hide()` on `BTN_LEVELUP`, and `MenuLevelUp` is a 48-line shell with zero
+  handlers in both games. Routed to the working auto-level-up path; manual
+  point-spend remains unimplemented.
+- **Movement mode unbound** from the offhand trigger, where it collided with
+  radial-wheel Select. Comfort Settings only.
+
+**The dominant open theme is that VR pointing has no visible ray.** Panels, the
+wheel, blink targeting and the Comfort menu all require aiming at something the
+player cannot see, which makes several otherwise-working features unusable. That
+is the next piece of work, ahead of individual bug fixes.
+
+**Tooling note:** `tsc -p tsconfig.kotorjs.json` does not cover `src/actions`.
+It reported clean while esbuild rejected nine files a scripted edit had
+malformed. Jest and webpack are the real gates for that tree.
+
 Tasks are sized for a single working session. Each states what "done" means, so a
 cold session can pick one up without re-deriving context. Check off in place.
 
@@ -491,8 +521,10 @@ unit/integration-tested only.
   exact Ebon Hawk Galaxy Map console exception delegates to its existing world
   `Use` route; it is never added to the all-purpose wheel.
 
-- **3.10** ✅ implemented / ☐ headset-accepted — **world use no longer drags the
-  avatar** (2026-08-22). Resolved by option (b): suppress the approach-walk for
+- **3.10** ✅ implemented (twice) / ☐ headset-accepted — **world use no longer
+  drags the avatar** (2026-08-22). *The first attempt covered only
+  `ActionUseObject` and `ActionOpenDoor`; Security and eight others still walked
+  the player and were caught by the second headset session.* Resolved by option (b): suppress the approach-walk for
   VR-initiated use, on the user's call that being pulled around felt unnatural.
 
   `ActionApproachPolicy` carries the rule as a session-scoped statement of

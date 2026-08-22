@@ -27,6 +27,50 @@ the busier Ebon Hawk rooms, p90 ~32 ms, 74–100% of frames over 20 ms; lighter
 windows reached 52–54. Below the sustained-50 gate for much of the run. That is
 H3, and it is now the largest open risk.
 
+## Session 2 findings (2026-08-22)
+
+The second device run got further but could not finish the scenario. Nineteen
+issues came back. Status below; everything marked **fixed** was confirmed under
+`npm run vr:check` against the real build before being called fixed.
+
+### Fixed and emulator-confirmed
+
+| Was | Cause | Retest |
+|---|---|---|
+| Activating from the edge of range still pulled the player | Only 2 of 13 actions had approach suppression. `ActionUnlockObject` (Security) — the most-used action — still walked. Now all 11 player-initiated actions, and scoped to the player so party/NPC movement is untouched | E9–E13 |
+| Recenter still worked looking straight up | The guard only caught an *exactly* vertical forward vector; a real headset is a few degrees off. Now a ~75° pitch limit | A8 |
+| Level Up did nothing | **Neither K1 nor TSL ever wired `BTN_LEVELUP`**; `MenuLevelUp` is a shell with no handlers. Routed to the working auto-level-up path | D5 |
+| Left stick felt overloaded | Movement mode was on the offhand *trigger*, shared with wheel Select. Now Comfort Settings only | A2, A13 |
+
+### Confirmed working
+
+- Walk/run on the offhand stick click (**A2 in this document was wrong** and is corrected).
+- Blink locomotion functions — but needs a ray to aim, see below.
+- Comfort Settings opens from the wheel.
+
+### Open — needs a ray pointer
+
+The single biggest usability gap. Panels, the wheel, blink targeting, and the
+Comfort menu all require pointing at something with no visible ray, so there is
+no way to know what is selected.
+
+- Comfort Settings panel cannot be interacted with at all
+- Blink lands somewhere apparently arbitrary
+- The wheel accepts the left ray only; it should accept either hand
+
+### Open — other
+
+- A full-size 2D UI persists after any interaction or cutscene, and shows combat entered after pausing
+- Pause (B) has no indication beyond the freeze, and makes some room objects vanish
+- Security skill and tunneler fail on containers that should accept them
+- Doors with no Security option show Bash but not Use
+- Active quest list renders blank
+- Inventory slots show no icon for equipped items
+- The lift offers its option after the cutscene, but selecting it does nothing
+- Boxes sometimes lose their texture when used
+- Opening **Screens** from the wheel appears to do nothing
+- Combat actions on the radial were a mistake and need a different route — a design conversation, not a fix
+
 ## Current focus: sections A and B only
 
 21 checks, roughly half an hour. These are the items automation fundamentally
@@ -77,18 +121,18 @@ physically unpleasant rather than merely wrong.
 | # | What to do | What "pass" looks like |
 |---|---|---|
 | A1 | Walk around `101PER` on the stick for two minutes | No nausea, no unexpected acceleration, no drift |
-| A2 | Toggle smooth vs blink locomotion (offhand thumbstick press) | Mode changes; blink teleport lands where aimed |
+| A2 | Switch smooth vs blink in **Comfort Settings** (no longer on a button) | Mode changes; blink teleport lands where aimed. The offhand stick click is **walk/run**, not movement mode — the old wording here was wrong |
 | A3 | Smooth turn, then snap turn (Comfort Settings → turnMode) | Snap turn pivots about **your head**, not the avatar's feet |
 | A4 | Set snap turn to each of its degree steps | Each step matches its label |
 | A5 | Enable the comfort vignette and move | Vignette closes on motion, opens at rest |
 | A6 | **Recenter — hold the dominant thumbstick in for ~0.7s** | Fires once on the hold; your physical forward becomes the game's forward, head ends up over the avatar, **no vertical jump**. (The Meta button can't be used — the OS reserves it and WebXR never sees it) |
 | A7 | Recenter repeatedly, including while turned by snap turn | Idempotent — no creeping drift, and deliberate turning is preserved |
-| A8 | Recenter while looking straight up | Ignored rather than throwing you sideways |
+| A8 | Recenter while looking straight up | Ignored rather than throwing you sideways. **Failed in session 2** — the guard only caught an exactly-vertical pose; now a real ~75° pitch limit |
 | A9 | Walk into a wall physically (roomscale), not on the stick | Soft push-back, no fade, no hard stop, no falling through |
 | A10 | Stand, then crouch, then stand | Eye height stays canonical; no sinking into the floor |
 | A11 | Play seated | Everything above still reachable |
 | A12 | **Turn hard with the dominant stick for a minute, clicking it accidentally** | No recenter. The ~0.7s hold exists specifically to stop this — a stray click must never be long enough to qualify. If one gets through, the hold needs lengthening |
-| A13 | Toggle **walk/run** — click the offhand thumbstick | Movement speed visibly changes between the engine's walkrate and runrate |
+| A13 | Toggle **walk/run** — click the offhand thumbstick | Movement speed visibly changes between the engine's walkrate and runrate. Confirmed working in session 2 |
 | A14 | **Pause** — dominant B | Engine pauses and unpauses; VR view stays stable while paused |
 | A15 | **Cycle party leader** — offhand Y | Control passes to the next party member; the wheel's Party submenu still picks a specific one |
 
