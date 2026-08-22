@@ -129,7 +129,7 @@ physically unpleasant rather than merely wrong.
 | G3 | Play a scripted camera sequence | Rig does not bury you underground; cuts are smoothed |
 | G4 | Watch dialogue with camera cuts | Fade-to-black between shots |
 | G5 | Hit an unskippable (`NodeUnskippable`) line | The VR abort still gets you out |
-| G6 | Dialogue skill checks | **Unconfirmed** — may already work via generic reprojection, may need bespoke work |
+| G6 | Dialogue with a `[Persuade]`-style skill-check reply | The check is an ordinary reply row, not a panel — confirm you can point at it and pick it like any other line |
 | G7 | The whole prologue's scripted sequences | **Comfort pass not done** — flag anything unpleasant |
 
 ## H. Rendering and performance
@@ -146,7 +146,8 @@ physically unpleasant rather than merely wrong.
 
 - **3.3** Two-handed saber is a mode flag, not dual-wielded tracking.
 - **4.2** No distinct physical/3D inventory; the flat 2D one reprojects.
-- **4.4** Dialogue skill-check panels unverified.
+- **4.4** Resolved: skill checks are ordinary dialogue reply rows, not a panel,
+  and the generic list adapter already covers them. Only G6 confirmation is left.
 - **4.5** Audited this session. Every TSL menu extends its K1 counterpart with no
   empty overrides and no TODO markers, so the "TSL menus are frequently stubs"
   worry is retired. The real gap was reachability, now closed — see D9-D14.

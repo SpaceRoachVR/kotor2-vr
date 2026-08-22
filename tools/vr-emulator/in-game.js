@@ -139,6 +139,54 @@ const WORLD_STATE = `(() => {
   log('4 in-game immersive session', session, session.active ? 'PASS' : 'FAIL');
   if (!session.active) throw new Error('session did not start in-game');
 
+  // --- Settle into a deterministic in-game state ---------------------------
+  // A save can land mid-movie, and movie/cutscene lifecycle suspends gameplay
+  // input. Testing locomotion against that races the cutscene: the same
+  // scenario moved 7.86 m on one run and 0 m on the next. Wait it out, and
+  // report what the input path actually sees either way.
+  const settle = await harness.evaluate(`(async () => {
+    const gs = window.KotOR.GameState;
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      const playing = gs.VideoManager && gs.VideoManager.isMoviePlaying
+        ? gs.VideoManager.isMoviePlaying() : false;
+      if (!playing && gs.Mode !== 5) break;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    return {
+      engineMode: gs.Mode,
+      moviePlaying: gs.VideoManager && gs.VideoManager.isMoviePlaying
+        ? gs.VideoManager.isMoviePlaying() : null,
+      engineState: gs.State,
+    };
+  })()`, { timeoutMs: 90000 });
+  log('4b settled', settle, settle.engineMode !== 5 ? 'PASS' : 'FAIL');
+
+  // Engine mode follows the current menu — `InGameOverlay` is the one that
+  // carries `engineMode = INGAME`. The scripted load clears menus, so without
+  // this the engine sits in GUI mode, gameplay input stays suppressed, and both
+  // locomotion and recenter silently do nothing.
+  const overlay = await harness.evaluate(`(() => {
+    const gs = window.KotOR.GameState;
+    const before = gs.Mode;
+    gs.MenuManager.InGameOverlay.open();
+    return { modeBefore: before, modeAfter: gs.Mode };
+  })()`);
+  log('4b2 in-game overlay opened', overlay, overlay.modeAfter === 1 ? 'PASS' : 'FAIL');
+  await new Promise((r) => setTimeout(r, 2000));
+
+  const inputContext = await harness.evaluate(`(() => {
+    const V = window.KotOR.VRSpike;
+    const gs = window.KotOR.GameState;
+    return {
+      isPresenting: V ? V.isPresenting : null,
+      yawOffset: V ? V.yawOffset : null,
+      comfort: typeof gs.getComfortSettings === 'function' ? gs.getComfortSettings() : 'accessor-not-a-function',
+      engineMode: gs.Mode,
+    };
+  })()`);
+  log('4c input context', inputContext);
+
   // --- Recenter -----------------------------------------------------------
   // Turn the emulated head well off-axis, then press the dominant-hand
   // recenter button and confirm the engine's yaw offset absorbs it.

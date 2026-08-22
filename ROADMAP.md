@@ -406,9 +406,20 @@ Every button reachable in flatscreen needs a VR route.
   `MenuGalaxyMap`. The existing generic `VRPanelHost` +
   `LegacyGUIVRPointerAdapter` reprojection handles legacy panels — no new rendering
   infrastructure needed.
-- **4.4** ❓ Dialogue skill checks as floating panels. Genuinely unconfirmed — may
-  already work via generic reprojection if skill checks are authored as ordinary GUI
-  screens, or may need bespoke handling. Not chased down this pass.
+- **4.4** ✅ resolved by inspection / ☐ headset-accepted — **Dialogue skill checks
+  need nothing bespoke.** The premise behind the question was wrong: KOTOR has no
+  skill-check panel. A check is authored in the DLG as a conditional script that
+  gates whether a reply node appears, with the `[Persuade]`-style marker baked
+  into the reply string. So a skill check is an ordinary row in `InGameDialog`'s
+  `LB_REPLIES` list box, not a distinct screen.
+
+  That reduces 4.4 to "can VR pick a row in a `GUIListBox`", which
+  `GUIListBoxVRPointerTargets` already answers generically — it takes any list
+  implementing the structural contract, not a named menu, and yields row and
+  scroll-arrow targets at the ray position. No new rendering or routing work.
+
+  What remains is confirmation that a reply is actually selectable in a live
+  dialogue, which is a device/emulator test rather than a code question.
 - **4.5** ✅ audited / ☐ headset-accepted — **Reachability audit (2026-08-22).**
 
   *The TSL-stub worry is retired.* All 63 K1 menus have TSL counterparts, every
