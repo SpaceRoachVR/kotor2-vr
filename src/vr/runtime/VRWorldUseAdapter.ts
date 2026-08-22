@@ -1,10 +1,15 @@
 import * as THREE from 'three';
+import {
+  activateSelectedObject,
+  SelectedObjectActivationResult,
+} from '@/engine/interaction/SelectedObjectActivation';
 import { ModuleObjectType } from '@/enums/module/ModuleObjectType';
 import { resolveDisplayName } from './resolveDisplayName';
 
 export interface VRWorldUseActor {
   readonly id: number;
   readonly position: THREE.Vector3;
+  clearAllActions(): void;
 }
 
 export interface VRWorldUseTarget {
@@ -20,7 +25,7 @@ export interface VRWorldUseTarget {
   getTag?(): string;
   getTemplateResRef?(): string | null;
   isLocked?(): boolean;
-  use(actor: VRWorldUseActor): void;
+  onClick(actor: VRWorldUseActor): void;
 }
 
 export interface VRWorldUseOutcome {
@@ -88,8 +93,8 @@ export function describeDirectVRWorldUse(
 }
 
 /**
- * Classifies the narrow set of targets that may use their existing engine
- * `use()` route without stealing ownership from locks, story state, or an
+ * Classifies the narrow set of targets that may use the native selected-target
+ * activation route without stealing ownership from locks, story state, or an
  * authored ActionMenu action.
  */
 export function classifySafeDirectVRWorldUse(
@@ -134,9 +139,9 @@ export function isSafeDirectVRWorldUse(
 }
 
 /**
- * Executes the engine's close-range `use` route without adding a desktop
- * ActionUseObject/ActionOpenDoor walk-to action. The target itself remains
- * responsible for all authored locks, keys, scripts, containers and menus.
+ * Executes the native selected-target activation route. The target's `onClick`
+ * remains responsible for authored walking, locks, keys, scripts, containers,
+ * combat, and menus, exactly as it is for a flatscreen click.
  */
 export function tryDirectVRWorldUse(
   actor: VRWorldUseActor,
@@ -166,14 +171,22 @@ function executeDirectVRWorldUse(
     return { handled: true, feedbackLabel: `${name}: Move closer` };
   }
 
-  try {
-    target.use(actor);
-    logger.info(`[VR interaction] target=${target.id} type=${type} distance=${distance.toFixed(2)} route=direct-use result=ok`);
+  const activation = activateSelectedObject(actor, target);
+  if (activation.status === 'activated') {
+    logger.info(`[VR interaction] target=${target.id} type=${type} distance=${distance.toFixed(2)} route=native-selected-activation result=ok`);
     return { handled: true, feedbackLabel: `Use: ${name}` };
-  } catch (error) {
-    logger.error(`[VR interaction] target=${target.id} type=${type} route=direct-use result=error`, error);
-    return { handled: true, feedbackLabel: `${name}: Unavailable` };
   }
+  reportActivationFailure(target, type, activation, logger);
+  return { handled: true, feedbackLabel: `${name}: Unavailable` };
+}
+
+function reportActivationFailure(
+  target: VRWorldUseTarget,
+  type: string,
+  activation: Extract<SelectedObjectActivationResult, { readonly status: 'failed' }>,
+  logger: Pick<Console, 'error'>,
+): void {
+  logger.error(`[VR interaction] target=${target.id} type=${type} route=native-selected-activation result=error`, activation.error);
 }
 
 function isSupportedAndInRange(actor: VRWorldUseActor, target: VRWorldUseTarget): boolean {
@@ -209,15 +222,16 @@ function distance2D(first: THREE.Vector3, second: THREE.Vector3): number {
 }
 
 function validateActor(actor: VRWorldUseActor): void {
-  if (!actor || !Number.isInteger(actor.id) || !(actor.position instanceof THREE.Vector3)) {
-    throw new TypeError('VR world-use actor must have an integer id and THREE.Vector3 position');
+  if (!actor || !Number.isInteger(actor.id) || !(actor.position instanceof THREE.Vector3) ||
+    typeof actor.clearAllActions !== 'function') {
+    throw new TypeError('VR world-use actor must have an integer id, THREE.Vector3 position, and clearAllActions');
   }
 }
 
 function validateTarget(target: VRWorldUseTarget): void {
   if (!target || !Number.isInteger(target.id) || !Number.isInteger(target.objectType) ||
-    !(target.position instanceof THREE.Vector3) || typeof target.use !== 'function') {
-    throw new TypeError('VR world-use target must expose id, objectType, position, and use');
+    !(target.position instanceof THREE.Vector3) || typeof target.onClick !== 'function') {
+    throw new TypeError('VR world-use target must expose id, objectType, position, and onClick');
   }
 }
 

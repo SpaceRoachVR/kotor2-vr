@@ -1,5 +1,9 @@
-import { describe, expect, test } from '@jest/globals';
-import { canAttemptSecurityUnlock } from '@/engine/interaction/ObjectLockRules';
+import { describe, expect, jest, test } from '@jest/globals';
+import {
+  canAttemptSecurityUnlock,
+  canBashObject,
+  resolveSecurityUnlock,
+} from '@/engine/interaction/ObjectLockRules';
 
 describe('canAttemptSecurityUnlock', () => {
   test.each([
@@ -21,5 +25,34 @@ describe('canAttemptSecurityUnlock', () => {
     ['key-required and not lockable', { locked: true, lockable: false, keyRequired: true }],
   ])('rejects a %s', (_name, lockState) => {
     expect(canAttemptSecurityUnlock(lockState)).toBe(false);
+  });
+});
+
+describe('resolveSecurityUnlock', () => {
+  test('uses the supplied real d20 result for the authored Low Security Door', () => {
+    const rollD20 = jest.fn(() => 1);
+
+    const result = resolveSecurityUnlock({
+      locked: true,
+      lockable: false,
+      keyRequired: false,
+      securitySkill: 6,
+      wisdom: 10,
+      openLockDC: 21,
+    }, rollD20);
+
+    expect(rollD20).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ attempted: true, unlocked: false, roll: 1, total: 12 });
+  });
+});
+
+describe('canBashObject', () => {
+  test.each([
+    ['ordinary lock', { plot: false, min1HP: false, notBlastable: false }, true],
+    ['plot-owned door', { plot: true, min1HP: false, notBlastable: false }, false],
+    ['Min1HP door', { plot: false, min1HP: true, notBlastable: false }, false],
+    ['NotBlastable door', { plot: false, min1HP: false, notBlastable: true }, false],
+  ])('allows Bash for %s only when authored destruction permits it', (_name, state, expected) => {
+    expect(canBashObject(state)).toBe(expected);
   });
 });

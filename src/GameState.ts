@@ -110,6 +110,7 @@ import { IPCMessageType } from "@/enums/server/ipc/IPCMessageType";
 import { IPCMessageTypeDebug } from "@/enums/server/ipc/IPCMessageTypeDebug";
 import { PerformanceMonitor } from "@/utility/PerformanceMonitor";
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
+import { shouldAutoCancelNonCreatureCombat } from "@/engine/interaction/CombatCancellationRules";
 
 export interface GameStateInitializeOptions {
   Game: GameEngineType,
@@ -634,10 +635,10 @@ function isStructurallyValidVRWorldPromptTarget(actor: ModuleCreature, target: M
 }
 
 function isDirectVRWorldUseTarget(target: ModuleObject): target is ModuleObject & {
-  use(actor: ModuleCreature): void;
+  onClick(actor: ModuleCreature): void;
 } {
   const supportedType = (target.objectType & (ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable)) !== 0;
-  return supportedType && typeof (target as unknown as { use?: unknown }).use === 'function';
+  return supportedType && typeof (target as unknown as { onClick?: unknown }).onClick === 'function';
 }
 
 interface VRWorldPromptActorActionState {
@@ -1666,6 +1667,8 @@ export class GameState implements EngineContext {
             vrCombatIssuedTargetId = target.id;
           },
           cancel: () => {
+            const combatTarget = actor.combatData?.lastAttackTarget;
+            if (!shouldAutoCancelNonCreatureCombat(combatTarget)) return;
             // NO `vrCombatIssuedTargetId === null` GUARD. That guard meant
             // "only cancel combat VR itself started", but combat is far more
             // often entered through the world prompt's authored Bash route,

@@ -9,7 +9,7 @@ import { ActionType } from "@/enums/actions/ActionType";
 import { SkillType } from "@/enums/nwscript/SkillType";
 import { ActionParameterType, ModuleObjectConstant, ModuleTriggerType } from "@/enums";
 import { TalentObject } from "@/talents/TalentObject";
-import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
+import { canAttemptSecurityUnlock, canBashObject } from "@/engine/interaction/ObjectLockRules";
 
 /**
  * ActionMenuManager class.
@@ -111,7 +111,7 @@ export class ActionMenuManager {
             }));
           }
           
-          if(!this.oTarget?.notBlastable){
+          if(canBashObject(ActionMenuManager.oTarget)){
             ActionMenuManager.ActionPanels.targetPanels[0].addAction(new GameState.ActionMenuManager.ActionMenuItem({
               action: {
                 type: ActionType.ActionPhysicalAttacks,
@@ -122,7 +122,7 @@ export class ActionMenuManager {
             }));
           }
 
-          if(!ActionMenuManager.oTarget?.notBlastable){
+          if(canBashObject(ActionMenuManager.oTarget)){
             const mineList = ActionMenuManager.oPC.getInventory().filter((item) => {
               return item.baseItemId == 58
             });
@@ -179,7 +179,7 @@ export class ActionMenuManager {
             }));
           }
           
-          if(!this.oTarget?.notBlastable){
+          if(canBashObject(ActionMenuManager.oTarget)){
             ActionMenuManager.ActionPanels.targetPanels[0].addAction(new GameState.ActionMenuManager.ActionMenuItem({
               action: {
                 type: ActionType.ActionPhysicalAttacks,
@@ -194,7 +194,7 @@ export class ActionMenuManager {
             return item.baseItemId == 58
           });
 
-          if(!this.oTarget?.notBlastable){
+          if(canBashObject(ActionMenuManager.oTarget)){
             for(let i = 0, len = mineList.length; i < len; i++){
               const item = mineList[i];
               const setMine = new GameState.ActionFactory.ActionSetMine();

@@ -12,6 +12,8 @@ import {
   XRInputFrame,
   XRWorldPose,
 } from '@/vr/runtime/XRTypes';
+import { shouldAutoCancelNonCreatureCombat } from '@/engine/interaction/CombatCancellationRules';
+import { ModuleObjectType } from '@/enums/module/ModuleObjectType';
 
 describe('InteractionSystem', () => {
   test('authorizes one near-touch interaction on the use-button press edge', () => {
@@ -130,6 +132,13 @@ describe('InteractionSystem', () => {
       position: expect.objectContaining({ x: 0, y: 0, z: -2 }),
     }));
     expect(activationCount).toBe(0);
+  });
+});
+
+describe('shouldAutoCancelNonCreatureCombat', () => {
+  test('auto-cancels combat against a non-creature object only', () => {
+    expect(shouldAutoCancelNonCreatureCombat({ objectType: ModuleObjectType.ModuleDoor })).toBe(true);
+    expect(shouldAutoCancelNonCreatureCombat({ objectType: ModuleObjectType.ModuleCreature })).toBe(false);
   });
 });
 

@@ -14,6 +14,7 @@ import { GUIControlEventFactory } from "@/gui/GUIControlEventFactory";
 import { Keyboard } from "@/controls/Keyboard";
 import { GamePad } from "@/controls/GamePad";
 import { Mouse } from "@/controls/Mouse";
+import { activateSelectedObject } from "@/engine/interaction/SelectedObjectActivation";
 import { KeyMapper } from "@/controls/KeyMapper";
 import { AnalogInput } from "@/controls/AnalogInput";
 import { TGAObject } from "@/resource/TGAObject";
@@ -352,8 +353,7 @@ export class IngameControls {
 
                 if(GameState.CursorManager.selectedObject == moduleObject && distance <= distanceThreshold){
                   if(typeof moduleObject.onClick === 'function'){
-                    GameState.getCurrentPlayer().clearAllActions();
-                    moduleObject.onClick(GameState.getCurrentPlayer());
+                    activateSelectedObject(GameState.getCurrentPlayer(), moduleObject);
                   }else{
                     let distance = GameState.getCurrentPlayer().position.distanceTo(moduleObject.position);
                     //console.log(distance);

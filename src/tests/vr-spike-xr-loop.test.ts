@@ -2181,10 +2181,12 @@ describe('GameState proactive world-prompt assembly', () => {
     const [useAction] = flattenPromptActions(harness.buildPrompt('module-object:14'));
 
     expect(useAction.label).toBe('Use: Galaxy Map');
-    expect(galaxyMap.use).not.toHaveBeenCalled();
+    expect(galaxyMap.onClick).not.toHaveBeenCalled();
     useAction.activate();
-    expect(galaxyMap.use).toHaveBeenCalledTimes(1);
-    expect(galaxyMap.use).toHaveBeenCalledWith(harness.actor);
+    expect(harness.actor.clearAllActions).toHaveBeenCalledTimes(1);
+    expect(galaxyMap.onClick).toHaveBeenCalledTimes(1);
+    expect(galaxyMap.onClick).toHaveBeenCalledWith(harness.actor);
+    expect(galaxyMap.use).not.toHaveBeenCalled();
   });
 
   test('fails a direct-use descriptor closed when an unlocked target becomes locked', () => {
@@ -2221,9 +2223,11 @@ describe('GameState proactive world-prompt assembly', () => {
     const [useAction] = flattenPromptActions(harness.buildPrompt('module-object:33'));
 
     expect(useAction.label).toBe('Use: Plasteel Cylinder');
-    expect(cylinder.use).not.toHaveBeenCalled();
+    expect(cylinder.onClick).not.toHaveBeenCalled();
     useAction.activate();
-    expect(cylinder.use).toHaveBeenCalledTimes(1);
+    expect(harness.actor.clearAllActions).toHaveBeenCalledTimes(1);
+    expect(cylinder.onClick).toHaveBeenCalledTimes(1);
+    expect(cylinder.use).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -2474,7 +2478,7 @@ interface GameStatePromptTestAction {
 }
 
 function createGameStateWorldPromptHarness(): {
-  readonly actor: { readonly id: number; readonly position: THREE.Vector3 };
+  readonly actor: { readonly id: number; readonly position: THREE.Vector3; clearAllActions(): void };
   readonly objectTypes: { readonly ModuleDoor: number; readonly ModulePlaceable: number; readonly ModuleTrigger: number };
   target(options: {
     readonly id: number;
@@ -2548,6 +2552,7 @@ function createGameStateWorldPromptHarness(): {
   const actor = {
     id: 7,
     position: new engineThree.Vector3(0, 0, 0),
+    clearAllActions: jest.fn(),
     getSkillLevel: () => 1,
     getInventory: () => inventory,
   };

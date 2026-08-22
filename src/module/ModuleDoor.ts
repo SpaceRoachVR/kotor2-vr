@@ -33,6 +33,8 @@ import { AudioPriorityGroup } from "@/enums/audio/AudioPriorityGroup";
 import { GameEffectFactory } from "@/effects/GameEffectFactory";
 import { CombatActionType, ModulePlaceableObjectSound, SkillType } from "@/enums";.3
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { resolveSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
+import { Dice } from "@/utility/Dice";
 
 interface AnimStateInfo {
   lastAnimState: ModuleDoorAnimState;
@@ -397,7 +399,9 @@ export class ModuleDoor extends ModuleObject {
         }
       }
 
-      object.playSoundSet(SSFType.UNLOCK_FAIL);
+      if(this.isLocked()){
+        object.playSoundSet(SSFType.UNLOCK_FAIL);
+      }
     }
 
     // If the door is still locked, run the on fail to open script
@@ -435,27 +439,32 @@ export class ModuleDoor extends ModuleObject {
     }
   }
 
-  attemptUnlock(object: ModuleObject){
+  attemptUnlock(object: ModuleObject, signalFailure = true){
     if(!BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleObject)){
       return false;
     }
     
-    const nSecuritySkill = object.getSkillLevel(SkillType.SECURITY);
-    if(this.isLocked() && !this.keyRequired && nSecuritySkill >= 1){
-      let d20 = 20;//d20 rolls are auto 20's outside of combat
-      let skillCheck = (((object.getWIS()/2) + nSecuritySkill) + d20) - this.openLockDC;
-      if(skillCheck >= 1 && nSecuritySkill >= 1){
-        this.unlock(object);
-        if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
-          object.playSoundSet(SSFType.UNLOCK_SUCCESS);
-        }
-      }else{
-        if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
-          object.playSoundSet(SSFType.UNLOCK_FAIL);
-        }
+    const result = resolveSecurityUnlock({
+      locked: this.isLocked(),
+      lockable: this.lockable,
+      keyRequired: this.keyRequired,
+      securitySkill: object.getSkillLevel(SkillType.SECURITY),
+      wisdom: object.getWIS(),
+      openLockDC: this.openLockDC,
+    }, () => Dice.rollD20(1));
+    if (!result.attempted) return false;
+    if (!result.unlocked) {
+      if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
+        object.playSoundSet(SSFType.UNLOCK_FAIL);
       }
+      if (signalFailure) this.use(object);
+      return false;
     }
-        
+
+    this.unlock(object);
+    if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
+      object.playSoundSet(SSFType.UNLOCK_SUCCESS);
+    }
     this.use(object);
     return true;
   }

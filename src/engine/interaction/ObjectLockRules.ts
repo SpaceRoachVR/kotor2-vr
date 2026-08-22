@@ -4,6 +4,22 @@ export interface ObjectLockState {
   keyRequired: boolean;
 }
 
+export interface SecurityUnlockAttempt extends ObjectLockState {
+  readonly securitySkill: number;
+  readonly wisdom: number;
+  readonly openLockDC: number;
+}
+
+export interface ObjectBashState {
+  readonly plot: boolean;
+  readonly min1HP: boolean;
+  readonly notBlastable: boolean;
+}
+
+export type SecurityUnlockResult =
+  | { readonly attempted: false; readonly unlocked: false }
+  | { readonly attempted: true; readonly unlocked: boolean; readonly roll: number; readonly total: number };
+
 /**
  * Security may attempt any lock that is not reserved for a required key.
  *
@@ -21,4 +37,51 @@ export interface ObjectLockState {
  */
 export function canAttemptSecurityUnlock(lockState: ObjectLockState): boolean {
   return lockState.locked && !lockState.keyRequired;
+}
+
+/**
+ * Rolls an authored Security attempt. Security must use a genuine d20 rather
+ * than treating all out-of-combat attempts as an automatic 20.
+ */
+export function resolveSecurityUnlock(
+  attempt: SecurityUnlockAttempt,
+  rollD20: () => number,
+): SecurityUnlockResult {
+  validateSecurityAttempt(attempt, rollD20);
+  if (!canAttemptSecurityUnlock(attempt) || attempt.securitySkill < 1) {
+    return { attempted: false, unlocked: false };
+  }
+
+  const roll = rollD20();
+  if (!Number.isInteger(roll) || roll < 1 || roll > 20) {
+    throw new RangeError('Security d20 roll must be an integer between 1 and 20');
+  }
+  const total = roll + (attempt.wisdom / 2) + attempt.securitySkill;
+  return { attempted: true, unlocked: total >= attempt.openLockDC, roll, total };
+}
+
+/** Plot, Min1HP, and NotBlastable objects never expose the generic Bash route. */
+export function canBashObject(state: ObjectBashState): boolean {
+  return !state.plot && !state.min1HP && !state.notBlastable;
+}
+
+function validateSecurityAttempt(
+  attempt: SecurityUnlockAttempt,
+  rollD20: unknown,
+): asserts attempt is SecurityUnlockAttempt {
+  if (!attempt || typeof attempt !== 'object') {
+    throw new TypeError('Security unlock attempt is required');
+  }
+  if (typeof rollD20 !== 'function') {
+    throw new TypeError('Security unlock requires a d20 roll function');
+  }
+  for (const [name, value] of Object.entries({
+    securitySkill: attempt.securitySkill,
+    wisdom: attempt.wisdom,
+    openLockDC: attempt.openLockDC,
+  })) {
+    if (!Number.isFinite(value)) {
+      throw new RangeError(`Security unlock ${name} must be finite`);
+    }
+  }
 }

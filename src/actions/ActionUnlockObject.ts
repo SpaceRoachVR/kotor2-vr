@@ -133,7 +133,10 @@ export class ActionUnlockObject extends Action {
       this.timer -= delta;
 
       if(this.timer <= 0){
-        const unlocked = (this.target as any).attemptUnlock(this.owner);
+        // The queued action owns failure signalling below. Direct NWScript
+        // calls retain the target's own failure route, but routing both here
+        // would execute OnFailToOpen twice.
+        const unlocked = (this.target as any).attemptUnlock(this.owner, false);
         if(!unlocked){
           const event = new GameState.GameEventFactory.EventSignalEvent();
           event.setCaller(this.getOwner());
