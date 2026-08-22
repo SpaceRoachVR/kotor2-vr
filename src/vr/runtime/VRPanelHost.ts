@@ -8,6 +8,11 @@ export interface VRPanelHostOptions {
   readonly maximumTextureHeight: number;
 }
 
+/** A menu-owned nested pass rendered while the legacy GUI camera is authoritative. */
+export interface LegacyPanelRenderPass {
+  render(renderer: THREE.WebGLRenderer): void;
+}
+
 const DEFAULT_OPTIONS: VRPanelHostOptions = {
   distanceMetres: 1.5,
   widthMetres: 1.6,
@@ -154,7 +159,8 @@ export class VRPanelHost {
   renderGui(
     renderer: THREE.WebGLRenderer,
     guiScene: THREE.Scene,
-    guiCamera: THREE.Camera
+    guiCamera: THREE.Camera,
+    legacyPanelRenderPass: LegacyPanelRenderPass | null = null
   ): void {
     const previousTarget = renderer.getRenderTarget();
     const previousXREnabled = renderer.xr.enabled;
@@ -169,6 +175,7 @@ export class VRPanelHost {
       renderer.setRenderTarget(this.renderTarget);
       renderer.setClearAlpha(0);
       renderer.clear(true, true, true);
+      legacyPanelRenderPass?.render(renderer);
       renderer.render(guiScene, guiCamera);
     } finally {
       renderer.setClearAlpha(previousClearAlpha);

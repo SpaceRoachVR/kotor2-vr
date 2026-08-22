@@ -8,9 +8,18 @@ export interface LegacyGUIVRPointerControl {
   click(): void;
 }
 
+/** A list-owned action resolved from the exact row or scroll affordance under the pointer. */
+export interface LegacyGUIVRPointerSemanticTarget {
+  readonly name: string;
+  readonly control: LegacyGUIVRPointerControl;
+  isAvailable(): boolean;
+  activate(): void;
+}
+
 export interface LegacyGUIVRPointerAdapterDependencies {
   readonly getViewportSize: () => { readonly width: number; readonly height: number };
   readonly getControlsAtPointer: () => readonly LegacyGUIVRPointerControl[];
+  readonly getSemanticTargetsAtPointer?: () => readonly LegacyGUIVRPointerSemanticTarget[];
   readonly setPointerVisible: (visible: boolean) => void;
   readonly applyPointerCoordinates: (coordinates: LegacyGUIVRPointerCoordinates) => void;
   readonly beforeControlActivation?: (control: LegacyGUIVRPointerControl) => void;
@@ -60,6 +69,15 @@ export class LegacyGUIVRPointerAdapter implements VRPanelPointerSink {
     if (!this.hasPointerHit) {
       LegacyGUIVRPointerAdapter.reportMiss('pointer is not over the panel');
       return false;
+    }
+    const semanticTarget = this.dependencies.getSemanticTargetsAtPointer?.().find(
+      (candidate) => candidate.isAvailable() && candidate.control.isVisible()
+    );
+    if (semanticTarget) {
+      this.dependencies.beforeControlActivation?.(semanticTarget.control);
+      semanticTarget.activate();
+      this.dependencies.afterControlActivation?.(semanticTarget.control);
+      return true;
     }
     const candidates = this.dependencies.getControlsAtPointer();
     const control = candidates.find(

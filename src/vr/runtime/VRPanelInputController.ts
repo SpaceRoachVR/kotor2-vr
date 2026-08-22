@@ -1,12 +1,14 @@
 import { RoutedXRAction } from './XRInputRouter';
 import { SemanticXRAction } from './XRTypes';
 import * as THREE from 'three';
+import type { LegacyPanelRenderPass } from './VRPanelHost';
 
 export interface VRPanelMenuController {
   triggerControllerAPress(): void;
   triggerControllerBPress(): void;
   triggerControllerXPress(): void;
   triggerControllerYPress(): void;
+  getLegacyPanelRenderPass?(): LegacyPanelRenderPass | null;
 }
 
 export interface VRPanelPointerSink {
@@ -45,6 +47,9 @@ export class VRPanelInputController {
     }
 
     if (owner !== this.owner) {
+      // A foreground handoff (for example dialogue to a terminal) must not
+      // leave the old panel's ray/cursor live over the new owner.
+      pointerSink?.setPointerPosition(null);
       this.owner = owner;
       this.awaitingRelease = VRPanelInputController.anyPressed(pressed);
       this.copyPressed(pressed);

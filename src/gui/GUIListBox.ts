@@ -19,6 +19,7 @@ import {
 } from "@/gui/listrow/defaultListRows";
 import { applyCustomProtoRowSkin } from "@/gui/listrow/applyProtoTemplateSkin";
 import { renderGuiSceneToTexture } from "@/gui/renderGuiSceneToTexture";
+import type { LegacyGUIVRPointerSemanticTarget } from "@/vr/runtime/LegacyGUIVRPointerAdapter";
 
 /**
  * GUIListBox class.
@@ -710,6 +711,53 @@ export class GUIListBox extends GUIControl {
     }
 
     return controls;
+  }
+
+  /**
+   * Exposes list interaction by meaning, not by the incidental order of
+   * generic GUI controls. The VR pointer adapter gives these targets priority
+   * so reply and skill rows always flow through this list's existing
+   * `onSelected` callback.
+   */
+  getVRPointerTargetsAtPointer(): readonly LegacyGUIVRPointerSemanticTarget[] {
+    if (!this.isVisible()) return [];
+
+    const targets: LegacyGUIVRPointerSemanticTarget[] = [];
+    for (let index = 0; index < this.children.length; index++) {
+      const row = this.children[index];
+      if (!row.isVisible() || row.disableSelection || !row.box.containsPoint(Mouse.positionUI)) continue;
+      targets.push({
+        name: `${this.name} row ${index + 1}`,
+        control: row,
+        isAvailable: () => row.isVisible() && !row.disableSelection && row.box.containsPoint(Mouse.positionUI),
+        activate: () => this.select(row),
+      });
+    }
+
+    const scrollbarVisible = this.maxScroll > 0 && !!this.scrollWrapper?.visible;
+    const upArrow = this.scrollbar?.upArrow;
+    if (scrollbarVisible && upArrow?.visible && upArrow.userData.box?.containsPoint(Mouse.positionUI)) {
+      targets.push({
+        name: `${this.name} scroll up`,
+        control: this,
+        isAvailable: () => this.maxScroll > 0 && !!this.scrollWrapper?.visible &&
+          !!upArrow.visible && !!upArrow.userData.box?.containsPoint(Mouse.positionUI),
+        activate: () => this.scrollUp(),
+      });
+    }
+
+    const downArrow = this.scrollbar?.downArrow;
+    if (scrollbarVisible && downArrow?.visible && downArrow.userData.box?.containsPoint(Mouse.positionUI)) {
+      targets.push({
+        name: `${this.name} scroll down`,
+        control: this,
+        isAvailable: () => this.maxScroll > 0 && !!this.scrollWrapper?.visible &&
+          !!downArrow.visible && !!downArrow.userData.box?.containsPoint(Mouse.positionUI),
+        activate: () => this.scrollDown(),
+      });
+    }
+
+    return targets;
   }
 
   calculateBox(){

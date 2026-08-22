@@ -46,6 +46,52 @@ describe('LegacyGUIVRPointerAdapter', () => {
     expect(behind.activationCount).toBe(0);
   });
 
+  test('activates the semantic list row before an overlapping generic control', () => {
+    const generic = control({ visible: true, clickable: true });
+    const row = control({ visible: true, clickable: true });
+    let selected = 0;
+    const adapter = new LegacyGUIVRPointerAdapter({
+      getViewportSize: () => ({ width: 1600, height: 900 }),
+      getControlsAtPointer: () => [generic],
+      getSemanticTargetsAtPointer: () => [{
+        name: 'LB_REPLIES row 2',
+        control: row,
+        isAvailable: () => true,
+        activate: () => { selected += 1; },
+      }],
+      setPointerVisible: () => undefined,
+      applyPointerCoordinates: () => undefined,
+    });
+    adapter.setPointerPosition(new THREE.Vector2(0, 0));
+
+    expect(adapter.activatePointer()).toBe(true);
+    expect(selected).toBe(1);
+    expect(generic.activationCount).toBe(0);
+  });
+
+  test('activates a semantic list scroll action without falling back to a generic scrollbar control', () => {
+    const genericScrollbar = control({ visible: true, clickable: true });
+    const list = control({ visible: true, clickable: true });
+    let scrollDown = 0;
+    const adapter = new LegacyGUIVRPointerAdapter({
+      getViewportSize: () => ({ width: 1600, height: 900 }),
+      getControlsAtPointer: () => [genericScrollbar],
+      getSemanticTargetsAtPointer: () => [{
+        name: 'LB_REPLIES scroll down',
+        control: list,
+        isAvailable: () => true,
+        activate: () => { scrollDown += 1; },
+      }],
+      setPointerVisible: () => undefined,
+      applyPointerCoordinates: () => undefined,
+    });
+    adapter.setPointerPosition(new THREE.Vector2(0, 0));
+
+    expect(adapter.activatePointer()).toBe(true);
+    expect(scrollDown).toBe(1);
+    expect(genericScrollbar.activationCount).toBe(0);
+  });
+
   test('hides the legacy cursor and rejects activation after the panel ray is cleared', () => {
     let pointerVisible = true;
     const target = control({ visible: true, clickable: true });

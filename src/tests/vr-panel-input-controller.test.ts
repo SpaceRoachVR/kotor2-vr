@@ -70,6 +70,26 @@ describe('VRPanelInputController', () => {
     expect(clickCount).toBe(1);
     expect(menu.triggerControllerAPress).not.toHaveBeenCalled();
   });
+
+  test('clears the legacy pointer when dialogue ownership changes to a computer', () => {
+    const controller = new VRPanelInputController();
+    const dialogue = createMenu();
+    const computer = createMenu();
+    const pointerPositions: Array<THREE.Vector2 | null> = [];
+    const pointer = {
+      setPointerPosition: (position: THREE.Vector2 | null): void => {
+        pointerPositions.push(position?.clone() ?? null);
+      },
+      activatePointer: (): boolean => true,
+    };
+    const pointerPosition = new THREE.Vector2(320, -120);
+
+    controller.process(dialogue, [], pointerPosition, pointer);
+    controller.process(dialogue, [], pointerPosition, pointer);
+    controller.process(computer, [], pointerPosition, pointer);
+
+    expect(pointerPositions.at(-1)).toBeNull();
+  });
 });
 
 function createMenu(): VRPanelMenuController {

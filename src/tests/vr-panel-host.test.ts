@@ -123,6 +123,28 @@ describe('VRPanelHost', () => {
     expect(renderer.setClearAlpha).toHaveBeenLastCalledWith(1);
   });
 
+  test('runs a menu-owned legacy pass with XR disabled before rendering the GUI scene', () => {
+    const guiScene = new THREE.Scene();
+    const guiCamera = new THREE.OrthographicCamera();
+    const host = new VRPanelHost(new THREE.Scene());
+    const renderer = createRenderer({} as THREE.WebGLRenderTarget);
+    const render = jest.fn((passRenderer: THREE.WebGLRenderer) => {
+      expect(passRenderer.xr.enabled).toBe(false);
+    });
+
+    host.renderGui(
+      renderer as unknown as THREE.WebGLRenderer,
+      guiScene,
+      guiCamera,
+      { render }
+    );
+
+    expect((render as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0]).toBe(renderer);
+    expect(render.mock.invocationCallOrder[0]).toBeLessThan(
+      (renderer.render as jest.Mock).mock.invocationCallOrder[0]
+    );
+  });
+
   test('hides and releases panel ownership when presentation is cancelled', () => {
     const host = new VRPanelHost(new THREE.Scene());
     host.present({}, pose(new THREE.Vector3(), new THREE.Quaternion()), 1280, 720);

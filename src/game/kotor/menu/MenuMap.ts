@@ -9,6 +9,7 @@ import { MapMode } from "@/enums/engine/MapMode";
 import { Mouse } from "@/controls";
 import type { ModuleWaypoint } from "@/module";
 import { CExoLocString } from "@/resource/CExoLocString";
+import type { LegacyPanelRenderPass } from "@/vr/runtime/VRPanelHost";
 
 /**
  * MenuMap class.
@@ -37,6 +38,10 @@ export class MenuMap extends GameMenu {
   onTransitScript: NWScriptInstance;
   transitScript: string;
   miniMap: LBL_MapView;
+  private legacyPanelDelta = 0;
+  private readonly legacyPanelRenderPass: LegacyPanelRenderPass = {
+    render: (renderer) => this.miniMap?.render(this.legacyPanelDelta, renderer),
+  };
 
   constructor(){
     super();
@@ -111,8 +116,15 @@ export class MenuMap extends GameMenu {
         Mouse.positionUI.x + (this.LBL_Map.extent.width/2)  + (this.LBL_Map.widget.position.x * -1),
         Mouse.positionUI.y + (this.LBL_Map.extent.height/2) + (this.LBL_Map.widget.position.y * -1),
       )
-      this.miniMap.render(delta);
+      this.legacyPanelDelta = delta;
+      if (!GameState.renderer?.xr?.isPresenting) {
+        this.miniMap.render(delta);
+      }
     }
+  }
+
+  getLegacyPanelRenderPass(): LegacyPanelRenderPass | null {
+    return this.miniMap ? this.legacyPanelRenderPass : null;
   }
 
   SetMapTexture(sTexture = '') {

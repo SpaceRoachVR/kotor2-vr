@@ -49,6 +49,7 @@ import {
   LegacyGUIVRPointerAdapter,
   LegacyGUIVRPointerCoordinates,
   LegacyGUIVRPointerControl,
+  LegacyGUIVRPointerSemanticTarget,
 } from "@/vr/runtime/LegacyGUIVRPointerAdapter";
 import {
   describeDirectVRWorldUse,
@@ -912,12 +913,24 @@ function findVRForceGestureSpell(actor: ModuleCreature, kind: 'push' | 'pull'): 
     return searchable.includes(keyword);
   }) ?? null;
 }
+
+function getLegacyGUIVRPointerSemanticTargets(): readonly LegacyGUIVRPointerSemanticTarget[] {
+  const controls = GameState.controls?.MenuGetActiveUIElements() ?? [];
+  const lists = new Set<any>();
+  for (const control of controls) {
+    const list = (control as any).list;
+    if (list && typeof list.getVRPointerTargetsAtPointer === 'function') lists.add(list);
+  }
+  return [...lists].flatMap((list) => list.getVRPointerTargetsAtPointer());
+}
+
 const vrLegacyGUIPointerAdapter = new LegacyGUIVRPointerAdapter({
   getViewportSize: () => ({
     width: GameState.ResolutionManager.getViewportWidth(),
     height: GameState.ResolutionManager.getViewportHeight(),
   }),
   getControlsAtPointer: () => GameState.controls?.MenuGetActiveUIElements() ?? [],
+  getSemanticTargetsAtPointer: getLegacyGUIVRPointerSemanticTargets,
   setPointerVisible: (visible: boolean) => {
     if (GameState.scene_cursor_holder) GameState.scene_cursor_holder.visible = visible;
   },

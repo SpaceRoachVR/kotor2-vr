@@ -2484,7 +2484,12 @@ export class VRSpike {
       // XR play. Reapply the panel hit after simulation so the original cursor
       // is included only in this GUI-to-texture pass.
       context.pointerSink.setPointerPosition(VRSpike.latestPanelPointerPosition);
-      VRSpike.panelHost.renderGui(renderer, context.guiScene, context.guiCamera);
+      VRSpike.panelHost.renderGui(
+        renderer,
+        context.guiScene,
+        context.guiCamera,
+        context.menu.getLegacyPanelRenderPass?.() ?? null
+      );
     } catch (error) {
       VRSpike.panelHost?.clear();
       VRSpike.panelPointerHost?.clear();
