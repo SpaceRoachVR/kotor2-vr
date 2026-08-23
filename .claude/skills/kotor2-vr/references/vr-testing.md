@@ -7,7 +7,7 @@ a standing instruction from Allen, not a preference.
 ## The two commands
 
 ```bash
-npm run vr:check   # 22 automated checks under an emulated Quest 3 — the gate
+npm run vr:check   # 23 automated checks under an emulated Quest 3 — the gate
 npm run vr:play    # launch a fresh Chrome profile with DevTools, for hands-on poking
 ```
 
@@ -16,6 +16,21 @@ save, enters an immersive session, and collects every metric in one pass. It
 exits non-zero on failure and writes
 `tools/vr-emulator/evidence/vr-check-metrics.json`, which is worth reading
 directly when investigating rather than re-running.
+
+**`vr:check` reads `dist/`. It does not build it.** On 2026-08-23 a run passed
+22/22 against a six-hour-old bundle and read as confirmation of a change that
+was not in it. Always `npm run webpack:dev` first. There is now a loud STALE
+BUNDLE banner that names the offending source file, but treat it as a backstop,
+not a substitute for building.
+
+Note for anyone touching that guard: comparing `dist/KotOR.js` mtime against
+source is **not** sufficient. Webpack's `compareBeforeEmit` defaults to true, so
+a rebuild whose output is byte-identical never rewrites the asset, and the
+bundle stays older than source while being perfectly current — which produced a
+false "stale" warning the first time the guard ran. `npm run webpack:dev` and
+`webpack:prod` therefore write `dist/.build-stamp` via `tools/build-stamp.js`,
+and the guard prefers that. `webpack:dev-watch` does **not** stamp, so under the
+watch build the banner can cry wolf.
 
 ## How it works, and the trap that cost the most time
 

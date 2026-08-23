@@ -87,9 +87,86 @@ function render(results) {
   console.log('');
 }
 
+/**
+ * Warn — loudly — when the bundle predates the sources it was built from.
+ *
+ * This tool checks `dist/`, and nothing here builds it. On 2026-08-23 a run
+ * passed 22/22 against a six-hour-old bundle and read as confirmation of a
+ * change that was not in it; the same trap has cost this project hours before.
+ * A warning rather than an automatic rebuild keeps the run fast and keeps this
+ * tool doing one thing, but makes a stale bundle impossible to miss.
+ */
+function warnIfBundleIsStale() {
+  const repoRoot = path.join(__dirname, '..', '..');
+  const bundle = path.join(repoRoot, 'dist', 'KotOR.js');
+  const stamp = path.join(repoRoot, 'dist', '.build-stamp');
+  const sourceRoot = path.join(repoRoot, 'src');
+
+  let bundleMtime;
+  try {
+    bundleMtime = fs.statSync(bundle).mtimeMs;
+  } catch {
+    console.warn('\n  !! dist/KotOR.js is missing — run `npm run webpack:dev` first.\n');
+    return;
+  }
+
+  // Prefer the stamp: webpack's `compareBeforeEmit` defaults to true, so a
+  // rebuild producing byte-identical output leaves the bundle's mtime behind
+  // its sources while being entirely current. `tools/build-stamp.js` is written
+  // on every completed build, so it dates the BUILD rather than the artefact.
+  // Fall back to the bundle when no stamp exists — an older checkout, or a
+  // build run through webpack directly rather than the npm script.
+  let buildMtime = bundleMtime;
+  try {
+    buildMtime = Math.max(bundleMtime, fs.statSync(stamp).mtimeMs);
+  } catch {
+    // No stamp; bundle mtime it is.
+  }
+
+  let newest = { mtimeMs: 0, file: null };
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!/\.(ts|tsx|js|jsx)$/.test(entry.name)) continue;
+      let mtimeMs;
+      try { mtimeMs = fs.statSync(full).mtimeMs; } catch { continue; }
+      if (mtimeMs > newest.mtimeMs) newest = { mtimeMs, file: full };
+    }
+  };
+  walk(sourceRoot);
+
+  // A source file cannot be located means the check cannot speak, and should
+  // say so rather than implying the bundle is fresh.
+  if (!newest.file) {
+    console.warn('\n  !! could not read any source file under src/ — bundle freshness unverified.\n');
+    return;
+  }
+
+  if (newest.mtimeMs <= buildMtime) return;
+
+  const ageMinutes = Math.round((newest.mtimeMs - buildMtime) / 60_000);
+  const relative = path.relative(path.join(__dirname, '..', '..'), newest.file);
+  console.warn(
+    `\n  ${'!'.repeat(72)}\n` +
+    `  !! STALE BUNDLE — dist/KotOR.js is ${ageMinutes} minute(s) older than source.\n` +
+    `  !! newest source: ${relative}\n` +
+    `  !! These results describe the LAST BUILD, not your working tree.\n` +
+    `  !! Run \`npm run webpack:dev\` and check again.\n` +
+    `  ${'!'.repeat(72)}\n`
+  );
+}
+
 (async () => {
   const args = parseArgs(process.argv.slice(2));
   fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
+  warnIfBundleIsStale();
 
   let service = null;
   let url = args.url;

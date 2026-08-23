@@ -108,10 +108,13 @@ resolve against the menu, not an enemy.
 > first placement while the overlay laid its target UI out in screen space.
 >
 > The name plate and health bar live in that overlay. With it unpresented, the
-> route chosen here does not exist. **How the frozen target is shown is reopened
-> and must be decided before 4.8 is implemented.** The remaining candidates are
-> a world-space highlight on the creature, a readout in the wheel's centre hub,
-> or both. Everything else in this document stands.
+> route chosen here does not exist.
+>
+> **Replaced by: a world-space highlight on the creature** (decided
+> 2026-08-23). An outline or reticle drawn on the actual target — fully
+> diegetic, no 2D surface, and unambiguous about *which* enemy, which a name
+> alone cannot settle when two identical troopers are in the room. The wheel's
+> centre hub stays free for cancel. Everything else in this document stands.
 
 ## Hard constraints from the code
 

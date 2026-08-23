@@ -6,9 +6,9 @@
   "scripts": {
     "start": "tsc --project tsconfig.electron.json && electron ./main",
     "start-watch": "tsc-watch --project tsconfig.electron.json --onSuccess \"electron ./main\"",
-    "webpack:dev": "cross-env NODE_ENV=development webpack",
+    "webpack:dev": "cross-env NODE_ENV=development webpack && node tools/build-stamp.js",
     "webpack:dev-watch": "cross-env NODE_ENV=development webpack --watch",
-    "webpack:prod": "cross-env NODE_ENV=production webpack",
+    "webpack:prod": "cross-env NODE_ENV=production webpack && node tools/build-stamp.js",
     "dev": "cross-env NODE_ENV=development webpack serve",
     "electron:watch": "tsc-watch --project tsconfig.electron.json",
     "electron:compile": "tsc --project tsconfig.electron.json",
