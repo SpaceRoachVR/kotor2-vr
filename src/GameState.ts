@@ -2249,6 +2249,23 @@ export class GameState implements EngineContext {
           }
           : null;
       },
+      /**
+       * ROADMAP 4.8. Only a live hostile creature is marked: a wheel opened on
+       * a door, a container, or empty space acts on world routes rather than on
+       * a combat target, and ringing a footlocker would be a lie.
+       *
+       * Dead targets stop being marked too — `isVRCombatTarget` fails closed on
+       * them — so the ring cannot linger on a corpse while the wheel is still up.
+       */
+      getCombatTargetHighlight: (targetId) => {
+        const actor = GameState.getCurrentPlayer();
+        if (!actor) return null;
+        const candidate = resolveVRAimedObject(targetId);
+        if (!candidate || !isVRCombatTarget(actor, candidate)) return null;
+        const position = candidate.position;
+        if (!position) return null;
+        return { id: String(candidate.id), position: position.clone() };
+      },
       getWorldTargetIndicator: () => {
         const hoveredObject = GameState.CursorManager.hoveredObject;
         const selectedObject = GameState.CursorManager.selectedObject;

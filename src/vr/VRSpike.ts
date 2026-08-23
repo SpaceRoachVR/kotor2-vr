@@ -35,6 +35,7 @@ import { VRRecenterHoldGate } from "./runtime/VRRecenterHoldGate";
 import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 import { VRHiltTimerHost } from "./runtime/VRHiltTimerHost";
 import { VRWeaponStanceHost } from "./runtime/VRWeaponStanceHost";
+import { VRCombatTargetHighlightHost, type VRCombatTargetHighlight } from "./runtime/VRCombatTargetHighlightHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
   VRWorldTargetIndicator,
@@ -241,6 +242,12 @@ export interface VRSpikeHooks {
   /** Builds the engine-safe all-purpose action wheel for the current aim. */
   createActionWheel?: (aimedTargetId: number | null) => VRRadialMenuDefinition | null;
   /**
+   * ROADMAP 4.8 — where to draw the world-space highlight for the target the
+   * open wheel is acting on. Returns null unless the id is a live hostile
+   * creature, so a wheel opened on a door or on nothing marks nothing.
+   */
+  getCombatTargetHighlight?: (targetId: number | null) => VRCombatTargetHighlight | null;
+  /**
    * Comfort settings panel (ROADMAP 2.6) — the settings the
    * ToggleLocomotionMode button alone doesn't reach: turn mode, snap-turn
    * angle, and the comfort vignette. Opened from the action wheel; always
@@ -333,6 +340,17 @@ export class VRSpike {
   private static comfortVignetteHost: VRComfortVignetteHost | null = null;
   private static hiltTimerHost: VRHiltTimerHost | null = null;
   private static weaponStanceHost: VRWeaponStanceHost | null = null;
+  private static combatTargetHighlightHost: VRCombatTargetHighlightHost | null = null;
+  private static combatTargetHighlightErrorReported = false;
+  /**
+   * The target the open wheel was built for (ROADMAP 4.8).
+   *
+   * Captured at the instant the wheel opens, not re-read per frame: the wheel
+   * is world-fixed while held and cannot be re-aimed, so the page in front of
+   * the player belongs to whatever was aimed at when it opened. The highlight
+   * has to agree with that or it would point at the wrong creature.
+   */
+  private static radialFrozenTargetId: number | null = null;
   private static weaponStanceErrorReported = false;
   private static blasterLaserHost: VRBlasterLaserHost | null = null;
   private static cutsceneFadeHost: VRCutsceneFadeHost | null = null;
@@ -1933,7 +1951,13 @@ export class VRSpike {
       );
       let openingMenu: VRRadialMenuDefinition | null = null;
       if (menuPressed && !VRSpike.radialMenuPressedLastFrame && !wasOpen) {
-        openingMenu = VRSpike.hooks?.createActionWheel?.(VRSpike.resolveAimedTargetId()) ?? null;
+        // Resolve aim ONCE and use the same value for both the menu and the
+        // highlight. Calling resolveAimedTargetId() twice could return two
+        // different objects if aim drifts between the calls, and the highlight
+        // would then mark a creature the page does not act on.
+        const aimedTargetId = VRSpike.resolveAimedTargetId();
+        openingMenu = VRSpike.hooks?.createActionWheel?.(aimedTargetId) ?? null;
+        VRSpike.radialFrozenTargetId = openingMenu ? aimedTargetId : null;
       }
       VRSpike.radialMenuPressedLastFrame = menuPressed;
 
@@ -1968,7 +1992,9 @@ export class VRSpike {
         if (presentationHost && openingHeadPose) presentationHost.present(presentation, openingHeadPose);
       } else {
         VRSpike.radialMenuHost?.clear();
+        VRSpike.radialFrozenTargetId = null;
       }
+      VRSpike.updateCombatTargetHighlight();
       return wasOpen || VRSpike.radialMenuController.isOpen || menuPressed || effects.length > 0;
     } catch (error) {
       VRSpike.closeRadialMenuForLifecycle(false);
@@ -2952,6 +2978,41 @@ export class VRSpike {
       if (!VRSpike.panelPresentationErrorReported) {
         VRSpike.panelPresentationErrorReported = true;
         console.error('[VRSpike] panel presentation rejected', error);
+      }
+    }
+  }
+
+  /**
+   * ROADMAP 4.8 — marks the creature the open wheel is acting on.
+   *
+   * Driven from the frozen target rather than live aim, matching the wheel
+   * itself. Shows nothing when the wheel is closed, or when it was opened on a
+   * door, a container, or empty space.
+   */
+  private static updateCombatTargetHighlight(): void {
+    const worldScene = VRSpike.scene;
+    const frozenTargetId = VRSpike.radialMenuController.isOpen
+      ? VRSpike.radialFrozenTargetId
+      : null;
+    if (!worldScene || frozenTargetId === null) {
+      VRSpike.combatTargetHighlightHost?.clear();
+      return;
+    }
+    try {
+      const highlight = VRSpike.hooks?.getCombatTargetHighlight?.(frozenTargetId) ?? null;
+      if (!highlight) {
+        VRSpike.combatTargetHighlightHost?.clear();
+        return;
+      }
+      if (!VRSpike.combatTargetHighlightHost) {
+        VRSpike.combatTargetHighlightHost = new VRCombatTargetHighlightHost(worldScene);
+      }
+      VRSpike.combatTargetHighlightHost.present(highlight);
+    } catch (error) {
+      VRSpike.combatTargetHighlightHost?.clear();
+      if (!VRSpike.combatTargetHighlightErrorReported) {
+        VRSpike.combatTargetHighlightErrorReported = true;
+        console.error('[VRSpike] combat target highlight rejected', error);
       }
     }
   }
