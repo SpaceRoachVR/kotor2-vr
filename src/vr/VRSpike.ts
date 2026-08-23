@@ -11,6 +11,7 @@ import { LocomotionController, ResolvedLocomotion } from "./runtime/LocomotionCo
 import { VRPanelHost } from "./runtime/VRPanelHost";
 import type { LegacyPanelRenderLayer } from "./runtime/VRPanelHost";
 import { VRPanelPointerHost } from "./runtime/VRPanelPointerHost";
+import { VRPointerHandResolver } from "./runtime/VRPointerHandResolver";
 import { VRKeyboardHost } from "./runtime/VRKeyboardHost";
 import { VRKeyboardInputController } from "./runtime/VRKeyboardInputController";
 import { VR_KEYBOARD_DONE_KEY } from "./runtime/VRKeyboardLayout";
@@ -352,9 +353,12 @@ export class VRSpike {
   private static readonly radialMenuController = new VRRadialMenuController();
   private static readonly haptics = new VRHapticFeedback();
   private static radialMenuHost: VRRadialMenuHost | null = null;
+  private static readonly radialRayHand = new VRPointerHandResolver();
   private static radialOpeningHeadPose: XRWorldPose | null = null;
   private static radialMenuPressedLastFrame = false;
   private static comfortSettingsHost: VRComfortSettingsHost | null = null;
+  private static comfortSettingsPointerHost: VRPanelPointerHost | null = null;
+  private static readonly comfortSettingsPointerHand = new VRPointerHandResolver();
   private static comfortSettingsSelectHeld = false;
   private static comfortSettingsCancelHeld = false;
   private static keyboardSelectHeld = false;
@@ -1291,7 +1295,7 @@ export class VRSpike {
     const session = VRSpike.session;
     const scene = VRSpike.scene;
     if (!context || !inputFrame || !session || !scene) {
-      VRSpike.comfortSettingsHost?.clear();
+      VRSpike.clearComfortSettingsPointer();
       VRSpike.comfortSettingsSelectHeld = false;
       VRSpike.comfortSettingsCancelHeld = false;
       return false;
@@ -1309,22 +1313,68 @@ export class VRSpike {
       );
       const cancelPressed = actions.some((action) => action.action === SemanticXRAction.Cancel && action.pressed);
 
-      if (selectPressed && !VRSpike.comfortSettingsSelectHeld) {
-        const rayPose = inputFrame.hands.right?.targetRayPose;
-        const row = rayPose ? VRSpike.comfortSettingsHost.rowAtRay(rayPose) : null;
-        if (row !== null) context.activateRow(row);
+      // The panel was hit-tested from the right controller only and drew no
+      // ray, so the player had no way to see where they were aiming and the
+      // left hand did nothing at all — the panel read as inert. Resolve the
+      // row from whichever hand is actually on it, and draw that hand's ray.
+      const panel = VRSpike.comfortSettingsHost.object;
+      const resolution = VRSpike.comfortSettingsPointerHand.resolve(
+        inputFrame,
+        (pose) => VRSpike.comfortSettingsHost?.rowAtRay(pose) ?? null,
+      );
+      VRSpike.drawComfortSettingsPointer(scene, panel, resolution?.pose ?? VRSpike.anyTrackedRay(inputFrame));
+
+      if (selectPressed && !VRSpike.comfortSettingsSelectHeld && resolution) {
+        context.activateRow(resolution.hit);
       }
       VRSpike.comfortSettingsSelectHeld = selectPressed;
 
       if (cancelPressed && !VRSpike.comfortSettingsCancelHeld) context.close();
       VRSpike.comfortSettingsCancelHeld = cancelPressed;
     } catch (error) {
-      VRSpike.comfortSettingsHost?.clear();
+      VRSpike.clearComfortSettingsPointer();
       VRSpike.comfortSettingsSelectHeld = false;
       VRSpike.comfortSettingsCancelHeld = false;
       console.error('[VRSpike] comfort settings panel input rejected', error);
     }
     return true;
+  }
+
+  /**
+   * Draws the comfort panel's ray from the pointing hand, falling back to any
+   * tracked ray so the player can see where they are aiming even while off the
+   * panel — a ray that appears only once it already hits teaches nothing.
+   */
+  private static drawComfortSettingsPointer(
+    scene: THREE.Scene,
+    panel: THREE.Object3D,
+    pose: XRWorldPose | null,
+  ): void {
+    if (!pose) {
+      VRSpike.comfortSettingsPointerHost?.clear();
+      return;
+    }
+    if (!VRSpike.comfortSettingsPointerHost) {
+      VRSpike.comfortSettingsPointerHost = new VRPanelPointerHost(scene);
+    }
+    // The panel resolves its own rows; only the ray and cursor are wanted here,
+    // so the viewport is a unit square and the GUI position is discarded.
+    VRSpike.comfortSettingsPointerHost.update(panel, pose, 1, 1);
+  }
+
+  private static anyTrackedRay(inputFrame: XRInputFrame): XRWorldPose | null {
+    for (const hand of ['right', 'left'] as const) {
+      const pose = inputFrame.hands[hand]?.targetRayPose;
+      if (pose?.trackingState === 'tracked') return pose;
+    }
+    return null;
+  }
+
+  /** Tears down the comfort panel and its pointer together. */
+  private static clearComfortSettingsPointer(): void {
+    VRSpike.comfortSettingsHost?.clear();
+    VRSpike.comfortSettingsPointerHost?.clear();
+    VRSpike.comfortSettingsPointerHand.reset();
   }
 
   /** Removes the legacy GUI cursor before another surface takes input ownership. */
@@ -1845,10 +1895,13 @@ export class VRSpike {
       VRSpike.radialMenuPressedLastFrame = menuPressed;
 
       const host = VRSpike.radialMenuHost;
-      const leftRayPose = inputFrame.hands.left?.targetRayPose;
-      const rayHit = wasOpen && host && leftRayPose?.trackingState === 'tracked'
-        ? host.resolveRay(leftRayPose)
+      // Either hand may aim at the wheel. Binding the ray to one controller is
+      // invisible to the player, so the other hand reads as a dead pointer.
+      const rayResolution = wasOpen && host
+        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose))
         : null;
+      if (!rayResolution) VRSpike.radialRayHand.reset();
+      const rayHit = rayResolution?.hit ?? null;
       const touchHits = wasOpen && host
         ? {
           left: VRSpike.resolveRadialTouch(host, inputFrame.hands.left?.targetRayPose),

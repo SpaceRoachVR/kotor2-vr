@@ -996,10 +996,13 @@ describe('VRSpike XR loop ownership', () => {
     } as unknown as XRSession;
     (VRSpike as any).latestInputFrame = {
       head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
-      hands: { right: { targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() } } },
+      hands: { right: { targetRayPose: {
+        position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked',
+      } } },
     };
     (VRSpike as any).comfortSettingsHost = {
       clear: jest.fn(), present: jest.fn(), rowAtRay: jest.fn(() => 2),
+      object: new THREE.Mesh(new THREE.PlaneGeometry(1, 1)),
     };
     const rows = [
       { label: 'Movement', value: 'Smooth' },
@@ -1574,7 +1577,32 @@ describe('VRSpike XR loop ownership', () => {
     expect(setPaused).not.toHaveBeenCalled();
   });
 
-  test('confirms the current left-ray hit once and clears the host before engine activation', () => {
+  test('the action wheel takes its ray from whichever hand is aiming at it', () => {
+    // Reported from the second headset session: "radial menu should accept ray
+    // pointer selection from either hand, not just left". The wheel resolved
+    // its ray from the left controller alone, and nothing on screen said so, so
+    // aiming with the right hand read as a dead pointer.
+    for (const aiming of ['left', 'right'] as const) {
+      const activate = jest.fn();
+      const input = installRadialInput();
+      const aimedPose = aiming === 'left' ? input.leftTargetRayPose : input.rightTargetRayPose;
+      const host = installRadialHost({ rayHit: { kind: 'entry', index: 0 } });
+      // Only the aiming hand's ray lands on a wedge; the other one misses.
+      host.resolveRay.mockImplementation(
+        (pose: unknown) => (pose === aimedPose ? { kind: 'entry', index: 0 } : null)
+      );
+      VRSpike.hooks = basicHooks({ createActionWheel: () => actionWheel(activate) });
+
+      input.leftButtons[4] = pressedButton();
+      (VRSpike as any).processRadialMenuInput();
+      input.leftButtons[0] = pressedButton();
+      (VRSpike as any).processRadialMenuInput();
+
+      expect(activate).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  test('confirms the current ray hit once and clears the host before engine activation', () => {
     const activate = jest.fn();
     const input = installRadialInput();
     const host = installRadialHost({
@@ -1588,7 +1616,9 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).processRadialMenuInput();
     (VRSpike as any).processRadialMenuInput();
 
-    expect(host.resolveRay).toHaveBeenCalledWith(input.leftTargetRayPose);
+    // Either hand may own the ray, so this no longer pins a controller —
+    // see the sibling test for the either-hand rule itself.
+    expect(host.resolveRay).toHaveBeenCalled();
     expect(activate).toHaveBeenCalledTimes(1);
     const activationOrder = activate.mock.invocationCallOrder[0];
     expect(host.clear.mock.invocationCallOrder.some((callOrder: number) => callOrder < activationOrder)).toBe(true);
