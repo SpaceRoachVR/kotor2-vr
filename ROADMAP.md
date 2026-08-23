@@ -733,9 +733,8 @@ Every button reachable in flatscreen needs a VR route.
 
   `Pause` toggles the engine's own pause on the dominant B button.
 
-- **4.8** ◐ **Combat radial redesign** — wheel restructure ✅ implemented
-  2026-08-23 (jest 731/731, vr:check 24/24); stance model, weapon stance
-  readout, and target highlight ☐ outstanding. Design agreed 2026-08-23. Headset
+- **4.8** ✅ implemented 2026-08-23 / ☐ headset-accepted — **Combat radial
+  redesign** (jest 757/757, vr:check 24/24). Headset
   session 2 recorded that combat actions on the wheel "were a mistake and need a
   different route." The route is still the wheel — what was wrong is that
   `buildVRActionWheel` flat-dumps `targetActions`/`selfActions` at the top level
@@ -761,12 +760,25 @@ Every button reachable in flatscreen needs a VR route.
   entirely, so the readout has no surface there. It is now a **world-space
   highlight on the creature** instead.
 
-  **Still outstanding:**
-  - Persistent attack-mode stance, changed between rounds and applying to the
-    next round, replacing the flat game's one-attack-per-selection queueing.
-  - Stance readout beside the diegetic round timer on the weapon — hilt for
-    sabers, blaster body for ranged, with the timer moving there too.
-  - World-space target highlight.
+  **Also implemented:**
+  - Persistent attack-mode stance (`VRAttackStanceController`), changed between
+    rounds and applying to the next one. The round boundary is *detected* — a
+    `CombatRound.timer` that went backwards is a new round — so the engine needs
+    no hook. Guarded against three quiet failures: Bash on a door is also
+    `ActionPhysicalAttacks` in target panel 0 and must not be swallowed;
+    `getFeats()` is not weapon-filtered, so the stance is re-resolved per swing
+    against `getEquippedWeaponType()`; and a non-finite timer is ignored rather
+    than coerced to 0, which would look like a round reset.
+  - Stance readout on the weapon beside the round timer
+    (`VRWeaponStanceHost`). The ring already covered both weapon types — it
+    clears only for `unarmed` — so ranged needed no separate anchor.
+  - World-space target highlight (`VRCombatTargetHighlightHost`): a flat ring at
+    the frozen target's feet, replacing the name-plate route that the
+    `InGameOverlay` removal took away.
+
+  **Not settled by emulation:** stance-plaque legibility through lenses, and
+  whether the round-queued stance *reads* correctly in a live fight. Both need
+  the headset.
 
   Full spec, constraints, and wedge-geometry rationale: `COMBAT-RADIAL-REDESIGN.md`.
 

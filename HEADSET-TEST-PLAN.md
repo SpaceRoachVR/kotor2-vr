@@ -259,6 +259,13 @@ physically unpleasant rather than merely wrong.
 | F6 | Force push / pull flick | Gesture registers; targets the thing you are looking at, not a stale target |
 | F7 | Cancel an attack mid-round | Cancel is not skipped when the target stops qualifying |
 | F8 | Complete a Peragus encounter start to finish | d20 layer intact; **Phase 3 exit criterion** |
+| F10 | Wheel → **Attacks** with a hostile aimed at | Lists Attack plus only the attack modes for the **equipped** weapon. Nothing fires — the page arms a stance |
+| F11 | Pick Flurry mid-fight, then watch the next two rounds | The round in progress still swings as before; the change takes effect on the **next** round |
+| F12 | Read the stance plaque on the hilt | Legible through the lenses at a natural grip. Names the active stance, and both sides as `ACTIVE → PENDING` while a change waits. **Legibility cannot be emulated — this is the check that matters** |
+| F13 | Arm a melee stance, then swap to a blaster | Stance degrades to a plain attack rather than attacking with an illegal feat; plaque follows the weapon to the blaster body |
+| F14 | Open the wheel aimed at one of two identical enemies | A ring marks **the one the page acts on**, visible even if it steps behind cover |
+| F15 | Open the wheel aimed at a door, a container, and empty space | No ring. Kill a target with the wheel still up — the ring stops marking the corpse |
+| F16 | Wheel → **Force Powers** | Lists only powers the engine says are available. **Known gap:** no Force-point affordability or range check, so an unaffordable power still lists. Invisible on Peragus; note it if it bites |
 
 ## G. Cutscenes and dialogue (Phase 5)
 

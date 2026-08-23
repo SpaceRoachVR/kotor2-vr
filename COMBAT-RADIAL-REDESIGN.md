@@ -1,8 +1,11 @@
 # Combat radial redesign (ROADMAP 4.8)
 
-**Status:** design agreed 2026-08-23. Wheel restructure **implemented** the same
-day (jest 731/731, vr:check 24/24). Stance model, weapon stance readout, and
-target highlight still outstanding. Supersedes the combat half of 4.1.
+**Status:** design agreed and **fully implemented** 2026-08-23 (jest 757/757,
+vr:check 24/24). Not headset-accepted. Supersedes the combat half of 4.1.
+
+Implemented across `VRActionWheelModelBuilder` (wheel structure),
+`VRAttackStanceController` (stance), `VRWeaponStanceHost` (readout) and
+`VRCombatTargetHighlightHost` (target ring).
 
 Session 2 of the headset testing recorded "combat actions on the radial were a
 mistake and need a different route — a design conversation, not a fix." This is
