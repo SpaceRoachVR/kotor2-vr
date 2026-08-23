@@ -2953,3 +2953,76 @@ function flattenPromptActions(model: any): readonly GameStatePromptTestAction[] 
     page.entries.filter((entry: any) => entry.kind === 'action')
   );
 }
+
+describe('world prompt rule against the real Ebon Hawk door profiles', () => {
+  // Flag profiles taken from an emulator survey of 001EBO's eleven doors, so
+  // these exercise combinations that actually ship rather than invented ones.
+  function doorLabels(
+    options: { locked?: boolean; keyRequired?: boolean; notBlastable?: boolean },
+    authored: readonly Record<string, unknown>[],
+  ): readonly string[] | null {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 77,
+      name: 'Door',
+      objectType: harness.objectTypes.ModuleDoor,
+      ...options,
+    });
+    harness.setTargets([door], authored);
+    // buildPrompt returns null when an object offers nothing at all.
+    const model = harness.buildPrompt('module-object:77');
+    return model ? flattenPromptActions(model).map((a) => a.label) : null;
+  }
+
+  test('a door offering Security does not also offer a redundant Use', () => {
+    // Door 199 in the survey: locked, DC 21, offered Security alone. Security
+    // is a real authored open route, so a generic Use would duplicate it.
+    const harness = createGameStateWorldPromptHarness();
+    const labels = doorLabels({ locked: true }, [harness.entry('isk_security')]);
+
+    expect(labels).toContain('Security');
+    expect(labels).not.toContain('Use: Door');
+  });
+
+  test('an unbreakable key-required door offers no prompt at all', () => {
+    // The Blast Doors and garage doors: locked, key-required, not blastable,
+    // DC 100. Nothing the player can do without the key.
+    expect(doorLabels({ locked: true, keyRequired: true, notBlastable: true }, [])).toBeNull();
+  });
+
+  test('an unlocked key-required door offers no direct use', () => {
+    // Main Hold Door: key-required but not locked. Direct use fails closed.
+    expect(doorLabels({ keyRequired: true }, [])).toBeNull();
+  });
+
+  test('KNOWN GAP: a locked bashable door offers Bash but no way to simply try it', () => {
+    // Reported from the second headset session as "doors with no security
+    // option show bash but not use", and reproduced here.
+    //
+    // `classifySafeDirectVRWorldUse` has two gates that suppress the generic
+    // route: a non-zero authored action count, and `isLocked()`. An earlier fix
+    // excluded Bash from the *count* precisely so that "the player could never
+    // simply try the door, which flatscreen allows" would stop happening — but
+    // the lock gate still refuses, so that fix never achieved its stated goal.
+    //
+    // This asserts the behaviour as it currently stands rather than as intended,
+    // because loosening a lock guard is a deliberate design call: the module's
+    // whole purpose is not to steal ownership from locks, keys and authored
+    // actions. Flip this test when that call is made.
+    const harness = createGameStateWorldPromptHarness();
+    const labels = doorLabels({ locked: true }, [harness.entry('iaction_attack')]);
+
+    expect(labels).toContain('Bash');
+    expect(labels).not.toContain('Use: Door');
+  });
+
+  test('an unlocked bashable door does let the player simply try it', () => {
+    // The same shape without the lock: here the generic route survives, which
+    // is why the existing coverage passed and the gap above went unnoticed.
+    const harness = createGameStateWorldPromptHarness();
+    const labels = doorLabels({}, [harness.entry('iaction_attack')]);
+
+    expect(labels).toContain('Bash');
+    expect(labels).toContain('Use: Door');
+  });
+});

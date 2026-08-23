@@ -342,44 +342,95 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     onProgress('menu wiring');
 
     // --- world prompt survey ------------------------------------------------
-    // Builds the prompt for every selectable object in the module and records
-    // what it offers. Reported from the second headset session: "doors with no
-    // security option show bash but not use", and Security/tunneler failing on
-    // containers that should accept them. A survey answers both with data
-    // instead of guesswork about which object misbehaved.
+    // Builds the prompt for every eligible object and records what it offers.
+    // Reported from the second headset session: "doors with no security option
+    // show bash but not use", and Security/tunneler failing on containers that
+    // should accept them. A survey answers both with data rather than guessing
+    // which object misbehaved — there is already a passing unit test asserting
+    // Use appears alongside Bash, so the real objects differ from the synthetic
+    // case somehow.
+    //
+    // Candidates are flat DTOs (id, name, actorDistanceMetres, hasActions,
+    // inRange); the underlying engine object is resolved separately by id for
+    // the lock flags.
     metrics.promptSurvey = await harness.evaluate(`(() => {
-      const V = window.KotOR.VRSpike;
-      const context = V && V.hooks && V.hooks.getWorldActionPromptContext
-        ? V.hooks.getWorldActionPromptContext() : null;
-      if (!context) return { error: 'no world prompt context' };
+      const K = window.KotOR;
+      const area = K.GameState.module && K.GameState.module.area;
+      const player = K.PartyManager && K.PartyManager.Player;
+      if (!area || !player) return { error: 'no area or player' };
 
+      const build = K.buildVRWorldActionPrompt;
+      if (typeof build !== 'function') return { error: 'buildVRWorldActionPrompt not exported' };
+
+      // Every action is gated by isLiveVRWorldPromptCandidate, which recomputes
+      // the candidate from live state — so a synthesised in-range candidate is
+      // rejected and a distant object reports nothing. The only truthful way to
+      // ask "what would this object offer" is to stand next to it. Position is
+      // restored afterwards.
+      const home = player.position.clone();
+      const safe = (fn, fallback) => { try { return fn(); } catch (e) { return fallback; } };
       const rows = [];
-      for (const candidate of context.candidates || []) {
-        let labels = [];
-        let error = null;
-        try {
-          const model = context.createPrompt(candidate);
-          const pages = (model && model.pages) || [];
-          labels = pages.flatMap(page => (page.entries || [])
-            .filter(e => e && e.kind === 'action')
-            .map(e => e.label));
-        } catch (e) {
-          error = String(e && e.message || e);
+
+      try {
+        for (const [kind, pool] of [['door', area.doors || []], ['placeable', area.placeables || []]]) {
+          for (const raw of pool) {
+            if (!raw || raw.id == null || !raw.position) continue;
+            // Prompt building is gated on playerSelectableObjects, a live pool
+            // the engine refreshes in its own update loop. A synchronous probe
+            // cannot widen it, so an object outside the pool reports nothing —
+            // which is "not sampled", not "offers no actions". Say which.
+            const pool = K.GameState.ModuleObjectManager.playerSelectableObjects || [];
+            const sampled = pool.includes(raw);
+            player.position.set(raw.position.x + 1.0, raw.position.y, raw.position.z);
+            let labels = [];
+            let error = null;
+            if (!sampled) {
+              rows.push({
+                id: raw.id,
+                kind,
+                name: safe(() => raw.getName(), null),
+                locked: safe(() => !!raw.isLocked(), null),
+                keyRequired: !!raw.keyRequired,
+                notBlastable: !!raw.notBlastable,
+                openLockDC: raw.openLockDC != null ? raw.openLockDC : null,
+                sampled: false,
+              });
+              continue;
+            }
+            try {
+              const model = build('module-object:' + raw.id);
+              labels = ((model && model.pages) || []).flatMap(page =>
+                (page.entries || []).filter(e => e && e.kind === 'action').map(e => e.label));
+            } catch (e) {
+              error = String(e && e.message || e);
+            }
+            rows.push({
+              id: raw.id,
+              kind,
+              name: safe(() => raw.getName(), null),
+              locked: safe(() => !!raw.isLocked(), null),
+              keyRequired: !!raw.keyRequired,
+              notBlastable: !!raw.notBlastable,
+              openLockDC: raw.openLockDC != null ? raw.openLockDC : null,
+              sampled: true,
+              labels,
+              ...(error ? { error } : {}),
+            });
+          }
         }
-        const t = candidate && candidate.target;
-        rows.push({
-          id: t && t.id,
-          name: (t && t.getName && (() => { try { return t.getName(); } catch (e) { return null; } })()) || null,
-          isDoor: !!(t && t.objectType && (t.objectType & 8)),
-          locked: !!(t && t.isLocked && (() => { try { return t.isLocked(); } catch (e) { return false; } })()),
-          keyRequired: !!(t && t.keyRequired),
-          notBlastable: !!(t && t.notBlastable),
-          labels,
-          ...(error ? { error } : {}),
-        });
+      } finally {
+        player.position.copy(home);
       }
-      return { total: rows.length, rows };
-    })()`, { timeoutMs: 60000 });
+
+      rows.sort((a, b) => a.id - b.id);
+      return {
+        total: rows.length,
+        sampled: rows.filter(r => r.sampled).length,
+        doors: (area.doors || []).length,
+        placeables: (area.placeables || []).length,
+        rows,
+      };
+    })()`, { timeoutMs: 120000 });
     onProgress('world prompt survey');
 
     // --- wheel menu routes open without throwing ----------------------------
