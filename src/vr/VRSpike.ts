@@ -26,6 +26,8 @@ import { getVRInteractionRange } from "./runtime/VRWorldUseAdapter";
 import { GamePad } from "@/controls/GamePad";
 import { VRSnapTurnController } from "./runtime/VRSnapTurnController";
 import { VRTeleportController } from "./runtime/VRTeleportController";
+import { VRTeleportMarkerHost } from "./runtime/VRTeleportMarkerHost";
+import { resolveVRTeleportAim } from "./runtime/VRTeleportAimResolver";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
@@ -312,6 +314,8 @@ export class VRSpike {
   private static readonly locomotionController = new LocomotionController();
   private static readonly snapTurnController = new VRSnapTurnController();
   private static readonly teleportController = new VRTeleportController();
+  private static teleportMarkerHost: VRTeleportMarkerHost | null = null;
+  private static readonly teleportAimHand = new VRPointerHandResolver();
   private static locomotionModeToggleHeld = false;
   private static readonly recenterHoldGate = new VRRecenterHoldGate();
   private static walkRunToggleHeld = false;
@@ -659,6 +663,7 @@ export class VRSpike {
     VRSpike.forceGestureController.reset();
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
+    VRSpike.clearTeleportMarker();
     VRSpike.locomotionModeToggleHeld = false;
     VRSpike.recenterHoldGate.reset();
     VRSpike.walkRunToggleHeld = false;
@@ -736,6 +741,7 @@ export class VRSpike {
     VRSpike.forceGestureController.reset();
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
+    VRSpike.clearTeleportMarker();
     VRSpike.locomotionModeToggleHeld = false;
     VRSpike.recenterHoldGate.reset();
     VRSpike.walkRunToggleHeld = false;
@@ -2276,6 +2282,7 @@ export class VRSpike {
         VRSpike.updateComfortVignette(0);
       } else {
         VRSpike.teleportController.reset();
+    VRSpike.clearTeleportMarker();
         applyLocomotion(resolvedLocomotion);
         // Discrete comfort modes (snap turn) don't need the vignette — it's
         // a mitigation for continuous vection, not instant reorientation.
@@ -2309,29 +2316,67 @@ export class VRSpike {
    */
   private static processTeleportLocomotion(
     rawMoveAxes: THREE.Vector2,
-    headWorldOrientation: THREE.Quaternion
+    _headWorldOrientation: THREE.Quaternion
   ): void {
     const result = VRSpike.teleportController.process(rawMoveAxes);
-    if (result.phase !== 'committed' || !result.direction) return;
+    if (result.phase === 'idle') {
+      VRSpike.clearTeleportMarker();
+      return;
+    }
 
     const feet = VRSpike.hooks?.getPlayerPosition() ?? null;
     const walkmesh = VRSpike.hooks?.getCurrentRoomWalkmesh?.() ?? null;
     const teleportPlayer = VRSpike.hooks?.teleportPlayer;
-    if (!feet || !walkmesh || !teleportPlayer) return;
+    const inputFrame = VRSpike.latestInputFrame;
+    if (!feet || !walkmesh || !teleportPlayer || !inputFrame) {
+      VRSpike.clearTeleportMarker();
+      return;
+    }
 
-    const headFacing = LocomotionController.worldOrientationToCreatureFacing(headWorldOrientation);
-    const worldDirection = result.direction
-      .clone()
-      .rotateAround(new THREE.Vector2(0, 0), headFacing);
-    const candidate = feet.clone().addScaledVector(
-      new THREE.Vector3(worldDirection.x, worldDirection.y, 0),
-      VRSpike.teleportController.maxDistanceMetres
+    // The destination comes from wherever a hand is pointing, not from the
+    // stick bearing. The stick only gates the aim, so the player still holds to
+    // aim and releases to go — but they now choose the distance by pointing,
+    // and can see the spot before committing to it.
+    const aimed = VRSpike.teleportAimHand.resolve(inputFrame, (pose) =>
+      resolveVRTeleportAim({
+        rayPose: pose,
+        feet,
+        maxDistanceMetres: VRSpike.teleportController.maxDistanceMetres,
+      })
     );
+    if (!aimed) {
+      VRSpike.clearTeleportMarker();
+      return;
+    }
 
-    const target = walkmesh.isPointWalkable(candidate)
-      ? candidate
-      : walkmesh.getNearestWalkablePoint(candidate);
-    teleportPlayer(target);
+    const candidate = aimed.hit.point;
+    const walkable = walkmesh.isPointWalkable(candidate);
+
+    if (result.phase === 'aiming') {
+      VRSpike.presentTeleportMarker(aimed.pose.position, candidate, walkable);
+      return;
+    }
+
+    VRSpike.clearTeleportMarker();
+    // A blocked aim still lands the player somewhere legal rather than
+    // swallowing the input: silently doing nothing reads as a broken control.
+    teleportPlayer(walkable ? candidate : walkmesh.getNearestWalkablePoint(candidate));
+  }
+
+  private static presentTeleportMarker(
+    origin: THREE.Vector3,
+    destination: THREE.Vector3,
+    walkable: boolean,
+  ): void {
+    const scene = VRSpike.scene;
+    if (!scene) return;
+    if (!VRSpike.teleportMarkerHost) VRSpike.teleportMarkerHost = new VRTeleportMarkerHost(scene);
+    VRSpike.teleportMarkerHost.present(new THREE.Vector3().copy(origin), destination, walkable);
+  }
+
+  private static clearTeleportMarker(): void {
+    VRSpike.teleportMarkerHost?.clear();
+    VRSpike.teleportAimHand.reset();
   }
 
   /**

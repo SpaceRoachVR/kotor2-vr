@@ -1073,7 +1073,12 @@ describe('VRSpike XR loop ownership', () => {
     expect((VRSpike as any).turnYaw).toBeCloseTo(-THREE.MathUtils.degToRad(45));
   });
 
-  test('blink-teleport commits a walkmesh-clamped relocation on stick release', () => {
+  test('blink-teleport aims with the controller ray and commits on stick release', () => {
+    // Reported from the second headset session: "blink needs ray pointer".
+    // Blink used to take its bearing from the stick and always travel exactly
+    // maxDistanceMetres with nothing drawn, so the player could neither choose
+    // a distance nor see where they would land. The stick now only gates the
+    // aim; the destination comes from wherever a hand points.
     const referenceSpace = {} as XRReferenceSpace;
     const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
     const axes = [0, 0, 0, -1];
@@ -1082,9 +1087,28 @@ describe('VRSpike XR loop ownership', () => {
     } as unknown as XRInputSource;
     VRSpike.renderer = { xr: { getReferenceSpace: () => referenceSpace } } as never;
     VRSpike.session = { inputSources: [offhand] } as unknown as XRSession;
+    VRSpike.scene = new THREE.Scene();
     VRSpike.rig = new THREE.Group();
     XRCoordinateConverter.applyXRToGameBasis(VRSpike.rig);
+
+    // A left hand held at 1.2 m, aimed 45 degrees below the horizon along +Y,
+    // so it meets the floor 1.2 m ahead of the player's feet.
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+      hands: {
+        left: {
+          targetRayPose: {
+            position: new THREE.Vector3(0, 0, 1.2),
+            orientation: new THREE.Quaternion()
+              .setFromEuler(new THREE.Euler(Math.PI / 2 - Math.PI / 4, 0, 0, 'XYZ')),
+            trackingState: 'tracked',
+          },
+        },
+      },
+    };
+
     const teleported: THREE.Vector3[] = [];
+    let walkable = true;
     const nearestWalkablePoint = new THREE.Vector3(0, 3, 0);
     VRSpike.hooks = {
       update: () => undefined,
@@ -1095,7 +1119,7 @@ describe('VRSpike XR loop ownership', () => {
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getComfortSettings: () => ({ locomotionMode: 'blink', turnMode: 'smooth', snapTurnDegrees: 45, vignetteEnabled: false }),
       getCurrentRoomWalkmesh: () => ({
-        isPointWalkable: () => false,
+        isPointWalkable: () => walkable,
         getNearestWalkablePoint: () => nearestWalkablePoint,
       }),
       teleportPlayer: (point) => teleported.push(point.clone()),
@@ -1106,17 +1130,32 @@ describe('VRSpike XR loop ownership', () => {
       }),
     } as unknown as XRFrame;
 
-    // Deflect forward to aim — no teleport yet.
+    // Deflect to aim: no teleport yet, but the marker must now be showing the
+    // landing spot — that preview is the whole point of the change.
     (VRSpike as any).processLocomotionInput(1000, frame);
     expect(teleported).toHaveLength(0);
+    const marker = (VRSpike as any).teleportMarkerHost;
+    expect(marker.markerObject.visible).toBe(true);
+    expect(marker.markerObject.position.y).toBeCloseTo(1.2, 5);
 
-    // Release — commits, clamped to the mocked nearest walkable point since
-    // the raw candidate is reported unwalkable.
+    // Release commits to the aimed point, not to maximum range.
     axes[3] = 0;
     (VRSpike as any).processLocomotionInput(1016, frame);
     expect(teleported).toHaveLength(1);
-    expect(teleported[0].x).toBeCloseTo(nearestWalkablePoint.x);
-    expect(teleported[0].y).toBeCloseTo(nearestWalkablePoint.y);
+    expect(teleported[0].y).toBeCloseTo(1.2, 5);
+    expect(teleported[0].z).toBeCloseTo(0, 5);
+    // The marker must not linger after the player has arrived.
+    expect(marker.markerObject.visible).toBe(false);
+
+    // An unwalkable aim still relocates, clamped: swallowing the input
+    // silently would read as a broken control.
+    walkable = false;
+    axes[3] = -1;
+    (VRSpike as any).processLocomotionInput(1032, frame);
+    axes[3] = 0;
+    (VRSpike as any).processLocomotionInput(1048, frame);
+    expect(teleported).toHaveLength(2);
+    expect(teleported[1].y).toBeCloseTo(nearestWalkablePoint.y);
   });
 
   test('updates 6DoF controller anchors and hides them when tracking is lost', () => {
