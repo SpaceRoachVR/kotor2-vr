@@ -100,11 +100,18 @@ name plate and health bar, through the existing `setVRSelectedObject` /
 your hand is pointing at the *wheel* when you confirm, so a live re-read would
 resolve against the menu, not an enemy.
 
-**Sequencing constraint:** that plate and bar live in `InGameOverlay`, and "a
-full-size 2D UI persists after any interaction or cutscene" is still open from
-headset session 2. The persistent-2D-UI defect is fixed **first**; the target
-display is wired onto it afterwards. Do not build the target display on an
-untrustworthy surface, and do not confound the two in one headset run.
+> **SUPERSEDED 2026-08-23 — this decision no longer has a surface.**
+>
+> The persistent-2D-UI defect was diagnosed the same day and its resolution was
+> to stop presenting `InGameOverlay` in VR entirely
+> (`INGAME_OVERLAY_PANEL_ENABLED = false`), because the panel world-locked on
+> first placement while the overlay laid its target UI out in screen space.
+>
+> The name plate and health bar live in that overlay. With it unpresented, the
+> route chosen here does not exist. **How the frozen target is shown is reopened
+> and must be decided before 4.8 is implemented.** The remaining candidates are
+> a world-space highlight on the creature, a readout in the wheel's centre hub,
+> or both. Everything else in this document stands.
 
 ## Hard constraints from the code
 

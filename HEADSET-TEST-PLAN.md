@@ -74,7 +74,20 @@ visible before it hits anything, and blink lands where the marker sat.
 
 ### Open — other
 
-- A full-size 2D UI persists after any interaction or cutscene, and shows combat entered after pausing
+- ~~A full-size 2D UI persists after any interaction or cutscene, and shows
+  combat entered after pausing~~ **Fixed 2026-08-23.** Not a leak — the G2/G3
+  overlay reprojection working as built. `VRPanelHost.place()` runs only when the
+  panel's owner changes, and the owner is the same `InGameOverlay` singleton every
+  frame, so the panel was placed once and world-locked; the material is
+  `transparent`, so it stayed invisible until the overlay drew content, which
+  needs `CursorManager.selectedObject` — hence "appears after interacting". And
+  the overlay lays its target UI out in **screen space** at the selected object's
+  projected position, so the contents jumped to each new target. The overlay is no
+  longer presented in VR at all (`INGAME_OVERLAY_PANEL_ENABLED = false`); its
+  screens are reached through the wheel's Menu route. Covered by the
+  `overlay-not-reprojected` check, which fails rather than passes vacuously if the
+  overlay was never eligible. **Retest:** confirm no panel appears after
+  interacting with a console, container or door.
 - Pause (B) has no indication beyond the freeze, and makes some room objects vanish
 - Security skill and tunneler fail on containers that should accept them
 - Doors with no Security option show Bash but not Use

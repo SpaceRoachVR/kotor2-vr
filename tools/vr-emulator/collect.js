@@ -341,6 +341,41 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     })()`);
     onProgress('menu wiring');
 
+    // --- the in-game overlay is not reprojected as a VR panel ---------------
+    // ROADMAP 4.8. Reported from the second headset session as "a full-size 2D
+    // UI appears after any interaction and moves to whatever I interacted with
+    // next". Not a leak: VRPanelHost.place() runs only when the owner changes,
+    // and the owner is the same InGameOverlay singleton every frame, so the
+    // panel world-locked once; meanwhile the overlay lays its target UI out in
+    // SCREEN space, so the content jumped around that fixed panel.
+    //
+    // The assertion that matters is not "no panel exists" — that would pass
+    // vacuously before the overlay is ever eligible. It is: the engine says the
+    // overlay is up and VR still declines to present it.
+    metrics.inGameOverlayPanel = await harness.evaluate(`(() => {
+      const spike = window.KotOR.VRSpike;
+      if (!spike) return { located: false, reason: 'no-VRSpike' };
+      const hooks = spike.hooks;
+      if (!hooks) return { located: false, reason: 'no-hooks' };
+      if (typeof hooks.getInGameOverlayContext !== 'function') {
+        return { located: false, reason: 'no-overlay-hook' };
+      }
+      let engineWouldPresent = null;
+      try {
+        engineWouldPresent = hooks.getInGameOverlayContext() !== null;
+      } catch (error) {
+        return { located: false, reason: 'overlay-hook-threw: ' + String(error) };
+      }
+      const host = spike.inGameOverlayHost ?? null;
+      return {
+        located: true,
+        engineWouldPresent,
+        hostCreated: host !== null,
+        hostVisible: host ? host.isVisible === true : false,
+      };
+    })()`);
+    onProgress('overlay panel suppression');
+
     // --- world prompt survey ------------------------------------------------
     // Builds the prompt for every eligible object and records what it offers.
     // Reported from the second headset session: "doors with no security option

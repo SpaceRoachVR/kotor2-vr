@@ -225,6 +225,33 @@ const CHECKS = [
     },
   },
   {
+    id: 'overlay-not-reprojected',
+    describe: 'InGameOverlay is never presented as a VR panel',
+    // ROADMAP 4.8. The panel world-locked on first placement while the overlay
+    // laid its target UI out in screen space, so the HUD appeared after an
+    // interaction and its contents jumped to each new target's projected
+    // position. The wheel's Menu route reaches the same screens deliberately.
+    run: (m) => {
+      const panel = m.inGameOverlayPanel;
+      if (!panel) return { ok: false, detail: 'metric absent' };
+      if (panel.located !== true) {
+        return { ok: false, detail: `subject not located: ${panel.reason}` };
+      }
+      // A pass is only meaningful if the engine would otherwise have presented
+      // it. Say so rather than reporting a vacuous success.
+      if (panel.engineWouldPresent !== true) {
+        return {
+          ok: false,
+          detail: 'inconclusive: overlay was not eligible this frame, so suppression was untested',
+        };
+      }
+      return {
+        ok: panel.hostCreated === false && panel.hostVisible === false,
+        detail: `engineWouldPresent=true hostCreated=${panel.hostCreated} hostVisible=${panel.hostVisible}`,
+      };
+    },
+  },
+  {
     id: 'no-page-exceptions',
     describe: 'no uncaught page exceptions',
     run: (m) => ({
