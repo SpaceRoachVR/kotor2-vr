@@ -68,6 +68,7 @@ import {
 } from "@/vr/runtime/VRWorldActionPromptModel";
 import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
 import {
+  formatVRAttackStanceReadout,
   VRAttackStanceController,
   type VRAttackStanceSelection,
   type VRCombatRoundSnapshot,
@@ -1911,6 +1912,12 @@ export class GameState implements EngineContext {
           nominatedTargetId: target ? String(target.id) : null,
           weaponMode: resolveVRCombatWeaponMode(actor),
           inCombat: actor.combatData.combatState === true,
+          // Only worth a plaque once there is something to say. A permanent
+          // "ATTACK" on the weapon while exploring is noise; the readout earns
+          // its place when a mode is armed or a change is waiting on the round.
+          stanceReadout: (vrAttackStance.getState().active || vrAttackStance.hasPending())
+            ? formatVRAttackStanceReadout(vrAttackStance.getState())
+            : '',
           onCombatSwing: (event) => {
             // The controller layer can animate all physical swings, but never
             // creates damage. Only a cadence-authorized event aimed at the

@@ -145,6 +145,24 @@ export class VRAttackStanceController {
   }
 }
 
+/** Shown when nothing is armed — the engine's plain, un-modified attack. */
+export const VR_PLAIN_ATTACK_LABEL = 'Attack';
+
+/**
+ * Formats the stance for the weapon-mounted readout.
+ *
+ * A queued change is shown alongside the active one rather than replacing it,
+ * because the distinction is the whole point of the round-queued model: until
+ * the round turns over you are still attacking as the *active* stance, and a
+ * readout that switched immediately would misreport what the next swing does.
+ */
+export function formatVRAttackStanceReadout(state: VRAttackStanceState): string {
+  const active = state.active?.label?.trim() || VR_PLAIN_ATTACK_LABEL;
+  if (state.pending === undefined) return active;
+  const pending = state.pending?.label?.trim() || VR_PLAIN_ATTACK_LABEL;
+  return `${active} → ${pending}`;
+}
+
 function sameStance(a: VRAttackStanceSelection, b: VRAttackStanceSelection): boolean {
   if (a === null || b === null) return a === b;
   return a.featId === b.featId;

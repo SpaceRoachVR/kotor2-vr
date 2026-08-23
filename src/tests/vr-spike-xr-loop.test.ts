@@ -726,7 +726,7 @@ describe('VRSpike XR loop ownership', () => {
       getFacing: () => 0,
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
-        actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat: true,
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat: true, stanceReadout: '',
         onCombatSwing: (event) => combatEvents.push(event),
       }),
     };
@@ -757,7 +757,7 @@ describe('VRSpike XR loop ownership', () => {
       getFacing: () => 0,
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
-        actorId: '7', nominatedTargetId: '42', weaponMode: 'blaster', inCombat: true,
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'blaster', inCombat: true, stanceReadout: '',
         onCombatSwing: (event) => combatEvents.push(event),
       }),
     };
@@ -793,7 +793,7 @@ describe('VRSpike XR loop ownership', () => {
       getFacing: () => 0,
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
-        actorId: '7', nominatedTargetId: null, weaponMode: 'unarmed', inCombat: false,
+        actorId: '7', nominatedTargetId: null, weaponMode: 'unarmed', inCombat: false, stanceReadout: '',
         onCombatSwing: () => undefined,
       }),
     };
@@ -819,7 +819,7 @@ describe('VRSpike XR loop ownership', () => {
       getFacing: () => 0,
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
-        actorId: '7', nominatedTargetId: '42', weaponMode: 'unarmed', inCombat: true,
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'unarmed', inCombat: true, stanceReadout: '',
         onCombatSwing: () => undefined, cancel: () => { cancelCount += 1; },
       }),
     };
@@ -859,7 +859,7 @@ describe('VRSpike XR loop ownership', () => {
         // Bashing a door leaves rounds running with nothing that can die, so
         // the escape hatch has to work with no qualifying target at all.
         return {
-          actorId: '7', nominatedTargetId: null, weaponMode: 'unarmed', inCombat: true,
+          actorId: '7', nominatedTargetId: null, weaponMode: 'unarmed', inCombat: true, stanceReadout: '',
           onCombatSwing: () => undefined, cancel: () => { cancelCount += 1; },
         };
       },

@@ -34,6 +34,7 @@ import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfort
 import { VRRecenterHoldGate } from "./runtime/VRRecenterHoldGate";
 import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 import { VRHiltTimerHost } from "./runtime/VRHiltTimerHost";
+import { VRWeaponStanceHost } from "./runtime/VRWeaponStanceHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
   VRWorldTargetIndicator,
@@ -215,6 +216,13 @@ export interface VRSpikeHooks {
     readonly weaponMode: import('./runtime/XRTypes').CombatWeaponMode;
     /** True while the actor is in an actual engagement (drives the laser sight). */
     readonly inCombat: boolean;
+    /**
+     * ROADMAP 4.8 — the armed attack stance, for the diegetic readout beside
+     * the round timer on the weapon. Empty string when there is nothing worth
+     * showing. Names both sides while a change is queued, because until the
+     * round turns over the swing still rolls as the *active* stance.
+     */
+    readonly stanceReadout: string;
     onCombatSwing(event: VRCombatSwingEvent): void;
     cancel?(): void;
   } | null;
@@ -324,6 +332,8 @@ export class VRSpike {
   private static partyCommandHeld = false;
   private static comfortVignetteHost: VRComfortVignetteHost | null = null;
   private static hiltTimerHost: VRHiltTimerHost | null = null;
+  private static weaponStanceHost: VRWeaponStanceHost | null = null;
+  private static weaponStanceErrorReported = false;
   private static blasterLaserHost: VRBlasterLaserHost | null = null;
   private static cutsceneFadeHost: VRCutsceneFadeHost | null = null;
   private static readonly cutsceneFadeEnvelope = new VRCutsceneFadeEnvelope();
@@ -1774,16 +1784,18 @@ export class VRSpike {
     if (!inputFrame || !session) {
       VRSpike.combatCancelHeld = false;
       VRSpike.hiltTimerHost?.clear();
+      VRSpike.weaponStanceHost?.clear();
       return;
     }
     const context = VRSpike.hooks?.getCombatContext?.(VRSpike.resolveAimedTargetId()) ?? null;
     if (!context) {
       VRSpike.combatCancelHeld = false;
       VRSpike.hiltTimerHost?.clear();
+      VRSpike.weaponStanceHost?.clear();
       return;
     }
 
-    VRSpike.updateHiltTimer(context.weaponMode, timestamp, context.inCombat);
+    VRSpike.updateHiltTimer(context.weaponMode, timestamp, context.inCombat, context.stanceReadout);
 
     try {
       const actions = VRSpike.inputRouter.route(
@@ -1820,7 +1832,8 @@ export class VRSpike {
   private static updateHiltTimer(
     weaponMode: CombatWeaponMode,
     timestamp: number,
-    inCombat: boolean
+    inCombat: boolean,
+    stanceReadout = ''
   ): void {
     // The hilt timer is a diegetic ring on the weapon itself, so it belongs on
     // the grip anchor. The blaster laser is an *aiming* line and must use the
@@ -1832,6 +1845,7 @@ export class VRSpike {
     const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor('right') ?? null;
     if (!gripAnchor || weaponMode === 'unarmed') {
       VRSpike.hiltTimerHost?.clear();
+      VRSpike.weaponStanceHost?.clear();
       VRSpike.blasterLaserHost?.clear();
       return;
     }
@@ -1839,6 +1853,23 @@ export class VRSpike {
       VRSpike.hiltTimerHost = new VRHiltTimerHost(gripAnchor);
     }
     VRSpike.hiltTimerHost.present(VRSpike.combatInputController.getRollReadiness(timestamp));
+
+    // ROADMAP 4.8. Same grip anchor as the ring, so the stance belongs to
+    // whatever is held — the hilt for a sabre, the body for a blaster. The ring
+    // hides itself once the roll is ready; the stance stays up, because it is
+    // persistent state the player needs to be able to check at any moment.
+    try {
+      if (!VRSpike.weaponStanceHost) {
+        VRSpike.weaponStanceHost = new VRWeaponStanceHost(gripAnchor);
+      }
+      VRSpike.weaponStanceHost.present(stanceReadout);
+    } catch (error) {
+      VRSpike.weaponStanceHost?.clear();
+      if (!VRSpike.weaponStanceErrorReported) {
+        VRSpike.weaponStanceErrorReported = true;
+        console.error('[VRSpike] weapon stance readout rejected', error);
+      }
+    }
 
     // Only show the laser sight during an actual engagement — a permanent red
     // line across the view while exploring is both noisy and misreads as the
