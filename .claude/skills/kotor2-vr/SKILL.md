@@ -1,6 +1,6 @@
 ---
 name: kotor2-vr
-description: Working knowledge of the kotor2-vr fork of KotOR.js — the TypeScript reimplementation of the Odyssey engine we are turning into a VR mod for Star Wars KOTOR II. Use this skill whenever the task touches this repo: tracing or fixing an engine bug, reading a runtime console log, implementing an NWScript opcode, working with Odyssey game data (GFF, 2DA, TLK, RIM/ERF/MOD, TPC, MDL, DLG), building or launching the Electron app, or writing any of the VR layer (camera rig, WebXR, locomotion, gesture combat, diegetic UI). Also use when the user pastes a stack trace or console dump from the game, reports a visual glitch, or asks what vanilla KOTOR II is supposed to do at some point in the game.
+description: Working knowledge of the kotor2-vr fork of KotOR.js — the TypeScript reimplementation of the Odyssey engine we are turning into a VR mod for Star Wars KOTOR II. Use this skill whenever the task touches this repo: tracing or fixing an engine bug, reading a runtime console log, implementing an NWScript opcode, working with Odyssey game data (GFF, 2DA, TLK, RIM/ERF/MOD, TPC, MDL, DLG), building or launching the Electron app, or writing any of the VR layer (camera rig, WebXR, locomotion, gesture combat, diegetic UI). Also use when the user pastes a stack trace or console dump from the game, reports a visual glitch, or asks what vanilla KOTOR II is supposed to do at some point in the game. Also use when testing VR behaviour under the emulated headset (`npm run vr:check`, `npm run vr:play`), triaging a headset-session bug report, or deciding what still needs a manual pass.
 ---
 
 # kotor2-vr
@@ -19,7 +19,7 @@ Read `ROADMAP.md` before starting work. It says which phase we are in and which
 tasks are session-sized. Do not start VR work while the current phase is engine
 hardening — VR bugs and engine bugs are indistinguishable on an unstable base.
 
-## The four reference files
+## The reference files
 
 Load the one that matches the task. Do not load all of them.
 
@@ -29,6 +29,8 @@ Load the one that matches the task. Do not load all of them.
 | `references/engine-architecture.md` | Tracing a bug, adding engine behavior, implementing an opcode |
 | `references/data-formats.md` | Inspecting game files, checking what vanilla should do, resource loading |
 | `references/vr-design.md` | Writing any part of the VR layer |
+| `references/vr-testing.md` | Verifying VR behaviour, writing a probe, triaging a headset report |
+| `references/project-map.md` | Finding a doc, a branch, a worktree, or a VR runtime file |
 
 ## Two rules that have cost us the most time
 
@@ -36,6 +38,11 @@ Load the one that matches the task. Do not load all of them.
 `publicPath`. Under Electron's `file://` that resolves to the drive root and the
 window is black with no error. Use `npm run webpack:dev-watch` plus `npm run start`.
 Full detail in `references/workflow.md`.
+
+**Confirm through emulation before asking for a headset pass.** Allen's standing
+instruction: anything testable under `npm run vr:check` must be shown working
+there first. A headset session is expensive and he runs it, not you. See
+`references/vr-testing.md`.
 
 **Do not theorize from a log. Add logging that names the object, then look.**
 This is the single most reliable lesson from this project. On one bug we burned four
@@ -48,6 +55,13 @@ resref, tag, id, or object type, then one more test run.
 Corollary: when the user reports a symptom, ask what they actually saw before
 proposing a cause. "Didn't display correctly" and "didn't display at all" have
 different fixes.
+
+**A probe that cannot find its subject must say so.** The most repeated mistake
+in this project is a diagnostic returning an empty result that reads as a
+finding — objects never sampled reported as offering nothing, `GameState.player`
+read when the player is `PartyManager.party[0]`. Always emit whether the subject
+was located, not only what was counted. And check that the API you are probing
+is the one the product actually calls.
 
 ## Failure patterns already found in this engine
 
@@ -98,6 +112,14 @@ the logic is missing entirely.
 
 ## Current state
 
-Branch `tsl-prologue-fixes`, ~12 commits, nothing pushed. The Peragus prologue runs
-its scripted beats. Known-open items are tracked in `ROADMAP.md` — check there rather
-than trusting this list to stay current.
+Branch `spike/stereo-perf`. Nothing pushed, no PR. The Peragus prologue runs its
+scripted beats, and the VR layer is well past a spike: locomotion, snap turn,
+recenter, blink teleport, an action wheel, comfort settings, and a world-use
+prompt system all exist and are covered by tests.
+
+Two gates are green and should stay that way: **`npx jest --ci`** and
+**`npm run vr:check`** (22 emulated-headset checks).
+
+Do not trust this section for specifics — `ROADMAP.md` is the live plan and
+`HEADSET-TEST-PLAN.md` is the live list of what needs a human. Check both.
+`references/project-map.md` indexes every doc, branch, and worktree.
