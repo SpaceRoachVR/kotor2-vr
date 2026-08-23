@@ -67,6 +67,11 @@ import {
   buildVRWorldPromptPages,
 } from "@/vr/runtime/VRWorldActionPromptModel";
 import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
+import {
+  VRAttackStanceController,
+  type VRAttackStanceSelection,
+  type VRCombatRoundSnapshot,
+} from "@/vr/runtime/VRAttackStanceController";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
 import type { HeldItemClassFallbackTransform, HeldItemVisualDescriptor } from "@/vr/runtime/XRControllerAnchorHost";
 import { BaseItemType } from "@/enums/combat/BaseItemType";
@@ -265,6 +270,110 @@ function getVRActionIcon(entry: VRActionMenuEntry): string | undefined {
   return typeof entry.icon === 'string' && entry.icon.trim() ? entry.icon : undefined;
 }
 
+/**
+ * ROADMAP 4.8 — attack modes are a persistent stance in VR, not a one-shot.
+ *
+ * The flat game queues exactly one Flurry attack when Flurry is picked. In VR
+ * the attack is a gesture, so the wheel's Attacks page arms a stance instead
+ * and every rolling swing thereafter attacks with it.
+ */
+const vrAttackStance = new VRAttackStanceController();
+
+/** Melee and ranged attack-mode feat categories in `feat.2da`. */
+const VR_MELEE_ATTACK_FEAT_CATEGORY = 0x1104;
+const VR_RANGED_ATTACK_FEAT_CATEGORY = 0x1111;
+
+function resolveVRCombatRoundSnapshot(actor: ModuleCreature | null): VRCombatRoundSnapshot | null {
+  const round = actor?.combatRound;
+  if (!round) return null;
+  return {
+    roundStarted: round.roundStarted === true,
+    timerMilliseconds: round.timer,
+  };
+}
+
+function isVRAttackModeFeat(talent: unknown): talent is TalentFeat {
+  const category = (talent as { category?: unknown } | null)?.category;
+  return category === VR_MELEE_ATTACK_FEAT_CATEGORY ||
+    category === VR_RANGED_ATTACK_FEAT_CATEGORY;
+}
+
+/**
+ * Maps the armed stance back to a feat the actor still has.
+ *
+ * Re-resolved against the live feat list every time rather than holding the
+ * `TalentFeat` itself: attack modes are filtered by `getEquippedWeaponType()`,
+ * so a stance armed with a sabre must not survive a swap to a blaster. If the
+ * feat is no longer available the stance silently degrades to a plain attack,
+ * which is the safe direction — the alternative is attacking with a feat the
+ * character cannot legally use.
+ */
+function resolveVRActiveStanceFeat(actor: ModuleCreature): TalentFeat | undefined {
+  const active = vrAttackStance.getState().active;
+  if (!active) return undefined;
+  try {
+    const feats = actor.getFeats() as readonly unknown[];
+    const match = feats.find((feat) => (feat as { __index?: unknown })?.__index === active.featId);
+    if (!isVRAttackModeFeat(match)) return undefined;
+
+    // `getFeats()` is not filtered by weapon, so a Flurry armed with a sabre
+    // would still resolve after swapping to a blaster and would then be
+    // attacked with illegally. ActionMenuManager offers melee feats only at
+    // weapon type 1 and ranged only at 4; hold the stance to the same rule.
+    const weaponType = actor.getEquippedWeaponType();
+    const category = (match as { category?: unknown }).category;
+    if (category === VR_MELEE_ATTACK_FEAT_CATEGORY && weaponType !== 1) return undefined;
+    if (category === VR_RANGED_ATTACK_FEAT_CATEGORY && weaponType !== 4) return undefined;
+
+    return match;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Turns a selection on the wheel's Attacks page into a stance change instead of
+ * an immediate attack. Returns whether the selection was consumed.
+ *
+ * Only panel 0 is intercepted — that is the Attack panel. Panel 1 (Force
+ * powers) and every non-creature target's panels keep the engine's own
+ * behaviour, because those genuinely are one-shot actions.
+ */
+function consumeVRAttackStanceSelection(panelIndex: number): boolean {
+  if (panelIndex !== 0) return false;
+  const actor = GameState.getCurrentPlayer();
+  if (!actor) return false;
+
+  // Gate on a hostile creature, not on the action type. Bash on a door is also
+  // `ActionType.ActionPhysicalAttacks` and also sits in target panel 0, so
+  // intercepting by type would silently swallow Bash and leave the player
+  // unable to break anything open.
+  if (!isVRCombatTarget(actor, GameState.ActionMenuManager.oTarget as ModuleObject)) return false;
+
+  let selected: { readonly talent?: unknown } | undefined;
+  try {
+    selected = GameState.ActionMenuManager.ActionPanels
+      .targetPanels[panelIndex]?.getSelectedAction();
+  } catch {
+    return false;
+  }
+  if (!selected) return false;
+
+  const talent = selected.talent;
+  const stance: VRAttackStanceSelection = isVRAttackModeFeat(talent)
+    ? {
+      featId: Number((talent as { __index?: unknown }).__index),
+      label: String((talent as { name?: unknown }).name ?? 'Attack'),
+    }
+    // The plain Attack entry on the same panel means "stop using a mode".
+    : null;
+
+  if (stance !== null && !Number.isInteger(stance.featId)) return false;
+
+  vrAttackStance.select(stance, resolveVRCombatRoundSnapshot(actor));
+  return true;
+}
+
 const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreature, ModuleObject> = {
   getCurrentActor: () => GameState.getCurrentPlayer() ?? null,
   isTargetAvailable: (actor, target) =>
@@ -279,7 +388,13 @@ const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreat
   getPlayerFacingLabel: (entry, target) => getVRActionLabel(entry, target),
   getIcon: (entry) => getVRActionIcon(entry),
   logger: console,
-  onTargetMenuAction: (panelIndex) => GameState.ActionMenuManager.onTargetMenuAction(panelIndex),
+  onTargetMenuAction: (panelIndex) => {
+    // ROADMAP 4.8: on the Attacks page a selection arms a stance rather than
+    // launching one attack. Falls through to the engine's own handler for
+    // everything it does not claim.
+    if (VRSpike.isPresenting && consumeVRAttackStanceSelection(panelIndex)) return;
+    GameState.ActionMenuManager.onTargetMenuAction(panelIndex);
+  },
   onSelfMenuAction: (panelIndex) => GameState.ActionMenuManager.onSelfMenuAction(panelIndex),
 };
 
@@ -1776,11 +1891,21 @@ export class GameState implements EngineContext {
       },
       getCombatContext: (aimedTargetId) => {
         const actor = GameState.getCurrentPlayer();
-        if (!actor) return null;
+        if (!actor) {
+          // No player means a module transition or a load. The armed stance
+          // belongs to a character in a place; do not carry it across.
+          vrAttackStance.reset();
+          return null;
+        }
         const candidate = resolveVRAimedObject(aimedTargetId);
         const target = isVRCombatTarget(actor, candidate) && isWithinVRCombatRange(actor, candidate)
           ? candidate
           : null;
+        // ROADMAP 4.8. Called every gameplay frame — before the target check in
+        // VRSpike.processCombatInput — so this is where a queued stance is
+        // promoted at the round boundary. Detecting the boundary here rather
+        // than hooking CombatRound.endCombatRound() keeps the engine untouched.
+        vrAttackStance.observeRound(resolveVRCombatRoundSnapshot(actor));
         return {
           actorId: String(actor.id),
           nominatedTargetId: target ? String(target.id) : null,
@@ -1791,7 +1916,11 @@ export class GameState implements EngineContext {
             // creates damage. Only a cadence-authorized event aimed at the
             // current engine target enters the normal CombatRound pipeline.
             if (!event.rollEligible || !target || event.nominatedTargetId !== String(target.id)) return;
-            actor.attackCreature(target);
+            // ROADMAP 4.8: the armed stance decides what this swing rolls AS.
+            // With no stance it is `undefined`, which is the engine's own plain
+            // ATTACK path — so the gesture still gates the roll either way, per
+            // the locked swing governor.
+            actor.attackCreature(target, resolveVRActiveStanceFeat(actor));
             vrCombatIssuedTargetId = target.id;
           },
           cancel: () => {
