@@ -80,6 +80,14 @@ const WORLD_STATE = `(() => {
     playerMaxHp: player ? player.getMaxHP && player.getMaxHP() : null,
     partySize: party && party.party ? party.party.length : null,
     foregroundMenu: foreground && foreground.constructor ? foreground.constructor.name : null,
+    // The whole stack, not just the top: "MainMenu is foreground" and "MainMenu
+    // is the only thing left" are different faults.
+    menuStack: menus && Array.isArray(menus.activeMenus)
+      ? menus.activeMenus.map((m) => m && m.constructor ? m.constructor.name : '?')
+      : null,
+    modalStack: menus && Array.isArray(menus.activeModals)
+      ? menus.activeModals.map((m) => m && m.constructor ? m.constructor.name : '?')
+      : null,
     inDialog: !!(menus && menus.InGameDialog && menus.InGameDialog.bVisible),
     presenting: !!(K.VRSpike && K.VRSpike.isPresenting),
   };
