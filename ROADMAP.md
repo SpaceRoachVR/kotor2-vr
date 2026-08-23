@@ -733,6 +733,32 @@ Every button reachable in flatscreen needs a VR route.
 
   `Pause` toggles the engine's own pause on the dominant B button.
 
+- **4.8** ☐ **Combat radial redesign** (design agreed 2026-08-23). Headset
+  session 2 recorded that combat actions on the wheel "were a mistake and need a
+  different route." The route is still the wheel — what was wrong is that
+  `buildVRActionWheel` flat-dumps `targetActions`/`selfActions` at the top level
+  beside Journal and Options, which guarantees pagination and freezes the target
+  at wheel-open with no way to re-aim.
+
+  Top level becomes exactly six items — Attacks, Force Powers, Menu, Party,
+  Comfort Settings, Clear Actions — fitting one page with no pagination. Attacks
+  and Force Powers are ordinary submenu wedges over the panels
+  `ActionMenuManager` *already* filters by equipped weapon type and known
+  powers. `Menu` collapses today's three static screen wedges plus the
+  five-item Screens submenu into one route that opens `InGameOverlay` on its
+  `BTN_CHAR` tab, since the overlay is one menu with a tab bar rather than eight
+  destinations.
+
+  Attack modes become a persistent stance, changed between rounds and applying
+  to the next round, read out beside the diegetic round timer on the weapon —
+  hilt for sabers, blaster body for ranged.
+
+  **Ordering:** the frozen-target readout reuses `setVRSelectedObject` /
+  `CursorManager`, whose plate and bar live in `InGameOverlay`. The open
+  persistent-2D-UI defect on that surface is fixed first.
+
+  Full spec, constraints, and wedge-geometry rationale: `COMBAT-RADIAL-REDESIGN.md`.
+
 ---
 
 ## Phase 5 — Cutscenes and dialogue

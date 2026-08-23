@@ -15,6 +15,7 @@ Read `ROADMAP.md` first, always. The rest are context you load on demand.
 | `DESIGN.md` | Locked design decisions for the VR conversion | Why something is the way it is |
 | `VR-AUDIT-AND-COMPLETION-PLAN.md` | Audit of VR-layer completeness | Gap analysis |
 | `VR-PLAYTEST-FIX-PLAN.md` | Fixes derived from playtests | Playtest-driven work |
+| `COMBAT-RADIAL-REDESIGN.md` | ROADMAP 4.8 spec — combat wheel structure, stance model, wedge-geometry limits | Touching `VRActionWheelModelBuilder` or any combat wheel route |
 | `PHASE0-ENGINE-PIVOT-REPORT.md` | Why this engine was chosen over reone / NorthernLights | Engine choice rationale — settled, do not relitigate |
 | `PHASE0-STEREO-SPIKE.md` | The stereo rendering spike | Stereo/perf background |
 | `CONTRIBUTING.md`, `README.md` | Inherited from upstream KotOR.js | Upstream conventions only |

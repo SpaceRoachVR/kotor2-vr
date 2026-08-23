@@ -83,7 +83,13 @@ visible before it hits anything, and blink lands where the marker sat.
 - The lift offers its option after the cutscene, but selecting it does nothing
 - Boxes sometimes lose their texture when used
 - Opening **Screens** from the wheel appears to do nothing
-- Combat actions on the radial were a mistake and need a different route — a design conversation, not a fix
+- ~~Combat actions on the radial were a mistake and need a different route — a
+  design conversation, not a fix~~ **Design agreed 2026-08-23**, not yet
+  implemented. The route stays the wheel; the flat top-level dump of
+  `targetActions`/`selfActions` becomes two filtered submenu wedges, and the
+  eight menu wedges collapse into one. See `COMBAT-RADIAL-REDESIGN.md` and
+  ROADMAP 4.8. **D1–D3 and D9–D15 below are scoped to the old layout and will be
+  rewritten when 4.8 lands — do not spend headset time on them first.**
 
 ## Current focus: sections A and B only
 
