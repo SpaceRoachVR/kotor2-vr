@@ -460,6 +460,129 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     })()`, { timeoutMs: 60000 });
     onProgress('menu routes');
 
+    // --- menus actually show something --------------------------------------
+    // "Opens without throwing" is not the same as "shows content": the second
+    // headset session reported a blank active-quest list and inventory slots
+    // with no icons, both of which opened cleanly. Measure what a menu holds,
+    // not just that it survived being opened.
+    metrics.menuContent = await harness.evaluate(`(async () => {
+      const gs = window.KotOR.GameState;
+      const out = {};
+
+      const journal = gs.JournalManager;
+      out.journal = {
+        managerPresent: !!journal,
+        entryCount: journal && Array.isArray(journal.Entries) ? journal.Entries.length : -1,
+        categoryCount: journal && Array.isArray(journal.Categories) ? journal.Categories.length : -1,
+      };
+
+      // An empty list has two very different causes — the save carries no
+      // quests, or it carries quests we failed to load. The party table GFF is
+      // not retained after loading, so re-read it from the save the same way
+      // SaveGame.loadPartyTable does and count the source structs.
+      try {
+        const save = window.KotOR.SaveGame.saves[0];
+        const data = await window.KotOR.GameFileSystem.readFile(
+          save.directory + '/PARTYTABLE.res'
+        );
+        const gff = new window.KotOR.GFFObject(data);
+        const root = gff.RootNode;
+        out.journal.savedHasJournalField = root.hasField('JNL_Entries');
+        out.journal.savedEntryCount = root.hasField('JNL_Entries')
+          ? root.getFieldByLabel('JNL_Entries').getChildStructs().length
+          : 0;
+      } catch (error) {
+        out.journal.saveReadError = String(error && error.message || error);
+      }
+
+      const menu = gs.MenuManager.MenuJournal;
+      if (menu) {
+        try {
+          menu.open();
+          await new Promise(r => setTimeout(r, 500));
+          const lb = menu.LB_ITEMS;
+          out.journal.listBoxPresent = !!lb;
+          out.journal.listedItems = lb && Array.isArray(lb.items) ? lb.items.length : -1;
+          out.journal.childCount = lb && lb.children ? lb.children.length : -1;
+        } catch (error) {
+          out.journal.error = String(error && error.message || error);
+        }
+        try { menu.close(); } catch (e) { /* not under test */ }
+      }
+      await new Promise(r => setTimeout(r, 200));
+
+      // Equipped-item icons: the reported slots draw no icon at all.
+      const equip = gs.MenuManager.MenuEquipment;
+      if (equip) {
+        try {
+          equip.open();
+          await new Promise(r => setTimeout(r, 500));
+          // Distinguish "nothing equipped" from "we looked in the wrong place":
+          // an empty result that means the latter reads as a false negative.
+          const player = gs.PartyManager && gs.PartyManager.party
+            ? gs.PartyManager.party[0] : null;
+          out.equipment = {
+            playerPresent: !!player,
+            partySize: gs.PartyManager && gs.PartyManager.party
+              ? gs.PartyManager.party.length : -1,
+            equipmentPropertyPresent: !!(player && player.equipment),
+          };
+          if (player && player.equipment) {
+            const slots = Object.entries(player.equipment)
+              .filter(([, item]) => !!item);
+            out.equipment.equippedSlots = slots.length;
+            out.equipment.slots = slots.slice(0, 12).map(([slot, item]) => ({
+              slot,
+              name: (item.getName && item.getName()) || null,
+              // The reported symptom is a slot with no icon.
+              icon: item.getIcon ? item.getIcon() : (item.icon || null),
+            }));
+          }
+        } catch (error) {
+          out.equipment = { error: String(error && error.message || error) };
+        }
+        try { equip.close(); } catch (e) { /* not under test */ }
+      }
+
+      // The reported symptom is an equipped slot drawing no icon. The item data
+      // carries an icon name, so the question is whether that name resolves —
+      // and whether anything ever asks for it. Ask directly.
+      const names = (out.equipment && out.equipment.slots || []).map(s => s.icon).filter(Boolean);
+      out.itemIcons = [];
+      for (const name of names) {
+        try {
+          // LoadGUI is the call the item protoitems actually make.
+          const tex = await Promise.race([
+            window.KotOR.TextureLoader.LoadGUI(name).catch(() => null),
+            new Promise((resolve) => setTimeout(() => resolve('timeout'), 5000)),
+          ]);
+          // GUIEquipmentItem does not call LoadGUI — it enqueues with
+          // TextureType.TEXTURE, and only reveals the sprite on success. Test
+          // that exact call too, since it is the one that actually draws.
+          const viaEnqueue = await Promise.race([
+            new Promise((resolve) => {
+              const mat = {};
+              window.KotOR.TextureLoader.enQueue(
+                name, mat, window.KotOR.TextureType.TEXTURE, () => resolve(true)
+              );
+              window.KotOR.TextureLoader.LoadQueue(() => resolve('queue-drained'));
+            }),
+            new Promise((resolve) => setTimeout(() => resolve('timeout'), 6000)),
+          ]);
+          out.itemIcons.push({
+            name,
+            viaLoadGUI: !!tex && tex !== 'timeout',
+            viaEnqueueTexture: viaEnqueue === true,
+            enqueueOutcome: viaEnqueue === true ? 'callback-fired' : String(viaEnqueue),
+          });
+        } catch (error) {
+          out.itemIcons.push({ name, error: String(error && error.message || error) });
+        }
+      }
+      return out;
+    })()`, { timeoutMs: 60000 });
+    onProgress('menu content');
+
     // --- console health -----------------------------------------------------
     metrics.console = await harness.evaluate(`(() => {
       const log = window.__xrHarness.log;
