@@ -24,7 +24,6 @@ export interface VRWorldUseTarget {
   getName?(): string;
   getTag?(): string;
   getTemplateResRef?(): string | null;
-  isLocked?(): boolean;
   onClick(actor: VRWorldUseActor): void;
 }
 
@@ -94,8 +93,12 @@ export function describeDirectVRWorldUse(
 
 /**
  * Classifies the narrow set of targets that may use the native selected-target
- * activation route without stealing ownership from locks, story state, or an
- * authored ActionMenu action.
+ * activation route without stealing ownership from key requirements, story
+ * state, or an authored ActionMenu action.
+ *
+ * Locked objects are allowed through: trying a locked door is a legal move that
+ * flatscreen permits, and the engine — not this classifier — owns what happens
+ * when the attempt fails.
  */
 export function classifySafeDirectVRWorldUse(
   target: VRWorldUseTarget,
@@ -107,9 +110,22 @@ export function classifySafeDirectVRWorldUse(
       ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable
     )) !== 0;
     if (!supportedType) return null;
-    if (authoredActionCount > 0 || typeof target.isLocked !== 'function' || target.isLocked()) {
-      return null;
-    }
+    if (authoredActionCount > 0) return null;
+
+    // `isLocked` is deliberately NOT a gate. Flatscreen lets the player walk up
+    // to a locked door and simply try it; the engine answers with its own
+    // refusal, and that answer is information — it is how the player learns the
+    // door is locked rather than merely shut. Refusing here meant a locked
+    // bashable door offered "Bash" as its only option, so the only way to ask a
+    // door whether it was locked was to attack it. An earlier fix excluded Bash
+    // from `authoredActionCount` for exactly this reason but left this gate in
+    // place, so it never achieved its own stated goal.
+    //
+    // The guards that actually protect ownership are still here: an authored
+    // ActionMenu action wins outright, `keyRequired` still refuses below, and
+    // an authored failure script still refuses further down. The engine owns
+    // the outcome of the attempt either way — this only decides whether the
+    // player is allowed to make it.
     if (!isExplicitFalseFlag(target.keyRequired)) return null;
 
     if (isEbonHawkGalaxyMap(target)) return 'ebon-hawk-galaxy-map';
@@ -122,8 +138,8 @@ export function classifySafeDirectVRWorldUse(
     // check above returns before reaching it. The real ownership guard is an
     // authored failure script, which is kept: if the object scripts its own
     // refusal, the engine owns that outcome and the generic route must not
-    // pre-empt it. Locks, keys, and authored ActionMenu actions are still
-    // checked above.
+    // pre-empt it. Keys and authored ActionMenu actions are still checked
+    // above; locks deliberately are not.
     if (hasStoryFailureScript(target.scripts)) return null;
     return 'ordinary';
   } catch {

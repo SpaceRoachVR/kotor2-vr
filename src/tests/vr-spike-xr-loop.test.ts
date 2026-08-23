@@ -3064,25 +3064,16 @@ describe('world prompt rule against the real Ebon Hawk door profiles', () => {
     expect(doorLabels({ keyRequired: true }, [])).toBeNull();
   });
 
-  test('KNOWN GAP: a locked bashable door offers Bash but no way to simply try it', () => {
+  test('a locked bashable door lets the player simply try it, not only bash it', () => {
     // Reported from the second headset session as "doors with no security
-    // option show bash but not use", and reproduced here.
-    //
-    // `classifySafeDirectVRWorldUse` has two gates that suppress the generic
-    // route: a non-zero authored action count, and `isLocked()`. An earlier fix
-    // excluded Bash from the *count* precisely so that "the player could never
-    // simply try the door, which flatscreen allows" would stop happening — but
-    // the lock gate still refuses, so that fix never achieved its stated goal.
-    //
-    // This asserts the behaviour as it currently stands rather than as intended,
-    // because loosening a lock guard is a deliberate design call: the module's
-    // whole purpose is not to steal ownership from locks, keys and authored
-    // actions. Flip this test when that call is made.
+    // option show bash but not use". The lock gate meant the only way to ask a
+    // door whether it was locked was to attack it; flatscreen instead lets the
+    // player try the door and answers with the engine's own refusal.
     const harness = createGameStateWorldPromptHarness();
     const labels = doorLabels({ locked: true }, [harness.entry('iaction_attack')]);
 
     expect(labels).toContain('Bash');
-    expect(labels).not.toContain('Use: Door');
+    expect(labels).toContain('Use: Door');
   });
 
   test('an unlocked bashable door does let the player simply try it', () => {

@@ -190,7 +190,6 @@ function placeable(name: string, distance: number): VRWorldUseTarget & { use: je
     keyRequired: 0,
     plot: 0,
     scripts: {},
-    isLocked: () => false,
     getName: () => name,
     use: jest.fn(),
     onClick: jest.fn(),
@@ -228,7 +227,6 @@ function ordinaryOpenablePlaceable(): VRWorldUseTarget & { use: jest.Mock; onCli
     keyRequired: 0,
     plot: 0,
     scripts: {},
-    isLocked: () => false,
     getName: () => 'Ordinary Container',
     use: jest.fn(),
     onClick: jest.fn((activeActor: VRWorldUseActor & { queuedActions?: string[] }) => {
