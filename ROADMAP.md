@@ -733,7 +733,9 @@ Every button reachable in flatscreen needs a VR route.
 
   `Pause` toggles the engine's own pause on the dominant B button.
 
-- **4.8** ☐ **Combat radial redesign** (design agreed 2026-08-23). Headset
+- **4.8** ◐ **Combat radial redesign** — wheel restructure ✅ implemented
+  2026-08-23 (jest 731/731, vr:check 24/24); stance model, weapon stance
+  readout, and target highlight ☐ outstanding. Design agreed 2026-08-23. Headset
   session 2 recorded that combat actions on the wheel "were a mistake and need a
   different route." The route is still the wheel — what was wrong is that
   `buildVRActionWheel` flat-dumps `targetActions`/`selfActions` at the top level
@@ -753,9 +755,18 @@ Every button reachable in flatscreen needs a VR route.
   to the next round, read out beside the diegetic round timer on the weapon —
   hilt for sabers, blaster body for ranged.
 
-  **Ordering:** the frozen-target readout reuses `setVRSelectedObject` /
-  `CursorManager`, whose plate and bar live in `InGameOverlay`. The open
-  persistent-2D-UI defect on that surface is fixed first.
+  **Superseded ordering note.** The frozen-target readout was to reuse
+  `setVRSelectedObject` / `CursorManager`, whose plate and bar live in
+  `InGameOverlay`. That defect was fixed by *removing* the overlay from VR
+  entirely, so the readout has no surface there. It is now a **world-space
+  highlight on the creature** instead.
+
+  **Still outstanding:**
+  - Persistent attack-mode stance, changed between rounds and applying to the
+    next round, replacing the flat game's one-attack-per-selection queueing.
+  - Stance readout beside the diegetic round timer on the weapon — hilt for
+    sabers, blaster body for ranged, with the timer moving there too.
+  - World-space target highlight.
 
   Full spec, constraints, and wedge-geometry rationale: `COMBAT-RADIAL-REDESIGN.md`.
 

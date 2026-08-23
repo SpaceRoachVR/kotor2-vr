@@ -1,7 +1,8 @@
 # Combat radial redesign (ROADMAP 4.8)
 
-**Status:** design agreed 2026-08-23. Not implemented. Supersedes the combat
-half of 4.1.
+**Status:** design agreed 2026-08-23. Wheel restructure **implemented** the same
+day (jest 731/731, vr:check 24/24). Stance model, weapon stance readout, and
+target highlight still outstanding. Supersedes the combat half of 4.1.
 
 Session 2 of the headset testing recorded "combat actions on the radial were a
 mistake and need a different route — a design conversation, not a fix." This is
@@ -38,12 +39,25 @@ at all when the target is a hostile creature.
 So "show only what is usable in this situation" is not new work. It is already
 computed, and was being flattened away.
 
-**`InGameOverlay` is one menu with a tab bar, not eight destinations.**
-TSL's overlay declares `BTN_MSG`, `BTN_JOU`, `BTN_MAP`, `BTN_OPT`, `BTN_CHAR`,
-`BTN_ABI`, `BTN_INV`, `BTN_EQU`. The wheel was spending three top-level wedges
-(Inventory, Character, Map) plus a five-item Screens submenu — eight wedges
-across two levels — on a menu that has its own tab bar. That collapses to **one
-wedge**.
+**The eight screens are one menu with a tab bar, not eight destinations.**
+
+The tab bar is **`MenuTop`**, not `InGameOverlay` — an earlier draft of this
+document said otherwise. `InGameOverlay` declares the same eight button names,
+but it is the HUD, and it is no longer presented in VR at all. `MenuTop` is the
+real thing: it declares `BTN_EQU`, `BTN_INV`, `BTN_CHAR`, `BTN_ABI`, `BTN_MSG`,
+`BTN_JOU`, `BTN_MAP`, `BTN_OPT`, each wired to open its screen, and K1's
+`MenuCharacter` reaches it as `this.manager.MenuTop.BTN_INV.click()`.
+
+It comes up on its own: `MenuManager` sets `childMenu = MenuTop` on all eight
+screens, `GameMenu.show()` shows the child and `hide()` hides it, and
+`getActiveControls()` includes the child's controls — so the tab bar is up and
+clickable the moment any screen opens, including through the VR panel pointer.
+
+So the wheel was spending three top-level wedges (Inventory, Character, Map)
+plus a five-item Screens submenu — eight wedges across two levels — on a menu
+that already had its own working tab bar. That collapses to **one wedge**, with
+no new code. Asserted by the `menu-tab-bar-live` check, because seven screens
+would silently become unreachable if it ever stopped holding.
 
 ## The design
 
@@ -55,7 +69,7 @@ Exactly six content items, so it fits one page with no pagination:
 |---|---|---|
 | Attacks | Target panel 0 — Attack + equipped-weapon attack-mode feats | Hostile creature aimed at |
 | Force Powers | Hostile panel 1 merged with friendly self panel 1 | Any power known |
-| Menu | Opens `InGameOverlay` on the **Character** tab (`BTN_CHAR`); the player uses the menu's own tab bar from there | Always |
+| Menu | Opens `MenuCharacter` — the **Character** tab — which brings `MenuTop` up with it; the player switches tabs there | Always |
 | Party | Existing nested party wheel — stays on the wheel because it is used mid-fight | Switchable members exist |
 | Comfort Settings | VR-only, so it has no menu-tab home | Always |
 | Clear Actions | `BTN_CLEARALL` | Queue non-empty or in combat |

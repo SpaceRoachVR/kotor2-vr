@@ -101,8 +101,22 @@ visible before it hits anything, and blink lands where the marker sat.
   implemented. The route stays the wheel; the flat top-level dump of
   `targetActions`/`selfActions` becomes two filtered submenu wedges, and the
   eight menu wedges collapse into one. See `COMBAT-RADIAL-REDESIGN.md` and
-  ROADMAP 4.8. **D1–D3 and D9–D15 below are scoped to the old layout and will be
-  rewritten when 4.8 lands — do not spend headset time on them first.**
+  ROADMAP 4.8.
+
+  **The wheel restructure landed 2026-08-23.** D1–D3 (wheel → Inventory /
+  Character / Map) and D9–D14 (Screens → each of five screens) no longer
+  describe anything: those eight routes are now a single **Menu** wedge that
+  opens the Character tab, with the game's own tab bar reaching the rest.
+  Replace all nine with one check:
+
+  > **D-new** — Wheel → **Menu** opens Character with the tab bar up, and every
+  > one of the eight tabs (Equipment, Inventory, Character, Abilities, Messages,
+  > Journal, Map, Options) switches to its screen. `menu-tab-bar-live` confirms
+  > the wiring under emulation; this confirms it *reads and works* through lenses.
+
+  D15 (wheel icons) shrinks to the six top-level wedges. Two new checks needed:
+  **Attacks** and **Force Powers** each open a page containing only what the
+  engine says is usable, and the six top-level wedges never paginate in combat.
 
 ## Current focus: sections A and B only
 
