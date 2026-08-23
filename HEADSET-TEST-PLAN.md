@@ -48,15 +48,29 @@ issues came back. Status below; everything marked **fixed** was confirmed under
 - Blink locomotion functions — but needs a ray to aim, see below.
 - Comfort Settings opens from the wheel.
 
-### Open — needs a ray pointer
+### Fixed in code, awaiting headset confirmation — the ray pointer
 
-The single biggest usability gap. Panels, the wheel, blink targeting, and the
-Comfort menu all require pointing at something with no visible ray, so there is
-no way to know what is selected.
+This was the single biggest usability gap and produced four separate reports
+from one cause: every ray-driven surface hard-coded which controller it listened
+to, and nothing on screen said which, so pointing with the other hand did
+nothing and the surface read as broken rather than as listening elsewhere.
 
-- Comfort Settings panel cannot be interacted with at all
-- Blink lands somewhere apparently arbitrary
-- The wheel accepts the left ray only; it should accept either hand
+Resolution is now by hit rather than by role — whichever hand is actually on the
+surface owns it, and the holding hand keeps it while both hands hit so the
+highlight cannot strobe at a wedge seam.
+
+- **Comfort Settings** — was right-hand only *and* drew no ray at all, so the
+  player could neither aim nor see where they were aiming. Now either hand, with
+  the same ray and cursor the legacy panels use.
+- **Blink** — took its bearing from the stick and always travelled exactly its
+  maximum range, drawing nothing. Now aimed by ray with a landing marker: hold
+  the stick to aim, point to choose the distance, release to go. Marker colour
+  carries validity.
+- **Action wheel** — accepted the left ray only, while its *touch* path already
+  accepted both. Now either hand on both paths.
+
+Confirm in the headset: each surface responds to **both** hands, the ray is
+visible before it hits anything, and blink lands where the marker sat.
 
 ### Open — other
 

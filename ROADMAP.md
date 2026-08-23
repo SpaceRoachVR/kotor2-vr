@@ -134,10 +134,20 @@ instruction that anything emulator-testable is proven there first.
 - **Movement mode unbound** from the offhand trigger, where it collided with
   radial-wheel Select. Comfort Settings only.
 
-**The dominant open theme is that VR pointing has no visible ray.** Panels, the
-wheel, blink targeting and the Comfort menu all require aiming at something the
-player cannot see, which makes several otherwise-working features unusable. That
-is the next piece of work, ahead of individual bug fixes.
+**The ray-pointer theme is resolved in code** (headset confirmation pending).
+Four separate reports shared one cause: every ray-driven surface hard-coded which
+controller it listened to, and nothing on screen said which. `VRPointerHandResolver`
+now picks the pointing hand by hit rather than by role, with the holding hand
+keeping ownership while both hands hit so a ray on a wedge seam cannot strobe.
+The Comfort panel draws the shared ray and cursor, and blink is aimed by ray with
+a landing marker instead of travelling a fixed distance along the stick bearing.
+
+**One design call is open, not a bug fix:** a locked bashable door offers Bash but
+no plain Use, so the player cannot simply try it the way flatscreen allows. The
+lock gate in `classifySafeDirectVRWorldUse` is a deliberate guard against VR
+stealing ownership from locks, keys and authored actions, so loosening it is
+Allen's call. Recorded as a `KNOWN GAP` test asserting current behaviour, beside
+a sibling pinning the unlocked case that works.
 
 **Tooling note:** `tsc -p tsconfig.kotorjs.json` does not cover `src/actions`.
 It reported clean while esbuild rejected nine files a scripted edit had
