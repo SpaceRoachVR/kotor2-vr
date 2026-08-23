@@ -1,6 +1,6 @@
 ---
 name: kotor2-vr
-description: Working knowledge of the kotor2-vr fork of KotOR.js — the TypeScript reimplementation of the Odyssey engine we are turning into a VR mod for Star Wars KOTOR II. Use this skill whenever the task touches this repo: tracing or fixing an engine bug, reading a runtime console log, implementing an NWScript opcode, working with Odyssey game data (GFF, 2DA, TLK, RIM/ERF/MOD, TPC, MDL, DLG), building or launching the Electron app, or writing any of the VR layer (camera rig, WebXR, locomotion, gesture combat, diegetic UI). Also use when the user pastes a stack trace or console dump from the game, reports a visual glitch, or asks what vanilla KOTOR II is supposed to do at some point in the game. Also use when testing VR behaviour under the emulated headset (`npm run vr:check`, `npm run vr:play`), triaging a headset-session bug report, or deciding what still needs a manual pass.
+description: Working knowledge of the kotor2-vr fork of KotOR.js — the TypeScript reimplementation of the Odyssey engine we are turning into a VR mod for Star Wars KOTOR II. Use this skill whenever the task touches this repo: tracing or fixing an engine bug, reading a runtime console log, implementing an NWScript opcode, working with Odyssey game data (GFF, 2DA, TLK, RIM/ERF/MOD, TPC, MDL, DLG), building or launching the Electron app, or writing any of the VR layer (camera rig, WebXR, locomotion, gesture combat, diegetic UI). Also use when the user pastes a stack trace or console dump from the game, reports a visual glitch, or asks what vanilla KOTOR II is supposed to do at some point in the game — its planets and modules, the prologue, the d20 rules layer, Odyssey object flags, influence, or which behaviours are retail quirks rather than defects. Also use when testing VR behaviour under the emulated headset (`npm run vr:check`, `npm run vr:play`), triaging a headset-session bug report, or deciding what still needs a manual pass.
 ---
 
 # kotor2-vr
@@ -31,6 +31,7 @@ Load the one that matches the task. Do not load all of them.
 | `references/vr-design.md` | Writing any part of the VR layer |
 | `references/vr-testing.md` | Verifying VR behaviour, writing a probe, triaging a headset report |
 | `references/project-map.md` | Finding a doc, a branch, a worktree, or a VR runtime file |
+| `references/game-knowledge.md` | Deciding whether a report is our bug or vanilla KOTOR II behaviour |
 
 ## Two rules that have cost us the most time
 
@@ -55,6 +56,13 @@ resref, tag, id, or object type, then one more test run.
 Corollary: when the user reports a symptom, ask what they actually saw before
 proposing a cause. "Didn't display correctly" and "didn't display at all" have
 different fixes.
+
+**Check what vanilla does before fixing it.** Reports are routinely ambiguous
+between our bug, retail behaviour, and a known TSL quirk — an empty quest log
+and a one-member party at the prologue are both correct, and the game ships
+unreachable cut content. `references/game-knowledge.md` covers the triage, and
+the Odyssey object flags that have already been misread here (`Lockable` means
+"can be re-locked", `Plot` means indestructible rather than unusable).
 
 **A probe that cannot find its subject must say so.** The most repeated mistake
 in this project is a diagnostic returning an empty result that reads as a

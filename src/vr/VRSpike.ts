@@ -1060,7 +1060,13 @@ export class VRSpike {
    * Returns whether this frame's activation was consumed by the overlay.
    */
   private static processInGameOverlayInput(): boolean {
-    const context = VRSpike.hooks?.getInGameOverlayContext?.() ?? null;
+    // Disabled by ROADMAP 4.8 — see INGAME_OVERLAY_PANEL_ENABLED. Resolving to
+    // a null context reuses the existing teardown path below rather than adding
+    // a second one, so the pointer host, input controller and cursor all clear
+    // exactly as they do when the overlay legitimately goes away.
+    const context = VRSpike.INGAME_OVERLAY_PANEL_ENABLED
+      ? (VRSpike.hooks?.getInGameOverlayContext?.() ?? null)
+      : null;
     const session = VRSpike.session;
     const inputFrame = VRSpike.latestInputFrame;
     const worldScene = VRSpike.scene;
@@ -2767,7 +2773,10 @@ export class VRSpike {
     const renderer = VRSpike.renderer;
     const worldScene = VRSpike.scene;
     const inputFrame = VRSpike.latestInputFrame;
-    const context = VRSpike.hooks?.getInGameOverlayContext?.() ?? null;
+    // Disabled by ROADMAP 4.8 — see INGAME_OVERLAY_PANEL_ENABLED.
+    const context = VRSpike.INGAME_OVERLAY_PANEL_ENABLED
+      ? (VRSpike.hooks?.getInGameOverlayContext?.() ?? null)
+      : null;
     if (!renderer || !worldScene || !inputFrame || !context) {
       VRSpike.inGameOverlayHost?.clear();
       VRSpike.latestInGameOverlayPointerPosition = null;
@@ -2824,6 +2833,39 @@ export class VRSpike {
    * world click.
    */
   private static readonly BESPOKE_WORLD_PROMPT_ENABLED = true;
+
+  /**
+   * Phase G2/G3 reprojected the whole of `InGameOverlay` into VR as a panel.
+   * Turned off by design decision 2026-08-23 (ROADMAP 4.8): the overlay is not
+   * presented in VR at all.
+   *
+   * **Why.** Headset session 2 reported a full-size 2D UI appearing after any
+   * interaction and then jumping to the position of whatever was interacted
+   * with next. That is not a leak — it is this feature working as built:
+   *
+   * - `VRPanelHost.place()` runs only when the panel's owner changes, and the
+   *   owner is the same `InGameOverlay` singleton every frame. So the panel is
+   *   placed once, on the first frame the context is non-null, and world-locks
+   *   there for the whole session.
+   * - The panel material is `transparent`, so it is invisible until the GUI
+   *   scene draws something. The target UI is gated on `_canShowTargetUI()`,
+   *   which needs `CursorManager.selectedObject` — set only when VR aim lands
+   *   on something interactable. Hence "appears after interacting".
+   * - `InGameOverlay` lays its target UI out in **screen space**, at the
+   *   projected 2D position of the selected object. Reprojected onto one fixed
+   *   panel, that content lands wherever the object happened to project, so a
+   *   new target makes the name plate and health bar jump.
+   *
+   * The overlay's own content is reachable without it: the action wheel's
+   * `Menu` route opens `InGameOverlay` on its `BTN_CHAR` tab as a foreground
+   * panel, and Cancel Combat is the wheel's `Clear Actions` wedge.
+   *
+   * Safe to disable because `BESPOKE_WORLD_PROMPT_ENABLED` is true — the
+   * bespoke world prompt, not this overlay, is the live interaction surface.
+   * If that flag is ever flipped off, this one must come back on first or VR
+   * has no way to act on anything.
+   */
+  private static readonly INGAME_OVERLAY_PANEL_ENABLED = false;
 
   private static renderPanel(): void {
     const renderer = VRSpike.renderer;
