@@ -89,6 +89,9 @@ const WORLD_STATE = `(() => {
       ? menus.activeModals.map((m) => m && m.constructor ? m.constructor.name : '?')
       : null,
     inDialog: !!(menus && menus.InGameDialog && menus.InGameDialog.bVisible),
+    // Gates every creature's updateActionQueue. LoadModule sets it; if a save
+    // load does not, nothing in the world can act.
+    readyToProcessEvents: module ? module.readyToProcessEvents === true : null,
     presenting: !!(K.VRSpike && K.VRSpike.isPresenting),
   };
 })()`;

@@ -457,6 +457,31 @@ async function activateWorldAction(harness, { objectId, actionLabel }) {
   return outcome;
 }
 
+/**
+ * Counts how often the player's update actually runs.
+ *
+ * Wrapped and sampled rather than reasoned about: every gate inside
+ * ModuleCreature.update can pass while update() itself is never reached, and
+ * those two look identical from the outside.
+ */
+async function countPlayerUpdates(harness, millis = 2000) {
+  await harness.evaluate(`(() => {
+    const player = window.KotOR.PartyManager.party[0];
+    if (!player) return false;
+    window.__updateCounts = { update: 0, updateActionQueue: 0 };
+    const origUpdate = player.update.bind(player);
+    const origQueue = player.updateActionQueue.bind(player);
+    player.update = function (delta) { window.__updateCounts.update++; return origUpdate(delta); };
+    player.updateActionQueue = function (delta) { window.__updateCounts.updateActionQueue++; return origQueue(delta); };
+    window.__restoreUpdates = () => { delete player.update; delete player.updateActionQueue; };
+    return true;
+  })()`);
+  await sleep(millis);
+  return harness.evaluate(
+    `(() => { const c = window.__updateCounts; try { window.__restoreUpdates(); } catch (e) {} return c; })()`,
+  );
+}
+
 async function boot(harness, url) {
   line('  · launching');
   await harness.launch(url);
@@ -872,7 +897,19 @@ async function runPlaythrough(harness, url, args) {
     await record('new game through character creation', () => newGameThroughCharacterCreation(harness));
   }
 
+  await record('player updates BEFORE entering VR', async () => {
+    const counts = await countPlayerUpdates(harness);
+    line(`  · calls in 2s (flatscreen): ${JSON.stringify(counts)}`);
+    return counts;
+  });
+
   await record('enter VR session', () => enterVrSession(harness));
+
+  await record('player updates AFTER entering VR', async () => {
+    const counts = await countPlayerUpdates(harness);
+    line(`  · calls in 2s (in session): ${JSON.stringify(counts)}`);
+    return counts;
+  });
 
   await record('opening conversation', async () => {
     const before = await dialogueSnapshot(harness);
@@ -902,6 +939,90 @@ async function runPlaythrough(harness, url, args) {
     line(`  · VR prompts (${prompts.candidateCount}): ${JSON.stringify(prompts.prompts.slice(0, 8), null, 1)}`);
     return { survey, prompts };
   });
+
+  await record('use the Skip Prologue console to reach Peragus', async () => {
+    // Through the real VR world-prompt route, not a scripted LoadModule: the
+    // point is to exercise the activation path the player uses.
+    //
+    // Give the world a moment first. Activating immediately after a resume
+    // enqueues the action before the engine has settled, and it then sits
+    // undrained — which reads exactly like "the prompt did nothing" and cost a
+    // long detour before the settling turned out to be the whole story.
+    await sleep(3000);
+    const used = await activateWorldAction(harness, {
+      objectId: 'module-object:97',
+      actionLabel: 'Use: Skip Prologue',
+    });
+    line(`  · activated ${JSON.stringify(used)}`);
+
+    await harness.waitFor(
+      `(() => { const m = window.KotOR.GameState.MenuManager;
+        return !!(m && m.InGameDialog && m.InGameDialog.bVisible); })()`,
+      TIMEOUTS.short, 500,
+    );
+
+    // Choose by label, not index: "1. [Continue the Prologue.]" is first, and
+    // picking blindly quietly kept us on the Ebon Hawk.
+    const played = await playDialogue(harness, {
+      label: 'skip prologue confirm',
+      choose: (replies) => {
+        const index = replies.findIndex((reply) => /skip the prologue/i.test(reply));
+        if (index < 0) {
+          throw new Error(`no "Skip the Prologue" reply offered; got ${JSON.stringify(replies)}`);
+        }
+        return index;
+      },
+    });
+    line(`  · ${JSON.stringify(played.transcript.slice(-3))}`);
+
+    await harness.waitFor(`(() => {
+      const gs = window.KotOR.GameState;
+      const area = gs.module && gs.module.area;
+      return !!(area && String(area.name || '').toLowerCase() !== '001ebo');
+    })()`, TIMEOUTS.moduleLoad, 3000);
+
+    const after = await worldState(harness);
+    line(`  · now in ${after.moduleName} as ${after.playerName}`);
+    return after;
+  });
+
+  await record('settle into Peragus', async () => {
+    // A module transition lands with LoadScreen up and no engine mode; the
+    // overlay is what carries INGAME.
+    await harness.evaluate(`(async () => {
+      const gs = window.KotOR.GameState;
+      const deadline = Date.now() + 60000;
+      while (Date.now() < deadline) {
+        const playing = gs.VideoManager && gs.VideoManager.isMoviePlaying
+          ? gs.VideoManager.isMoviePlaying() : false;
+        if (!playing && gs.Mode !== 5) break;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      return true;
+    })()`, { timeoutMs: 90000 });
+    await harness.evaluate(
+      `(() => { try { window.KotOR.GameState.MenuManager.InGameOverlay.open(); } catch (e) {} return true; })()`,
+    );
+    await sleep(2000);
+    const snapshot = await dialogueSnapshot(harness);
+    if (snapshot.located && snapshot.visible) {
+      const played = await playDialogue(harness, { label: 'peragus opening' });
+      line(`  · opening conversation: ${played.turns} turns`);
+      for (const entry of played.transcript.slice(0, 8)) line(`      ${entry.slice(0, 130)}`);
+    }
+    const state = await worldState(harness);
+    line(`  · ${JSON.stringify(state)}`);
+    const survey = await surveyArea(harness);
+    if (survey.located) {
+      line(`  · ${survey.areaName}: ${JSON.stringify(survey.counts)}`);
+      line(`  · hostiles: ${JSON.stringify(survey.hostiles.slice(0, 5))}`);
+    }
+    const prompts = await listWorldPrompts(harness);
+    line(`  · VR prompts: ${JSON.stringify(prompts.prompts ? prompts.prompts.slice(0, 6) : prompts)}`);
+    return { state, survey, prompts };
+  });
+
+  await record('checkpoint: peragus arrival', () => checkpoint(harness, 'peragus-arrival'));
 
   report.finalState = await worldState(harness).catch(() => null);
   line(`\nfinal state: ${JSON.stringify(report.finalState, null, 2)}`);
