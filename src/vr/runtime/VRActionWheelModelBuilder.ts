@@ -10,9 +10,23 @@ export interface VRActionWheelEngineAction {
   readonly id: string;
   readonly label: string;
   readonly icon?: string;
+  /**
+   * Which `ActionMenuManager` panel this came from. Carried through because the
+   * panel *is* the categorisation (ROADMAP 4.8): `UpdateActionMenus` puts Attack
+   * and the equipped-weapon attack-mode feats in target panel 0 and hostile
+   * Force powers in target panel 1, and friendly powers in self panel 1. The
+   * wheel used to flatten all of it into one top-level list, throwing that away
+   * and then paginating.
+   */
+  readonly panelIndex: number;
   revalidate(): boolean;
   activate(): void;
 }
+
+/** Target panel 0: Attack plus the feats filtered by `getEquippedWeaponType()`. */
+const ATTACK_PANEL_INDEX = 0;
+/** Target panel 1 (hostile) and self panel 1 (friendly) are both Force powers. */
+const FORCE_POWER_PANEL_INDEX = 1;
 
 export interface VRActionWheelPartyMember {
   readonly id: string;
@@ -26,17 +40,32 @@ export interface VRActionWheelBuildContext {
   readonly id: string;
   readonly targetActions: readonly VRActionWheelEngineAction[];
   readonly selfActions: readonly VRActionWheelEngineAction[];
-  readonly canLevelUp: boolean;
+  /**
+   * True only when the aimed target is a hostile creature — the sole case in
+   * which `ActionMenuManager` fills the target panels with combat actions.
+   *
+   * For anything else (a door, a container, a trap) those same panel indices
+   * carry Security, Bash, Open, and mine Disarm/Recover, which are world
+   * actions and must stay at the top level rather than being filed under
+   * "Attacks". The two cases never co-occur, because the engine builds its
+   * target panels for whichever single `oTarget` is current — which is why the
+   * combat top level is exactly six items and never paginates.
+   */
+  readonly targetIsHostileCreature: boolean;
   readonly partyMembers: readonly VRActionWheelPartyMember[];
-  readonly openInventory: () => void;
-  readonly openCharacter: () => void;
-  readonly openMap: () => void;
   readonly openComfortSettings: () => void;
-  readonly openEquipment: () => void;
-  readonly openAbilities: () => void;
-  readonly openJournal: () => void;
-  readonly openMessages: () => void;
-  readonly openOptions: () => void;
+  /**
+   * Opens the engine's in-game menu on the Character tab.
+   *
+   * One wedge replaces eight. The wheel used to spend three top-level wedges
+   * (Inventory, Character, Map) plus a five-item Screens submenu on what is one
+   * menu with a tab bar: every one of the eight screens sets
+   * `childMenu = MenuTop` in `MenuManager`, `GameMenu.show()` shows the child,
+   * and `getActiveControls()` includes the child's controls — so the tab bar is
+   * up and clickable the moment any screen opens. The player switches tabs
+   * there rather than reopening the wheel.
+   */
+  readonly openMenu: () => void;
   /**
    * True when the player has queued actions or is in combat — the only state in
    * which clearing is meaningful. The wheel omits the route otherwise rather
@@ -65,55 +94,10 @@ export interface VRActionMenuEntry {
 
 type VRActionWheelMenuCallback = keyof Pick<
   VRActionWheelBuildContext,
-  'openInventory' | 'openCharacter' | 'openMap' | 'openComfortSettings' |
-  'openEquipment' | 'openAbilities' | 'openJournal' | 'openMessages' | 'openOptions'
+  'openComfortSettings' | 'openMenu'
 >;
 
-interface VRActionWheelMenuRoute {
-  readonly id: string;
-  readonly label: string;
-  /**
-   * Verified against the retail `swpc_tex_gui.erf` key list. TSL names the
-   * in-game overlay icons `lbl_icn_<screen>2`; the wheel previously used names
-   * like `inv_bag01` and `iattackr`, none of which exist, so every wedge logged
-   * a load failure and drew the generic fallback.
-   */
-  readonly icon: string;
-  readonly callback: VRActionWheelMenuCallback;
-}
-
-/** Reached in one press — the screens opened often enough to want them shallow. */
-const STATIC_ACTIONS: readonly VRActionWheelMenuRoute[] = [
-  { id: 'menu:inventory', label: 'Inventory', icon: 'lbl_icn_inv2', callback: 'openInventory' },
-  { id: 'menu:character', label: 'Character', icon: 'lbl_icn_char2', callback: 'openCharacter' },
-  { id: 'menu:map', label: 'Map', icon: 'lbl_icn_map2', callback: 'openMap' },
-];
-
-/**
- * The rest of the flatscreen in-game overlay (ROADMAP 4.5).
- *
- * `InGameOverlay` offers eight screens — Messages, Journal, Map, Options,
- * Character, Abilities, Inventory, Equipment — and the wheel routed only three
- * of them, so Equipment, Abilities, Journal, Messages, and Options had no VR
- * route at all. Equipment in particular is not optional: it is where gear is
- * swapped.
- *
- * They go in a submenu rather than at the top level so the common three stay a
- * single press, matching how Party is already nested.
- */
-const SCREEN_ACTIONS: readonly VRActionWheelMenuRoute[] = [
-  { id: 'menu:equipment', label: 'Equipment', icon: 'lbl_icn_equ2', callback: 'openEquipment' },
-  { id: 'menu:abilities', label: 'Abilities', icon: 'lbl_icn_abi2', callback: 'openAbilities' },
-  { id: 'menu:journal', label: 'Journal', icon: 'lbl_icn_que2', callback: 'openJournal' },
-  { id: 'menu:messages', label: 'Messages', icon: 'lbl_icn_msg2', callback: 'openMessages' },
-  { id: 'menu:options', label: 'Options', icon: 'lbl_icn_opt2', callback: 'openOptions' },
-];
-
-const MENU_CALLBACKS: readonly VRActionWheelMenuCallback[] = [
-  ...STATIC_ACTIONS.map((route) => route.callback),
-  ...SCREEN_ACTIONS.map((route) => route.callback),
-  'openComfortSettings',
-];
+const MENU_CALLBACKS: readonly VRActionWheelMenuCallback[] = ['openComfortSettings', 'openMenu'];
 
 /** Builds an immutable, engine-independent snapshot in deterministic route order. */
 export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadialMenuDefinition {
@@ -121,16 +105,63 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
 
   const items: VRRadialContentItem[] = [];
   const engineIds = new Set<string>();
-  appendEngineActions(items, context.targetActions, engineIds);
-  appendEngineActions(items, context.selfActions, engineIds);
+  const rootId = context.id.trim();
+  const hostile = context.targetIsHostileCreature === true;
 
-  for (const route of STATIC_ACTIONS) {
-    items.push(createStaticAction(route.id, route.label, route.icon, context[route.callback]));
+  // Combat splits into two submenus over the panels the engine already
+  // filtered. Non-combat target actions (Security, Bash, Open, mine
+  // Disarm/Recover) stay at the top level, where the player expects to reach
+  // them in one press.
+  const combatTargetActions = hostile ? context.targetActions : [];
+  const worldTargetActions = hostile ? [] : context.targetActions;
+
+  const attackActions = actionsFromPanel(combatTargetActions, ATTACK_PANEL_INDEX);
+  const forcePowerActions = [
+    ...actionsFromPanel(combatTargetActions, FORCE_POWER_PANEL_INDEX),
+    ...actionsFromPanel(context.selfActions, FORCE_POWER_PANEL_INDEX),
+  ];
+
+  appendSubmenuOfEngineActions(items, {
+    id: 'submenu:attacks',
+    label: 'Attacks',
+    icon: 'i_attack',
+    menuId: `${rootId}:attacks`,
+    actions: attackActions,
+  });
+
+  appendSubmenuOfEngineActions(items, {
+    id: 'submenu:force-powers',
+    label: 'Force Powers',
+    // The Abilities tab icon, where Force powers live. `ip_forcepower` looks
+    // like it should exist and does not — naming a missing resref logs a load
+    // failure every time the wheel opens and lands on the same fallback anyway.
+    icon: 'lbl_icn_abi2',
+    menuId: `${rootId}:force-powers`,
+    actions: forcePowerActions,
+  });
+
+  // Anything the engine produced that the two combat panels did not claim:
+  // world actions when the target is not hostile, and any future panel this
+  // build does not know about. Dropping them silently would make an authored
+  // action unreachable, which is worse than an extra wedge.
+  appendEngineActions(items, worldTargetActions, engineIds);
+  appendEngineActions(
+    items,
+    context.selfActions.filter((action) => readPanelIndex(action) !== FORCE_POWER_PANEL_INDEX),
+    engineIds,
+  );
+  if (hostile) {
+    appendEngineActions(
+      items,
+      context.targetActions.filter((action) => {
+        const panel = readPanelIndex(action);
+        return panel !== ATTACK_PANEL_INDEX && panel !== FORCE_POWER_PANEL_INDEX;
+      }),
+      engineIds,
+    );
   }
 
-  if (context.canLevelUp === true) {
-    items.push(createStaticAction('menu:level-up', 'Level-Up', 'lbl_levelup', context.openCharacter));
-  }
+  items.push(createStaticAction('menu:screens', 'Menu', 'lbl_icn_char2', context.openMenu));
 
   const partyMembers = validPartyMembers(context.partyMembers);
   if (partyMembers.length > 0) {
@@ -156,19 +187,6 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
       context.clearQueuedActions,
     ));
   }
-
-  items.push({
-    kind: 'submenu',
-    id: 'submenu:screens',
-    label: 'Screens',
-    revalidate: () => true,
-    buildMenu: () => createMenu(
-      `${context.id.trim()}:screens`,
-      'Screens',
-      SCREEN_ACTIONS.map((route) =>
-        createStaticAction(route.id, route.label, route.icon, context[route.callback])),
-    ),
-  });
 
   // VR-only, so there is no authored KOTOR icon to point at; the fallback is
   // the correct outcome rather than a missing-texture warning.
@@ -203,6 +221,60 @@ export function createVRActionSourceKey(
     normalizeIdentity(entry?.icon),
     normalizeIdentity(entry?.playerFacingLabel),
   ]);
+}
+
+/**
+ * A missing or malformed `panelIndex` must not silently land in a combat page.
+ * `NaN` matches no panel constant, so such an action falls through to the
+ * top-level catch-all instead of being filed under a category it may not
+ * belong to.
+ */
+function readPanelIndex(action: VRActionWheelEngineAction): number {
+  const panelIndex = action?.panelIndex;
+  return Number.isInteger(panelIndex) ? (panelIndex as number) : Number.NaN;
+}
+
+function actionsFromPanel(
+  actions: readonly VRActionWheelEngineAction[],
+  panelIndex: number,
+): readonly VRActionWheelEngineAction[] {
+  return actions.filter((action) => readPanelIndex(action) === panelIndex);
+}
+
+/**
+ * Adds a combat submenu, but only when it has at least one currently valid
+ * action. An empty wedge would be a control that does nothing — and worse, an
+ * empty menu fails `validateVRRadialMenu`'s "at least one page" rule with a
+ * `RangeError`, which would take the whole wheel down mid-fight.
+ */
+function appendSubmenuOfEngineActions(
+  output: VRRadialContentItem[],
+  submenu: {
+    readonly id: string;
+    readonly label: string;
+    readonly icon: string;
+    readonly menuId: string;
+    readonly actions: readonly VRActionWheelEngineAction[];
+  },
+): void {
+  const buildItems = (): VRRadialContentItem[] => {
+    const items: VRRadialContentItem[] = [];
+    appendEngineActions(items, submenu.actions, new Set<string>());
+    return items;
+  };
+
+  if (buildItems().length === 0) return;
+
+  output.push({
+    kind: 'submenu',
+    id: submenu.id,
+    label: submenu.label,
+    icon: submenu.icon,
+    revalidate: () => buildItems().length > 0,
+    // Called lazily when the submenu opens, so the page re-snapshots the
+    // engine's validity then rather than when the wheel was first opened.
+    buildMenu: () => createMenu(submenu.menuId, submenu.label, buildItems()),
+  });
 }
 
 function appendEngineActions(
@@ -325,6 +397,7 @@ function isValidEngineAction(action: VRActionWheelEngineAction): boolean {
     isNonEmptyString(action.id) &&
     isNonEmptyString(action.label) &&
     (action.icon === undefined || isNonEmptyString(action.icon)) &&
+    Number.isInteger(action.panelIndex) &&
     typeof action.revalidate === 'function' &&
     typeof action.activate === 'function';
 }

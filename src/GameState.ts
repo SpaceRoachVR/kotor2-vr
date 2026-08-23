@@ -1939,19 +1939,24 @@ export class GameState implements EngineContext {
             kind: 'self',
             panels: panels.selfPanels as readonly VRActionMenuPanel[],
           }, vrActionMenuBridgeDependencies),
-          canLevelUp: actor.canLevelUp(),
+          targetIsHostileCreature: target !== null,
           partyMembers: snapshotVRPartyMembers(),
-          openInventory: () => GameState.MenuManager.MenuInventory.open(),
-          openCharacter: () => GameState.MenuManager.MenuCharacter.open(),
-          openMap: () => GameState.MenuManager.MenuMap.open(),
           openComfortSettings: () => { vrComfortSettingsPanelOpen = true; },
-          // The rest of InGameOverlay's screens (ROADMAP 4.5). Equipment,
-          // Abilities, Journal, Messages, and Options had no VR route at all.
-          openEquipment: () => GameState.MenuManager.MenuEquipment.open(),
-          openAbilities: () => GameState.MenuManager.MenuAbilities.open(),
-          openJournal: () => GameState.MenuManager.MenuJournal.open(),
-          openMessages: () => GameState.MenuManager.MenuMessages.open(),
-          openOptions: () => GameState.MenuManager.MenuOptions.open(),
+          /**
+           * ROADMAP 4.8 — one wedge for all eight in-game screens.
+           *
+           * `MenuCharacter` is the Character tab, and `MenuManager` sets
+           * `childMenu = MenuTop` on every one of the eight screens. `show()`
+           * shows the child and `getActiveControls()` includes its controls, so
+           * opening Character brings up the live tab bar and the player reaches
+           * Equipment, Inventory, Abilities, Journal, Messages, Map and Options
+           * from there rather than reopening the wheel.
+           *
+           * This also supersedes the dedicated Level-Up wedge: `MenuCharacter`
+           * is where Auto Level-Up lives, so it is one hop away rather than a
+           * seventh top-level item that would force the wheel to paginate.
+           */
+          openMenu: () => GameState.MenuManager.MenuCharacter.open(),
           // BTN_CLEARALL's exact behaviour, offered only when there is
           // something to clear.
           canClearActions: actor.actionQueue.length > 0 ||

@@ -22,6 +22,10 @@ function engineAction(
   return {
     id,
     label,
+    // Panel 0 by default. For target actions that is the Attack panel, but only
+    // when the target is a hostile creature — otherwise panel 0 carries world
+    // actions, which is the default this helper is used under.
+    panelIndex: 0,
     revalidate: () => true,
     activate: jest.fn(),
     ...overrides,
@@ -47,17 +51,10 @@ function context(overrides: Partial<VRActionWheelBuildContext> = {}): VRActionWh
     id: 'action-wheel',
     targetActions: [],
     selfActions: [],
-    canLevelUp: false,
+    targetIsHostileCreature: false,
     partyMembers: [],
-    openInventory: jest.fn(),
-    openCharacter: jest.fn(),
-    openMap: jest.fn(),
     openComfortSettings: jest.fn(),
-    openEquipment: jest.fn(),
-    openAbilities: jest.fn(),
-    openJournal: jest.fn(),
-    openMessages: jest.fn(),
-    openOptions: jest.fn(),
+    openMenu: jest.fn(),
     canClearActions: false,
     clearQueuedActions: jest.fn(),
     ...overrides,
@@ -86,69 +83,127 @@ function findSubmenu(menu: VRRadialMenuDefinition, id: string): VRRadialSubmenuI
   return item;
 }
 
-test('orders combat, self, menus, conditional level-up, party, and comfort settings', () => {
+/**
+ * ROADMAP 4.8. The combat top level is exactly six items and must never
+ * paginate: pagination mid-fight is the failure this redesign exists to remove,
+ * and `validateVRRadialMenu` caps a page at six content items anyway.
+ */
+test('a hostile target yields exactly six top-level items on one page', () => {
   const menu = buildVRActionWheel(context({
-    targetActions: [engineAction('attack', 'Attack')],
-    selfActions: [engineAction('force-lightning', 'Force Lightning')],
-    canLevelUp: true,
+    targetIsHostileCreature: true,
+    targetActions: [
+      engineAction('attack', 'Attack', { panelIndex: 0 }),
+      engineAction('flurry', 'Flurry', { panelIndex: 0 }),
+      engineAction('lightning', 'Force Lightning', { panelIndex: 1 }),
+    ],
+    selfActions: [engineAction('heal', 'Heal', { panelIndex: 1 })],
     partyMembers: [partyMember('kreia', 'Kreia')],
+    canClearActions: true,
   }));
 
   expect(contentIds(menu)).toEqual([
-    'engine:attack',
-    'engine:force-lightning',
-    'menu:inventory',
-    'menu:character',
-    'menu:map',
-    'menu:level-up',
+    'submenu:attacks',
+    'submenu:force-powers',
+    'menu:screens',
     'submenu:party',
-    'submenu:screens',
+    'action:clear-queue',
     'menu:comfort-settings',
   ]);
+  expect(menu.pages).toHaveLength(1);
   expect(contentIds(menu)).not.toContain('menu:galaxy-map');
+  // Superseded by the Menu route: MenuCharacter is where Auto Level-Up lives,
+  // so a seventh top-level wedge would have forced pagination for something
+  // that is never time-critical.
+  expect(contentIds(menu)).not.toContain('menu:level-up');
 });
 
-test('routes the rest of the in-game overlay through the Screens submenu', () => {
-  // InGameOverlay offers eight screens; the wheel used to reach three of them,
-  // leaving Equipment, Abilities, Journal, Messages, and Options with no VR
-  // route at all (ROADMAP 4.5).
-  const openEquipment = jest.fn();
-  const openAbilities = jest.fn();
-  const openJournal = jest.fn();
-  const openMessages = jest.fn();
-  const openOptions = jest.fn();
-  const screens = findSubmenu(
-    buildVRActionWheel(context({
-      openEquipment, openAbilities, openJournal, openMessages, openOptions,
-    })),
-    'submenu:screens',
+test('splits Attacks from Force Powers along the panels the engine already filtered', () => {
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    targetActions: [
+      engineAction('attack', 'Attack', { panelIndex: 0 }),
+      engineAction('flurry', 'Flurry', { panelIndex: 0 }),
+      engineAction('lightning', 'Force Lightning', { panelIndex: 1 }),
+    ],
+    selfActions: [engineAction('heal', 'Heal', { panelIndex: 1 })],
+  }));
+
+  expect(contentIds(findSubmenu(menu, 'submenu:attacks').buildMenu()))
+    .toEqual(['engine:attack', 'engine:flurry']);
+  // Hostile (target panel 1) and friendly (self panel 1) powers share one page.
+  expect(contentIds(findSubmenu(menu, 'submenu:force-powers').buildMenu()))
+    .toEqual(['engine:lightning', 'engine:heal']);
+});
+
+test('keeps world actions at the top level when the target is not a hostile creature', () => {
+  // The same panel indices carry Security, Bash, Open and mine Disarm/Recover
+  // for a door, container or trap. Filing those under "Attacks" would put a
+  // one-press interaction behind a submenu.
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: false,
+    targetActions: [
+      engineAction('security', 'Security', { panelIndex: 1 }),
+      engineAction('bash', 'Bash', { panelIndex: 0 }),
+    ],
+  }));
+
+  expect(contentIds(menu)).toContain('engine:security');
+  expect(contentIds(menu)).toContain('engine:bash');
+  expect(contentIds(menu)).not.toContain('submenu:attacks');
+  expect(contentIds(menu)).not.toContain('submenu:force-powers');
+});
+
+test('omits a combat submenu with no valid actions rather than offering a dead wedge', () => {
+  // An empty submenu is not merely useless: an empty menu fails
+  // validateVRRadialMenu's "at least one page" rule with a RangeError, which
+  // would take the whole wheel down mid-fight.
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    targetActions: [
+      engineAction('attack', 'Attack', { panelIndex: 0 }),
+      engineAction('spent', 'Force Lightning', { panelIndex: 1, revalidate: () => false }),
+    ],
+  }));
+
+  expect(contentIds(menu)).toContain('submenu:attacks');
+  expect(contentIds(menu)).not.toContain('submenu:force-powers');
+});
+
+test('paginates a combat page that exceeds the six-item content cap', () => {
+  // Later in the game a character knows more than six hostile powers. The cap
+  // is enforced by a thrown RangeError, so this must paginate rather than throw.
+  const powers = Array.from({ length: 9 }, (_, index) =>
+    engineAction(`power-${index}`, `Power ${index}`, { panelIndex: 1 }));
+  const forcePowers = findSubmenu(
+    buildVRActionWheel(context({ targetIsHostileCreature: true, targetActions: powers })),
+    'submenu:force-powers',
   ).buildMenu();
 
-  expect(contentIds(screens)).toEqual([
-    'menu:equipment',
-    'menu:abilities',
-    'menu:journal',
-    'menu:messages',
-    'menu:options',
-  ]);
-
-  findAction(screens, 'menu:equipment').activate();
-  findAction(screens, 'menu:abilities').activate();
-  findAction(screens, 'menu:journal').activate();
-  findAction(screens, 'menu:messages').activate();
-  findAction(screens, 'menu:options').activate();
-
-  expect(openEquipment).toHaveBeenCalledTimes(1);
-  expect(openAbilities).toHaveBeenCalledTimes(1);
-  expect(openJournal).toHaveBeenCalledTimes(1);
-  expect(openMessages).toHaveBeenCalledTimes(1);
-  expect(openOptions).toHaveBeenCalledTimes(1);
+  expect(forcePowers.pages.length).toBeGreaterThan(1);
+  expect(contentIds(forcePowers)).toHaveLength(9);
 });
 
-test('rejects a build context missing any screen route', () => {
-  for (const missing of [
-    'openEquipment', 'openAbilities', 'openJournal', 'openMessages', 'openOptions',
-  ] as const) {
+test('the Menu wedge is the single route to all eight in-game screens', () => {
+  // MenuManager sets childMenu = MenuTop on every one of the eight screens, and
+  // GameMenu.show() shows the child, so opening Character brings up the live
+  // tab bar. Eight wedges across two levels collapse into one.
+  const openMenu = jest.fn();
+  const menu = buildVRActionWheel(context({ openMenu }));
+
+  findAction(menu, 'menu:screens').activate();
+
+  expect(openMenu).toHaveBeenCalledTimes(1);
+  for (const retired of [
+    'menu:inventory', 'menu:character', 'menu:map',
+    'menu:equipment', 'menu:abilities', 'menu:journal', 'menu:messages', 'menu:options',
+    'submenu:screens',
+  ]) {
+    expect(contentIds(menu)).not.toContain(retired);
+  }
+});
+
+test('rejects a build context missing any menu route', () => {
+  for (const missing of ['openComfortSettings', 'openMenu'] as const) {
     const broken = context();
     delete (broken as unknown as Record<string, unknown>)[missing];
 
@@ -211,36 +266,36 @@ test('omits an engine descriptor whose initial revalidation throws', () => {
 });
 
 test('static actions invoke only their bound local routes', () => {
-  const openInventory = jest.fn();
-  const openCharacter = jest.fn();
-  const openMap = jest.fn();
+  const openMenu = jest.fn();
   const openComfortSettings = jest.fn();
-  const menu = buildVRActionWheel(context({
-    openInventory,
-    openCharacter,
-    openMap,
-    openComfortSettings,
-  }));
+  const menu = buildVRActionWheel(context({ openMenu, openComfortSettings }));
 
-  findAction(menu, 'menu:inventory').activate();
-  findAction(menu, 'menu:character').activate();
-  findAction(menu, 'menu:map').activate();
+  findAction(menu, 'menu:screens').activate();
+
+  expect(openMenu).toHaveBeenCalledTimes(1);
+  expect(openComfortSettings).not.toHaveBeenCalled();
+
   findAction(menu, 'menu:comfort-settings').activate();
 
-  expect(openInventory).toHaveBeenCalledTimes(1);
-  expect(openCharacter).toHaveBeenCalledTimes(1);
-  expect(openMap).toHaveBeenCalledTimes(1);
   expect(openComfortSettings).toHaveBeenCalledTimes(1);
+  expect(openMenu).toHaveBeenCalledTimes(1);
 });
 
-test('Level-Up opens Character and never creates a route when leveling is unavailable', () => {
-  const openCharacter = jest.fn();
-  const eligibleMenu = buildVRActionWheel(context({ canLevelUp: true, openCharacter }));
+test('an action carrying no usable panel index falls through to the top level', () => {
+  // Never guess a category for a malformed descriptor: filing it under Attacks
+  // or Force Powers would put it somewhere it may not belong, and dropping it
+  // would make an authored action unreachable.
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    targetActions: [
+      engineAction('attack', 'Attack', { panelIndex: 0 }),
+      engineAction('odd', 'Odd Action', { panelIndex: 7 }),
+    ],
+  }));
 
-  findAction(eligibleMenu, 'menu:level-up').activate();
-
-  expect(openCharacter).toHaveBeenCalledTimes(1);
-  expect(contentIds(buildVRActionWheel(context({ canLevelUp: false })))).not.toContain('menu:level-up');
+  expect(contentIds(menu)).toContain('engine:odd');
+  expect(contentIds(findSubmenu(menu, 'submenu:attacks').buildMenu()))
+    .not.toContain('engine:odd');
 });
 
 test('party re-resolves the live index before switching', () => {

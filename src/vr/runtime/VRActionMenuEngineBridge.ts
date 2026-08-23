@@ -73,6 +73,10 @@ export function snapshotVRActionMenuPanelEntries<TActor extends object, TTarget 
         id: source.sourceKey,
         label: source.label,
         icon: source.icon,
+        // ROADMAP 4.8: the panel is the categorisation. Carried through so the
+        // wheel can route Attack and attack-mode feats (panel 0) apart from
+        // Force powers (panel 1) instead of flattening both into one list.
+        panelIndex,
         revalidate: () => refreshActionSource(
           snapshot.actor,
           target,

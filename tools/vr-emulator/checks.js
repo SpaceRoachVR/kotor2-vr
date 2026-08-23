@@ -103,7 +103,10 @@ const CHECKS = [
     // and draws a generic fallback shape.
     run: (m) => ({
       ok: (m.wheel?.iconLoadFailures ?? 0) === 0 && (m.console?.iconLoadFailures ?? 0) === 0,
-      detail: `wheelFailures=${m.wheel?.iconLoadFailures} totalFailures=${m.console?.iconLoadFailures}`,
+      detail: `wheelFailures=${m.wheel?.iconLoadFailures} totalFailures=${m.console?.iconLoadFailures}` +
+        (m.wheel?.iconLoadFailureTexts?.length
+          ? ` :: ${m.wheel.iconLoadFailureTexts.join(' | ')}`
+          : ''),
     }),
   },
   {
@@ -221,6 +224,28 @@ const CHECKS = [
         detail: broken.length
           ? broken.map(([name, status]) => `${name} ${status}`).join('; ')
           : `${Object.keys(routes).length} routes open cleanly`,
+      };
+    },
+  },
+  {
+    id: 'menu-tab-bar-live',
+    describe: 'opening a screen brings up MenuTop with all eight tabs wired',
+    // ROADMAP 4.8 collapsed eight wheel wedges into one Menu route on the
+    // strength of this. If it stops holding, seven screens become unreachable
+    // in VR and nothing else would report it.
+    run: (m) => {
+      const bar = m.menuTabBar;
+      if (!bar) return { ok: false, detail: 'metric absent' };
+      if (bar.located !== true) {
+        return { ok: false, detail: `subject not located: ${bar.reason}` };
+      }
+      const broken = Object.entries(bar.wired ?? {}).filter(([, status]) => status !== 'ok');
+      const ok = bar.isChild === true && bar.visible === true && broken.length === 0;
+      return {
+        ok,
+        detail: broken.length
+          ? `childMenu=${bar.isChild} visible=${bar.visible} broken: ${broken.map(([t, s]) => `${t} ${s}`).join(', ')}`
+          : `childMenu=${bar.isChild} visible=${bar.visible} all 8 tabs wired`,
       };
     },
   },

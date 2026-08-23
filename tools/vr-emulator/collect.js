@@ -258,6 +258,12 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
         const since = window.__xrHarness.log.slice(${wheelMark});
         return {
           iconLoadFailures: since.filter(e => /could not be loaded/.test(e.text)).length,
+          // Name them. A bare count says the wheel drew a fallback somewhere
+          // but not which wedge, which is the difference between a fixable
+          // report and another run spent finding out.
+          iconLoadFailureTexts: since
+            .filter(e => /could not be loaded/.test(e.text))
+            .map(e => e.text.slice(0, 200)),
           lines: since.length,
         };
       })()`);
@@ -469,9 +475,11 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     onProgress('world prompt survey');
 
     // --- wheel menu routes open without throwing ----------------------------
-    // The action wheel's Screens submenu opens real legacy menus. Two of them
-    // threw on first headset use: MenuMap touched BTN_PRTYSLCT, which TSL's GUI
-    // does not have, and GUIFeatItem dereferenced a padding hole in feats.2da.
+    // These are the eight in-game screens. Since ROADMAP 4.8 the wheel reaches
+    // them through a single Menu wedge and the game's own tab bar rather than
+    // through wedges of its own, but each still has to survive being opened:
+    // two threw on first headset use, MenuMap touching BTN_PRTYSLCT which TSL's
+    // GUI does not have, and GUIFeatItem dereferencing a feats.2da padding hole.
     // Opening each here catches a route that builds but explodes on use.
     metrics.menuRoutes = await harness.evaluate(`(async () => {
       const gs = window.KotOR.GameState;
@@ -494,6 +502,41 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       return results;
     })()`, { timeoutMs: 60000 });
     onProgress('menu routes');
+
+    // --- the tab bar comes up with a screen, and its tabs are live ----------
+    // ROADMAP 4.8's Menu wedge rests entirely on this: eight wheel wedges were
+    // collapsed into one on the strength of MenuManager setting
+    // `childMenu = MenuTop` on every screen, GameMenu.show() showing the child,
+    // and getActiveControls() including the child's controls. If that stops
+    // holding, seven of the eight screens become unreachable in VR and the
+    // wheel would not report it — so assert it rather than trusting the wiring.
+    metrics.menuTabBar = await harness.evaluate(`(async () => {
+      const gs = window.KotOR.GameState;
+      const screen = gs.MenuManager.MenuCharacter;
+      const top = gs.MenuManager.MenuTop;
+      if (!screen) return { located: false, reason: 'no-MenuCharacter' };
+      if (!top) return { located: false, reason: 'no-MenuTop' };
+      try {
+        screen.open();
+        await new Promise(r => setTimeout(r, 400));
+      } catch (error) {
+        return { located: false, reason: 'open-threw: ' + String(error && error.message || error) };
+      }
+      const isChild = screen.childMenu === top;
+      const visible = top.bVisible === true;
+      const tabs = ['BTN_EQU', 'BTN_INV', 'BTN_CHAR', 'BTN_ABI',
+                    'BTN_MSG', 'BTN_JOU', 'BTN_MAP', 'BTN_OPT'];
+      const wired = {};
+      for (const tab of tabs) {
+        const button = top[tab];
+        if (!button) { wired[tab] = 'missing'; continue; }
+        const listeners = button.eventListeners && button.eventListeners['click'];
+        wired[tab] = Array.isArray(listeners) && listeners.length > 0 ? 'ok' : 'no-handler';
+      }
+      try { screen.close(); } catch (e) { /* closing is not what we are testing */ }
+      return { located: true, isChild, visible, wired };
+    })()`, { timeoutMs: 30000 });
+    onProgress('menu tab bar');
 
     // --- menus actually show something --------------------------------------
     // "Opens without throwing" is not the same as "shows content": the second
