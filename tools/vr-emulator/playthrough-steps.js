@@ -14,6 +14,27 @@ const { worldState, clickButtonByText, TIMEOUTS } = require('./playthrough');
 
 const CHECKPOINT_PREFIX = 'VRPT';
 
+/**
+ * Checkpoints in the order they are reached. `--resume <name>` skips every step
+ * belonging to a stage at or before that checkpoint, so a later checkpoint does
+ * not replay the Ebon Hawk — special-casing one name meant every new checkpoint
+ * silently re-ran the whole prologue.
+ */
+const CHECKPOINT_ORDER = [
+  'prologue-start',
+  'peragus-arrival',
+  'medbay-door',
+  'medbay-looted',
+];
+
+function resumedPast(args, checkpoint) {
+  if (!args.resume) return false;
+  const resumedAt = CHECKPOINT_ORDER.indexOf(args.resume);
+  const stageAt = CHECKPOINT_ORDER.indexOf(checkpoint);
+  if (resumedAt < 0 || stageAt < 0) return false;
+  return stageAt <= resumedAt;
+}
+
 function line(text) {
   console.log(text);
 }
@@ -482,6 +503,221 @@ async function countPlayerUpdates(harness, millis = 2000) {
   );
 }
 
+/**
+ * The party's inventory and what the player has equipped.
+ *
+ * Reports whether it located the party at all, not just counts: this project
+ * has twice mistaken a probe reading the wrong object (GameState.player, which
+ * does not exist — the player is PartyManager.party[0]) for an empty inventory.
+ */
+async function describeInventory(harness) {
+  return harness.evaluate(`(() => {
+    const K = window.KotOR;
+    const party = K.PartyManager;
+    if (!party) return { located: false, reason: 'no PartyManager' };
+    const player = party.party ? party.party[0] : null;
+    if (!player) return { located: false, reason: 'no player at party[0]' };
+
+    const nameOf = (item) => {
+      if (!item) return null;
+      try { return String((item.getName && item.getName()) || item.tag || item.templateResRef || '?'); }
+      catch (e) { return '<unreadable>'; }
+    };
+
+    let inventory = [];
+    let inventoryError = null;
+    try {
+      const raw = typeof party.getInventory === 'function'
+        ? party.getInventory()
+        : (player.getInventory ? player.getInventory() : null);
+      if (Array.isArray(raw)) {
+        inventory = raw.map((item) => ({ name: nameOf(item), stack: item && item.stackSize }));
+      } else {
+        inventoryError = 'inventory is not an array: ' + typeof raw;
+      }
+    } catch (error) {
+      inventoryError = String(error && error.message || error);
+    }
+
+    const equipped = {};
+    try {
+      const slots = player.equipment || {};
+      for (const slot of Object.keys(slots)) {
+        if (slots[slot]) equipped[slot] = nameOf(slots[slot]);
+      }
+    } catch (e) { /* leave equipped partial */ }
+
+    return {
+      located: true,
+      playerName: nameOf(player),
+      credits: party.Gold,
+      inventoryCount: inventory.length,
+      inventory: inventory.slice(0, 30),
+      inventoryError,
+      equipped,
+      canLevelUp: typeof player.canLevelUp === 'function' ? !!player.canLevelUp() : null,
+      level: player.getTotalClassLevel ? player.getTotalClassLevel() : null,
+      xp: player.getXP ? player.getXP() : null,
+      hp: player.getHP ? player.getHP() : null,
+      maxHp: player.getMaxHP ? player.getMaxHP() : null,
+    };
+  })()`, { timeoutMs: 60000 });
+}
+
+/**
+ * Walks the player with the engine's own ActionMoveToPoint and waits for
+ * arrival.
+ *
+ * Traversal only. Every *interaction* in this driver goes through the VR
+ * world-prompt route, because that is what is under test; walking is the
+ * engine's pathfinding and walkmesh, which VR does not replace.
+ */
+async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = 90000, label = 'destination' }) {
+  const started = await harness.evaluate(`(() => {
+    const K = window.KotOR;
+    const gs = K.GameState;
+    const player = K.PartyManager.party[0];
+    if (!player) return { ok: false, reason: 'no player' };
+    const action = new gs.ActionFactory.ActionMoveToPoint();
+    const P = K.ActionParameterType || { FLOAT: 2, DWORD: 4, INT: 3 };
+    action.setParameter(0, P.FLOAT, ${Number(x)});
+    action.setParameter(1, P.FLOAT, ${Number(y)});
+    action.setParameter(2, P.FLOAT, ${Number(z)});
+    action.setParameter(3, P.DWORD, gs.module.area.id);
+    action.setParameter(5, P.INT, 1);
+    action.setParameter(6, P.FLOAT, ${Number(range)});
+    action.setParameter(8, P.FLOAT, 60.0);
+    player.actionQueue.add(action);
+    return { ok: true, from: { x: +player.position.x.toFixed(2), y: +player.position.y.toFixed(2) } };
+  })()`);
+  if (!started.ok) throw new Error(`moveTo ${label}: ${started.reason}`);
+
+  // Poll rather than one long waitFor: a confirmation modal suspends gameplay,
+  // so the walk simply stops with its move still queued. Clearing it as it
+  // appears is the difference between "arrived" and a spurious pathfinding bug.
+  const deadline = Date.now() + timeoutMs;
+  let arrived = false;
+  try {
+    while (Date.now() < deadline) {
+      await clearBlockingModal(harness);
+      arrived = await harness.evaluate(`(() => {
+        const player = window.KotOR.PartyManager.party[0];
+        if (!player) return false;
+        const dx = player.position.x - ${Number(x)};
+        const dy = player.position.y - ${Number(y)};
+        return Math.sqrt(dx * dx + dy * dy) <= ${Number(range) + 0.6};
+      })()`);
+      if (arrived) break;
+      await sleep(1000);
+    }
+    if (!arrived) throw new Error('timeout');
+  } catch (error) {
+    const where = await harness.evaluate(`(() => {
+      const player = window.KotOR.PartyManager.party[0];
+      const dx = player.position.x - ${Number(x)};
+      const dy = player.position.y - ${Number(y)};
+      return {
+        at: { x: +player.position.x.toFixed(2), y: +player.position.y.toFixed(2) },
+        remaining: +Math.sqrt(dx * dx + dy * dy).toFixed(2),
+        queued: (player.actionQueue || []).length,
+        action: player.action ? (player.action.constructor ? player.action.constructor.name : '?') : null,
+      };
+    })()`);
+    throw new Error(`moveTo ${label}: did not arrive — ${JSON.stringify(where)}`);
+  }
+
+  return harness.evaluate(`(() => {
+    const player = window.KotOR.PartyManager.party[0];
+    return { x: +player.position.x.toFixed(2), y: +player.position.y.toFixed(2), z: +player.position.z.toFixed(2) };
+  })()`);
+}
+
+/**
+ * Clears a blocking confirmation modal, reporting what it said.
+ *
+ * `InGameConfirm` sits on the modal stack and suspends gameplay, so a walk that
+ * runs into one simply stops with its move still queued — which reads as
+ * "pathfinding stalled" and is not. Always says what the modal contained, so a
+ * dismissed prompt is never silently lost from the record.
+ */
+async function clearBlockingModal(harness) {
+  const outcome = await harness.evaluate(`(() => {
+    const menus = window.KotOR.GameState.MenuManager;
+    const confirm = menus && menus.InGameConfirm;
+    if (!confirm || confirm.bVisible !== true) return { present: false };
+
+    let message = null;
+    try {
+      for (const key of Object.keys(confirm)) {
+        if (!/^LBL_/.test(key)) continue;
+        const control = confirm[key];
+        const text = control && control.text && typeof control.text.text === 'string'
+          ? control.text.text : null;
+        if (text && text.trim()) { message = key + ': ' + text.trim().slice(0, 200); break; }
+      }
+    } catch (e) { message = '<unreadable>'; }
+
+    const ok = confirm.BTN_OK;
+    if (!ok) return { present: true, message, dismissed: false, reason: 'no BTN_OK' };
+    try { ok.click(); } catch (error) {
+      return { present: true, message, dismissed: false, reason: String(error && error.message || error) };
+    }
+    return { present: true, message, dismissed: true };
+  })()`);
+  if (outcome.present) {
+    line(`  · confirm modal ${outcome.dismissed ? 'accepted' : 'NOT dismissed'}: ${outcome.message || '<no text found>'}` +
+      (outcome.reason ? ` (${outcome.reason})` : ''));
+  }
+  return outcome;
+}
+
+/**
+ * Locates a live object by tag, so a walkthrough reads by name rather than by
+ * object id — ids shift between saves, tags do not.
+ */
+async function findObjectByTag(harness, tag) {
+  const wanted = JSON.stringify(String(tag).toLowerCase());
+  const found = await harness.evaluate(`(() => {
+    const gs = window.KotOR.GameState;
+    const area = gs.module && gs.module.area;
+    if (!area) return { located: false, reason: 'no area' };
+    const player = window.KotOR.PartyManager.party[0];
+    const pools = [
+      ['placeable', area.placeables],
+      ['door', area.doors],
+      ['creature', area.creatures],
+      ['trigger', area.triggers],
+    ];
+    const matches = [];
+    for (const [kind, pool] of pools) {
+      if (!Array.isArray(pool)) continue;
+      for (const object of pool) {
+        if (!object) continue;
+        if (String(object.tag || '').toLowerCase() !== ${wanted}) continue;
+        matches.push({
+          kind,
+          id: object.id,
+          promptId: 'module-object:' + object.id,
+          tag: String(object.tag || ''),
+          name: (() => { try { return String((object.getName && object.getName()) || ''); } catch (e) { return ''; } })(),
+          position: {
+            x: +object.position.x.toFixed(2),
+            y: +object.position.y.toFixed(2),
+            z: +object.position.z.toFixed(2),
+          },
+          distance: player ? +player.position.distanceTo(object.position).toFixed(2) : null,
+          locked: typeof object.isLocked === 'function' ? !!object.isLocked() : null,
+        });
+      }
+    }
+    return { located: matches.length > 0, matches };
+  })()`);
+  if (!found.located) {
+    throw new Error(`no object tagged "${tag}" in this area${found.reason ? ` (${found.reason})` : ''}`);
+  }
+  return found.matches;
+}
+
 async function boot(harness, url) {
   line('  · launching');
   await harness.launch(url);
@@ -912,6 +1148,7 @@ async function runPlaythrough(harness, url, args) {
   });
 
   await record('opening conversation', async () => {
+    if (resumedPast(args, 'peragus-arrival')) return { skipped: 'resumed past it' };
     const before = await dialogueSnapshot(harness);
     line(`  · dialogue: ${JSON.stringify({
       visible: before.visible, state: before.state,
@@ -940,89 +1177,226 @@ async function runPlaythrough(harness, url, args) {
     return { survey, prompts };
   });
 
-  await record('use the Skip Prologue console to reach Peragus', async () => {
-    // Through the real VR world-prompt route, not a scripted LoadModule: the
-    // point is to exercise the activation path the player uses.
-    //
-    // Give the world a moment first. Activating immediately after a resume
-    // enqueues the action before the engine has settled, and it then sits
-    // undrained — which reads exactly like "the prompt did nothing" and cost a
-    // long detour before the settling turned out to be the whole story.
-    await sleep(3000);
-    const used = await activateWorldAction(harness, {
-      objectId: 'module-object:97',
-      actionLabel: 'Use: Skip Prologue',
+  // Ebon Hawk section. Skipped once a Peragus checkpoint has been resumed.
+  if (!resumedPast(args, 'peragus-arrival')) {
+    await record('use the Skip Prologue console to reach Peragus', async () => {
+      // Through the real VR world-prompt route, not a scripted LoadModule: the
+      // point is to exercise the activation path the player uses.
+      //
+      // Give the world a moment first. Activating immediately after a resume
+      // enqueues the action before the engine has settled, and it then sits
+      // undrained — which reads exactly like "the prompt did nothing" and cost a
+      // long detour before the settling turned out to be the whole story.
+      await sleep(3000);
+      const used = await activateWorldAction(harness, {
+        objectId: 'module-object:97',
+        actionLabel: 'Use: Skip Prologue',
+      });
+      line(`  · activated ${JSON.stringify(used)}`);
+
+      await harness.waitFor(
+        `(() => { const m = window.KotOR.GameState.MenuManager;
+          return !!(m && m.InGameDialog && m.InGameDialog.bVisible); })()`,
+        TIMEOUTS.short, 500,
+      );
+
+      // Choose by label, not index: "1. [Continue the Prologue.]" is first, and
+      // picking blindly quietly kept us on the Ebon Hawk.
+      const played = await playDialogue(harness, {
+        label: 'skip prologue confirm',
+        choose: (replies) => {
+          const index = replies.findIndex((reply) => /skip the prologue/i.test(reply));
+          if (index < 0) {
+            throw new Error(`no "Skip the Prologue" reply offered; got ${JSON.stringify(replies)}`);
+          }
+          return index;
+        },
+      });
+      line(`  · ${JSON.stringify(played.transcript.slice(-3))}`);
+
+      await harness.waitFor(`(() => {
+        const gs = window.KotOR.GameState;
+        const area = gs.module && gs.module.area;
+        return !!(area && String(area.name || '').toLowerCase() !== '001ebo');
+      })()`, TIMEOUTS.moduleLoad, 3000);
+
+      const after = await worldState(harness);
+      line(`  · now in ${after.moduleName} as ${after.playerName}`);
+      return after;
     });
-    line(`  · activated ${JSON.stringify(used)}`);
 
-    await harness.waitFor(
-      `(() => { const m = window.KotOR.GameState.MenuManager;
-        return !!(m && m.InGameDialog && m.InGameDialog.bVisible); })()`,
-      TIMEOUTS.short, 500,
-    );
-
-    // Choose by label, not index: "1. [Continue the Prologue.]" is first, and
-    // picking blindly quietly kept us on the Ebon Hawk.
-    const played = await playDialogue(harness, {
-      label: 'skip prologue confirm',
-      choose: (replies) => {
-        const index = replies.findIndex((reply) => /skip the prologue/i.test(reply));
-        if (index < 0) {
-          throw new Error(`no "Skip the Prologue" reply offered; got ${JSON.stringify(replies)}`);
+    await record('settle into Peragus', async () => {
+      // A module transition lands with LoadScreen up and no engine mode; the
+      // overlay is what carries INGAME.
+      await harness.evaluate(`(async () => {
+        const gs = window.KotOR.GameState;
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+          const playing = gs.VideoManager && gs.VideoManager.isMoviePlaying
+            ? gs.VideoManager.isMoviePlaying() : false;
+          if (!playing && gs.Mode !== 5) break;
+          await new Promise(r => setTimeout(r, 1000));
         }
-        return index;
-      },
-    });
-    line(`  · ${JSON.stringify(played.transcript.slice(-3))}`);
-
-    await harness.waitFor(`(() => {
-      const gs = window.KotOR.GameState;
-      const area = gs.module && gs.module.area;
-      return !!(area && String(area.name || '').toLowerCase() !== '001ebo');
-    })()`, TIMEOUTS.moduleLoad, 3000);
-
-    const after = await worldState(harness);
-    line(`  · now in ${after.moduleName} as ${after.playerName}`);
-    return after;
-  });
-
-  await record('settle into Peragus', async () => {
-    // A module transition lands with LoadScreen up and no engine mode; the
-    // overlay is what carries INGAME.
-    await harness.evaluate(`(async () => {
-      const gs = window.KotOR.GameState;
-      const deadline = Date.now() + 60000;
-      while (Date.now() < deadline) {
-        const playing = gs.VideoManager && gs.VideoManager.isMoviePlaying
-          ? gs.VideoManager.isMoviePlaying() : false;
-        if (!playing && gs.Mode !== 5) break;
-        await new Promise(r => setTimeout(r, 1000));
+        return true;
+      })()`, { timeoutMs: 90000 });
+      await harness.evaluate(
+        `(() => { try { window.KotOR.GameState.MenuManager.InGameOverlay.open(); } catch (e) {} return true; })()`,
+      );
+      await sleep(2000);
+      const snapshot = await dialogueSnapshot(harness);
+      if (snapshot.located && snapshot.visible) {
+        const played = await playDialogue(harness, { label: 'peragus opening' });
+        line(`  · opening conversation: ${played.turns} turns`);
+        for (const entry of played.transcript.slice(0, 8)) line(`      ${entry.slice(0, 130)}`);
       }
-      return true;
-    })()`, { timeoutMs: 90000 });
-    await harness.evaluate(
-      `(() => { try { window.KotOR.GameState.MenuManager.InGameOverlay.open(); } catch (e) {} return true; })()`,
-    );
-    await sleep(2000);
-    const snapshot = await dialogueSnapshot(harness);
-    if (snapshot.located && snapshot.visible) {
-      const played = await playDialogue(harness, { label: 'peragus opening' });
-      line(`  · opening conversation: ${played.turns} turns`);
-      for (const entry of played.transcript.slice(0, 8)) line(`      ${entry.slice(0, 130)}`);
-    }
-    const state = await worldState(harness);
-    line(`  · ${JSON.stringify(state)}`);
+      const state = await worldState(harness);
+      line(`  · ${JSON.stringify(state)}`);
+      const survey = await surveyArea(harness);
+      if (survey.located) {
+        line(`  · ${survey.areaName}: ${JSON.stringify(survey.counts)}`);
+        line(`  · hostiles: ${JSON.stringify(survey.hostiles.slice(0, 5))}`);
+      }
+      const prompts = await listWorldPrompts(harness);
+      line(`  · VR prompts: ${JSON.stringify(prompts.prompts ? prompts.prompts.slice(0, 6) : prompts)}`);
+      return { state, survey, prompts };
+    });
+  }
+
+  if (!resumedPast(args, 'peragus-arrival')) {
+    await record('checkpoint: peragus arrival', () => checkpoint(harness, 'peragus-arrival'));
+  }
+
+
+  await record('Peragus medical bay: recon', async () => {
+    const inventory = await describeInventory(harness);
+    if (!inventory.located) throw new Error(`inventory: ${inventory.reason}`);
+    line(`  · ${inventory.playerName} lvl=${inventory.level} xp=${inventory.xp} hp=${inventory.hp}/${inventory.maxHp} ` +
+      `credits=${inventory.credits} canLevelUp=${inventory.canLevelUp}`);
+    line(`  · carrying ${inventory.inventoryCount}: ${JSON.stringify(inventory.inventory.slice(0, 10))}` +
+      (inventory.inventoryError ? ` (error: ${inventory.inventoryError})` : ''));
+    line(`  · equipped: ${JSON.stringify(inventory.equipped)}`);
+
     const survey = await surveyArea(harness);
-    if (survey.located) {
-      line(`  · ${survey.areaName}: ${JSON.stringify(survey.counts)}`);
-      line(`  · hostiles: ${JSON.stringify(survey.hostiles.slice(0, 5))}`);
-    }
+    if (!survey.located) throw new Error(`survey: ${survey.reason}`);
+    line(`  · nearest placeables: ${JSON.stringify(survey.nearestPlaceables.slice(0, 10))}`);
+    line(`  · nearest doors: ${JSON.stringify(survey.nearestDoors.slice(0, 5))}`);
+
     const prompts = await listWorldPrompts(harness);
-    line(`  · VR prompts: ${JSON.stringify(prompts.prompts ? prompts.prompts.slice(0, 6) : prompts)}`);
-    return { state, survey, prompts };
+    line(`  · VR prompts: ${JSON.stringify(prompts.prompts || prompts, null, 1)}`);
+    return { inventory, survey, prompts };
   });
 
-  await record('checkpoint: peragus arrival', () => checkpoint(harness, 'peragus-arrival'));
+
+  await record('walk to the medbay door and open it through the VR prompt', async () => {
+    if (resumedPast(args, 'medbay-door')) return { skipped: 'resumed past it' };
+    const doors = await findObjectByTag(harness, 'PeragusDoor1');
+    const door = doors.sort((a, b) => a.distance - b.distance)[0];
+    line(`  · nearest ${door.name} at ${JSON.stringify(door.position)} (${door.distance}m, locked=${door.locked})`);
+
+    await moveTo(harness, {
+      x: door.position.x, y: door.position.y, z: door.position.z,
+      range: 2.0, label: door.name,
+    });
+    await sleep(1500);
+
+    const prompts = await listWorldPrompts(harness);
+    const offered = (prompts.prompts || []).find((p) => p.id === door.promptId);
+    line(`  · prompt: ${JSON.stringify(offered || null)}`);
+    if (!offered) {
+      throw new Error(`no VR prompt for ${door.name} while standing at it; candidates were ` +
+        JSON.stringify((prompts.prompts || []).map((p) => `${p.name}@${p.distance}m inRange=${p.inRange}`)));
+    }
+    if (!offered.actions || !offered.actions.length) {
+      throw new Error(`${door.name} offered no actions (promptError=${offered.promptError})`);
+    }
+
+    await activateWorldAction(harness, { objectId: door.promptId, actionLabel: offered.actions[0] });
+    await sleep(2500);
+    await clearBlockingModal(harness);
+
+    const state = await harness.evaluate(`(() => {
+      const area = window.KotOR.GameState.module.area;
+      const d = (area.doors || []).find((o) => o && o.id === ${Number(door.id)});
+      if (!d) return { located: false };
+      return {
+        located: true,
+        open: typeof d.isOpen === 'function' ? !!d.isOpen() : null,
+        locked: typeof d.isLocked === 'function' ? !!d.isLocked() : null,
+        animState: d.animationState ? d.animationState.index : null,
+      };
+    })()`);
+    line(`  · door after use: ${JSON.stringify(state)}`);
+    if (state.located && state.open === false) {
+      throw new Error(`activating "${offered.actions[0]}" did not open ${door.name}: ${JSON.stringify(state)}`);
+    }
+    return { door, action: offered.actions[0], state };
+  });
+
+  if (!resumedPast(args, 'medbay-door')) {
+    await record('checkpoint: medbay door open', () => checkpoint(harness, 'medbay-door'));
+  }
+
+
+  await record('loot something through the VR prompt (inventory changes)', async () => {
+    // Walk toward the medbay containers, then loot whatever the prompt system
+    // actually offers. Insisting on one tag conflated "this container is
+    // unreachable from here" with "looting is broken"; the mechanic under test
+    // is the prompt-to-inventory path, not pathfinding to a specific crate.
+    const [container] = await findObjectByTag(harness, 'MilLowPlstcCylin');
+    try {
+      await moveTo(harness, {
+        x: container.position.x, y: container.position.y, z: container.position.z,
+        range: 1.6, label: container.name, timeoutMs: 60000,
+      });
+    } catch (error) {
+      line(`  · could not reach ${container.name} (${String(error.message).slice(0, 120)}); using what is in range`);
+    }
+    await sleep(1500);
+    await clearBlockingModal(harness);
+
+    const prompts = await listWorldPrompts(harness);
+    const reachable = (prompts.prompts || []).filter((p) => p.inRange && p.actions && p.actions.length);
+    line(`  · reachable prompts: ${JSON.stringify(reachable.map((p) => `${p.name}: ${p.actions.join('|')}`))}`);
+    if (!reachable.length) {
+      throw new Error('nothing offers a VR action from here; candidates were ' +
+        JSON.stringify((prompts.prompts || []).map((p) => `${p.name}@${p.distance}m inRange=${p.inRange} err=${p.promptError}`)));
+    }
+
+    const before = await describeInventory(harness);
+    const results = [];
+    for (const target of reachable.slice(0, 4)) {
+      const action = target.actions[0];
+      try {
+        await activateWorldAction(harness, { objectId: target.id, actionLabel: action });
+        await sleep(2000);
+      } catch (error) {
+        results.push({ target: target.name, action, error: String(error.message).slice(0, 140) });
+        continue;
+      }
+      const state = await worldState(harness);
+      let tookAll = null;
+      if (state.foregroundMenu === 'MenuContainer') {
+        tookAll = await harness.evaluate(`(() => {
+          const menu = window.KotOR.GameState.MenuManager.MenuContainer;
+          const button = menu.BTN_GIVEITEMS || menu.BTN_OK;
+          if (!button) return { ok: false, reason: 'no take-all; have ' + Object.keys(menu).filter(k => /^BTN_/.test(k)).join(',') };
+          try { button.click(); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
+          return { ok: true, used: menu.BTN_GIVEITEMS ? 'BTN_GIVEITEMS' : 'BTN_OK' };
+        })()`);
+        await sleep(1500);
+      }
+      results.push({ target: target.name, action, foreground: state.foregroundMenu, tookAll });
+      await clearBlockingModal(harness);
+    }
+    line(`  · results: ${JSON.stringify(results, null, 1)}`);
+
+    const after = await describeInventory(harness);
+    line(`  · inventory ${before.inventoryCount} -> ${after.inventoryCount}: ${JSON.stringify(after.inventory.slice(0, 10))}`);
+    line(`  · credits ${before.credits} -> ${after.credits}, xp ${before.xp} -> ${after.xp}, canLevelUp=${after.canLevelUp}`);
+    return { before, after, results };
+  });
+
+  await record('checkpoint: looted medbay', () => checkpoint(harness, 'medbay-looted'));
 
   report.finalState = await worldState(harness).catch(() => null);
   line(`\nfinal state: ${JSON.stringify(report.finalState, null, 2)}`);
@@ -1032,6 +1406,8 @@ async function runPlaythrough(harness, url, args) {
 module.exports = {
   runPlaythrough,
   surveyArea,
+  describeInventory,
+  moveTo,
   listWorldPrompts,
   dialogueSnapshot,
   playDialogue,
