@@ -71,6 +71,33 @@ export function canBashObject(state: ObjectBashState): boolean {
   return !state.plot && !state.min1HP && !state.notBlastable;
 }
 
+/**
+ * Planting a mine is an explosives route, not a Bash, and `NotBlastable` is the
+ * flag that governs it. `Plot` is deliberately NOT consulted.
+ *
+ * Gating mine placement on `canBashObject` made `Plot` block explosives too,
+ * which sealed the Peragus prologue: `001EBO`'s Engine Room Door ships
+ * `Plot=1, NotBlastable=0, HP=1` and its own conversation reads "This door is
+ * damaged and cannot be opened with your Security skill, or by bashing it. You
+ * can use a mine to open this door." It is the only way to the hyperdrive, and
+ * repairing the hyperdrive is what sets `001EBO_HyperDrive`, which is what
+ * makes Peragus selectable on the Galaxy Map. With the Bash rule applied, the
+ * prologue could not be finished at all.
+ *
+ * The retail flags settle the rule rather than inference: of the ten door
+ * templates in `001EBO`, every locked one carries `NotBlastable=1` except
+ * `engine_door` — the single door the game tells the player to blow open. So
+ * `NotBlastable` expresses "explosives do nothing here" and `Plot` expresses
+ * "attacks cannot destroy this", which are different questions.
+ *
+ * `Min1HP` is still honoured: an object that cannot be reduced below 1 HP is
+ * one the designer marked as surviving damage outright, and trap detonation
+ * assigns HP directly.
+ */
+export function canPlaceMineOnObject(state: ObjectBashState): boolean {
+  return !state.notBlastable && !state.min1HP;
+}
+
 /** Returns whether an object is one of the world targets that can be bashed or mined. */
 export function isObjectDestructionTarget(value: unknown): value is ObjectDestructionTarget {
   if (!value || typeof value !== 'object') return false;
@@ -80,12 +107,20 @@ export function isObjectDestructionTarget(value: unknown): value is ObjectDestru
 }
 
 /**
- * Revalidates the authored destruction rules when a queued Bash or Mine action
+ * Revalidates the authored destruction rules when a queued Bash action
  * executes. Menu visibility alone is not an authorization boundary because an
  * action can outlive a target-state change or be forged by a script/save.
  */
 export function canExecuteObjectDestruction(value: unknown): boolean {
   return isObjectDestructionTarget(value) && canBashObject(value);
+}
+
+/**
+ * The same revalidation for a queued mine placement, against the explosives
+ * rule rather than the Bash rule. See {@link canPlaceMineOnObject}.
+ */
+export function canExecuteMinePlacement(value: unknown): boolean {
+  return isObjectDestructionTarget(value) && canPlaceMineOnObject(value);
 }
 
 function validateSecurityAttempt(

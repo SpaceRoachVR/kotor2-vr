@@ -106,6 +106,7 @@ import { CopyShader } from "three/examples/jsm/shaders/CopyShader";
 import Stats from 'three/examples/jsm/libs/stats.module'
 // import { BitWise } from "@/utility/BitWise";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
+import { ActionType } from "@/enums/actions/ActionType";
 import { ModuleTriggerType } from "@/enums/module/ModuleTriggerType";
 import { SkillType } from "@/enums/nwscript/SkillType";
 import { AudioEmitterType } from "@/enums/audio/AudioEmitterType";
@@ -244,12 +245,28 @@ function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null
 }
 
 function getVRActionLabel(entry: VRActionMenuEntry, target: ModuleObject | null): string {
+  // Planting a mine is identified by its action type, not by its icon. The
+  // entry ActionMenuManager builds for it carries neither a talent nor an
+  // item, and the icon is the mine item's own inventory icon, whose resref
+  // does not contain "mine" — so every icon heuristic below falls through and
+  // the authored route rendered as the meaningless label "Action". The action
+  // type is the one unambiguous signal available here.
+  if (entry.action?.type === ActionType.ActionSetMine) return 'Mine';
+
   const talentLabel = entry.talent?.label ?? entry.talent?.name;
   if (typeof talentLabel === 'string' && talentLabel.trim()) return toPlayerFacingActionLabel(talentLabel);
   const itemName = entry.item?.getName?.();
   if (typeof itemName === 'string' && itemName.trim()) return toPlayerFacingActionLabel(itemName);
   const icon = typeof entry.icon === 'string' ? entry.icon.toLowerCase() : '';
-  if (icon.includes('attack')) return (target?.objectType & ModuleObjectType.ModuleDoor) !== 0 ? 'Bash' : 'Attack';
+  // ActionMenuManager represents an authored Bash on either a locked door or
+  // a locked placeable as `ActionPhysicalAttacks` with the same attack icon.
+  // It is a destruction interaction in both cases, not combat against a
+  // creature; presenting the placeable form as "Attack" made a required
+  // container Bash indistinguishable from ordinary combat in VR.
+  if (icon.includes('attack')) {
+    const bashTargetTypes = ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable;
+    return ((target?.objectType ?? 0) & bashTargetTypes) !== 0 ? 'Bash' : 'Attack';
+  }
   if (icon.includes('security') || icon.includes('unlock') || /(^|_)sec/.test(icon)) return 'Security';
   if (icon.includes('dismine')) return 'Disarm';
   if (icon.includes('recmine')) return 'Recover';

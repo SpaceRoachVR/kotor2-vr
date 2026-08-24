@@ -21,6 +21,7 @@ export * from "@/interface";
 
 export * from "@/LoadingScreen";
 export * from "@/engine/SaveGame";
+export * from "@/engine/Planetary";
 export * from "@/utility/ConfigClient";
 
 export * from "@/odyssey";
