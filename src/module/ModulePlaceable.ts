@@ -32,6 +32,7 @@ import { ModulePlaceableObjectSound } from "@/enums/module/ModulePlaceableObject
 import { AudioPriorityGroup } from "@/enums/audio/AudioPriorityGroup";
 import { SWBodyBag } from "@/engine/rules/SWBodyBag";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { transferPlaceableInventory } from "@/module/PlaceableInventoryTransfer";
 import { resolveSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 import { Dice } from "@/utility/Dice";
 
@@ -423,13 +424,7 @@ export class ModulePlaceable extends ModuleObject {
   }
 
   retrieveInventory(){
-    while(this.inventory.length){
-      const item = this.inventory.pop();
-      const stackSize = item.getStackSize();
-      for(let i = 0; i < stackSize; i++){
-        GameState.InventoryManager.addItem(item);
-      }
-    }
+    transferPlaceableInventory(this.inventory, (item) => GameState.InventoryManager.addItem(item));
     const instance = this.scripts[ModuleObjectScript.PlaceableOnInvDisturbed];
     if(!instance){ return; }
     instance.lastDisturbed = GameState.PartyManager.party[0];
@@ -1018,6 +1013,11 @@ export class ModulePlaceable extends ModuleObject {
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Open') ).setValue(this.isOpen() ? 1 : 0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenLockDC') ).setValue(this.openLockDC);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PartyInteract') ).setValue(this.partyInteract);
+    // NotBlastable is loaded from the template but was never written back, so
+    // every door and placeable came back from a save as blastable. That
+    // silently unsealed every Blast Door in Peragus and, once the mine route
+    // stopped being gated on Plot, offered a mine on all of them.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotBlastable') ).setValue(this.notBlastable ? 1 : 0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Plot') ).setValue(this.plot);
     gff.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraitId') ).setValue(this.portraitId);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Ref') ).setValue(this.ref);
@@ -1137,6 +1137,7 @@ export class ModulePlaceable extends ModuleObject {
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenLockDC') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PaletteId') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PartyInteract') );
+    template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotBlastable') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Plot') );
     template.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraidId') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Ref') );

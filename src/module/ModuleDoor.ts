@@ -35,6 +35,7 @@ import { CombatActionType, ModulePlaceableObjectSound, SkillType } from "@/enums
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { resolveSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 import { Dice } from "@/utility/Dice";
+import { synchronizeDoorWalkmeshCollisionState } from "@/module/DoorWalkmeshCollisionState";
 
 interface AnimStateInfo {
   lastAnimState: ModuleDoorAnimState;
@@ -305,23 +306,13 @@ export class ModuleDoor extends ModuleObject {
   }
 
   updateCollisionState(): void {
-    // if(!this.collisionManager?.walkmesh?.mesh){ return; }
-
-    let idx = -1;
-    switch(this.openState){
-      case ModuleDoorOpenState.DESTROYED:
-      case ModuleDoorOpenState.OPEN1:
-      case ModuleDoorOpenState.OPEN2:
-        GameState.group.room_walkmeshes.remove( this.collisionManager.walkmesh.mesh );
-        idx = this.area.doorWalkmeshes.indexOf(this.collisionManager.walkmesh);
-        if(idx >= 0){ this.area.doorWalkmeshes.splice(idx, 1); }
-      break;
-      default:
-        GameState.group.room_walkmeshes.add( this.collisionManager.walkmesh.mesh );
-        idx = this.area.doorWalkmeshes.indexOf(this.collisionManager.walkmesh);
-        if(idx == -1){ this.area.doorWalkmeshes.push(this.collisionManager.walkmesh); }
-      break;
-    }
+    synchronizeDoorWalkmeshCollisionState({
+      isPassable: this.isOpen() || this.openState === ModuleDoorOpenState.DESTROYED,
+      walkmesh: this.collisionManager?.walkmesh,
+      roomWalkmeshes: GameState.group?.room_walkmeshes,
+      doorWalkmeshes: this.area?.doorWalkmeshes,
+      walkmeshList: GameState.walkmeshList,
+    });
   }
 
   setOpenState(openState: ModuleDoorOpenState = ModuleDoorOpenState.CLOSED){
@@ -1342,6 +1333,11 @@ export class ModuleDoor extends ModuleObject {
     
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenLockDC') ).setValue(this.openLockDC);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenState') ).setValue(this.openState);
+    // NotBlastable is loaded from the template but was never written back, so
+    // every door and placeable came back from a save as blastable. That
+    // silently unsealed every Blast Door in Peragus and, once the mine route
+    // stopped being gated on Plot, offered a mine on all of them.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotBlastable') ).setValue(this.notBlastable ? 1 : 0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Plot') ).setValue(this.plot);
     gff.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraitId') ).setValue(this.portraitId);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Ref') ).setValue(this.ref);
@@ -1443,6 +1439,7 @@ export class ModuleDoor extends ModuleObject {
     template.RootNode.addField( new GFFField(GFFDataType.RESREF, 'OnUserDefined') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenLockDC') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PaletteId') ).setValue(6);
+    template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotBlastable') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Plot') );
     template.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraidId') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Ref') );
