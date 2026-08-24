@@ -7,6 +7,10 @@ import { OdysseyFace3 } from "@/three/odyssey";
 import { BitWise } from "@/utility/BitWise";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { EngineDebugType } from "@/enums/engine/EngineDebugType";
+import {
+  isWalkmeshSeam,
+  seamBridgeOffsets,
+} from "@/engine/collision/WalkmeshSeamRules";
 
 // =============================================
 // TYPE DEFINITIONS
@@ -618,6 +622,11 @@ export class CollisionManager {
 
     for (const edge of edges) {
       if (!edge || edge.transition >= 0) continue;
+      // A room perimeter edge with another walkable island right behind it is a
+      // seam, not a wall. Treating it as a wall sealed the Exile onto the
+      // 101PER kolto-tank pad. Placeable and door edges are genuine solids and
+      // are deliberately not given this exemption.
+      if (collisionType === CollisionType.ROOM && this.isRoomSeamEdge(edge)) continue;
       const collision = this.detectSingleEdgeCollision(edge, collisionType);
       if (collision) {
         collisions.push(collision);
@@ -920,7 +929,13 @@ export class CollisionManager {
       }
     }
 
-    // Handle case where no valid ground face found
+    // Handle case where no valid ground face found. A creature crossing a seam
+    // is legitimately over the gap between two islands for several sub-steps,
+    // and reverting there pins it to the island it started on.
+    if (!this.groundFace) {
+      this.tryBridgeWalkmeshSeam();
+    }
+
     if (!this.groundFace) {
       this.object.forceVector.set(0, 0, 0);
       this.object.position.copy(this.originalPosition);
@@ -934,6 +949,68 @@ export class CollisionManager {
 
     // Clean up collision state for next frame
     this.collisionState.clear();
+  }
+
+  /**
+   * Caches the seam verdict per edge. Room walkmeshes are static for the life
+   * of a module, so this is computed once per edge rather than per frame.
+   */
+  private seamEdgeVerdicts: WeakMap<object, boolean> = new WeakMap();
+  private seamProbePoint = new THREE.Vector3();
+
+  private isRoomSeamEdge(edge: any): boolean {
+    if (!edge || !edge.line || !edge.normal) return false;
+    const cached = this.seamEdgeVerdicts.get(edge);
+    if (cached !== undefined) return cached;
+
+    const faces = this.object.room?.collisionManager?.walkmesh?.walkableFaces;
+    if (!Array.isArray(faces) || !faces.length) return false;
+
+    // Probe at the edge's own height: the islands either side of a seam differ
+    // by centimetres, and pointInFace2d ignores z anyway.
+    const probeZ = edge.line.start.z;
+    const isWalkable = (x: number, y: number): boolean => {
+      this.seamProbePoint.set(x, y, probeZ);
+      for (const face of faces) {
+        if (face && typeof face.pointInFace2d === 'function' &&
+            face.pointInFace2d(this.seamProbePoint)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const verdict = isWalkmeshSeam(edge.line.start, edge.line.end, edge.normal, isWalkable);
+    this.seamEdgeVerdicts.set(edge, verdict);
+    return verdict;
+  }
+
+  private seamTravel = new THREE.Vector3();
+  private seamOrigin = new THREE.Vector3();
+
+  /**
+   * Carries a creature that has stepped into the gap between two walkmesh
+   * islands onto the far one, continuing along the direction it was already
+   * moving. Returns false — leaving the position untouched — when no ground is
+   * found within SEAM_BRIDGE_DISTANCE, so a walk off a real ledge still fails.
+   */
+  private tryBridgeWalkmeshSeam(): boolean {
+    this.seamTravel.copy(this.object.position).sub(this.originalPosition);
+    this.seamTravel.z = 0;
+    if (this.seamTravel.lengthSq() < 1e-12) return false;
+    this.seamTravel.normalize();
+    this.seamOrigin.copy(this.object.position);
+
+    for (const offset of seamBridgeOffsets()) {
+      this.object.position.copy(this.seamOrigin).addScaledVector(this.seamTravel, offset);
+      this.groundFace = undefined;
+      this.findWalkableFace();
+      if (this.groundFace) return true;
+    }
+
+    this.object.position.copy(this.seamOrigin);
+    this.groundFace = undefined;
+    return false;
   }
 
   findWalkableFace(object: ModuleObject = this.object){
