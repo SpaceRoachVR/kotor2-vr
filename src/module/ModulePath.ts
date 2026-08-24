@@ -402,9 +402,22 @@ export class ModulePath {
     closest_destination_point.addConnection(destPoint);
     destPoint.addConnection(closest_destination_point);
 
-    originPoint.connections = this.points.slice(0).filter( (p) => {
+    //Keep the anchor added above. This assignment used to REPLACE
+    //originPoint.connections outright, discarding the deliberate link to
+    //closest_origin_point four lines up. Where no path point happens to have
+    //line of sight to the actor - standing in an alcove, or on the far side
+    //of a room boundary, both common in Peragus - the origin was left with no
+    //connections at all, search() failed, and traverseToPoint fell through to
+    //fallbackPath: a straight line from the actor to the destination that
+    //hasLOS had ALREADY rejected. That is how a 46m route across the medical
+    //bay came back as two points through several walls.
+    const visibleFromOrigin = this.points.slice(0).filter( (p) => {
       return p.hasLOS(originPoint, owner);
     });
+    if(visibleFromOrigin.indexOf(closest_origin_point) == -1){
+      visibleFromOrigin.push(closest_origin_point);
+    }
+    originPoint.connections = visibleFromOrigin;
 
     const path = new ComputedPath(owner, originPoint, destPoint);
     path.setOwner(owner);

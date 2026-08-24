@@ -96,6 +96,24 @@ export class PathPoint {
     }
 
     /**
+     * Check line intersects closed doors
+     *
+     * Doors are objects, not walkmesh edges, so a shut door left no trace in
+     * area.walkEdges and a straight segment through a closed doorway read as
+     * clear line of sight. traverseToPoint short-circuits on that answer, so
+     * a 46m route across the Peragus medical bay came back as two points
+     * straight through several shut doors, and following it went nowhere.
+     * An open door is not an obstacle and is skipped.
+     */
+    const doors = this.area.doors || [];
+    for(let j = 0, len = doors.length; j < len; j++){
+      const door = doors[j];
+      if(!door) continue;
+      if(typeof door.isOpen === 'function' && door.isOpen()) continue;
+      if(door.checkLineIntersectsObject(path_line)) return false;
+    }
+
+    /**
      * Check line intersects creatures
      */
     for(let j = 0, len = this.area.creatures.length; j < len; j++){
