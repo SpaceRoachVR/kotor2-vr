@@ -25,6 +25,7 @@ const CHECKPOINT_ORDER = [
   'peragus-arrival',
   'medbay-door',
   'medbay-looted',
+  'first-kill',
 ];
 
 function resumedPast(args, checkpoint) {
@@ -383,9 +384,25 @@ async function listWorldPrompts(harness) {
     const context = hooks.getWorldActionPromptContext();
     if (!context) return { located: false, reason: 'hook returned null (no actor or no module?)' };
     const candidates = Array.isArray(context.candidates) ? context.candidates : [];
+    // Which pool the object came from. navigateTo must open DOORS, not any
+    // usable thing in range — without this it kept re-opening a container and
+    // called that progress.
+    const area = window.KotOR.GameState.module && window.KotOR.GameState.module.area;
+    const idsOf = (pool) => new Set((Array.isArray(pool) ? pool : []).map((o) => o && o.id));
+    const doorIds = idsOf(area && area.doors);
+    const placeableIds = idsOf(area && area.placeables);
+    const kindOf = (promptId) => {
+      const match = /^module-object:(\d+)$/.exec(String(promptId));
+      const numeric = match ? Number(match[1]) : null;
+      if (numeric === null) return 'unknown';
+      if (doorIds.has(numeric)) return 'door';
+      if (placeableIds.has(numeric)) return 'placeable';
+      return 'other';
+    };
     const described = candidates.map((candidate) => {
       const row = {
         id: String(candidate.id),
+        kind: kindOf(candidate.id),
         name: String(candidate.name || ''),
         distance: +Number(candidate.actorDistanceMetres).toFixed(2),
         hasActions: candidate.hasActions === true,
@@ -578,6 +595,12 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = 90000, label 
     const gs = K.GameState;
     const player = K.PartyManager.party[0];
     if (!player) return { ok: false, reason: 'no player' };
+    // Drop any stale move first. A failed leg leaves its ActionMoveToPoint
+    // queued, and a second one behind it never runs — the player then sits
+    // still while the driver reports "did not arrive", which looks like the
+    // walkmesh is blocked when it is really a queue the driver dirtied.
+    const stale = player.actionQueue.length;
+    try { player.clearAllActions(); } catch (e) { /* best effort */ }
     const action = new gs.ActionFactory.ActionMoveToPoint();
     const P = K.ActionParameterType || { FLOAT: 2, DWORD: 4, INT: 3 };
     action.setParameter(0, P.FLOAT, ${Number(x)});
@@ -588,7 +611,7 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = 90000, label 
     action.setParameter(6, P.FLOAT, ${Number(range)});
     action.setParameter(8, P.FLOAT, 60.0);
     player.actionQueue.add(action);
-    return { ok: true, from: { x: +player.position.x.toFixed(2), y: +player.position.y.toFixed(2) } };
+    return { ok: true, clearedStale: stale, from: { x: +player.position.x.toFixed(2), y: +player.position.y.toFixed(2) } };
   })()`);
   if (!started.ok) throw new Error(`moveTo ${label}: ${started.reason}`);
 
@@ -718,6 +741,35 @@ async function findObjectByTag(harness, tag) {
   return found.matches;
 }
 
+/** Every door in the area with its state, nearest first. */
+async function listDoors(harness) {
+  return harness.evaluate(`(() => {
+    const gs = window.KotOR.GameState;
+    const area = gs.module && gs.module.area;
+    const player = window.KotOR.PartyManager.party[0];
+    if (!area || !player) return { located: false, reason: 'no area or player' };
+    const doors = (area.doors || []).filter(Boolean).map((door) => ({
+      id: door.id,
+      promptId: 'module-object:' + door.id,
+      tag: String(door.tag || ''),
+      name: (() => { try { return String((door.getName && door.getName()) || ''); } catch (e) { return ''; } })(),
+      open: typeof door.isOpen === 'function' ? !!door.isOpen() : null,
+      locked: typeof door.isLocked === 'function' ? !!door.isLocked() : null,
+      plot: !!door.plot,
+      min1HP: !!door.min1HP,
+      notBlastable: !!door.notBlastable,
+      position: {
+        x: +door.position.x.toFixed(2),
+        y: +door.position.y.toFixed(2),
+        z: +door.position.z.toFixed(2),
+      },
+      distance: +player.position.distanceTo(door.position).toFixed(2),
+    }));
+    doors.sort((a, b) => a.distance - b.distance);
+    return { located: true, doors };
+  })()`, { timeoutMs: 60000 });
+}
+
 /** Straight-line distance from the player to a point, ignoring height. */
 async function distanceTo(harness, x, y) {
   return harness.evaluate(`(() => {
@@ -748,6 +800,9 @@ async function distanceTo(harness, x, y) {
  */
 async function navigateTo(harness, { x, y, z, range = 1.6, label = 'destination', maxAttempts = 8 }) {
   const opened = [];
+  // Opening the same door twice is never progress; without this the loop burned
+  // every attempt re-using one object and reported that as "opened" eight times.
+  const openedIds = new Set();
   let previousDistance = await distanceTo(harness, x, y);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -762,29 +817,141 @@ async function navigateTo(harness, { x, y, z, range = 1.6, label = 'destination'
       previousDistance = remaining;
 
       await clearBlockingModal(harness);
-      const prompts = await listWorldPrompts(harness);
-      const doors = (prompts.prompts || []).filter((candidate) =>
-        candidate.inRange &&
-        Array.isArray(candidate.actions) &&
-        candidate.actions.some((action) => /open|use|bash|security/i.test(action)));
 
-      if (!doors.length) {
+      // The walk stops where the walkmesh ends, which is rarely right next to
+      // the door in the way — so find the nearest closed door in the AREA, walk
+      // to it, and only then open it. Filtering on what is already in prompt
+      // range never saw a door 16m off and reported a dead end instead.
+      const inventory = await listDoors(harness);
+      if (!inventory.located) throw new Error(`navigateTo ${label}: ${inventory.reason}`);
+      // Try candidates in distance order rather than committing to the nearest.
+      // The nearest closed door is often a plot door that can never open, and
+      // fixating on it reported a dead end while a usable route stood behind it.
+      const candidates = inventory.doors.filter((door) =>
+        !door.open && !openedIds.has(door.promptId));
+
+      if (!candidates.length) {
         if (progressed) continue;
-        throw new Error(`navigateTo ${label}: stopped ${remaining}m short with nothing to open. ` +
+        const prompts = await listWorldPrompts(harness);
+        throw new Error(`navigateTo ${label}: stopped ${remaining}m short and every door is already open. ` +
           `In range: ${JSON.stringify((prompts.prompts || []).map((p) =>
-            `${p.name}@${p.distance}m inRange=${p.inRange} actions=${(p.actions || []).join('|')} err=${p.promptError}`))}`);
+            `${p.name}@${p.distance}m inRange=${p.inRange} actions=${(p.actions || []).join('|')}`))}`);
       }
 
-      // Nearest first: the door in the way is the one you are standing at.
-      const blocker = doors.sort((a, b) => a.distance - b.distance)[0];
-      // Prefer a plain open over Bash — bashing a door that Security would have
-      // opened is a different playthrough, and a noisier one.
-      const action = blocker.actions.find((a) => /^use|open/i.test(a)) ||
-        blocker.actions.find((a) => /security/i.test(a)) ||
-        blocker.actions[0];
-      line(`  · ${remaining}m short; opening ${blocker.name} via "${action}"`);
+      let blocker = null;
+      let action = null;
+      const rejected = [];
+      for (const door of candidates.slice(0, 4)) {
+        try {
+          if (door.distance > 2.5) {
+            await moveTo(harness, {
+              x: door.position.x, y: door.position.y, z: door.position.z,
+              range: 2.0, label: door.name, timeoutMs: 45000,
+            });
+            await sleep(1200);
+            await clearBlockingModal(harness);
+          }
+        } catch (walkError) {
+          rejected.push(`${door.name}: unreachable`);
+          continue;
+        }
+        const prompts = await listWorldPrompts(harness);
+        const offered = (prompts.prompts || []).find((p) => p.id === door.promptId);
+        if (!offered || !offered.actions || !offered.actions.length) {
+          rejected.push(`${door.name}: no action (locked=${door.locked} plot=${door.plot} ` +
+            `notBlastable=${door.notBlastable} err=${offered && offered.promptError})`);
+          openedIds.add(door.promptId);
+          continue;
+        }
+        blocker = door;
+        action = offered.actions.find((a) => /^use|open/i.test(a)) ||
+          offered.actions.find((a) => /security/i.test(a)) ||
+          offered.actions[0];
+        break;
+      }
+
+      if (!blocker) {
+        if (progressed) continue;
+        throw new Error(`navigateTo ${label}: stopped ${remaining}m short; no closed door offered a way ` +
+          `through. Tried: ${JSON.stringify(rejected)}`);
+      }
+
+      line(`  · ${remaining}m short; opening ${blocker.name} via "${action}"` +
+        (rejected.length ? ` (skipped ${JSON.stringify(rejected)})` : ''));
       try {
-        await activateWorldAction(harness, { objectId: blocker.id, actionLabel: action });
+        const prompts = await listWorldPrompts(harness);
+        const offered = (prompts.prompts || []).find((p) => p.id === blocker.promptId);
+        if (!offered || !offered.actions || !offered.actions.length) {
+          // "No prompt on a locked door" is either correct (plot-locked, fails
+          // closed per checklist E4) or the session-2 defect. Only the door's
+          // own flags and the actor's skills can tell them apart, so report them.
+          const why = await harness.evaluate(`(() => {
+            const gs = window.KotOR.GameState;
+            const area = gs.module.area;
+            const door = (area.doors || []).find((d) => d && d.id === ${Number(blocker.id)});
+            const player = window.KotOR.PartyManager.party[0];
+            if (!door) return { located: false };
+            let security = null;
+            try { security = player.skills && player.skills[6] ? player.skills[6].rank : null; } catch (e) {}
+            return {
+              located: true,
+              locked: typeof door.isLocked === 'function' ? !!door.isLocked() : null,
+              lockable: !!door.lockable,
+              keyRequired: !!door.keyRequired,
+              keyName: String(door.keyName || ''),
+              notBlastable: !!door.notBlastable,
+              plot: !!door.plot,
+              min1HP: !!door.min1HP,
+              openLockDC: door.openLockDC,
+              openLockDiffMod: door.openLockDiffMod,
+              useable: typeof door.isUseable === 'function' ? door.isUseable() : null,
+              staticFlag: !!door.static,
+              playerSecurityRank: security,
+              scripts: door.scripts ? Object.keys(door.scripts).filter((k) => !!door.scripts[k]) : null,
+            };
+          })()`);
+          line(`  · ${blocker.name} properties: ${JSON.stringify(why)}`);
+          // What ActionMenuManager itself offers for this door. If the engine
+          // produces a Bash entry and the VR prompt shows nothing, the loss is
+          // in the VR layer; if the engine offers nothing either, it is the
+          // authored data or the lock rules.
+          const engineOffers = await harness.evaluate(`(() => {
+            const gs = window.KotOR.GameState;
+            const area = gs.module.area;
+            const door = (area.doors || []).find((d) => d && d.id === ${Number(blocker.id)});
+            const actor = gs.getCurrentPlayer();
+            if (!door || !actor) return { located: false };
+            try {
+              gs.ActionMenuManager.SetPC(actor);
+              gs.ActionMenuManager.SetTarget(door);
+              gs.ActionMenuManager.UpdateMenuActions();
+            } catch (error) {
+              return { located: true, threw: String(error && error.message || error) };
+            }
+            const panels = gs.ActionMenuManager.ActionPanels;
+            const describe = (list) => (list || []).map((panel, index) => ({
+              panel: index,
+              actions: (panel && panel.actions ? panel.actions : []).map((entry) => ({
+                actionType: entry && entry.action ? entry.action.type : null,
+                talent: entry && entry.talent ? (entry.talent.name || entry.talent.label || 'talent') : null,
+                icon: entry ? entry.icon : null,
+              })),
+            })).filter((p) => p.actions.length);
+            return { located: true, targetPanels: describe(panels.targetPanels) };
+          })()`);
+          line(`  · engine action menu for ${blocker.name}: ${JSON.stringify(engineOffers)}`);
+          throw new Error(`no VR action for ${blocker.name} while standing at it ` +
+            `(locked=${blocker.locked}, err=${offered && offered.promptError}); in range: ` +
+            JSON.stringify((prompts.prompts || []).map((p) => `${p.name}@${p.distance}m inRange=${p.inRange}`)));
+        }
+        // Prefer a plain open over Bash — bashing a door Security would have
+        // opened is a different, noisier playthrough.
+        const action = offered.actions.find((a) => /^use|open/i.test(a)) ||
+          offered.actions.find((a) => /security/i.test(a)) ||
+          offered.actions[0];
+        line(`  · opening ${blocker.name} via "${action}"`);
+        await activateWorldAction(harness, { objectId: blocker.promptId, actionLabel: action });
+        openedIds.add(blocker.promptId);
         opened.push(`${blocker.name}(${action})`);
         await sleep(2500);
         await clearBlockingModal(harness);
@@ -794,6 +961,158 @@ async function navigateTo(harness, { x, y, z, range = 1.6, label = 'destination'
     }
   }
   throw new Error(`navigateTo ${label}: gave up after ${maxAttempts} legs; opened ${JSON.stringify(opened)}`);
+}
+
+/**
+ * Builds the VR action wheel for a target and describes it.
+ *
+ * Goes through `hooks.createActionWheel`, the same call VRSpike makes when the
+ * player holds the wheel button, so this reflects ROADMAP 4.8's real structure:
+ * six top-level items, with Attacks and Force Powers as submenus over the
+ * panels ActionMenuManager already filtered.
+ */
+async function describeActionWheel(harness, targetId) {
+  const numeric = targetId === null || targetId === undefined ? 'null' : Number(targetId);
+  return harness.evaluate(`(() => {
+    const hooks = window.KotOR.VRSpike && window.KotOR.VRSpike.hooks;
+    if (!hooks || typeof hooks.createActionWheel !== 'function') {
+      return { located: false, reason: 'no createActionWheel hook' };
+    }
+    const menu = hooks.createActionWheel(${numeric});
+    if (!menu) return { located: false, reason: 'createActionWheel returned null' };
+    const describe = (definition) => (definition.pages || []).flatMap((page) =>
+      (page.entries || [])
+        .filter((entry) => entry.kind === 'action' || entry.kind === 'submenu')
+        .map((entry) => ({ kind: entry.kind, id: entry.id, label: entry.label })));
+    const top = describe(menu);
+    const submenus = {};
+    for (const page of menu.pages || []) {
+      for (const entry of page.entries || []) {
+        if (entry.kind !== 'submenu') continue;
+        try { submenus[entry.id] = describe(entry.buildMenu()); }
+        catch (error) { submenus[entry.id] = 'threw: ' + String(error && error.message || error); }
+      }
+    }
+    return { located: true, pageCount: (menu.pages || []).length, top, submenus };
+  })()`, { timeoutMs: 60000 });
+}
+
+/**
+ * Activates one entry of the action wheel, optionally inside a submenu.
+ *
+ * Matched by label so a walkthrough reads as what the player picked, and a
+ * renamed or absent entry fails loudly with what was on offer.
+ */
+async function activateWheelAction(harness, { targetId, submenuId = null, actionLabel }) {
+  const numeric = targetId === null || targetId === undefined ? 'null' : Number(targetId);
+  const wantedSubmenu = submenuId === null ? 'null' : JSON.stringify(String(submenuId));
+  const wantedLabel = JSON.stringify(String(actionLabel).toLowerCase());
+
+  const outcome = await harness.evaluate(`(() => {
+    const hooks = window.KotOR.VRSpike && window.KotOR.VRSpike.hooks;
+    if (!hooks || typeof hooks.createActionWheel !== 'function') {
+      return { ok: false, reason: 'no createActionWheel hook' };
+    }
+    const menu = hooks.createActionWheel(${numeric});
+    if (!menu) return { ok: false, reason: 'createActionWheel returned null' };
+
+    const entriesOf = (definition) => (definition.pages || []).flatMap((page) =>
+      (page.entries || []).filter((entry) => entry.kind === 'action' || entry.kind === 'submenu'));
+
+    let scope = menu;
+    const submenuId = ${wantedSubmenu};
+    if (submenuId) {
+      const submenu = entriesOf(menu).find((entry) => entry.kind === 'submenu' && entry.id === submenuId);
+      if (!submenu) {
+        return {
+          ok: false,
+          reason: 'no submenu ' + submenuId,
+          offered: entriesOf(menu).map((entry) => entry.id + ':' + entry.label),
+        };
+      }
+      try { scope = submenu.buildMenu(); }
+      catch (error) { return { ok: false, reason: 'buildMenu threw: ' + String(error && error.message || error) }; }
+    }
+
+    const actions = entriesOf(scope).filter((entry) => entry.kind === 'action');
+    const action = actions.find((entry) => String(entry.label).toLowerCase() === ${wantedLabel});
+    if (!action) {
+      return { ok: false, reason: 'action not on the wheel', offered: actions.map((entry) => entry.label) };
+    }
+    let valid = false;
+    try { valid = action.revalidate() === true; }
+    catch (error) { return { ok: false, reason: 'revalidate threw: ' + String(error && error.message || error) }; }
+    if (!valid) return { ok: false, reason: 'action failed revalidation: ' + action.label };
+    try { action.activate(); }
+    catch (error) { return { ok: false, reason: 'activate threw: ' + String(error && error.message || error) }; }
+    return { ok: true, action: action.label };
+  })()`, { timeoutMs: 60000 });
+
+  if (!outcome.ok) {
+    throw new Error(`wheel "${actionLabel}"${submenuId ? ` in ${submenuId}` : ''}: ${outcome.reason}` +
+      (outcome.offered ? ` (offered: ${JSON.stringify(outcome.offered)})` : ''));
+  }
+  return outcome;
+}
+
+/**
+ * Delivers one roll-eligible swing at a target through the engine's combat
+ * bridge.
+ *
+ * **Test boundary, stated plainly.** This drives `getCombatContext(...)
+ * .onCombatSwing`, which is the handler a recognised gesture calls. It exercises
+ * target nomination, the armed attack stance (ROADMAP 4.8) and the whole d20
+ * path. It does NOT exercise gesture *recognition* — the speed gate, the blade
+ * sample point, the two-handed grip — which VRCombatInputController's unit tests
+ * cover and which ultimately needs a headset (checklist F1-F3).
+ *
+ * Driving it this way rather than animating the emulated controller is
+ * deliberate: aiming the interaction ray from outside is fragile, and a swing
+ * that missed because the ray drifted would read as combat being broken.
+ */
+async function swingAt(harness, targetId) {
+  return harness.evaluate(`(() => {
+    const spike = window.KotOR.VRSpike;
+    const hooks = spike && spike.hooks;
+    if (!hooks || typeof hooks.getCombatContext !== 'function') {
+      return { ok: false, reason: 'no getCombatContext hook' };
+    }
+    // Drop any queued movement first. ActionCombat goes on the back of the
+    // queue, so a move still at the front blocks it forever — the swing is
+    // accepted, nothing happens, and it reads as combat being broken. This is
+    // the driver's own approach move, not something a player would have.
+    try {
+      const player = window.KotOR.PartyManager.party[0];
+      if (player && player.actionQueue && player.actionQueue.length) {
+        player.clearAllActions();
+      }
+    } catch (e) { /* best effort */ }
+    const context = hooks.getCombatContext(${Number(targetId)});
+    if (!context) return { ok: false, reason: 'combat context unavailable' };
+    if (!context.nominatedTargetId) {
+      return { ok: false, reason: 'target not nominated (out of range, or not a valid combat target)' };
+    }
+    try {
+      context.onCombatSwing({
+        actorId: context.actorId,
+        nominatedTargetId: context.nominatedTargetId,
+        hand: 'right',
+        weaponMode: context.weaponMode,
+        speedMetresPerSecond: 3.0,
+        rollEligible: true,
+        pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
+        timestamp: performance.now(),
+      });
+    } catch (error) {
+      return { ok: false, reason: 'onCombatSwing threw: ' + String(error && error.message || error) };
+    }
+    return {
+      ok: true,
+      weaponMode: context.weaponMode,
+      inCombat: context.inCombat === true,
+      stance: context.stanceReadout || null,
+    };
+  })()`, { timeoutMs: 60000 });
 }
 
 async function boot(harness, url) {
@@ -1481,6 +1800,145 @@ async function runPlaythrough(harness, url, args) {
 
   if (!resumedPast(args, 'medbay-looted')) {
     await record('checkpoint: looted medbay', () => checkpoint(harness, 'medbay-looted'));
+  }
+
+
+  await record('fight a mining droid through the action wheel', async () => {
+    if (resumedPast(args, 'first-kill')) return { skipped: 'resumed past it' };
+
+    const survey = await surveyArea(harness);
+    const target = (survey.hostiles || [])[0];
+    if (!target) throw new Error('no live hostiles in this area');
+    line(`  · nearest hostile: ${target.name} (${target.distance}m)`);
+
+    const position = await harness.evaluate(`(() => {
+      const area = window.KotOR.GameState.module.area;
+      const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
+      if (!c) return null;
+      return { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) };
+    })()`);
+    if (!position) throw new Error(`hostile ${target.id} vanished before approach`);
+
+    // Close to melee-ish range; the wheel's Attacks page only populates for a
+    // hostile creature that the engine considers a valid target.
+    // Nomination is gated on resolveVRCombatRange, which is melee reach — the
+    // earlier 3m approach plus arrival tolerance left the player outside it and
+    // every swing came back "target not nominated".
+    await navigateTo(harness, { ...position, range: 1.4, label: target.name });
+    await sleep(1500);
+    await clearBlockingModal(harness);
+
+    const wheel = await describeActionWheel(harness, target.id);
+    if (!wheel.located) throw new Error(`action wheel: ${wheel.reason}`);
+    line(`  · wheel top level (${wheel.top.length}, pages=${wheel.pageCount}): ${JSON.stringify(wheel.top.map((e) => e.label))}`);
+    line(`  · submenus: ${JSON.stringify(wheel.submenus)}`);
+
+    const attacks = wheel.submenus['submenu:attacks'];
+    if (!Array.isArray(attacks) || !attacks.length) {
+      throw new Error(`no Attacks page for a hostile creature; wheel was ${JSON.stringify(wheel.top.map((e) => e.label))}`);
+    }
+
+    const before = await describeInventory(harness);
+    const attackLabel = attacks[0].label;
+    // 4.8: the Attacks page ARMS a stance, it does not attack. Selecting
+    // "Attack" here sets the plain, un-modified stance; the blows themselves
+    // come from swings. Clicking it repeatedly and expecting damage is what a
+    // misreading of that design looks like.
+    await activateWheelAction(harness, {
+      targetId: target.id, submenuId: 'submenu:attacks', actionLabel: attackLabel,
+    });
+    line(`  · armed stance via "${attackLabel}"; attacking by swing`);
+
+    // Swing until it dies. Each activation queues one attack; the round timer
+    // paces them, so this is a fight rather than a burst.
+    let killed = false;
+    for (let round = 0; round < 40; round += 1) {
+      const status = await harness.evaluate(`(() => {
+        const area = window.KotOR.GameState.module.area;
+        const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
+        const player = window.KotOR.PartyManager.party[0];
+        if (!c) return { gone: true };
+        return {
+          gone: false,
+          dead: typeof c.isDead === 'function' ? !!c.isDead() : null,
+          hp: c.getHP ? c.getHP() : null,
+          playerHp: player.getHP ? player.getHP() : null,
+          inCombat: player.combatData ? player.combatData.combatState === true : null,
+        };
+      })()`);
+      if (status.gone || status.dead) { killed = true; break; }
+      if (round % 6 === 0) {
+        line(`  · round ${round}: target hp=${status.hp} player hp=${status.playerHp} inCombat=${status.inCombat}`);
+      }
+      let swung = await swingAt(harness, target.id);
+      if (!swung.ok && /not nominated/.test(swung.reason || '')) {
+        // The droid moves. Close the gap against its CURRENT position and retry
+        // once before calling it a refusal.
+        const now = await harness.evaluate(`(() => {
+          const area = window.KotOR.GameState.module.area;
+          const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
+          const player = window.KotOR.PartyManager.party[0];
+          if (!c) return null;
+          return {
+            x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2),
+            gap: +player.position.distanceTo(c.position).toFixed(2),
+          };
+        })()`);
+        if (now) {
+          if (round === 0) line(`  · not nominated at ${now.gap}m; closing`);
+          try {
+            await moveTo(harness, { x: now.x, y: now.y, z: now.z, range: 1.2, label: target.name, timeoutMs: 20000 });
+          } catch (e) { /* it may be walking toward us anyway */ }
+          swung = await swingAt(harness, target.id);
+        }
+      }
+      if (!swung.ok) {
+        if (round === 0) throw new Error(`first swing refused: ${swung.reason}`);
+      } else if (round === 0) {
+        line(`  · swinging: weaponMode=${swung.weaponMode} stance=${swung.stance || '(none)'}`);
+        await sleep(1200);
+        // A swing that is accepted but never lands: report what attackCreature
+        // actually produced, rather than only that HP did not move.
+        const combat = await harness.evaluate(`(() => {
+          const K = window.KotOR;
+          const gs = K.GameState;
+          const player = K.PartyManager.party[0];
+          const area = gs.module.area;
+          const foe = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
+          const round = player.combatRound;
+          const describe = (a) => a ? (a.constructor ? a.constructor.name : '?') : null;
+          return {
+            playerQueue: (player.actionQueue || []).map(describe),
+            playerAction: describe(player.action),
+            combatState: player.combatData ? player.combatData.combatState : null,
+            combatQueueLength: player.combatData && player.combatData.combatQueue
+              ? player.combatData.combatQueue.length : null,
+            lastAttackTarget: player.combatData && player.combatData.lastAttackTarget
+              ? String(player.combatData.lastAttackTarget.tag || player.combatData.lastAttackTarget.id) : null,
+            roundStarted: round ? round.roundStarted : null,
+            roundTimer: round ? round.timer : null,
+            roundAction: round ? describe(round.action) : null,
+            roundActionCount: round && round.actions ? round.actions.length : null,
+            foeHostile: foe && typeof foe.isHostile === 'function' ? foe.isHostile(player) : null,
+            foeDead: foe && typeof foe.isDead === 'function' ? foe.isDead() : null,
+            foeHp: foe && foe.getHP ? foe.getHP() : null,
+            gap: foe ? +player.position.distanceTo(foe.position).toFixed(2) : null,
+          };
+        })()`);
+        line(`  · after first swing: ${JSON.stringify(combat)}`);
+      }
+      await sleep(1200);
+      await clearBlockingModal(harness);
+    }
+
+    const after = await describeInventory(harness);
+    line(`  · killed=${killed} xp ${before.xp} -> ${after.xp} hp ${after.hp}/${after.maxHp} canLevelUp=${after.canLevelUp}`);
+    if (!killed) throw new Error(`could not kill ${target.name} in 40 rounds`);
+    return { target: target.name, before, after };
+  });
+
+  if (!resumedPast(args, 'first-kill')) {
+    await record('checkpoint: first kill', () => checkpoint(harness, 'first-kill'));
   }
 
   report.finalState = await worldState(harness).catch(() => null);
