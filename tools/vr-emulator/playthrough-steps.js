@@ -26,6 +26,9 @@ const CHECKPOINT_ORDER = [
   'medbay-door',
   'medbay-looted',
   'first-kill',
+  'droids-cleared',
+  'levelled',
+  'module-102',
 ];
 
 function resumedPast(args, checkpoint) {
@@ -1115,6 +1118,138 @@ async function swingAt(harness, targetId) {
   })()`, { timeoutMs: 60000 });
 }
 
+/**
+ * Fights one hostile to the death: approach into combat range, arm the plain
+ * stance from the wheel's Attacks page, then swing until it drops.
+ *
+ * Returns `{ killed: false, reason }` rather than throwing when a specific foe
+ * cannot be engaged, so a sweep can move on to the next one and report what it
+ * skipped instead of stopping at the first awkward target.
+ */
+async function fightHostile(harness, target) {
+  const position = await harness.evaluate(`(() => {
+    const area = window.KotOR.GameState.module.area;
+    const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
+    if (!c) return null;
+    return { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) };
+  })()`);
+  if (!position) return { killed: false, reason: 'vanished before approach' };
+
+  try {
+    await navigateTo(harness, { ...position, range: 1.4, label: target.name, maxAttempts: 8 });
+  } catch (error) {
+    return { killed: false, reason: `unreachable: ${String(error.message).slice(0, 120)}` };
+  }
+  await sleep(1000);
+  await clearBlockingModal(harness);
+
+  // Arm the plain stance. 4.8: the Attacks page ARMS, it does not attack.
+  try {
+    const wheel = await describeActionWheel(harness, target.id);
+    const attacks = wheel.located ? wheel.submenus['submenu:attacks'] : null;
+    if (Array.isArray(attacks) && attacks.length) {
+      await activateWheelAction(harness, {
+        targetId: target.id, submenuId: 'submenu:attacks', actionLabel: attacks[0].label,
+      });
+    }
+  } catch (error) {
+    // A stance that will not arm is worth knowing about but does not stop the
+    // fight — an unarmed swing is the plain attack anyway.
+    line(`  · stance not armed for ${target.name}: ${String(error.message).slice(0, 100)}`);
+  }
+
+  for (let round = 0; round < 40; round += 1) {
+    const status = await harness.evaluate(`(() => {
+      const area = window.KotOR.GameState.module.area;
+      const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
+      const player = window.KotOR.PartyManager.party[0];
+      if (!c) return { gone: true };
+      return {
+        gone: false,
+        dead: typeof c.isDead === 'function' ? !!c.isDead() : null,
+        hp: c.getHP ? c.getHP() : null,
+        playerHp: player.getHP ? player.getHP() : null,
+      };
+    })()`);
+    if (status.gone || status.dead) return { killed: true, rounds: round };
+    if (status.playerHp !== null && status.playerHp <= 0) {
+      return { killed: false, reason: 'player died' };
+    }
+
+    let swung = await swingAt(harness, target.id);
+    if (!swung.ok && /not nominated/.test(swung.reason || '')) {
+      const now = await harness.evaluate(`(() => {
+        const area = window.KotOR.GameState.module.area;
+        const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
+        if (!c) return null;
+        return { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) };
+      })()`);
+      if (now) {
+        try { await moveTo(harness, { ...now, range: 1.2, label: target.name, timeoutMs: 20000 }); }
+        catch (e) { /* it may be closing on us anyway */ }
+        swung = await swingAt(harness, target.id);
+      }
+    }
+    if (!swung.ok && round === 0) return { killed: false, reason: swung.reason };
+    await sleep(1200);
+    await clearBlockingModal(harness);
+  }
+  return { killed: false, reason: 'still standing after 40 rounds' };
+}
+
+/** Fights every live hostile in the area, nearest first. */
+async function clearHostiles(harness, { limit = 12 } = {}) {
+  const outcomes = [];
+  // A foe that cannot be engaged must be set aside, not stopped on: the survey
+  // hands back the same nearest hostile every time, so breaking on the first
+  // awkward one left the rest of the area alive.
+  const skipped = new Set();
+  for (let index = 0; index < limit; index += 1) {
+    const survey = await surveyArea(harness);
+    if (!survey.located) throw new Error(`survey: ${survey.reason}`);
+    const next = (survey.hostiles || []).find((h) => !skipped.has(h.id));
+    if (!next) break;
+    const result = await fightHostile(harness, next);
+    const stats = await describeInventory(harness);
+    line(`  · ${next.name} (${next.distance}m): ${result.killed ? `killed in ${result.rounds} rounds` : `SKIPPED — ${result.reason}`}` +
+      ` | xp=${stats.xp} hp=${stats.hp}/${stats.maxHp} canLevelUp=${stats.canLevelUp}`);
+    outcomes.push({ name: next.name, ...result });
+    if (!result.killed) skipped.add(next.id);
+    if (result.reason === 'player died') break;
+  }
+  return outcomes;
+}
+
+/**
+ * Returns the engine to gameplay after a menu interaction.
+ *
+ * Engine mode follows the current menu, so a screen left open holds the engine
+ * in GUI mode — the player cannot move, and every subsequent navigation reports
+ * its target as "unreachable". That is what a forgotten Exit looks like from
+ * the outside, and it is indistinguishable from a pathfinding fault.
+ */
+async function returnToGameplay(harness) {
+  const outcome = await harness.evaluate(`(() => {
+    const gs = window.KotOR.GameState;
+    const menus = gs.MenuManager;
+    const closed = [];
+    for (const name of ['MenuCharacter', 'MenuContainer', 'MenuEquipment', 'MenuInventory',
+                        'MenuAbilities', 'MenuJournal', 'MenuMessages', 'MenuOptions',
+                        'MenuLevelUp', 'MenuPartySelection']) {
+      const menu = menus[name];
+      if (menu && menu.bVisible) {
+        try { menu.close(); closed.push(name); } catch (e) { closed.push(name + '(close threw)'); }
+      }
+    }
+    // InGameOverlay is the menu that carries EngineMode.INGAME.
+    try { if (!menus.InGameOverlay.bVisible) menus.InGameOverlay.open(); } catch (e) {}
+    return { closed, mode: gs.Mode };
+  })()`);
+  if (outcome.closed.length) line(`  · closed ${JSON.stringify(outcome.closed)} (engineMode=${outcome.mode})`);
+  await sleep(800);
+  return outcome;
+}
+
 async function boot(harness, url) {
   line('  · launching');
   await harness.launch(url);
@@ -1786,6 +1921,7 @@ async function runPlaythrough(harness, url, args) {
       await sleep(2000);
     }
     await clearBlockingModal(harness);
+    await returnToGameplay(harness);
 
     const after = await describeInventory(harness);
     line(`  · inventory ${before.inventoryCount} -> ${after.inventoryCount}: ${JSON.stringify(after.inventory.slice(0, 10))}`);
@@ -1992,6 +2128,114 @@ async function runPlaythrough(harness, url, args) {
     line(`  · xpbaseconst: ${JSON.stringify(info.xpbaseconst)}`);
     line(`  · creature challenge ratings: ${JSON.stringify(info.creatures)}`);
     return info;
+  });
+
+
+  await record('clear the mining droids', async () => {
+    if (resumedPast(args, 'droids-cleared')) return { skipped: 'resumed past it' };
+    const outcomes = await clearHostiles(harness, { limit: 12 });
+    const killed = outcomes.filter((o) => o.killed).length;
+    const stats = await describeInventory(harness);
+    line(`  · ${killed}/${outcomes.length} killed; xp=${stats.xp} level=${stats.level} canLevelUp=${stats.canLevelUp}`);
+    if (!killed) throw new Error(`killed nothing: ${JSON.stringify(outcomes)}`);
+    return { outcomes, stats };
+  });
+
+  if (!resumedPast(args, 'droids-cleared')) {
+    await record('checkpoint: droids cleared', () => checkpoint(harness, 'droids-cleared'));
+  }
+
+  await record('level up through the wheel Menu route', async () => {
+    if (resumedPast(args, 'levelled')) return { skipped: 'resumed past it' };
+    const before = await describeInventory(harness);
+    line(`  · level=${before.level} xp=${before.xp} canLevelUp=${before.canLevelUp}`);
+    if (!before.canLevelUp) {
+      return { skipped: `not eligible yet (xp=${before.xp}, level ${before.level})` };
+    }
+
+    // The wheel's single Menu wedge opens MenuCharacter, which is where Auto
+    // Level-Up lives — 4.8 dropped the dedicated Level-Up wedge for exactly this.
+    await activateWheelAction(harness, { targetId: null, actionLabel: 'Menu' });
+    await sleep(2000);
+    const state = await worldState(harness);
+    line(`  · foreground: ${state.foregroundMenu}`);
+
+    const controls = await describeMenuControls(harness, 'MenuCharacter');
+    line(`  · character menu: visible=${controls.visible} clickable=${JSON.stringify(controls.clickable)}`);
+
+    const levelled = await harness.evaluate(`(() => {
+      const menus = window.KotOR.GameState.MenuManager;
+      const menu = menus.MenuCharacter;
+      if (!menu) return { ok: false, reason: 'no MenuCharacter' };
+      const button = menu.BTN_AUTO || menu.BTN_LEVELUP;
+      if (!button) {
+        return { ok: false, reason: 'no level-up control; have ' + Object.keys(menu).filter((k) => /^BTN_/.test(k)).join(',') };
+      }
+      try { button.click(); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
+      return { ok: true, used: menu.BTN_AUTO ? 'BTN_AUTO' : 'BTN_LEVELUP' };
+    })()`);
+    line(`  · level-up control: ${JSON.stringify(levelled)}`);
+    await sleep(3000);
+    await clearBlockingModal(harness);
+
+    // Leaving the character screen open holds the engine in GUI mode, which
+    // makes every later navigation report "unreachable".
+    await returnToGameplay(harness);
+
+    const after = await describeInventory(harness);
+    line(`  · level ${before.level} -> ${after.level}, canLevelUp=${after.canLevelUp}`);
+    const resumedState = await worldState(harness);
+    if (resumedState.engineMode !== 1) {
+      throw new Error(`levelling left the engine in mode ${resumedState.engineMode} (want 1=INGAME); ` +
+        `foreground=${resumedState.foregroundMenu}`);
+    }
+    return { before, after, levelled };
+  });
+
+
+  await record('leave the medical bay for the next Peragus module', async () => {
+    if (resumedPast(args, 'module-102')) return { skipped: 'resumed past it' };
+    const startModule = (await worldState(harness)).moduleName;
+
+    const doors = await listDoors(harness);
+    if (!doors.located) throw new Error(doors.reason);
+    line(`  · doors: ${JSON.stringify(doors.doors.slice(0, 8).map((d) =>
+      `${d.name}(${d.tag})@${d.distance}m open=${d.open} locked=${d.locked} plot=${d.plot}`))}`);
+
+    // Transition doors are named for the module they lead to, e.g.
+    // "Emergency Hatch{102PER}". Prefer one of those over any old exit.
+    const exits = doors.doors.filter((d) => /\{1\d\dPER\}/i.test(d.name));
+    line(`  · module exits: ${JSON.stringify(exits.map((d) => `${d.name}@${d.distance}m locked=${d.locked} plot=${d.plot}`))}`);
+
+    const reachable = exits.filter((d) => !d.plot);
+    if (!reachable.length) {
+      return {
+        blockedBy: exits.map((d) => `${d.name} plot=${d.plot} locked=${d.locked}`),
+        note: 'every module exit is plot-locked; the prologue gates it behind a task not yet done',
+      };
+    }
+
+    const exit = reachable[0];
+    await navigateTo(harness, {
+      x: exit.position.x, y: exit.position.y, z: exit.position.z,
+      range: 2.0, label: exit.name, maxAttempts: 8,
+    });
+    await sleep(1500);
+    await clearBlockingModal(harness);
+
+    const prompts = await listWorldPrompts(harness);
+    const offered = (prompts.prompts || []).find((p) => p.id === exit.promptId);
+    if (!offered || !offered.actions || !offered.actions.length) {
+      throw new Error(`no VR action on ${exit.name}; in range: ` +
+        JSON.stringify((prompts.prompts || []).map((p) => `${p.name}@${p.distance}m inRange=${p.inRange}`)));
+    }
+    await activateWorldAction(harness, { objectId: exit.promptId, actionLabel: offered.actions[0] });
+    await sleep(4000);
+    await clearBlockingModal(harness);
+
+    const after = await worldState(harness);
+    line(`  · module ${startModule} -> ${after.moduleName}`);
+    return { from: startModule, to: after.moduleName, via: exit.name };
   });
 
   report.finalState = await worldState(harness).catch(() => null);
