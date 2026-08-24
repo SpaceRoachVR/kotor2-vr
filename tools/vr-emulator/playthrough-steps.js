@@ -28,6 +28,8 @@ const CHECKPOINT_ORDER = [
   'first-kill',
   'droids-cleared',
   'levelled',
+  'medbay-swept',
+  'consoles-used',
   'module-102',
 ];
 
@@ -592,7 +594,16 @@ async function describeInventory(harness) {
  * world-prompt route, because that is what is under test; walking is the
  * engine's pathfinding and walkmesh, which VR does not replace.
  */
-async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = 90000, label = 'destination' }) {
+async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label = 'destination' }) {
+  // Scale the wait with the distance actually to be covered. A fixed 45s budget
+  // was fine across a room and hopeless across 70m of Peragus, so long walks
+  // timed out mid-stride and every distant fixture reported "unreachable" —
+  // which reads as a broken walkmesh rather than an impatient driver.
+  if (timeoutMs === null) {
+    const gap = await distanceTo(harness, x, y);
+    const metres = Number.isFinite(gap) ? gap : 30;
+    timeoutMs = Math.min(240000, Math.max(45000, Math.round(metres * 4000)));
+  }
   const started = await harness.evaluate(`(() => {
     const K = window.KotOR;
     const gs = K.GameState;
@@ -810,7 +821,7 @@ async function navigateTo(harness, { x, y, z, range = 1.6, label = 'destination'
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const arrived = await moveTo(harness, { x, y, z, range, label, timeoutMs: 45000 });
+      const arrived = await moveTo(harness, { x, y, z, range, label });
       line(`  · reached ${label} after ${attempt} leg(s)${opened.length ? `, opening ${opened.join(', ')}` : ''}`);
       return { arrived, opened, legs: attempt };
     } catch (error) {
@@ -849,7 +860,7 @@ async function navigateTo(harness, { x, y, z, range = 1.6, label = 'destination'
           if (door.distance > 2.5) {
             await moveTo(harness, {
               x: door.position.x, y: door.position.y, z: door.position.z,
-              range: 2.0, label: door.name, timeoutMs: 45000,
+              range: 2.0, label: door.name,
             });
             await sleep(1200);
             await clearBlockingModal(harness);
@@ -1248,6 +1259,156 @@ async function returnToGameplay(harness) {
   if (outcome.closed.length) line(`  · closed ${JSON.stringify(outcome.closed)} (engineMode=${outcome.mode})`);
   await sleep(800);
   return outcome;
+}
+
+/** Every interactable in the area, with position, so a sweep can walk to them. */
+async function listInteractables(harness) {
+  return harness.evaluate(`(() => {
+    const gs = window.KotOR.GameState;
+    const area = gs.module && gs.module.area;
+    const player = window.KotOR.PartyManager.party[0];
+    if (!area || !player) return { located: false, reason: 'no area or player' };
+    const rows = [];
+    const push = (object, kind) => {
+      if (!object) return;
+      rows.push({
+        kind,
+        id: object.id,
+        promptId: 'module-object:' + object.id,
+        tag: String(object.tag || ''),
+        name: (() => { try { return String((object.getName && object.getName()) || ''); } catch (e) { return ''; } })(),
+        position: {
+          x: +object.position.x.toFixed(2),
+          y: +object.position.y.toFixed(2),
+          z: +object.position.z.toFixed(2),
+        },
+        distance: +player.position.distanceTo(object.position).toFixed(2),
+        plot: !!object.plot,
+        locked: typeof object.isLocked === 'function' ? !!object.isLocked() : null,
+        useable: typeof object.isUseable === 'function' ? !!object.isUseable() : null,
+      });
+    };
+    (area.placeables || []).forEach((o) => push(o, 'placeable'));
+    (area.doors || []).forEach((o) => push(o, 'door'));
+    (area.creatures || []).forEach((o) => push(o, 'creature'));
+    rows.sort((a, b) => a.distance - b.distance);
+    return { located: true, rows };
+  })()`, { timeoutMs: 60000 });
+}
+
+/** Snapshot of what the prologue is gating on, so a sweep can tell it moved. */
+async function questGateSnapshot(harness) {
+  return harness.evaluate(`(() => {
+    const gs = window.KotOR.GameState;
+    const area = gs.module && gs.module.area;
+    if (!area) return { located: false };
+    const exits = (area.doors || []).filter(Boolean)
+      .map((d) => ({
+        name: (() => { try { return String((d.getName && d.getName()) || ''); } catch (e) { return ''; } })(),
+        tag: String(d.tag || ''),
+        plot: !!d.plot,
+        locked: typeof d.isLocked === 'function' ? !!d.isLocked() : null,
+        open: typeof d.isOpen === 'function' ? !!d.isOpen() : null,
+      }))
+      .filter((d) => /\{1\d\dPER\}|\{151HAR\}/i.test(d.name));
+    return { located: true, exits };
+  })()`, { timeoutMs: 60000 });
+}
+
+/**
+ * Interacts with everything reachable, once each.
+ *
+ * This is how a player advances a questline: use the console, open the
+ * footlocker, read the terminal. Scripting the beats from memory of the retail
+ * game would encode guesses; walking up to each object and taking what it
+ * offers exercises whatever the module actually authored, and the quest scripts
+ * fire as a side effect.
+ *
+ * Objects are visited once and then retired whether or not they did anything —
+ * without that the nearest one is chosen forever.
+ */
+async function sweepInteractables(harness, { limit = 30, visited = new Set() } = {}) {
+  const log = [];
+  for (let index = 0; index < limit; index += 1) {
+    const inventory = await listInteractables(harness);
+    if (!inventory.located) throw new Error(`interactables: ${inventory.reason}`);
+
+    const next = inventory.rows.find((row) =>
+      !visited.has(row.promptId) &&
+      row.kind !== 'creature' &&
+      row.plot !== true &&
+      row.distance < 60);
+    if (!next) break;
+    visited.add(next.promptId);
+
+    try {
+      if (next.distance > 2.2) {
+        await navigateTo(harness, {
+          x: next.position.x, y: next.position.y, z: next.position.z,
+          range: 1.8, label: next.name || next.tag, maxAttempts: 4,
+        });
+      }
+    } catch (error) {
+      log.push({ name: next.name || next.tag, skipped: 'unreachable' });
+      continue;
+    }
+    await sleep(900);
+    await clearBlockingModal(harness);
+
+    const prompts = await listWorldPrompts(harness);
+    const offered = (prompts.prompts || []).find((p) => p.id === next.promptId);
+    if (!offered || !offered.actions || !offered.actions.length) {
+      log.push({ name: next.name || next.tag, skipped: `no action (${offered && offered.promptError})` });
+      continue;
+    }
+
+    const entry = { name: next.name || next.tag, kind: next.kind, actions: offered.actions, did: [] };
+    for (const action of offered.actions) {
+      // The destructive route is labelled "Bash" on doors and "Attack" on
+      // containers — both are ActionPhysicalAttacks. Only take either when
+      // nothing else is offered, or the sweep smashes lockers it could open.
+      const destructive = /^(bash|attack)$/i.test(action);
+      const alternatives = offered.actions.filter((a) => !/^(bash|attack)$/i.test(a));
+      if (destructive && alternatives.length) continue;
+      try {
+        await activateWorldAction(harness, { objectId: next.promptId, actionLabel: action });
+        entry.did.push(action);
+      } catch (error) {
+        entry.did.push(`${action} FAILED: ${String(error.message).slice(0, 90)}`);
+        continue;
+      }
+      await sleep(2200);
+
+      // Whatever the interaction raised: a container to empty, a conversation
+      // to play, a modal to accept.
+      const state = await worldState(harness);
+      if (state.foregroundMenu === 'MenuContainer') {
+        const took = await harness.evaluate(`(() => {
+          const menu = window.KotOR.GameState.MenuManager.MenuContainer;
+          const list = menu.LB_ITEMS;
+          const rows = list && Array.isArray(list.children) ? list.children : [];
+          if (!rows.length) return { ok: false, reason: 'empty' };
+          try { list.select(rows[0]); menu.BTN_OK.click(); }
+          catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
+          return { ok: true, rowCount: rows.length };
+        })()`);
+        entry.looted = took;
+        await sleep(1500);
+      }
+      if (state.inDialog) {
+        try {
+          const played = await playDialogue(harness, { label: entry.name, maxTurns: 80 });
+          entry.dialogue = played.transcript.slice(-3);
+        } catch (error) {
+          entry.dialogue = `stalled: ${String(error.message).slice(0, 120)}`;
+        }
+      }
+      await clearBlockingModal(harness);
+      await returnToGameplay(harness);
+    }
+    log.push(entry);
+  }
+  return log;
 }
 
 async function boot(harness, url) {
@@ -2193,6 +2354,109 @@ async function runPlaythrough(harness, url, args) {
   });
 
 
+  await record('work the medical bay: use everything reachable', async () => {
+    if (resumedPast(args, 'medbay-swept')) return { skipped: 'resumed past it' };
+    const gatesBefore = await questGateSnapshot(harness);
+    line(`  · exits before: ${JSON.stringify(gatesBefore.exits)}`);
+
+    const log = await sweepInteractables(harness, { limit: 24 });
+    for (const entry of log) {
+      if (entry.skipped) { line(`  · ${entry.name}: skipped (${entry.skipped})`); continue; }
+      line(`  · ${entry.name} [${entry.kind}] did=${JSON.stringify(entry.did)}` +
+        (entry.looted ? ` looted=${JSON.stringify(entry.looted)}` : '') +
+        (entry.dialogue ? ` dialogue=${JSON.stringify(entry.dialogue)}` : ''));
+    }
+
+    const gatesAfter = await questGateSnapshot(harness);
+    line(`  · exits after: ${JSON.stringify(gatesAfter.exits)}`);
+    const opened = (gatesAfter.exits || []).filter((exit) => {
+      const before = (gatesBefore.exits || []).find((b) => b.tag === exit.tag);
+      return before && before.plot && !exit.plot;
+    });
+    line(`  · exits unlocked by the sweep: ${JSON.stringify(opened.map((e) => e.name))}`);
+
+    const stats = await describeInventory(harness);
+    line(`  · carrying ${stats.inventoryCount}: ${JSON.stringify(stats.inventory.slice(0, 12))}`);
+    return { log, gatesBefore, gatesAfter, stats };
+  });
+
+  if (!resumedPast(args, 'medbay-swept')) {
+    await record('checkpoint: medbay swept', () => checkpoint(harness, 'medbay-swept'));
+  }
+
+
+  await record('use the medical bay consoles', async () => {
+    if (resumedPast(args, 'consoles-used')) return { skipped: 'resumed past it' };
+    const gatesBefore = await questGateSnapshot(harness);
+    const results = [];
+
+    // The named fixtures the prologue actually hangs its progress on, rather
+    // than whatever the generic sweep happened to reach first.
+    for (const tag of ['MedCom', 'MedBen', 'KolTank', 'KreiaInv', 'inv_talker']) {
+      let matches;
+      try { matches = await findObjectByTag(harness, tag); }
+      catch (error) { results.push({ tag, skipped: 'not in this area' }); continue; }
+      const target = matches.sort((a, b) => a.distance - b.distance)[0];
+
+      try {
+        if (target.distance > 2.2) {
+          await navigateTo(harness, {
+            x: target.position.x, y: target.position.y, z: target.position.z,
+            range: 1.8, label: target.name || tag, maxAttempts: 5,
+          });
+        }
+      } catch (error) {
+        results.push({ tag, name: target.name, skipped: `unreachable: ${String(error.message).slice(0, 90)}` });
+        continue;
+      }
+      await sleep(1000);
+      await clearBlockingModal(harness);
+
+      const prompts = await listWorldPrompts(harness);
+      const offered = (prompts.prompts || []).find((p) => p.id === target.promptId);
+      if (!offered || !offered.actions || !offered.actions.length) {
+        results.push({ tag, name: target.name, skipped: `no action (${offered && offered.promptError})` });
+        continue;
+      }
+
+      const entry = { tag, name: target.name, actions: offered.actions, did: [] };
+      for (const action of offered.actions) {
+        if (/^(bash|attack)$/i.test(action) && offered.actions.length > 1) continue;
+        try {
+          await activateWorldAction(harness, { objectId: target.promptId, actionLabel: action });
+          entry.did.push(action);
+        } catch (error) {
+          entry.did.push(`${action} FAILED: ${String(error.message).slice(0, 80)}`);
+          continue;
+        }
+        await sleep(2500);
+        const state = await worldState(harness);
+        entry.foreground = state.foregroundMenu;
+        if (state.inDialog) {
+          try {
+            const played = await playDialogue(harness, { label: entry.name || tag, maxTurns: 90 });
+            entry.dialogue = played.transcript.slice(-6);
+          } catch (error) { entry.dialogue = `stalled: ${String(error.message).slice(0, 120)}`; }
+        }
+        if (state.foregroundMenu === 'InGameComputer') {
+          entry.computerControls = await describeMenuControls(harness, 'InGameComputer');
+        }
+        await clearBlockingModal(harness);
+        await returnToGameplay(harness);
+      }
+      results.push(entry);
+    }
+
+    for (const entry of results) line(`  · ${entry.tag}: ${JSON.stringify(entry)}`);
+    const gatesAfter = await questGateSnapshot(harness);
+    line(`  · exits after: ${JSON.stringify(gatesAfter.exits)}`);
+    return { results, gatesBefore, gatesAfter };
+  });
+
+  if (!resumedPast(args, 'consoles-used')) {
+    await record('checkpoint: consoles used', () => checkpoint(harness, 'consoles-used'));
+  }
+
   await record('leave the medical bay for the next Peragus module', async () => {
     if (resumedPast(args, 'module-102')) return { skipped: 'resumed past it' };
     const startModule = (await worldState(harness)).moduleName;
@@ -2237,6 +2501,7 @@ async function runPlaythrough(harness, url, args) {
     line(`  · module ${startModule} -> ${after.moduleName}`);
     return { from: startModule, to: after.moduleName, via: exit.name };
   });
+
 
   report.finalState = await worldState(harness).catch(() => null);
   line(`\nfinal state: ${JSON.stringify(report.finalState, null, 2)}`);
