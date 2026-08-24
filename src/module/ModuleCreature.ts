@@ -60,6 +60,7 @@ import { TextSprite3D } from "@/engine/TextSprite3D";
 import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { ExperienceType } from "@/enums/engine/ExperienceType";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { resolveKillExperience } from "@/combat/killExperience";
 
 /**
 * ModuleCreature class.
@@ -2178,8 +2179,41 @@ export class ModuleCreature extends ModuleObject {
     instance.run(this);
   }
 
+  /**
+   * Awards the party the experience this creature was worth.
+   *
+   * `xptable.2da` was loaded and consulted nowhere: ChallengeRating was read
+   * from the template and written back on save, but combat awarded no XP at
+   * all, so a character could never level from fighting. Found by killing a
+   * mining droid on Peragus and watching XP stay at 0.
+   *
+   * Only hostiles pay out, and never a party member — a companion going down
+   * must not reward the player. Failure is silent by design: a kill worth
+   * nothing is a balance question, but a throw here would abort onDeath and
+   * strand the corpse mid-animation.
+   */
+  awardKillExperience(){
+    try {
+      if(this.isPartyMember()) return;
+      const player = GameState.PartyManager.Player;
+      if(!player || this === player) return;
+      if(typeof this.isHostile === 'function' && !this.isHostile(player)) return;
+
+      const table = GameState.TwoDAManager.datatables.get('xptable');
+      const experience = resolveKillExperience(
+        table?.rows as any,
+        player.getTotalClassLevel(),
+        this.challengeRating,
+      );
+      if(experience > 0) GameState.PartyManager.GiveXP(experience);
+    } catch (e) {
+      console.warn('ModuleCreature.awardKillExperience', this.getTag ? this.getTag() : this.id, e);
+    }
+  }
+
   onDeath(){
     this.weaponPowered(false);
+    this.awardKillExperience();
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnDeath];
     if(!nwscript){ return true; }
     const instance = nwscript.newInstance();

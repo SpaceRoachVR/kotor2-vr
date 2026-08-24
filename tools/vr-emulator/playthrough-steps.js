@@ -1934,12 +1934,65 @@ async function runPlaythrough(harness, url, args) {
     const after = await describeInventory(harness);
     line(`  · killed=${killed} xp ${before.xp} -> ${after.xp} hp ${after.hp}/${after.maxHp} canLevelUp=${after.canLevelUp}`);
     if (!killed) throw new Error(`could not kill ${target.name} in 40 rounds`);
+    // xptable.2da pays a level-1 character 125 for a CR-1 kill. Combat awarded
+    // nothing at all before this was wired, so assert it rather than logging it.
+    if (!(after.xp > before.xp)) {
+      throw new Error(`kill awarded no experience (${before.xp} -> ${after.xp}); ` +
+        `xptable lookup is level ${before.level} vs the victim's challenge rating`);
+    }
     return { target: target.name, before, after };
   });
 
   if (!resumedPast(args, 'first-kill')) {
     await record('checkpoint: first kill', () => checkpoint(harness, 'first-kill'));
   }
+
+
+  await record('XP data probe', async () => {
+    const info = await harness.evaluate(`(() => {
+      const gs = window.KotOR.GameState;
+      const tables = gs.TwoDAManager && gs.TwoDAManager.datatables;
+      if (!tables) return { located: false, reason: 'no datatables' };
+      const names = Array.from(tables.keys());
+      const interesting = names.filter((n) => /exp|xp|challenge|crtable|encounter/i.test(n));
+      // 2DA rows are an object keyed by row index, not an array — reading
+      // .length gave undefined and .slice threw.
+      const rowsOf = (table) => (table && table.rows) ? Object.values(table.rows) : [];
+      const describe = (name) => {
+        const table = tables.get(name);
+        const rows = rowsOf(table);
+        if (!rows.length) return { name, rowCount: 0 };
+        return { name, rowCount: rows.length, columns: Object.keys(rows[0]).slice(0, 12), row0: rows[0], row1: rows[1] };
+      };
+      const area = gs.module && gs.module.area;
+      const hostiles = (area && area.creatures || []).filter(Boolean).map((c) => ({
+        tag: String(c.tag || ''),
+        cr: c.challengeRating,
+        dead: typeof c.isDead === 'function' ? c.isDead() : null,
+      })).slice(0, 8);
+      return {
+        located: true,
+        totalTables: names.length,
+        interesting,
+        exptable: describe('exptable'),
+        xptable: (() => {
+          const rows = rowsOf(tables.get('xptable'));
+          return { rowCount: rows.length, rows: rows.slice(0, 12) };
+        })(),
+        xpbaseconst: (() => {
+          const rows = rowsOf(tables.get('xpbaseconst'));
+          return { rowCount: rows.length, rows: rows.slice(0, 6) };
+        })(),
+        creatures: hostiles,
+      };
+    })()`, { timeoutMs: 60000 });
+    line(`  · tables matching exp/xp/cr: ${JSON.stringify(info.interesting)}`);
+    line(`  · exptable: ${JSON.stringify(info.exptable)}`);
+    line(`  · xptable: ${JSON.stringify(info.xptable)}`);
+    line(`  · xpbaseconst: ${JSON.stringify(info.xpbaseconst)}`);
+    line(`  · creature challenge ratings: ${JSON.stringify(info.creatures)}`);
+    return info;
+  });
 
   report.finalState = await worldState(harness).catch(() => null);
   line(`\nfinal state: ${JSON.stringify(report.finalState, null, 2)}`);
