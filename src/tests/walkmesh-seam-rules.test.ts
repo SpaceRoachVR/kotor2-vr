@@ -4,6 +4,7 @@ import {
   seamBridgeOffsets,
   SEAM_BRIDGE_DISTANCE,
   SEAM_BRIDGE_STEP,
+  SEAM_HEIGHT_TOLERANCE,
 } from '@/engine/collision/WalkmeshSeamRules';
 
 /**
@@ -72,5 +73,25 @@ describe('seamBridgeOffsets', () => {
   test('rejects a non-positive distance or step', () => {
     expect(() => seamBridgeOffsets(0)).toThrow(RangeError);
     expect(() => seamBridgeOffsets(1, 0)).toThrow(RangeError);
+  });
+});
+
+describe('SEAM_HEIGHT_TOLERANCE', () => {
+  // The caller supplies height awareness through isWalkable, because walkmesh
+  // containment is 2D. These pin the two real cases the tolerance separates.
+  test('admits the 101PER kolto pad, which is 0.03m off its floor', () => {
+    expect(Math.abs(9.05 - 9.02)).toBeLessThanOrEqual(SEAM_HEIGHT_TOLERANCE);
+  });
+
+  test('rejects the 002EBO Utility Lift platform, 1.4m above the hull walkway', () => {
+    expect(Math.abs(10.85 - 9.44)).toBeGreaterThan(SEAM_HEIGHT_TOLERANCE);
+  });
+
+  test('a height-aware isWalkable keeps a ledge edge solid', () => {
+    // Ground exists beyond the edge in plan view, but 1.4m up.
+    const flatAnswer = () => true;
+    const heightAware = () => false;
+    expect(isWalkmeshSeam(PAD_EDGE_START, PAD_EDGE_END, PAD_INWARD_NORMAL, flatAnswer)).toBe(true);
+    expect(isWalkmeshSeam(PAD_EDGE_START, PAD_EDGE_END, PAD_INWARD_NORMAL, heightAware)).toBe(false);
   });
 });

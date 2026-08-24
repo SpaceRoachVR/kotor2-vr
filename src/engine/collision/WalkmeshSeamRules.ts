@@ -20,6 +20,19 @@
 /** How far past an edge to look for the island on the other side, in metres. */
 export const SEAM_PROBE_DISTANCE = 0.5;
 
+/**
+ * How far the ground beyond an edge may differ in height and still be the same
+ * surface, in metres.
+ *
+ * Walkmesh containment tests are 2D, so without this a balcony, a ramp head or
+ * a raised platform counts as "walkable ground right behind the edge" and its
+ * guard rail stops being a wall. The Ebon Hawk's exterior Utility Lift sits
+ * 1.4m above the hull walkway and is directly over it in plan view — exactly
+ * the case that must stay solid. The kolto pad this rule exists for is 0.03m
+ * off its floor.
+ */
+export const SEAM_HEIGHT_TOLERANCE = 0.5;
+
 /** How far a creature may be carried across a seam before the move is refused. */
 export const SEAM_BRIDGE_DISTANCE = 0.75;
 
@@ -45,6 +58,8 @@ const EDGE_SAMPLE_FRACTIONS = Object.freeze([0.25, 0.5, 0.75]);
  * negation. `isWalkable` must answer for the SAME room's walkmesh — asking
  * across rooms would let a creature step through a thin inter-room wall, and
  * genuine room-to-room openings are already expressed as transition edges.
+ * It must also reject ground outside SEAM_HEIGHT_TOLERANCE of the edge; see
+ * that constant for why a 2D answer is not enough.
  */
 export function isWalkmeshSeam(
   edgeStart: SeamPoint,

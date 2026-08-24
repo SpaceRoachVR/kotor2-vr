@@ -10,6 +10,7 @@ import { EngineDebugType } from "@/enums/engine/EngineDebugType";
 import {
   isWalkmeshSeam,
   seamBridgeOffsets,
+  SEAM_HEIGHT_TOLERANCE,
 } from "@/engine/collision/WalkmeshSeamRules";
 
 // =============================================
@@ -966,16 +967,20 @@ export class CollisionManager {
     const faces = this.object.room?.collisionManager?.walkmesh?.walkableFaces;
     if (!Array.isArray(faces) || !faces.length) return false;
 
-    // Probe at the edge's own height: the islands either side of a seam differ
-    // by centimetres, and pointInFace2d ignores z anyway.
-    const probeZ = edge.line.start.z;
+    // pointInFace2d ignores z, so containment alone would accept a platform
+    // stacked above the edge. Require the ground beyond to sit within
+    // SEAM_HEIGHT_TOLERANCE of the edge as well: a seam is a gap in one
+    // surface, a ledge is two surfaces.
+    const probeZ = (edge.line.start.z + edge.line.end.z) / 2;
     const isWalkable = (x: number, y: number): boolean => {
       this.seamProbePoint.set(x, y, probeZ);
       for (const face of faces) {
-        if (face && typeof face.pointInFace2d === 'function' &&
-            face.pointInFace2d(this.seamProbePoint)) {
-          return true;
-        }
+        if (!face || typeof face.pointInFace2d !== 'function') continue;
+        if (!face.pointInFace2d(this.seamProbePoint)) continue;
+        const triangle = (face as any).triangle;
+        if (!triangle) continue;
+        const faceZ = (triangle.a.z + triangle.b.z + triangle.c.z) / 3;
+        if (Math.abs(faceZ - probeZ) <= SEAM_HEIGHT_TOLERANCE) return true;
       }
       return false;
     };

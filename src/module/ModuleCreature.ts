@@ -23,6 +23,7 @@ import { TalentSkill } from "@/talents/TalentSkill";
 import { TalentSpell } from "@/talents/TalentSpell";
 import { OdysseyModel3D, OdysseyObject3D } from "@/three/odyssey";
 import { OdysseyModel, OdysseyModelAnimation } from "@/odyssey";
+import { resolveEquipmentSlotRule } from "@/module/CreatureEquipmentSlots";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
 import { CREATURE_EQUIPMENT_PERSISTENCE_SLOTS } from "@/module/creature/CreatureEquipmentPersistence";
 import { LIPObject } from "@/resource/LIPObject";
@@ -3410,7 +3411,7 @@ export class ModuleCreature extends ModuleObject {
       return;
     }
 
-    this.unequipSlot(slot);
+    this.unequipSlot(slot, true);
     item.onEquip(this);
     await item.loadModel();
     switch(slot){
@@ -3471,150 +3472,63 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
-  unequipSlot(slot = 0x1){
+  /**
+   * Removes whatever occupies the given slot.
+   *
+   * `returnToInventory` distinguishes the player taking something off — which
+   * must put it back in the party inventory, or the item is simply gone — from
+   * the cutscene helpers below, which stow weapons for the duration of a
+   * conversation and re-equip the same objects afterwards. Every player-facing
+   * route (the equipment screen, ActionUnequipItem, and the swap inside
+   * equipItem) passes true.
+   */
+  unequipSlot(slot = 0x1, returnToInventory = false){
+    const rule = resolveEquipmentSlotRule(slot);
+    if(!rule){ return; }
+    const equipment = this.equipment as any;
+    const item = equipment[rule.key];
+    if(!item){ return; }
+
     try{
-      switch(slot){
-        case ModuleCreatureArmorSlot.IMPLANT:
-          try{
-            if(this.equipment.IMPLANT){
-              this.equipment.IMPLANT.onUnEquip(this);
-              this.equipment.IMPLANT.destroy();
-              this.equipment.IMPLANT = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.HEAD:
+      item.onUnEquip(this);
+    }catch(e){
+      console.error('unequipSlot: onUnEquip threw', rule.key, e);
+    }
 
-          if(this.equipment.HEAD){
-            this.equipment.HEAD.onUnEquip(this);
-          }
-
-          try{
-            this.equipment.HEAD.model.parent.remove(this.equipment.HEAD.model);
-          }catch(e){}
-
-          this.equipment.HEAD = undefined;
-          this.loadModel();
-        break;
-        case ModuleCreatureArmorSlot.ARMS:
-          try{
-            if(this.equipment.ARMS){
-              this.equipment.ARMS.onUnEquip(this);
-              this.equipment.ARMS.destroy();
-              this.equipment.ARMS = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.RIGHTARMBAND:
-          try{
-            if(this.equipment.RIGHTARMBAND){
-              this.equipment.RIGHTARMBAND.onUnEquip(this);
-              this.equipment.RIGHTARMBAND.destroy();
-              this.equipment.RIGHTARMBAND = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.LEFTARMBAND:
-          try{
-            if(this.equipment.LEFTARMBAND){
-              this.equipment.LEFTARMBAND.onUnEquip(this);
-              this.equipment.LEFTARMBAND.destroy();
-              this.equipment.LEFTARMBAND = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.ARMOR:
-
-          if(this.equipment.ARMOR){
-            this.equipment.ARMOR.onUnEquip(this);
-          }
-
-          this.equipment.ARMOR = undefined;
-          this.loadModel();
-        break;
-        case ModuleCreatureArmorSlot.RIGHTARMBAND:
-          try{
-            if(this.equipment.RIGHTARMBAND){
-              this.equipment.RIGHTARMBAND.onUnEquip(this);
-              this.model.rhand.remove(this.equipment.RIGHTARMBAND.model);
-              this.equipment.RIGHTARMBAND.destroy();
-              this.equipment.RIGHTARMBAND = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.RIGHTHAND:
-          try{
-            if(this.equipment.RIGHTHAND){
-              this.equipment.RIGHTHAND.onUnEquip(this);
-              this.model.rhand.remove(this.equipment.RIGHTHAND.model);
-              this.equipment.RIGHTHAND.destroy();
-              this.equipment.RIGHTHAND = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.RIGHTHAND2:
-          try{
-            if(this.equipment.RIGHTHAND2){
-              this.equipment.RIGHTHAND2.onUnEquip(this);
-              // this.model.rhand.remove(this.equipment.RIGHTHAND2.model);
-              this.equipment.RIGHTHAND2.destroy();
-              this.equipment.RIGHTHAND2 = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.BELT:
-          try{
-            if(this.equipment.BELT){
-              this.equipment.BELT.onUnEquip(this);
-              this.model.rhand.remove(this.equipment.BELT.model);
-              this.equipment.BELT.destroy();
-              this.equipment.BELT = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.LEFTHAND:
-          try{
-            if(this.equipment.LEFTHAND){
-              this.equipment.LEFTHAND.onUnEquip(this);
-              this.model.lhand.remove(this.equipment.LEFTHAND.model);
-              this.equipment.LEFTHAND.destroy();
-              this.equipment.LEFTHAND = null;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.LEFTHAND2:
-          try{
-            if(this.equipment.LEFTHAND2){
-              this.equipment.LEFTHAND2.onUnEquip(this);
-              // this.model.lhand.remove(this.equipment.LEFTHAND2.model);
-              this.equipment.LEFTHAND2.destroy();
-              this.equipment.LEFTHAND2 = null;
-            }
-          }catch(e){
-            
-          }
-        break;
+    //Detaching the model must never gate clearing the slot. Droid bodies have
+    //no rhand/lhand attachment node, so `this.model.rhand.remove(...)` threw
+    //for T3-M4, the surrounding catch swallowed it, and the assignment below
+    //never ran - the Mining Laser stayed equipped and nothing could be
+    //unequipped through the equipment screen at all. `equipItem` already
+    //carries a guard for the same reason; this is its missing counterpart.
+    try{
+      if(rule.attach === 'parent'){
+        item.model?.parent?.remove(item.model);
+      }else if(rule.attach && item.model){
+        (this.model as any)?.[rule.attach]?.remove(item.model);
       }
     }catch(e){
-      console.error('unequipItem', e);
+      console.error('unequipSlot: detaching the model threw', rule.key, e);
+    }
+
+    if(returnToInventory){
+      try{
+        GameState.InventoryManager.addItem(item);
+      }catch(e){
+        console.error('unequipSlot: returning the item to inventory threw', rule.key, e);
+      }
+    }else if(rule.destroyOnUnequip){
+      try{
+        item.destroy();
+      }catch(e){
+        console.error('unequipSlot: destroy threw', rule.key, e);
+      }
+    }
+
+    equipment[rule.key] = undefined;
+
+    if(rule.reloadModelOnUnequip){
+      this.loadModel();
     }
   }
 

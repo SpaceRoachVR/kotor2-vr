@@ -205,7 +205,7 @@ export class MenuEquipment extends GameMenu {
           //console.log('selectedItem', this.selectedItem, this.slot, );
           let currentPC = GameState.PartyManager.party[0];
           if(this.selectedItem instanceof GUIItemNone){
-            currentPC.unequipSlot(this.slot);
+            currentPC.unequipSlot(this.slot, true);
           }else if(this.selectedItem instanceof ModuleItem){
             currentPC.equipItem(this.slot, this.selectedItem).then( () => {
               this.updateSlotIcons();
@@ -357,6 +357,13 @@ export class MenuEquipment extends GameMenu {
       description = this.selectedItem.getDescription();
     } else if(item instanceof GUIItemEquipped) {
       description = item.node.getDescription();
+    } else if(item instanceof GUIItemNone) {
+      //The list's 'None' row IS a selection. BTN_EQUIP branches on
+      //`selectedItem instanceof GUIItemNone` to call unequipSlot(), but this
+      //method left selectedItem undefined for it, so that branch was
+      //unreachable and nothing could ever be unequipped through the equipment
+      //screen - the click was accepted and silently did nothing.
+      this.selectedItem = item;
     }
     this.LB_DESC.setItem(description);
   }

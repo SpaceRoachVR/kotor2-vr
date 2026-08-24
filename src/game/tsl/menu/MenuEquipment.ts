@@ -275,7 +275,7 @@ export class MenuEquipment extends K1_MenuEquipment {
         if(this.selectedItem instanceof ModuleItem || this.selectedItem instanceof GUIItemNone){
           const currentPC = GameState.PartyManager.party[this.currentNPCIndex];
           if(this.selectedItem instanceof GUIItemNone){
-            currentPC.unequipSlot(this.slot);
+            currentPC.unequipSlot(this.slot, true);
           }else{
             currentPC.equipItem(this.slot, this.selectedItem).then(() => {
               this.updateSlotIcons();
