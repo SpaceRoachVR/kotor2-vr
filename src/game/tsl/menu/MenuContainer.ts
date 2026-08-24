@@ -2,6 +2,11 @@ import { GameState } from "@/GameState";
 import { GUILabel, GUIListBox, GUIButton } from "@/gui";
 import { ModuleCreature, ModulePlaceable } from "@/module";
 import { MenuContainer as K1_MenuContainer } from "@/game/kotor/KOTOR";
+// BTN_GIVEITEMS' handler switches on this and it was never imported, so the
+// take/give toggle threw `MenuContainerMode is not defined` the moment it was
+// pressed — in flatscreen and VR alike. K1's MenuContainer imports it from the
+// same place; the TSL copy dropped the import.
+import { MenuContainerMode } from "@/enums/gui/MenuContainerMode";
 
 /**
  * MenuContainer class.

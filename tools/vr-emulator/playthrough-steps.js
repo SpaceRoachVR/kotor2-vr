@@ -718,6 +718,84 @@ async function findObjectByTag(harness, tag) {
   return found.matches;
 }
 
+/** Straight-line distance from the player to a point, ignoring height. */
+async function distanceTo(harness, x, y) {
+  return harness.evaluate(`(() => {
+    const player = window.KotOR.PartyManager.party[0];
+    if (!player) return null;
+    const dx = player.position.x - ${Number(x)};
+    const dy = player.position.y - ${Number(y)};
+    return +Math.sqrt(dx * dx + dy * dy).toFixed(2);
+  })()`);
+}
+
+/**
+ * Walks to a point, opening whatever doors block the way.
+ *
+ * `moveTo` alone walks until the walkmesh runs out and then sits there with its
+ * move still queued, which is indistinguishable from broken pathfinding. Peragus
+ * is a series of rooms behind doors, so traversal needs the loop: walk, and when
+ * progress stops, open the nearest blocking door through its VR prompt and
+ * continue.
+ *
+ * Opening the door goes through the real world-prompt route deliberately —
+ * traversal is scaffolding, but every door opened on the way is itself a test of
+ * the thing under test.
+ *
+ * Gives up when an attempt neither closed distance nor opened anything, rather
+ * than looping until the timeout: no progress and no door is a real dead end and
+ * should be reported as one, with what was in range at the time.
+ */
+async function navigateTo(harness, { x, y, z, range = 1.6, label = 'destination', maxAttempts = 8 }) {
+  const opened = [];
+  let previousDistance = await distanceTo(harness, x, y);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const arrived = await moveTo(harness, { x, y, z, range, label, timeoutMs: 45000 });
+      line(`  · reached ${label} after ${attempt} leg(s)${opened.length ? `, opening ${opened.join(', ')}` : ''}`);
+      return { arrived, opened, legs: attempt };
+    } catch (error) {
+      const remaining = await distanceTo(harness, x, y);
+      const progressed = previousDistance !== null && remaining !== null &&
+        remaining < previousDistance - 0.5;
+      previousDistance = remaining;
+
+      await clearBlockingModal(harness);
+      const prompts = await listWorldPrompts(harness);
+      const doors = (prompts.prompts || []).filter((candidate) =>
+        candidate.inRange &&
+        Array.isArray(candidate.actions) &&
+        candidate.actions.some((action) => /open|use|bash|security/i.test(action)));
+
+      if (!doors.length) {
+        if (progressed) continue;
+        throw new Error(`navigateTo ${label}: stopped ${remaining}m short with nothing to open. ` +
+          `In range: ${JSON.stringify((prompts.prompts || []).map((p) =>
+            `${p.name}@${p.distance}m inRange=${p.inRange} actions=${(p.actions || []).join('|')} err=${p.promptError}`))}`);
+      }
+
+      // Nearest first: the door in the way is the one you are standing at.
+      const blocker = doors.sort((a, b) => a.distance - b.distance)[0];
+      // Prefer a plain open over Bash — bashing a door that Security would have
+      // opened is a different playthrough, and a noisier one.
+      const action = blocker.actions.find((a) => /^use|open/i.test(a)) ||
+        blocker.actions.find((a) => /security/i.test(a)) ||
+        blocker.actions[0];
+      line(`  · ${remaining}m short; opening ${blocker.name} via "${action}"`);
+      try {
+        await activateWorldAction(harness, { objectId: blocker.id, actionLabel: action });
+        opened.push(`${blocker.name}(${action})`);
+        await sleep(2500);
+        await clearBlockingModal(harness);
+      } catch (activationError) {
+        throw new Error(`navigateTo ${label}: could not open ${blocker.name} — ${activationError.message}`);
+      }
+    }
+  }
+  throw new Error(`navigateTo ${label}: gave up after ${maxAttempts} legs; opened ${JSON.stringify(opened)}`);
+}
+
 async function boot(harness, url) {
   line('  · launching');
   await harness.launch(url);
@@ -1337,66 +1415,73 @@ async function runPlaythrough(harness, url, args) {
   }
 
 
-  await record('loot something through the VR prompt (inventory changes)', async () => {
-    // Walk toward the medbay containers, then loot whatever the prompt system
-    // actually offers. Insisting on one tag conflated "this container is
-    // unreachable from here" with "looting is broken"; the mechanic under test
-    // is the prompt-to-inventory path, not pathfinding to a specific crate.
+  await record('navigate to the medbay container and loot it', async () => {
+    if (resumedPast(args, 'medbay-looted')) return { skipped: 'resumed past it' };
     const [container] = await findObjectByTag(harness, 'MilLowPlstcCylin');
-    try {
-      await moveTo(harness, {
-        x: container.position.x, y: container.position.y, z: container.position.z,
-        range: 1.6, label: container.name, timeoutMs: 60000,
-      });
-    } catch (error) {
-      line(`  · could not reach ${container.name} (${String(error.message).slice(0, 120)}); using what is in range`);
-    }
+    line(`  · ${container.name} at ${JSON.stringify(container.position)} (${container.distance}m)`);
+
+    const trip = await navigateTo(harness, {
+      x: container.position.x, y: container.position.y, z: container.position.z,
+      range: 1.6, label: container.name,
+    });
     await sleep(1500);
     await clearBlockingModal(harness);
 
     const prompts = await listWorldPrompts(harness);
-    const reachable = (prompts.prompts || []).filter((p) => p.inRange && p.actions && p.actions.length);
-    line(`  · reachable prompts: ${JSON.stringify(reachable.map((p) => `${p.name}: ${p.actions.join('|')}`))}`);
-    if (!reachable.length) {
-      throw new Error('nothing offers a VR action from here; candidates were ' +
+    const offered = (prompts.prompts || []).find((p) => p.id === container.promptId);
+    if (!offered || !offered.actions || !offered.actions.length) {
+      throw new Error(`standing at ${container.name} but it offers no VR action; in range: ` +
         JSON.stringify((prompts.prompts || []).map((p) => `${p.name}@${p.distance}m inRange=${p.inRange} err=${p.promptError}`)));
     }
+    line(`  · prompt: ${JSON.stringify(offered.actions)}`);
 
     const before = await describeInventory(harness);
-    const results = [];
-    for (const target of reachable.slice(0, 4)) {
-      const action = target.actions[0];
-      try {
-        await activateWorldAction(harness, { objectId: target.id, actionLabel: action });
-        await sleep(2000);
-      } catch (error) {
-        results.push({ target: target.name, action, error: String(error.message).slice(0, 140) });
-        continue;
-      }
-      const state = await worldState(harness);
-      let tookAll = null;
-      if (state.foregroundMenu === 'MenuContainer') {
-        tookAll = await harness.evaluate(`(() => {
-          const menu = window.KotOR.GameState.MenuManager.MenuContainer;
-          const button = menu.BTN_GIVEITEMS || menu.BTN_OK;
-          if (!button) return { ok: false, reason: 'no take-all; have ' + Object.keys(menu).filter(k => /^BTN_/.test(k)).join(',') };
-          try { button.click(); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
-          return { ok: true, used: menu.BTN_GIVEITEMS ? 'BTN_GIVEITEMS' : 'BTN_OK' };
-        })()`);
-        await sleep(1500);
-      }
-      results.push({ target: target.name, action, foreground: state.foregroundMenu, tookAll });
-      await clearBlockingModal(harness);
+    await activateWorldAction(harness, { objectId: container.promptId, actionLabel: offered.actions[0] });
+    await sleep(2500);
+
+    const state = await worldState(harness);
+    line(`  · foreground after use: ${state.foregroundMenu}`);
+    if (state.foregroundMenu === 'MenuContainer') {
+      // BTN_OK is take-all (it calls container.retrieveInventory), but it
+      // early-returns unless something is selected — so select a row first,
+      // exactly as a player pointing at an item would. BTN_GIVEITEMS is a
+      // take/give MODE TOGGLE, not a take button; using it took nothing.
+      const took = await harness.evaluate(`(() => {
+        const menu = window.KotOR.GameState.MenuManager.MenuContainer;
+        const list = menu.LB_ITEMS;
+        const rows = list && Array.isArray(list.children) ? list.children : null;
+        if (!rows) return { ok: false, reason: 'LB_ITEMS has no children array' };
+        if (!rows.length) return { ok: false, reason: 'container is empty', rowCount: 0 };
+        try { list.select(rows[0]); } catch (error) {
+          return { ok: false, reason: 'select threw: ' + String(error && error.message || error) };
+        }
+        if (!menu.selectedItem) {
+          return { ok: false, reason: 'selecting row 0 did not set selectedItem', rowCount: rows.length };
+        }
+        try { menu.BTN_OK.click(); } catch (error) {
+          return { ok: false, reason: 'BTN_OK threw: ' + String(error && error.message || error) };
+        }
+        return { ok: true, rowCount: rows.length };
+      })()`);
+      line(`  · take-all: ${JSON.stringify(took)}`);
+      await sleep(2000);
     }
-    line(`  · results: ${JSON.stringify(results, null, 1)}`);
+    await clearBlockingModal(harness);
 
     const after = await describeInventory(harness);
     line(`  · inventory ${before.inventoryCount} -> ${after.inventoryCount}: ${JSON.stringify(after.inventory.slice(0, 10))}`);
-    line(`  · credits ${before.credits} -> ${after.credits}, xp ${before.xp} -> ${after.xp}, canLevelUp=${after.canLevelUp}`);
-    return { before, after, results };
+    // Tight again: the loose version passed while looting nothing, which is
+    // worse than failing.
+    if (after.inventoryCount <= before.inventoryCount) {
+      throw new Error(`looting ${container.name} added nothing (${before.inventoryCount} -> ${after.inventoryCount}); ` +
+        `foreground was ${state.foregroundMenu}`);
+    }
+    return { trip, before, after };
   });
 
-  await record('checkpoint: looted medbay', () => checkpoint(harness, 'medbay-looted'));
+  if (!resumedPast(args, 'medbay-looted')) {
+    await record('checkpoint: looted medbay', () => checkpoint(harness, 'medbay-looted'));
+  }
 
   report.finalState = await worldState(harness).catch(() => null);
   line(`\nfinal state: ${JSON.stringify(report.finalState, null, 2)}`);
