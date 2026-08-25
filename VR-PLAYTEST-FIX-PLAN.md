@@ -712,3 +712,121 @@ All marked `TEMPORARY` in source. Remove once the issues they serve are closed:
 
 Nothing below Phase B has device evidence. Every phase exit needs the same
 in-headset confirmation bar the rest of ROADMAP.md holds itself to.
+
+---
+
+# Headset session 2026-08-25 — 13 reports triaged
+
+A full headset pass through the Ebon Hawk prologue with CDP capture. Console log
+archived with this entry. Three previously-open items were **confirmed fixed in
+the headset**: the Galaxy Map (ROADMAP 1.9) works correctly, ROADMAP 1.6's Kreia
+placeable now loads and poses, and ROADMAP 1.10's wall-pinning no longer bites a
+human player.
+
+Triaged below by confidence. **Root-caused** means the mechanism is identified in
+code and the evidence names it. **Hypothesis** means a named mechanism that has
+not been confirmed — do not treat these as causes.
+
+## Root-caused
+
+### R1 — Custom character creation is deliberately disabled upstream (not a bug)
+`only quick character is available in character creation`
+
+`src/game/tsl/menu/CharGenQuickOrCustom.ts:97` (and the K1 twin at :104):
+
+```js
+//Hide because this submenu is very incomplete.
+//Comment out this line to work on the custom chargen screen
+this.CUST_CHAR_BTN.hide();
+```
+
+Confirmed by the log — `no clickable control among [CUST_CHAR_BTN(visible=false,
+clickable=false)]`. This is an upstream KotOR.js stub, not a regression here.
+Re-enabling is one line; making the screen work is a project. **Scope decision,
+not a defect.**
+
+### R2 — The security tunneler's bonus is never applied
+`security tunneler does not activate ... same audio message as the regular skill`
+`locked container in combat training room doesn't unlock or start training combat`
+`security skill fails on some locked containers when it shouldn't`
+
+These are one bug. `ActionMenuManager` builds the tunneler variant with
+`action.setParameter(1, ActionParameterType.DWORD, securityTunnelers[0])` —
+passing the **ModuleItem object** where a DWORD id is expected
+(`ActionMenuManager.ts:107` and `:175`). `Action.getParameter` resolves DWORD via
+`ModuleObjectManager.GetObjectById`, which tolerates an object *only* when
+`id.id >= 1`; inventory items are not reliably registered in `ObjectList` — the
+exact trap ROADMAP 1.1 flagged. When it misses, `oItem` is undefined,
+`ActionUnlockObject` applies no `EffectSkillIncrease`, and the tunneler attempt
+is arithmetically identical to the plain one. The log agrees: both offered
+variants carry `item=null`.
+
+Why that gates the combat training room, from the numbers in the log — actor
+`securitySkill=6`, and `total = d20 + wisdom/2 + securitySkill`:
+
+| target | OpenLockDC | best possible total | outcome |
+|---|---|---|---|
+| Low Security Door | 21 | 31 | passes about half the time |
+| Metal Box — Combat Training | 33 | 31 | **impossible without the tunneler** |
+| High Security Cylinder | 36 | 31 | **impossible without the tunneler** |
+
+So the two containers Allen could not open are exactly the two the authored
+content reserves for the tunneler — and the tunneler does nothing. The tutorial
+bark even says to use it. Fixing R2 should clear all three reports.
+
+### R3 — The security roll uses the wrong ability, and the score not the modifier
+`ObjectLockRules.resolveSecurityUnlock` computes
+`total = roll + (wisdom / 2) + securitySkill`, fed by `wisdom: object.getWIS()`
+(`ModuleDoor.ts:443`, `ModulePlaceable.ts:539`).
+
+Two faults: Security is governed by **Intelligence** in KOTOR, not Wisdom; and
+an ability *modifier* is `(score - 10) / 2`, not `score / 2`, so a WIS 10 actor
+gets a flat +5 it has not earned. Every security check in the game is currently
+about five points too easy, against the wrong stat. Worth fixing with R2, since
+changing both at once moves the difficulty twice.
+
+## Already tracked — new evidence attached
+
+- **Doors invisible** → issue 13. Still reproduces. New and useful: the same
+  session reports *3C-FD invisible*, *Locker not interactable*, the medbay
+  `{Dummy Medbay PC}` absent, and **"invisible assets sometimes become visible
+  when they are only in the extreme left of my vision."** That last one is the
+  strongest clue yet and points at frustum culling against stale or offset
+  bounds rather than at room `.vis` bookkeeping — a mesh whose bounding volume
+  does not follow it renders only when that stale volume enters the frustum.
+- **Lift to the outer hull does nothing** → issue 12. The log now shows why the
+  *interaction* ends: `lift_002` starts, plays its entry, and reaches
+  `onEndConversationAbort` — the three replies (including "[Go outside.]") are
+  never presented. So the conversation aborts before offering choices, rather
+  than the transition failing.
+- **Engine Room Door has no interactions** → the log shows
+  `resolution=expected-empty` with `keyRequired=1, openLockDC=1, notBlastable=false`.
+  The authored route is a mine, and the actor had none — consistent with
+  ROADMAP 1.10's finding that the door is mine-only. Confirm before treating as
+  a defect.
+
+## Hypothesis — needs a check, do not treat as cause
+
+- **`setCutsceneMode` re-enables skinned-mesh frustum culling.**
+  `ModuleObject.setCutsceneMode` does `skins[i].frustumCulled = !state`, so
+  leaving a cutscene sets culling **on** for skinned meshes, whose bounds are
+  the bind pose and do not follow animation. `ModuleCreature` deliberately sets
+  `frustumCulled = false` at load, so this undoes it. That would fit Kreia's
+  face vanishing at close range and 3C-FD disappearing after the `tr_3cfd_int`
+  conversation. **Against it:** `setCutsceneMode` logs on every call and does
+  not appear anywhere in this session's log. Verify it is reached before acting.
+
+## Not reproduced — evidence points the other way
+
+- **"the character isn't assigned any stats or feats."** The emulator harness
+  runs the same quick-chargen path and reports
+  `{str:10, dex:16, con:10, wis:12, int:14, cha:14, featCount:8}` — stats and
+  feats *are* assigned. More likely the character sheet is not rendering them,
+  which is issue 6 (menus blank / no icons). Check the sheet against those
+  numbers before treating chargen as broken.
+
+## Cosmetic, filed for completeness
+
+- `<FullName>` is never substituted — objects surface as
+  `{Dummy Medbay PC}<FullName>` and `<FullName>{Invis}`. A token-substitution
+  gap, not a missing object.
