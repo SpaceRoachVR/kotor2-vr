@@ -43,10 +43,17 @@ export class CharGenCustomPanel extends GameMenu {
     this.voidFill = false;
   }
 
-  async menuControlInitializer(skipInit: boolean = false) {
-    await super.menuControlInitializer();
-    if(skipInit) return;
-    return new Promise<void>((resolve, reject) => {
+  /**
+   * Wires the six step buttons plus Back and Cancel.
+   *
+   * Lives in its own method because TSL's subclass calls
+   * `super.menuControlInitializer(true)`, which skips this class's initializer
+   * body — so every button on the TSL custom panel was dead while the K1 ones
+   * worked. Reported from the headset: the panel opened with eight buttons and
+   * none of them responded.
+   */
+  protected wireCustomPanel(){
+
       this.BTN_BACK.addEventListener('click', (e) => {
         e.stopPropagation();
         this.manager.CharGenMain.close();
@@ -93,6 +100,22 @@ export class CharGenCustomPanel extends GameMenu {
         });
       });
 
+      // Cancel was declared in both games and wired in neither, so the panel
+      // shipped a permanently dead button. It abandons character creation the
+      // same way Back steps out of it.
+      this.BTN_CANCEL?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.manager.CharGenMain.close();
+        this.manager.CharGenMain.childMenu = this.manager.CharGenQuickOrCustom;
+        this.manager.CharGenMain.open();
+      });
+  }
+
+  async menuControlInitializer(skipInit: boolean = false) {
+    await super.menuControlInitializer();
+    if(skipInit) return;
+    return new Promise<void>((resolve, reject) => {
+      this.wireCustomPanel();
       this.tGuiPanel.offset.x = -180;
       this.tGuiPanel.offset.y = 85;
       this.recalculatePosition();

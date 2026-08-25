@@ -65,10 +65,16 @@ export class CharGenSkills extends GameMenu {
     this.voidFill = true;
   }
 
-  async menuControlInitializer(skipInit: boolean = false) {
-    await super.menuControlInitializer();
-    if(skipInit) return;
-    return new Promise<void>((resolve, reject) => {
+  /**
+   * Wires Back, Accept and Recommended.
+   *
+   * Separated because TSL's subclass calls `super.menuControlInitializer(true)`
+   * and so never runs this class's initializer body — leaving every button on
+   * the TSL skills step dead. That step is reachable now that custom character
+   * creation is offered.
+   */
+  protected wireSkillControls(){
+
       
       this.BTN_BACK.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -138,6 +144,13 @@ export class CharGenSkills extends GameMenu {
         this.updateButtonStates();
 
       });
+  }
+
+  async menuControlInitializer(skipInit: boolean = false) {
+    await super.menuControlInitializer();
+    if(skipInit) return;
+    return new Promise<void>((resolve, reject) => {
+      this.wireSkillControls();
       resolve();
     });
   }

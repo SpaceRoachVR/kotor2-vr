@@ -44,6 +44,9 @@ export class CharGenCustomPanel extends K1_CharGenCustomPanel {
     await super.menuControlInitializer(true);
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
+      // super was called with skipInit, so the base class never wired anything.
+      // Without this every button on the TSL custom panel is dead.
+      this.wireCustomPanel();
       resolve();
     });
   }
