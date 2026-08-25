@@ -394,7 +394,11 @@ function getDisplayedReplyScriptNames(replies) {
 }
 
 function line(text) {
-  console.log(text);
+  // A bare line() used to print the string "undefined". That mattered more than
+  // it looks: the only bare call was the stall nudge below, so every stall in a
+  // run rendered as an anonymous `undefined` and the single most useful signal
+  // in the log read as noise. 163 of them in one run.
+  console.log(text === undefined ? '' : text);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1368,7 +1372,12 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
       if (lastNavigation && Math.abs(lastNavigation.remaining - navigation.remaining) < 0.05) {
         stalledSamples += 1;
         if (stalledSamples === 6) {
-          line();
+          // Say where and how far out. A stall is the thing worth localising in
+          // the log -- "stopped Nm short" only reports the end state, while this
+          // names the exact position the actor stopped advancing from.
+          line(`  · ${label}: stalled at (${navigation.playerX.toFixed(2)}, ` +
+            `${navigation.playerY.toFixed(2)}), ${navigation.remaining.toFixed(2)}m out, ` +
+            `${navigation.queued} queued; re-asserting gameplay`);
           await returnToGameplay(harness);
         }
       } else {
