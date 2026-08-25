@@ -320,7 +320,13 @@ export class GameMenu {
       controls = this.tGuiPanel.getActiveControls();
     }
     if(this.childMenu){
-      controls = controls.concat(controls, this.childMenu.getActiveControls());
+      // `concat(controls, ...)` appended this menu's own controls a second
+      // time, so every hit-test result arrived duplicated — visible in the
+      // headset logs as "[LBL_BAR3(...), LBL_BAR3(...)]" for a single label.
+      // Duplicates make each control receive mouseDown twice on the legacy
+      // mouse path and made the VR miss diagnostics twice as long as the
+      // truth.
+      controls = controls.concat(this.childMenu.getActiveControls());
     }
     return controls;
   }

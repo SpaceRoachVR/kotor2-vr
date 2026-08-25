@@ -263,10 +263,16 @@ export class MenuCharacter extends GameMenu {
     this.LBL_CHA_MOD?.setText(Math.floor((character.getCHA() - 10) / 2));
     this.LBL_EXPERIENCE_STAT?.setText(character.experience.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','));
     this.LBL_NEEDED_XP?.setText(GameState.TwoDAManager.datatables.get('exptable').rows[character.getTotalClassLevel()].xp.replace(/\B(?=(\d{3})+(?!\d))/g, ','));
+    // BTN_LEVELUP is hidden during setup alongside BTN_AUTO and nothing ever
+    // revealed it again, so the Level Up button was permanently invisible --
+    // which is what "the level up button does nothing" was describing. It
+    // belongs on screen under exactly the same condition as Auto.
     if (character.canLevelUp()) {
       this.BTN_AUTO?.show();
+      this.BTN_LEVELUP?.show();
     } else {
       this.BTN_AUTO?.hide();
+      this.BTN_LEVELUP?.hide();
     }
   }
 
