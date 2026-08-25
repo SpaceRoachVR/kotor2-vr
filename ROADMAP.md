@@ -618,6 +618,41 @@ succeeds from others. This is a driver-visible limitation rather than a
 player-facing one: a person steers with a thumbstick and does not ask the
 engine to plan a 30m route.
 
+**Localised: the actor sticks on walls, and the mechanism is named (2026-08-25).**
+Resuming from `morgue-door` with the stall diagnostic active produced 13 stalls
+with positions. Measuring each against `101PER`'s own perimeter (wall) edges,
+rebuilt in world space from the retail WOKs:
+
+| | median distance to nearest wall |
+|---|---|
+| ordinary walkable ground (829 face centroids) | **1.15m** |
+| stall positions | **0.43m** |
+
+Only 19.8% of walkable ground lies as close to a wall as the stall median, yet
+10 of 10 stalls do, and 8 of 10 sit below the 25th percentile. Stalls are not
+position-independent: the actor stops when pressed against geometry. Two further
+signals agree — `queued: 0` at almost every stall, so no competing action is
+fighting locomotion, and stalls arrive in pairs about 2cm apart, so the
+`returnToGameplay` nudge does not clear it.
+
+**The mechanism is `CollisionManager.applyCollideAndSlide`.** It works on
+`object.forceVector`, and before projecting it against the edge normals it
+applies a choke-point rule: where two edges have opposing normals
+(`n1.dot(n2) < -0.3`) and the movement points into both, it does
+`forceVector.set(0, 0, 0)` and returns — a full stop with no slide. VR
+locomotion aims straight at the next waypoint and keeps aiming there, so in a
+tight spot the vector points into both edges every frame and the actor is
+pinned. This is also why it surfaced now: the adapter only began writing
+`forceVector` in `9219b6ff`; before that the vector was zero and this code had
+nothing to act on.
+
+- **Next:** decide whether the choke rule should zero the vector or project it
+  onto whichever edge still has a free direction. The rule is deliberate — it
+  stops actors squeezing through walls — so this needs care, and a headset
+  session would show whether a human steering out of it feels wrong at all.
+- **Not player-facing.** A person steers with a thumbstick and slides off the
+  wall; the driver cannot, because it re-aims at the same waypoint every sample.
+
 **The measurement was in the log all along, disguised (2026-08-25).** The
 driver's `line(text)` did `console.log(text)`, and the only bare `line()` call
 in the file was the stall-recovery nudge — fired when a leg has not advanced
