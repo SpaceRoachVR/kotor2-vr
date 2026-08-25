@@ -541,7 +541,7 @@ export class ModulePlaceable extends ModuleObject {
       lockable: this.lockable,
       keyRequired: this.keyRequired,
       securitySkill: object.getSkillLevel(SkillType.SECURITY),
-      wisdom: object.getWIS(),
+      intelligence: object.getINT(),
       openLockDC: this.openLockDC,
     }, () => Dice.rollD20(1));
     if (!result.attempted) return false;

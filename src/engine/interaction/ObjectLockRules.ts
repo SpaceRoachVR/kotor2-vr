@@ -8,7 +8,8 @@ export interface ObjectLockState {
 
 export interface SecurityUnlockAttempt extends ObjectLockState {
   readonly securitySkill: number;
-  readonly wisdom: number;
+  /** Raw Intelligence score. The modifier is derived here, not by the caller. */
+  readonly intelligence: number;
   readonly openLockDC: number;
 }
 
@@ -46,8 +47,25 @@ export function canAttemptSecurityUnlock(lockState: ObjectLockState): boolean {
 }
 
 /**
+ * The engine's ability modifier, matching `CombatRound.GetMod`. Duplicated
+ * rather than imported to keep this rules module free of engine dependencies.
+ */
+function abilityModifier(score: number): number {
+  return Math.floor((score - 10) / 2);
+}
+
+/**
  * Rolls an authored Security attempt. Security must use a genuine d20 rather
  * than treating all out-of-combat attempts as an automatic 20.
+ *
+ * `d20 + Intelligence modifier + Security rank` against `OpenLockDC`.
+ *
+ * Two things were wrong before. Security is governed by **Intelligence** in
+ * KOTOR, not Wisdom; and the term was `wisdom / 2`, which is half the raw
+ * score rather than an ability modifier — so an average actor collected a flat
+ * +5 it had not earned and every lock in the game sat five points too easy.
+ * `getSkillLevel` returns the raw rank with no modifier folded in, so the
+ * modifier genuinely belongs here.
  */
 export function resolveSecurityUnlock(
   attempt: SecurityUnlockAttempt,
@@ -62,7 +80,7 @@ export function resolveSecurityUnlock(
   if (!Number.isInteger(roll) || roll < 1 || roll > 20) {
     throw new RangeError('Security d20 roll must be an integer between 1 and 20');
   }
-  const total = roll + (attempt.wisdom / 2) + attempt.securitySkill;
+  const total = roll + abilityModifier(attempt.intelligence) + attempt.securitySkill;
   return { attempted: true, unlocked: total > attempt.openLockDC, roll, total };
 }
 
@@ -135,7 +153,7 @@ function validateSecurityAttempt(
   }
   for (const [name, value] of Object.entries({
     securitySkill: attempt.securitySkill,
-    wisdom: attempt.wisdom,
+    intelligence: attempt.intelligence,
     openLockDC: attempt.openLockDC,
   })) {
     if (!Number.isFinite(value)) {

@@ -39,12 +39,13 @@ describe('resolveSecurityUnlock', () => {
       lockable: false,
       keyRequired: false,
       securitySkill: 6,
-      wisdom: 10,
+      intelligence: 10,
       openLockDC: 21,
     }, rollD20);
 
     expect(rollD20).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ attempted: true, unlocked: false, roll: 1, total: 12 });
+    // 1 + Intelligence modifier 0 + rank 6.
+    expect(result).toEqual({ attempted: true, unlocked: false, roll: 1, total: 7 });
   });
 
   test('rejects a Security total exactly equal to the authored OpenLockDC', () => {
@@ -53,11 +54,33 @@ describe('resolveSecurityUnlock', () => {
       lockable: false,
       keyRequired: false,
       securitySkill: 6,
-      wisdom: 10,
+      intelligence: 10,
       openLockDC: 21,
-    }, () => 10);
+    }, () => 15);
 
-    expect(result).toEqual({ attempted: true, unlocked: false, roll: 10, total: 21 });
+    expect(result).toEqual({ attempted: true, unlocked: false, roll: 15, total: 21 });
+  });
+
+  test('scores Security off Intelligence, as a modifier rather than half the score', () => {
+    // The old rule added wisdom/2, so an average actor collected a flat +5 it
+    // had not earned -- and collected it from the wrong ability entirely.
+    const average = resolveSecurityUnlock({
+      locked: true, lockable: false, keyRequired: false,
+      securitySkill: 6, intelligence: 10, openLockDC: 21,
+    }, () => 10);
+    expect(average.attempted && average.total).toBe(16);
+
+    const clever = resolveSecurityUnlock({
+      locked: true, lockable: false, keyRequired: false,
+      securitySkill: 6, intelligence: 16, openLockDC: 21,
+    }, () => 10);
+    expect(clever.attempted && clever.total).toBe(19);
+
+    const dull = resolveSecurityUnlock({
+      locked: true, lockable: false, keyRequired: false,
+      securitySkill: 6, intelligence: 8, openLockDC: 21,
+    }, () => 10);
+    expect(dull.attempted && dull.total).toBe(15);
   });
 });
 
