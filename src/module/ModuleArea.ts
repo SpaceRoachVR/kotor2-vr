@@ -1404,7 +1404,10 @@ export class ModuleArea extends ModuleObject {
 
       try { await this.loadDoors(); } catch(e){ console.error(e); }
 
-      this.doorWalkmeshes = this.doors.filter( (d) => { return d?.collisionManager?.walkmesh}).map( (d) => { return d.collisionManager.walkmesh; });
+      this.doorWalkmeshes = [];
+      for (const door of this.doors) {
+        door?.updateCollisionState();
+      }
 
       try { await this.loadStores(); } catch(e){ console.error(e); }
 
