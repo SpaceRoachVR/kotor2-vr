@@ -873,3 +873,47 @@ The orderings differ and doors are the headline symptom.
 - `<FullName>` is never substituted — objects surface as
   `{Dummy Medbay PC}<FullName>` and `<FullName>{Invis}`. A token-substitution
   gap, not a missing object.
+
+---
+
+## Systemic — TSL menus that skip the base initializer wire nothing
+
+A TSL menu whose `menuControlInitializer` calls `super.menuControlInitializer(true)`
+skips the K1 base class's initializer body, which is where the base wires its
+buttons. If the subclass then adds no handlers of its own, **every control in
+that menu is dead**, while the same screen works in K1.
+
+Found three separate times from the headset before the pattern was recognised —
+the equipment screen, the character-creation Feats step, and the custom panel
+("eight buttons and none of them respond") — so it is worth treating as a class
+rather than as individual reports.
+
+Swept across `src/game/tsl/menu/`. Menus that skip the base body **and** define
+no listeners of their own, against the number the K1 base defines:
+
+| TSL menu | own listeners | K1 listeners | status |
+|---|---|---|---|
+| `CharGenCustomPanel` | 0 | 8 | ✅ fixed |
+| `CharGenSkills` | 0 | 3 | ✅ fixed |
+| `CharGenFeats` | 0 | 2 | ✅ fixed |
+| `MenuPazaakGame` | 0 | 10 | ☐ |
+| `MenuUpgradeSelect` | 0 | 6 | ☐ |
+| `MenuPazaakSetup` | 0 | 4 | ☐ |
+| `MenuUpgradeItems` | 0 | 2 | ☐ |
+| `MenuUpgrade` | 0 | 1 | ☐ |
+| `MenuToolTip` | 0 | 1 | ☐ |
+
+The three fixed ones are the character-creation flow, which is now reachable.
+The rest are **not** fixed blind: some TSL screens differ from their K1
+counterparts deliberately, and inheriting K1's handlers could wire the wrong
+controls. Each needs its own look, but the diagnosis is the same and the fix
+shape is known — expose the base wiring as a `protected` helper and call it
+from both subclasses.
+
+Pazaak and the upgrade bench are the player-visible ones. Neither is on the
+Peragus critical path, so they are queued behind the prologue.
+
+**Guard:** `src/tests/tsl-menu-inherited-wiring.test.ts` asserts both the fix
+and its premise — that the subclass really does skip the base body — so the
+test starts failing rather than passing vacuously if a menu is later changed to
+run the base initializer normally.
