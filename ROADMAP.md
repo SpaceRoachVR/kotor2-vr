@@ -338,6 +338,23 @@ those names against the retail texture packs and the TSLRCM Override splits them
 in two — which is exactly the "genuinely absent vs. parsing gap" this item asked
 for.
 
+**Reframed 2026-08-25 — these are requests retail never makes.** The retail
+install is complete and renders correctly, textures included. Re-verified the
+14 names against the whole install — `chitin.key`/BIFs, all four
+`TexturePacks/*.erf`, and Override's 1,823 loose files: 13 are absent outright
+and the 14th, `pmhc04`, exists only as an MDL/MDX **model**, not a texture.
+
+Both facts hold together, and the conclusion is sharper than "decide whether
+any need a substitute": if the shipped game draws these screens correctly
+without these files, then every one of them is a name **this engine asks for
+and the real game does not**. So each is an engine bug to trace back to its
+requester, not an asset gap to paper over with a substitute. Treat a
+missing-resource report as a lead, not as a limit of the data.
+
+(Checked one candidate mechanism and cleared it: 30 K1 menus set
+`background = '1600x1200back'`, but every TSL subclass overrides `background`,
+so TSL menus do not inherit it. The requester is elsewhere.)
+
 **Genuinely absent (14).** `pmhc04`, `po_no`, `bluefill`, `yellowfill`,
 `po_pcarth`, `invent1/2`, `boxline3/4`, `confirm1/2`, `lbl_wupitems`,
 `1600x1200back`, `uparrow`. In neither the packs nor Override. Several are K1
