@@ -73,10 +73,14 @@ export class ActionRecoverMine extends Action {
         //todo: recover skill check
 
         trap.destroy();
-        const buffer = ResourceLoader.loadCachedResource(ResourceTypes['utp'], trap.trapResRef);
+        const buffer = ResourceLoader.loadCachedResource(ResourceTypes['uti'], trap.trapResRef);
         if(buffer){
           const item = new GameState.Module.ModuleArea.ModuleItem(new GFFObject(buffer));
-          this.owner.addItem(item);
+          if(GameState.PartyManager.party.indexOf(this.owner as any) > -1){
+            GameState.InventoryManager.addItem(item);
+          }else{
+            this.owner.addItem(item);
+          }
         }
       }
 
