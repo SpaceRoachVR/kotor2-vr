@@ -369,13 +369,15 @@ faults. Demoting these specific probes to a debug-level message would make the
 console meaningfully easier to trust; not done, since it touches the shared
 `GameFileSystem` error path.
 
-### 1.3 — Player is an appearance-less human instead of T3-M4
-`ModuleArea.loadPlayer()` finds `PartyManager.Player` unset and invents a placeholder
-from `getPlayerTemplate()`, while the prologue spawns T3 separately by script. Two
-entities result: a phantom human the camera follows, and the real T3 the UI reports on.
-- **Done when:** the prologue player is T3-M4, one entity, camera and UI agree.
-- **Files:** `src/module/ModuleArea.ts` (~line 1600), `src/managers/PartyManager.ts`,
-  the `DoSpecialSpawnInT3M4` path.
+### 1.3 — Player is an appearance-less human instead of T3-M4 ✅ not reproducible (2026-08-25)
+The acceptance criterion is met in the current build. Every state dump across
+the Ebon Hawk prologue reports `playerName: "T3-M4"`, `partySize: 1`,
+`hasPlayer: true` — one entity, camera and UI agreeing, through consoles, the
+footlocker bash, the security slice and the module transition.
+
+`loadPlayer`'s placeholder branch is only taken when `PartyManager.Player` is
+not already a `ModuleCreature`, which in the prologue it is, so the phantom is
+never built. Both branches resolve the room explicitly.
 
 ### 1.3b — `Invalid Item Property Sub Type: undefined` on save load ✅ fixed (2026-08-25)
 
@@ -458,18 +460,49 @@ as Kreia and Atton join, which is the next slice.
 - **Files:** `src/game/kotor/menu/MenuEquipment.ts`,
   `src/game/tsl/menu/MenuEquipment.ts`, `src/managers/InventoryManager.ts`.
 
-### 1.5 — Movie audio bleed
-`PlayMovie` sets MOVIE mode, then module init finishes and `RestoreEnginePlayMode`
-clobbers it back to INGAME while the video is still playing, so area music and ambience
-resume underneath the cutscene and continue into the tutorial.
-- **Done when:** no world audio during a movie; audio resumes cleanly after.
-- **Files:** `src/managers/VideoManager.ts`, `src/GameState.ts` engine-mode handling.
-- **Design point:** decide who owns engine mode during a movie. The startup queue
-  already mutes channels explicitly; the in-game path has no equivalent.
+### 1.5 — Movie audio bleed ✅ fixed in `84403a6a`, recorded here 2026-08-25
+`PlayMovie` set MOVIE mode, then module init finishing called
+`RestoreEnginePlayMode` back to INGAME while the video was still playing, so
+area music and ambience resumed underneath the cutscene and bled into the
+tutorial.
 
-### 1.6 — `p_kreiastunt` missing walkmesh
-Kreia's stunt-body placeable fails `loadWalkmesh` and renders in bind pose.
-- **Done when:** the corpse container loads and reads as intended.
+Fixed by giving movie mode an explicit owner: `MovieModeOwnership` lets
+`playMovieQueue` claim MOVIE up front and restore the prior mode only when the
+whole queue completes, rather than each individual movie doing it. Covered by
+`src/tests/movie-mode-ownership.test.ts`.
+
+**The design point is answered.** World audio is silenced by the video object
+itself, not by engine mode — `BIKObject.play`/`playFromBuffer` mute every
+channel and unmute MOVIE, and `stop()` reverses it. Nothing keys audio off
+`EngineMode.MOVIE` at all.
+
+**Watch item, not a demonstrated defect.** That mute is owned per BIK object,
+not per queue — exactly the shape the engine-mode bug above had. At end of
+video `stop()` unmutes every channel, and the next movie re-mutes only when its
+`play()` runs. The gap is a few synchronous calls plus microtasks, so it is
+sub-frame and almost certainly inaudible; it is recorded because the structure
+invites the bug back, not because bleed was observed. If world audio is ever
+heard between two queued movies, this is the place.
+
+### 1.6 — `p_kreiastunt` missing walkmesh ◑ the walkmesh half is not a defect; the bind pose is still open (2026-08-25)
+
+**The missing walkmesh is an absent asset, not an engine fault, and it is a
+whole class rather than one model.** `p_kreiastunt` ships an `MDL` and an `MDX`
+in `models.bif` and no `PWK` — in neither the BIFs nor Override. Checked across
+the install: **all 34 `p_*` models have no PWK**, while the install ships 304
+PWKs for ordinary placeables. The `p_*` set is character-appearance stunt
+bodies used as placeables — Atton, Bastila, Carth, Kreia and so on — and a
+character model legitimately has no placeable walkmesh.
+
+So `loadWalkmesh` failing here is expected for every stunt body in the game.
+Logging it at error level is noise of exactly the kind 1.11 catalogues, and the
+placeable itself loads: the prologue survey lists
+`Body{Kreia Placeable}` (tag `kreia_corpse`) among the nearest placeables.
+
+- **Still open:** the *bind pose*. That is a separate question from the
+  walkmesh — a stunt body rendering unposed means no animation is being
+  applied, not that a walkmesh is missing — and it needs an on-screen
+  observation to characterise. Do not chase the walkmesh error for it.
 - **Files:** `src/module/ModulePlaceable.ts`.
 
 ### 1.7 — Re-verify content gated by the transit fix
@@ -478,10 +511,22 @@ Empty containers and untriggered combat training may have been downstream of arr
 before setup scripts ran — or of the wedged action queue.
 - **Done when:** a clean run from a new save confirms each, or files a fresh bug.
 
-### 1.8 — T3-M4 spawn skips `getCurrentRoom()`
-The lazy room resolve in `ModuleCreature.update()` is a mitigation, not a fix. Find
-the spawn path that omits it.
-- **Done when:** the spawn sets the room directly and the mitigation can be removed.
+### 1.8 — T3-M4 spawn skips `getCurrentRoom()` ✅ premise stale; mitigation deliberately retained (2026-08-25)
+
+**No spawn path omits the room resolve.** Every one of them was checked and
+each resolves it explicitly: `ModuleArea.loadPlayer` in both branches,
+`ModuleArea.loadCreatures`, `loadDoors`, `loadPlaceables`, and all three party
+paths in `PartyManager`. T3-M4 in particular spawns through `loadPlayer` —
+which calls `getCurrentRoom()` directly — not through a script `CreateObject`,
+which is still `action: undefined` and therefore cannot be the path.
+
+**The mitigation stays, on purpose.** `ModuleCreature.update()`'s `if(!this.room)`
+guard costs one null check per frame and still covers a real hole:
+`loadCreatures` resolves the room only *after* `await creature.loadModel()`,
+with the whole body inside a `try`. A model that fails to load is caught and
+logged, and that creature reaches the world with no room. Removing the guard
+would turn an asset failure into a creature with no floor that rejects every
+step. Revisit only if that ordering is fixed first.
 
 ### 1.9 — Galaxy map display ☐ retest after the 1.2 fix
 The `invalid guitag null` ×4 warning is `planetary.2da` padding and not the fault.
