@@ -203,7 +203,7 @@ export class MenuEquipment extends GameMenu {
         e.stopPropagation();
         if(this.selectedItem instanceof ModuleItem){
           //console.log('selectedItem', this.selectedItem, this.slot, );
-          let currentPC = GameState.PartyManager.party[0];
+          let currentPC = this.getEquipmentTarget();
           if(this.selectedItem instanceof GUIItemNone){
             currentPC.unequipSlot(this.slot, true);
           }else if(this.selectedItem instanceof ModuleItem){
@@ -252,7 +252,7 @@ export class MenuEquipment extends GameMenu {
   updateListHover(slot: number) {
     if (slot) {
       const inv = GameState.InventoryManager.getInventory(slot, GameState.getCurrentPlayer());
-      const currentPC = GameState.PartyManager.party[0];
+      const currentPC = this.getEquipmentTarget();
       this.LB_ITEMS.mutate(tx => {
         tx.clear();
         tx.add(new GUIItemNone());
@@ -329,7 +329,7 @@ export class MenuEquipment extends GameMenu {
     }
     this.selectedItem = null;
     this.updateSelected(null);
-    const currentPC = GameState.PartyManager.party[0];
+    const currentPC = this.getEquipmentTarget();
     if (this.slot) {
       const inv = GameState.InventoryManager.getInventory(this.slot, currentPC);
       this.LB_ITEMS.mutate(tx => {
@@ -369,10 +369,28 @@ export class MenuEquipment extends GameMenu {
   }
 
   /**
+   * The character this screen is currently showing.
+   *
+   * K1's equipment screen only ever edits the party leader, so this answers
+   * party[0]. TSL's switches party member with BTN_NEXTNPC and overrides it.
+   *
+   * It exists so every read on the screen resolves to the SAME character.
+   * They did not: TSL overrode updateSlotIcons and updateCharacterStats to
+   * follow currentNPCIndex and its BTN_EQUIP equipped onto that character,
+   * but updateList delegates to this class and updateListHover is not
+   * overridden at all -- so both went on offering party[0]'s equippable items
+   * and party[0]'s worn row. Select any companion and the screen listed one
+   * character's inventory and equipped it onto another.
+   */
+  getEquipmentTarget(): ModuleCreature {
+    return GameState.PartyManager.party[0];
+  }
+
+  /**
    * Update the slot icons.
    */
   updateSlotIcons(force: boolean = false) {
-    const currentPC = GameState.PartyManager.party[0];
+    const currentPC = this.getEquipmentTarget();
     if(!currentPC) return;
 
     //Every slot icon below used to be gated behind `currentPC.getRace() == 6` with an
@@ -472,7 +490,7 @@ export class MenuEquipment extends GameMenu {
   updateCharacterStats(){
     this.selectedControl = this.defaultControl;
     this.equipmentSelectionActive = false;
-    const currentPC = GameState.PartyManager.party[0];
+    const currentPC = this.getEquipmentTarget();
     if (!currentPC) {
       return;
     }
