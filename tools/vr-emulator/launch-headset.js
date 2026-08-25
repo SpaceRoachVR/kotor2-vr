@@ -19,6 +19,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const ASSET_SERVER = path.join(__dirname, '..', 'asset-http', 'asset-server.js');
+const CDP_PORT = Number(process.env.KOTOR2VR_CDP_PORT) || 9422;
 const CHROME_CANDIDATES = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
@@ -89,6 +90,14 @@ function startAssetService() {
     // capturing if something needs reporting; several open roadmap items are
     // waiting on exactly that evidence.
     '--auto-open-devtools-for-tabs',
+    // ...and make that evidence collectable rather than only readable. Without
+    // a debugging port the only way to get a texture diagnostic or a console
+    // warning out of a headset session is for the person wearing the headset
+    // to read it aloud -- and DevTools refuses pasted snippets until someone
+    // types "allow pasting" by hand, so even running a query is awkward.
+    // Same port the emulator harness uses; the two never run together, because
+    // they both want the asset service.
+    `--remote-debugging-port=${CDP_PORT}`,
     url,
   ];
 
@@ -99,6 +108,7 @@ function startAssetService() {
   console.log('  · Disable Synchronous Spacewarp and select 72 Hz.');
   console.log('  · Accept the EULA, load your save, then press "Enter VR (spike)".');
   console.log('  · Leave DevTools open — the console is the evidence for several open items.');
+  console.log(`  · CDP is on http://127.0.0.1:${CDP_PORT} — diagnostics can be pulled from outside.`);
   console.log('\nCtrl+C here stops the asset service when you are done.\n');
 
   spawn(browser, args, { detached: true, stdio: 'ignore' }).unref();
