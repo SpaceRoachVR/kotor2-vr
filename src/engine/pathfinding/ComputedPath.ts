@@ -369,9 +369,23 @@ export class ComputedPath {
 
     const safeDistance = this.owner?.getHitDistance();
 
-    this.points = curve.getPoints( divisions ).map( (v) => {
+    const smoothed = curve.getPoints( divisions ).map( (v) => {
       return PathPoint.FromVector3(this.owner ? this.owner.area.getNearestWalkablePoint(v, safeDistance) : v);
     });
+
+    //getNearestWalkablePoint can answer with the SAME point for every sample
+    //when the smoothed curve leaves the walkmesh - the whole route then
+    //collapses onto one position. A caller following it walks nowhere while
+    //reporting that it arrived at each waypoint in turn, which is what made
+    //the Ebon Hawk Security Console unreachable from six metres away with a
+    //route of eleven identical points. Drop repeats, and keep the searched
+    //route rather than a degenerate smoothing of it.
+    const distinct = smoothed.filter((point, index) =>
+      index === 0 || point.vector.distanceToSquared(smoothed[index - 1].vector) > 1e-6);
+    if(distinct.length < 2){
+      return;
+    }
+    this.points = distinct;
   }
 
   static FromPointsList(points: PathPoint[] = []): ComputedPath {

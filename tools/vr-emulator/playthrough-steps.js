@@ -967,18 +967,33 @@ async function resolveExteriorMine(harness, { mine, actionLabel }) {
 
   const before = await describeInventory(harness);
   if (!before.located) throw new Error(`mine inventory before action: ${before.reason || 'player not located'}`);
-  await navigateTo(harness, {
-    x: mine.position.x,
-    y: mine.position.y,
-    z: mine.position.z,
-    range: 1.5,
-    label: `Frag Mine, Minor (${actionLabel})`,
-    maxAttempts: 3,
-    permittedDoorPromptIds: [],
-  });
-  await sleep(800);
+  // Retry the approach, and let the mine prompt decide when we are close
+  // enough. Arriving from the Utility Lift puts T3 on a raised platform above
+  // the hull, and the descent to a mine is where a single approach most often
+  // stops a few metres out.
+  let prompts = null;
+  for (let approach = 1; approach <= 4; approach += 1) {
+    try {
+      await navigateTo(harness, {
+        x: mine.position.x,
+        y: mine.position.y,
+        z: mine.position.z,
+        range: 1.5,
+        label: `Frag Mine, Minor (${actionLabel})`,
+        maxAttempts: 3,
+        permittedDoorPromptIds: [],
+      });
+    } catch (error) {
+      if (approach === 4) throw error;
+      line(`  · mine approach ${approach} fell short (${String(error.message).slice(0, 70)})`);
+    }
+    await sleep(800);
+    prompts = await listWorldPrompts(harness);
+    const near = (prompts.prompts || []).find((prompt) =>
+      prompt.id === `module-object:${mine.id}` && prompt.inRange === true);
+    if (near) break;
+  }
 
-  const prompts = await listWorldPrompts(harness);
   const minePrompt = (prompts.prompts || []).find((prompt) =>
     prompt.id === `module-object:${mine.id}` && /frag mine/i.test(String(prompt.name || '')) && prompt.inRange);
   if (!minePrompt || !Array.isArray(minePrompt.actions)) {
@@ -1289,10 +1304,18 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
           usePath: false,
         });
       }
-      return harness.evaluate(`(() => {
-        const player = window.KotOR.PartyManager.party[0];
-        return { x: +player.position.x.toFixed(2), y: +player.position.y.toFixed(2), z: +player.position.z.toFixed(2) };
-      })()`);
+      // Finish directly. The planner's last waypoint is not the target: smooth()
+      // maps every sample through getNearestWalkablePoint, and a wall-mounted
+      // object like the Security Console does not stand on the walkmesh at all,
+      // so its route ended six metres away and the object stayed out of
+      // interaction range. Walking the planned route gets past the geometry;
+      // the last few metres are a straight line by definition.
+      return moveTo(harness, {
+        x, y, z, range,
+        label: `${label} final approach`,
+        usePath: false,
+        timeoutMs: 30000,
+      });
     }
   }
 
@@ -1804,20 +1827,34 @@ async function useTaggedWorldObject(harness, {
   if (!target) {
     throw new Error(`${tag}: target id ${targetId} was not found; candidates=${JSON.stringify(matches.map((candidate) => candidate.id))}`);
   }
-  await navigateTo(harness, {
-    x: target.position.x,
-    y: target.position.y,
-    z: target.position.z,
-    range,
-    label: target.name || target.tag,
-    maxAttempts,
-    usePath,
-    permittedDoorPromptIds,
-  });
-  await sleep(800);
-  const prompts = await listWorldPrompts(harness);
-  if (!prompts.located) throw new Error(`${target.name || tag}: VR prompt context unavailable: ${prompts.reason}`);
-  const offered = (prompts.prompts || []).find((prompt) => prompt.id === target.promptId);
+  // Walk, then check the prompt, and retry the pair. A single approach that
+  // stops a few metres out is common on long routes and leaves the object
+  // out of interaction range; the prompt is the authority on whether we are
+  // close enough, so keep walking until it says yes.
+  let prompts = null;
+  let offered = null;
+  for (let approach = 1; approach <= 3; approach += 1) {
+    try {
+      await navigateTo(harness, {
+        x: target.position.x,
+        y: target.position.y,
+        z: target.position.z,
+        range,
+        label: target.name || target.tag,
+        maxAttempts,
+        usePath,
+        permittedDoorPromptIds,
+      });
+    } catch (error) {
+      if (approach === 3) throw error;
+      line(`  · ${target.name || tag}: approach ${approach} fell short (${String(error.message).slice(0, 70)})`);
+    }
+    await sleep(800);
+    prompts = await listWorldPrompts(harness);
+    if (!prompts.located) throw new Error(`${target.name || tag}: VR prompt context unavailable: ${prompts.reason}`);
+    offered = (prompts.prompts || []).find((prompt) => prompt.id === target.promptId);
+    if (offered && offered.inRange === true && Array.isArray(offered.actions)) break;
+  }
   if (!offered || offered.inRange !== true || !Array.isArray(offered.actions)) {
     throw new Error(`${target.name || tag}: no in-range VR actions: ${JSON.stringify(offered || null)}`);
   }
@@ -3303,56 +3340,6 @@ async function runPlaythrough(harness, url, args) {
       line(`  · exterior interactables: ${JSON.stringify(interactables)}`);
       line(`  · exterior VR prompts: ${JSON.stringify(prompts)}`);
       return { state, survey, interactables, prompts };
-    });
-    await record('probe which directions T3 can walk from the lift arrival', async () => {
-      const sweep = await harness.evaluate(`(async () => {
-        const K = window.KotOR;
-        const gs = K.GameState;
-        const area = gs.module && gs.module.area;
-        const player = K.PartyManager.party[0];
-        const controller = window.__xrDevice && window.__xrDevice.controllers && window.__xrDevice.controllers.left;
-        if (!player || !controller || !area) return { located: false, reason: 'no player, area or controller' };
-        const home = { x: player.position.x, y: player.position.y, z: player.position.z };
-        const onWalkmesh = (x, y, z) => {
-          const probe = player.position.clone();
-          probe.set(x, y, z);
-          return (area.walkFaces || []).some((face) => face &&
-            typeof face.pointInFace2d === 'function' && face.pointInFace2d(probe));
-        };
-        const results = [];
-        for (let i = 0; i < 8; i += 1) {
-          const angle = (i * Math.PI) / 4;
-          const from = { x: player.position.x, y: player.position.y };
-          controller.updateAxes('thumbstick', Math.sin(angle), -Math.cos(angle));
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          controller.updateAxes('thumbstick', 0, 0);
-          await new Promise((resolve) => setTimeout(resolve, 400));
-          results.push({
-            deg: Math.round((angle * 180) / Math.PI),
-            moved: +Math.hypot(player.position.x - from.x, player.position.y - from.y).toFixed(2),
-            fromHome: +Math.hypot(player.position.x - home.x, player.position.y - home.y).toFixed(2),
-          });
-        }
-        return {
-          located: true,
-          home: { x: +home.x.toFixed(2), y: +home.y.toFixed(2), z: +home.z.toFixed(2) },
-          mode: gs.Mode,
-          canMove: typeof player.canMove === 'function' ? player.canMove() : null,
-          homeOnWalkmesh: onWalkmesh(home.x, home.y, home.z),
-          room: (() => {
-            const value = player.room;
-            if (value == null) return null;
-            if (typeof value === 'number' || typeof value === 'string') return value;
-            return String(value.roomName || value.name || value.id || 'room-object');
-          })(),
-          results,
-          finished: { x: +player.position.x.toFixed(2), y: +player.position.y.toFixed(2) },
-        };
-      })()`, { timeoutMs: 90_000 });
-      if (!sweep.located) throw new Error(`direction sweep unavailable: ${sweep.reason}`);
-      line(`  · arrival: ${JSON.stringify({ home: sweep.home, mode: sweep.mode, canMove: sweep.canMove, room: sweep.room, homeOnWalkmesh: sweep.homeOnWalkmesh })}`);
-      for (const entry of sweep.results) line(`    ${JSON.stringify(entry)}`);
-      return sweep;
     });
     if (!resumedPast(args, 'ebon-first-mine-disarmed')) {
       await record('disarm the first exterior Frag Mine through the VR action wheel', async () => {
@@ -4956,7 +4943,7 @@ async function runPlaythrough(harness, url, args) {
     // the droid covers most of it by itself — but it stops well outside melee
     // reach, so alternate "let it come" with a short walk to where it now is.
     let approached = false;
-    for (let round = 0; round < 4 && !approached; round += 1) {
+    for (let round = 0; round < 6 && !approached; round += 1) {
       const current = round === 0 ? { distance: target.distance, position } : await targetState();
       if (!current) throw new Error(`${target.name} vanished during the approach`);
       try {
@@ -4976,9 +4963,9 @@ async function runPlaythrough(harness, url, args) {
         // Stop waiting once it has clearly settled; a short walk finishes it.
         if (wait >= 4 && closing.distance < current.distance - 1) break;
       }
-      if (!approached && closing && closing.distance >= current.distance) {
-        throw new Error(`${target.name} neither reachable nor closing: ${closing.distance}m`);
-      }
+      // Do not give up because one round made no headway: the walk and the
+      // droid's own approach both contribute, and either can stall for a
+      // round while the other does not.
       if (closing) line(`  · ${target.name} is now ${closing.distance}m away`);
     }
     if (!approached) throw new Error(`${target.name} could not be reached for combat`);
