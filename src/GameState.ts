@@ -2994,6 +2994,14 @@ export class GameState implements EngineContext {
     VRSpike.traceStartupStage('render-start');
     GameState.Render(delta, timestamp);
     VRSpike.traceStartupStage('render-complete');
+    // Rebuild the culling frustum now that the XR camera carries a world pose.
+    // three writes the reference-space-LOCAL head pose into its XR camera at
+    // frame start and only composes the rig during render(), so the copy read
+    // during the simulation phase above sits near the world origin — measured
+    // in-headset at (-0.62, 0.69, -0.31) while the player stood at
+    // (44.37, 44.64, 2.50). Culling against that hid every door and creature
+    // and let them reappear only when the origin swung through view.
+    GameState.updateViewportFrustum();
     const renderCpuEnd = performance.now();
     VRSpike.perf.recordCpuFrame(
       renderCpuStart - simulationCpuStart,
