@@ -3,6 +3,7 @@ import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState"
 import { EngineMode } from "@/enums/engine/EngineMode";
 import { NWScriptDataType } from "@/enums/nwscript/NWScriptDataType";
 import { GameState } from "@/GameState";
+import { Planetary } from "@/engine/Planetary";
 import type { ModuleCreature, ModuleObject } from "@/module";
 import { BitWise } from "@/utility/BitWise";
 import { NW_FALSE, NW_TRUE } from "@/nwscript/NWScriptConstants";
@@ -5226,42 +5227,57 @@ NWScriptDefK2.Actions = {
     name: 'ShowGalaxyMap',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]) {
+      Planetary.SetSelectedPlanet(args[0]);
+      GameState.MenuManager.MenuGalaxyMap.open();
+    }
   },
   740: {
     comment: '740: SetPlanetSelectable\nSets \'nPlanet\' selectable on the Galaxy Map Gui.',
     name: 'SetPlanetSelectable',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, number]) {
+      Planetary.SetPlanetSelectable(args[0], !!args[1]);
+    }
   },
   741: {
     comment: '741: GetPlanetSelectable\nReturns wheter or not \'nPlanet\' is selectable.',
     name: 'GetPlanetSelectable',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]) {
+      const planet = Planetary.GetPlanetByIndex(args[0]);
+      return planet && planet.selectable ? NW_TRUE : NW_FALSE;
+    }
   },
   742: {
     comment: '742: SetPlanetAvailable\nSets \'nPlanet\' available on the Galaxy Map Gui.',
     name: 'SetPlanetAvailable',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, number]) {
+      Planetary.SetPlanetAvailable(args[0], !!args[1]);
+    }
   },
   743: {
     comment: '743: GetPlanetAvailable\nReturns wheter or not \'nPlanet\' is available.',
     name: 'GetPlanetAvailable',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]) {
+      const planet = Planetary.GetPlanetByIndex(args[0]);
+      return planet && planet.enabled ? NW_TRUE : NW_FALSE;
+    }
   },
   744: {
     comment: '744: GetSelectedPlanet\nReturns the ID of the currently selected planet.  Check Planetary.2da\nfor which planet the return value corresponds to. If the return is -1\nno planet is selected.',
     name: 'GetSelectedPlanet',
     type: NWScriptDataType.INTEGER,
     args: [],
-    action: undefined
+    action: function(this: NWScriptInstance, args: []) {
+      return Planetary.selectedIndex;
+    }
   },
   745: {
     comment: '745: SoundObjectFadeAndStop\nFades a sound object for \'fSeconds\' and then stops it.',
