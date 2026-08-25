@@ -377,7 +377,28 @@ entities result: a phantom human the camera follows, and the real T3 the UI repo
 - **Files:** `src/module/ModuleArea.ts` (~line 1600), `src/managers/PartyManager.ts`,
   the `DoSpecialSpawnInT3M4` path.
 
-### 1.3b — `Invalid Item Property Sub Type: undefined` on save load ☐ new evidence
+### 1.3b — `Invalid Item Property Sub Type: undefined` on save load ✅ fixed (2026-08-25)
+
+**Cause: the save writer used labels the loader cannot read.** `save()` emitted
+`SubType` and `Usable`; `initProperties()` — and the retail blueprints — use
+`Subtype` and `Useable`. An item loaded from a module was therefore fine and
+the same item loaded from a save came back with `subType` undefined, which is
+why the error only ever appeared after a load. `useable` was lost the same way
+and never announced itself at all.
+
+Confirmed against real data rather than inferred: `SAVEGAME.sav` contains
+`SubType` seven times and `Subtype` not once, and dumping the `PropertiesList`
+field labels out of `101PER`'s own `.uti` resources gives the retail spelling.
+
+The writer now uses the retail labels; the reader accepts the old misspellings
+as a fallback so the 581 saves already on disk — including the playthrough
+checkpoints — keep loading. Both latent faults below are fixed too. The
+regression test asserts the general property (every label `save()` writes is one
+`initProperties()` reads) rather than the two instances found.
+
+**This did not turn out to be related to 1.4** — see below.
+
+<details><summary>Original report</summary>
 The emulator run supplied the log that 1.2/1.4 were waiting on: loading a
 Peragus save emits `Invalid Item Property Sub Type: undefined` **36 times**
 (`src/engine/ItemProperty.ts:65`). `this.subType` is `undefined`, so
@@ -396,14 +417,46 @@ since both turn a data gap into a harder failure:
   plausible cause of equipment behaving oddly. Worth checking before treating
   1.4 as independent GUI logic.
 - **Files:** `src/engine/ItemProperty.ts`.
+</details>
 
-### 1.4 — Inventory slots do not equip
-Clicking an equipment slot does not equip. Unknown whether this shares a cause with
-1.2 or is independent GUI logic.
-- **Done when:** items equip and persist across a save/load.
-- **Files:** `src/game/tsl/menu/` equip menu, `src/managers/InventoryManager.ts`.
-- **First check:** diff the TSL menu against `src/game/kotor/` — TSL menus are
-  frequently stubs where K1 is complete.
+### 1.4 — Inventory slots do not equip ◑ original symptom not reproducible; a different defect found and fixed (2026-08-25)
+
+**The original symptom could not be reproduced, and the equip path checks out.**
+The playthrough's slot survey reports all 11 TSL slot buttons `wired: true`,
+each with the `None` row that the unequip branch needs, and `worn` correctly
+reading "Mining Laser" and "Droid Shock Arm" off T3-M4. `updateSelected`
+assigns `selectedItem` (fixed under 1.10), and `BTN_EQUIP` branches correctly.
+The report predates several fixes and appears to have been overtaken by them.
+
+**`offered: []` in that survey is not evidence of a fault.** It is correct: the
+list is built by `InventoryManager.getInventory(slot, creature)`, whose
+`isItemUsableBy` filter was checked against the retail 2DAs and is right —
+`baseitems.2da` `droidorhuman` is 2 for droid-only and 1 for human-only, and
+`racialtypes.2da` is 5=Droid, 6=Human, which is exactly the mapping the code
+applies. T3's shared inventory genuinely held nothing droid-equippable at that
+point (empty, then a Computer Spike).
+
+**Not related to 1.3b.** Item properties were indeed failing to resolve, but
+the equip filter reads `baseItem`, not item properties, so the two never met.
+
+**A real defect was found instead, and fixed: the screen resolved two different
+characters at once.** TSL's equipment screen switches party member with
+BTN_NEXTNPC and overrode `updateSlotIcons`, `updateCharacterStats` and
+`isSlotLocked` to follow `currentNPCIndex` — but `updateList` delegates to the
+K1 base and `updateListHover` is not overridden at all, and both read
+`party[0]`. Selecting a companion offered party[0]'s equippable items and
+party[0]'s worn row, then equipped the choice onto the companion. Both classes
+now resolve the character through one overridable accessor.
+
+Latent for the whole prologue, where the party is one character. Live as soon
+as Kreia and Atton join, which is the next slice.
+
+- **Still open:** the original "clicking a slot does not equip" is unverified
+  either way on a party of one with an equippable item to hand. The playthrough
+  step is deliberately read-only — acting there polluted every later checkpoint
+  — so confirming it needs either a unit test over the menu or a throwaway run.
+- **Files:** `src/game/kotor/menu/MenuEquipment.ts`,
+  `src/game/tsl/menu/MenuEquipment.ts`, `src/managers/InventoryManager.ts`.
 
 ### 1.5 — Movie audio bleed
 `PlayMovie` sets MOVIE mode, then module init finishes and `RestoreEnginePlayMode`
