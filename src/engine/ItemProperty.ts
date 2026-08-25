@@ -33,7 +33,20 @@ export class ItemProperty {
   subType: number;
   costTable: number;
   costValue: number;
-  upgradeType: number;
+  /**
+   * -1 means "no upgrade is required to use this property", and that is the
+   * correct default: `UpgradeType` is an optional K2 upgrade-system field that
+   * most retail templates simply omit. Both security tunnelers
+   * (`g_i_secspike01/02`) omit it, as do the great majority of the install's
+   * 994 item templates.
+   *
+   * Left undefined, `isUseable()` computed `1 << undefined` === 1, compared it
+   * against `upgrades` (0), and answered false — so EVERY property on such a
+   * template read as unusable. That silently disabled armour, attack, damage,
+   * Disguise and all six ability bonuses in `ModuleItem`, and the security
+   * tunneler's ThievesTools bonus in `ActionUnlockObject`.
+   */
+  upgradeType: number = -1;
   param1: number;
   param1Value: number;
   chanceAppear: number;
@@ -123,9 +136,15 @@ export class ItemProperty {
 
   //Determine if the property requires an upgrade to use, or if it is always useable
   isUseable(){
+    //Defensive as well as defaulted: a template that carries UpgradeType as a
+    //non-numeric value would otherwise shift by NaN and land back on the same
+    //silent "unusable" answer the default above exists to prevent.
+    if(!Number.isInteger(this.upgradeType) || this.upgradeType < 0){
+      return true;
+    }
     const upgrade_flag = (1 << this.upgradeType);
     //If no upgrade is required or the upgrade is present on the item
-    if(this.upgradeType == -1 || ((this.item.upgrades & upgrade_flag) == upgrade_flag)){
+    if(((this.item?.upgrades ?? 0) & upgrade_flag) == upgrade_flag){
       return true;
     }
     return false;
