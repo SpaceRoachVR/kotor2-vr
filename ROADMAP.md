@@ -441,9 +441,52 @@ galaxy map didn't display correctly" without needing the symptom described
 first. Retest before chasing anything else here.
 - **Blocked on:** what "didn't display correctly" actually looked like.
 
-### 1.10 — Full Peragus playthrough
+### 1.10 — Full Peragus playthrough ◑ medical-bay slice complete in VR (2026-08-24)
+
 - **Done when:** a fresh save reaches the end of the Peragus arc with no progression
   blockers, and remaining issues are cosmetic and logged.
+
+`node tools/vr-emulator/playthrough.js` now runs from a new game to the end of the
+Peragus medical bay under the emulated headset, in a live immersive session, with
+no scripted shortcuts: character creation, the T3-M4 Ebon Hawk prologue in full
+(consoles, footlocker bash, security slice, garage, both Low Security Doors, the
+exterior lift, disarming one mine and recovering the other, all five Parts caches,
+mining the Engine Room Door, rigging the hyperdrive, Galaxy Map travel), then
+Peragus — waking at the kolto tank, the medical bay door, looting, the medical
+console and its morgue unlock, combat and kills, clearing the mining droids,
+levelling, and an equipment change. It ends at the authored boundary below.
+
+Six engine defects were in the way, each of which stopped the prologue outright:
+
+1. **A mine could not be planted on a Plot door.** Mine placement was gated on
+   `canBashObject`, which refuses anything Plot-flagged. `001EBO`'s Engine Room
+   Door is Plot=1, NotBlastable=0 and is the only route to the hyperdrive.
+   `canPlaceMineOnObject` is now its own rule.
+2. **`NotBlastable` was never written back to a save**, so every door returned
+   from a save blastable — which then offered "Mine" on Peragus's Blast Doors.
+3. **A creature could not cross a walkmesh seam.** `101PER`'s kolto pad is a
+   2.2m island 0.03m off the medbay floor, and every perimeter edge of an island
+   reads as a wall, so the Exile was sealed on the pad it wakes on. Seams are now
+   distinguished from walls, height-aware so a ledge stays solid.
+4. **Nothing could be unequipped**, three defects deep: `updateSelected` never
+   assigned the "None" row, `unequipSlot` threw on droids before clearing the
+   slot, and nothing returned the item to inventory.
+5. **The pathfinder handed back straight lines it had already rejected** — the
+   origin's graph anchor was discarded, and closed doors did not block
+   line of sight.
+
+**The authored boundary, read out of the data rather than assumed.** The old
+`module-102` target was wrong. `Emergency Hatch{102PER}` ships Locked=1,
+KeyRequired=0, OpenLockDC=100, and `emrhatch.dlg` says "The explosions in the
+mining tunnels below have sealed the emergency hatch. There is no way to open
+it." The continuation is the 103PER turbolift, which is KeyRequired and opens
+through the rest of `101PER` — Kreia, the detention block, Atton, the fuel
+depot. That is the next slice, not a defect in this one.
+
+**Known weakness carried forward:** long-range routing in `101PER` can still
+return a two-point line for a 45m+ cross-level route. The two fixes above did
+not fully settle it and the remaining cause is unidentified;
+`Utility.LineLineIntersection` itself checks out.
 
 **Phase 1 exit:** Peragus completable in flatscreen. This is the baseline every VR
 change is measured against.
@@ -823,8 +866,108 @@ First shippable artifact.
 - **7.3** Remaining TSL-only opcodes — ~81 with no K1 counterpart. Influence trio
   795–797 is the most valuable cluster and needs a storage design decision first.
 - **7.4** Full playthrough.
+- **7.5** Optional AI-upscaled texture pack support — see below. Blocked on
+  usage permission from the mod author.
 
 M4-78 is out of scope.
+
+### 7.5 — Optional AI-upscaled texture pack ☐ blocked on author permission
+
+[Selphadur's Kotor Texture Redux](https://www.nexusmods.com/kotor/mods/1302)
+(v1.1, 28 Dec 2019, 9.0 GB, 2,300+ textures) replaces vanilla textures with 4x
+AI upscales, hand-cleaned, with alpha channels carried across. Vanilla Odyssey
+textures are mostly 256²–512² and were authored for a camera several metres
+back; in a headset the player's eye ends up centimetres from a wall panel, so
+the resolution deficit is far more visible in VR than in flatscreen. That is
+the case for pulling this in.
+
+Allen has messaged Selphadur asking for usage permission. **Do not start
+implementation, download the pack into the repo, or commit any of its files
+until that permission is in hand and recorded here.**
+
+**Two blockers before this is even worth planning in detail:**
+
+1. **This pack is for KOTOR 1, not KOTOR II.** The Nexus page is under the
+   `kotor` (K1) domain, the readme says `swkotor\Override`, and it ships a K1R
+   compatibility patch. A search of the `kotor2` Nexus for "texture redux"
+   returns nothing, and in the mod's own comments Selphadur says a K2 upscale is
+   "a huge possibility" but never confirmed one. So the first task is not
+   integration, it is **measuring the resref overlap**: extract the pack's file
+   list, intersect it against the resrefs TSL actually requests, and find out
+   what fraction of K2's texture set it can cover at all. The shared-Odyssey
+   subset (generic placeables, some doors, VFX, a few body/head textures) is
+   real but is nowhere near all 2,300. If the overlap is small, the honest
+   answer may be that this pack is the wrong source and the pipeline below
+   should be pointed at a K2-specific pack or at an upscale we run ourselves.
+2. **The stated permissions are restrictive.** From the Nexus permissions block:
+   upload elsewhere "not allowed … under any circumstances"; modification
+   requires the author's permission; **conversion to work on other games "not
+   allowed … under any circumstances"**; asset use allowed with credit;
+   commercial use forbidden. Using K1 textures in a K2 project reads as
+   conversion, which is exactly the clause that is a flat no by default — hence
+   the ask. Whatever Selphadur replies, quote it verbatim in this entry, because
+   the answer determines the distribution model.
+
+**Distribution model (assume this even on a "yes"):** the pack is
+user-supplied, never bundled. The user downloads it from Nexus themselves and
+points the mod at it, or drops it into their own `Override`. 9.0 GB of TGA does
+not belong in a git repo regardless of licence, and "no upload to other sites"
+forecloses redistribution outright. Credit goes in the README and in an
+in-game credits/settings panel.
+
+**Implementation notes — a starting point, not a plan:**
+
+- **Resolution already works.** `TextureResolution.resolveExact()` searches
+  `override-tga` first, ahead of `override-tpc`, `active-module`,
+  `texture-pack`/`gui-pack`, and `key-bif`
+  ([TextureResolution.ts:288](src/loaders/TextureResolution.ts#L288)). Loose
+  `.tga` files in `Override` therefore already win over the shipped packs with
+  no engine change. A first smoke test is literally: copy a handful of matching
+  upscales into `Override`, load `101PER`, and read
+  `TextureLoader.getDiagnostics()` to confirm `source: 'override-tga'`.
+- **The `.tga`-over-`.tpc` choice is deliberate on the pack's side.** Selphadur
+  moved off TPC because of mip-map problems, and told a commenter converting
+  back to TPC would reintroduce them. Do not "optimise" by converting to TPC.
+- **VRAM is the real risk, and it is a VR risk specifically.** `TGALoader`
+  decodes to uncompressed RGBA and sets `generateMipmaps = true`
+  ([TGALoader.ts:42](src/loaders/TGALoader.ts#L42)). A 4x upscale of a 512²
+  source is 2048² — 16 MB resident, ~21 MB with the mip chain, per texture,
+  versus ~1.3 MB for the DXT-compressed original. That is a ~16x GPU memory
+  multiplier applied to a build that Phase 0.3 already flags at ~8.9 GB
+  renderer memory with load times climbing 41s → 47s → 65s across successive
+  loads. **0.3 must be closed before this lands**, or the pack simply converts
+  a known leak into an out-of-memory crash.
+- **The likely answer is an offline transcode to KTX2 / Basis Universal.** Ship
+  a tool under `tools/` that walks a user-supplied Override directory once,
+  transcodes each `.tga` to KTX2 (UASTC for normal/bump, ETC1S for diffuse),
+  and writes a side-directory the loader prefers. That keeps GPU-side
+  compression, keeps the mip chain, cuts both VRAM and load time, and —
+  usefully for the permissions question — produces an artifact that lives on
+  the user's disk and is never redistributed. It needs a new
+  `TextureResolutionSource` (`'hd-pack'`, ahead of `override-tga`) and a
+  matching branch in `OdysseyTextureSourceProvider.load()`
+  ([TextureLoader.ts](src/loaders/TextureLoader.ts)).
+- **Budget and downscale, do not load blind.** Whatever the format, add a
+  per-session texture memory budget and a max-dimension cap the user can set
+  (2048 / 1024 / off) in the existing Comfort Settings panel route. A 3060 at
+  the Phase 0 stereo target has no headroom for a naive 9 GB pack.
+- **Alpha channels and TXI still have to survive.** The pack copies alpha
+  across, and `override-tga` pairs each TGA with an `Override` `.txi`. Any
+  transcode step must carry both, or transparency, environment mapping, and
+  blending regress. Guard this with a test alongside
+  `src/tests/texture-loader-routing.test.ts`.
+- **Watch the known-bad file.** `PLC_FrcDist01.tga` crashes retail KOTOR 1 on
+  Taris and the author removed it in v1.1. If any v1.0-era copy is in play,
+  exclude it.
+- **Done when:** the resref-overlap measurement is written up with a number;
+  permission is recorded verbatim; a user-supplied pack loads through a
+  documented path with `source` diagnostics proving it, at a measured VRAM cost
+  inside budget and with no regression against the Phase 0 stereo FPS floor.
+- **Files:** `src/loaders/TextureResolution.ts`, `src/loaders/TextureLoader.ts`,
+  `src/loaders/TGALoader.ts`, `src/loaders/ResourceLoader.ts` (Override scan),
+  new tooling under `tools/`.
+- **Depends on:** 0.3 (memory growth), and realistically Phase 6.3 (the perf
+  pass) for a baseline to regress against.
 
 ---
 

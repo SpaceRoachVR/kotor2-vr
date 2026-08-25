@@ -67,6 +67,39 @@ Consequences for testing that have already caused false reports:
 Later the Exile wakes in the Peragus medical bay, meets Kreia, and picks up
 Atton Rand. Peragus is largely deserted, with mining droids as the hostiles.
 
+### The prologue's actual gate chain, read out of the module data
+
+Established 2026-08-24 with `tools/odyssey-inspect/`. Every link here was
+verified against the retail files, not recalled:
+
+1. T3 slices the Communications Console, which opens the Main Hold Door.
+2. The Footlocker Bash yields Computer Spikes; the Security Console slice opens
+   the garage; the Low Security Doors yield to Security.
+3. The Utility Lift goes outside. The exterior carries two Frag Mines (one to
+   disarm, one to recover) and the Parts caches — Proton Missile, Port Engine,
+   Quadlasers.
+4. **`engine_door` is opened with a mine, and only with a mine.** Its own
+   conversation (`eng_door.dlg`) says Security and Bash will not work. It is
+   the only door template in `001EBO` with `NotBlastable=0`; every other locked
+   door there ships `NotBlastable=1`.
+5. Behind it is the `Hyperdrive` placeable (tag `Hyperdrive`, conversation
+   `hyper`). "Rig the hyperdrive" costs 5 Parts and sets
+   **`001EBO_HyperDrive = 2`**.
+6. `glxy_map.dlg` tests `c_global_eq("001EBO_HyperDrive", 2)`. Until then the
+   Galaxy Map answers with StrRef 129939, "The Ebon Hawk cannot dock with the
+   Peragus Mining Facility until main power has been restored."
+7. Before the repair the only enabled destination is `Peragus_Tutorial`
+   (`LBL_Tutorial`); `a_galaxy_map` then disables it and enables `Peragus`
+   (`LBL_Planet_PeragusII`). A hard-coded control name is right in exactly one
+   of the two states, and `MenuGalaxyMap.show()` only binds a click handler to
+   *enabled* planets — so the wrong one fails as "no click handler".
+
+On Peragus, `WP_player_start` puts the Exile on the kolto tank pad, and the
+**medical console unlocks the morgue**: `medlog.dlg` reply "Unlock door to
+morgue" runs `a_setmor` into an entry that runs `a_doormor`. The Morgue Door
+itself is `NotBlastable=1, KeyRequired=0, OpenLockDC=100` — unpickable in
+practice, so the console is the route.
+
 ## The rules layer
 
 TSL is d20: **d20 + ability modifier + ranks against a DC.** Combat is
@@ -145,6 +178,18 @@ an earlier audit wrongly concluded no TSL menu was stubbed.
 When a TSL feature is dead, diff it against the K1 file before concluding the
 logic was never written. A ledger of the remaining dropped handlers lives in
 `src/tests/tsl-menu-dropped-handlers.test.ts`.
+
+## Reading the retail data without booting the engine
+
+`tools/odyssey-inspect/` holds read-only RIM/ERF/GFF/TLK readers and
+`dump-dlg.js`, which prints a conversation as a tree with each node's
+conditional and action scripts *and their node-side arguments*. TSL keeps those
+arguments on the DLG node, not in the script, so `c_global_eq` says nothing
+until you can see it is testing `001EBO_HyperDrive` against 2.
+
+The resource type table in `formats.js` was derived from `001EBO`'s own
+containers rather than from a generic Aurora table, which had door templates
+and placeable templates under the wrong ids.
 
 ## Where ground truth actually lives
 

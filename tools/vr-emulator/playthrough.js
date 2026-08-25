@@ -3,7 +3,8 @@
  *
  *   node tools/vr-emulator/playthrough.js                 # starts its own asset service
  *   node tools/vr-emulator/playthrough.js --url "<url>"   # reuse a running one
- *   node tools/vr-emulator/playthrough.js --stop-at 4     # stop after step 4
+ *   node tools/vr-emulator/playthrough.js --prologue-route continue
+ *   node tools/vr-emulator/playthrough.js --prologue-route skip # diagnostic only
  *
  * Drives a NEW GAME from character creation through the Peragus prologue under
  * an emulated Quest 3, inside a live immersive session, and reports the first
@@ -32,15 +33,46 @@ const TIMEOUTS = {
   short: 30_000,
 };
 
+const PROLOGUE_ROUTES = Object.freeze(['continue', 'skip']);
+
 function parseArgs(argv) {
-  const args = { url: null, stopAt: Infinity, headless: true, resume: null };
+  const args = {
+    url: null,
+    stopAt: Infinity,
+    headless: true,
+    resume: null,
+    // A new run must preserve the authored T3-M4 opening. "skip" remains
+    // available only for focused Peragus diagnosis and cannot be used as
+    // end-to-end acceptance evidence.
+    prologueRoute: 'continue',
+  };
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--url') args.url = argv[++i];
-    else if (argv[i] === '--stop-at') args.stopAt = Number(argv[++i]);
+    const argument = argv[i];
+    if (argument === '--url') {
+      const value = argv[++i];
+      if (!value) throw new Error('--url requires a non-empty URL');
+      args.url = value;
+    } else if (argument === '--stop-at') {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value < 1) throw new Error('--stop-at requires a positive integer');
+      args.stopAt = value;
+    }
     else if (argv[i] === '--headed') args.headless = false;
     // Resume from a checkpoint this driver saved earlier, so a re-test does not
     // replay character creation every time.
-    else if (argv[i] === '--resume') args.resume = argv[++i];
+    else if (argument === '--resume') {
+      const value = argv[++i];
+      if (!value) throw new Error('--resume requires a checkpoint name');
+      args.resume = value;
+    } else if (argument === '--prologue-route') {
+      const value = String(argv[++i] || '').toLowerCase();
+      if (!PROLOGUE_ROUTES.includes(value)) {
+        throw new Error(`--prologue-route must be one of ${PROLOGUE_ROUTES.join(', ')}`);
+      }
+      args.prologueRoute = value;
+    } else {
+      throw new Error(`unknown argument: ${argument}`);
+    }
   }
   return args;
 }
@@ -119,7 +151,17 @@ async function clickButtonByText(harness, text) {
   }
 }
 
-module.exports = { parseArgs, WORLD_STATE, worldState, clickButtonByText, steps, step, TIMEOUTS, EVIDENCE_DIR };
+module.exports = {
+  parseArgs,
+  PROLOGUE_ROUTES,
+  WORLD_STATE,
+  worldState,
+  clickButtonByText,
+  steps,
+  step,
+  TIMEOUTS,
+  EVIDENCE_DIR,
+};
 
 // ---------------------------------------------------------------------------
 // The walkthrough
@@ -140,12 +182,47 @@ if (require.main === module) {
       await waitForPort(8479).catch(() => undefined);
     }
 
-    const harness = new VrHarness({ port: 9431, headless: args.headless });
+    // The walkthrough is written as a sequence of resumable stages, and some
+    // stages are written earlier in the file than the stage that reaches them
+    // — their guards read args.resume, which only advances mid-pass. When a
+    // pass ends by handing back a checkpoint rather than finishing, continue
+    // from it instead of making the operator re-invoke by hand.
+    //
+    // Each pass gets its own browser: `boot` launches one on a fixed CDP port,
+    // so reusing the harness across passes fails with "port already in use".
+    // A fresh browser per pass also keeps one pass's renderer state out of the
+    // next, which matters on a build with known memory growth.
     let report;
+    const seen = new Set();
+    let resume = args.resume;
+    const passes = [];
     try {
-      report = await runPlaythrough(harness, url, args);
+      for (let pass = 1; ; pass += 1) {
+        if (pass > 1) console.log(`
+=== continuing from checkpoint "${resume}" (pass ${pass}) ===`);
+        const harness = new VrHarness({ port: 9431, headless: args.headless });
+        try {
+          report = await runPlaythrough(harness, url, { ...args, resume });
+        } finally {
+          await harness.close().catch(() => undefined);
+          // Chrome can linger a moment after exit before the OS releases the
+          // listening socket.
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+        passes.push({ pass, resume: resume ?? null, steps: report.steps.length, resumeNext: report.resumeNext ?? null });
+        if (report.blocked || !report.resumeNext) break;
+        if (seen.has(report.resumeNext) || pass >= 8) {
+          report.blocked = {
+            step: 'playthrough driver',
+            error: `stage "${report.resumeNext}" did not advance the campaign after ${pass} pass(es)`,
+          };
+          break;
+        }
+        seen.add(report.resumeNext);
+        resume = report.resumeNext;
+      }
+      report.passes = passes;
     } finally {
-      await harness.close().catch(() => undefined);
       if (service) service.stop();
     }
 

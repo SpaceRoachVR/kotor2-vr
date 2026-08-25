@@ -264,13 +264,25 @@ class VrHarness {
 
   async close() {
     if (this.cdp) this.cdp.close();
-    if (this.chrome && !this.chrome.killed) {
-      try {
-        process.kill(this.chrome.pid);
-      } catch {
-        /* already exited */
-      }
+    if (!this.chrome || this.chrome.killed) return;
+    // Wait for the process to actually go, not just for the signal to be sent.
+    // Chrome holds the CDP port until it exits, so returning early made the
+    // next launch in the same process fail its own "port already in use"
+    // guard — which reads as a stale browser rather than as a close that had
+    // not finished yet.
+    const exited = new Promise((resolve) => {
+      this.chrome.once('exit', resolve);
+      this.chrome.once('close', resolve);
+    });
+    try {
+      process.kill(this.chrome.pid);
+    } catch {
+      return; /* already exited */
     }
+    await Promise.race([
+      exited,
+      new Promise((resolve) => setTimeout(resolve, 10_000)),
+    ]);
   }
 }
 
