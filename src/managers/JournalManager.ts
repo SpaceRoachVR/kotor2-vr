@@ -63,8 +63,18 @@ export class JournalManager {
     return 0;
   }
 
+  /**
+   * The gate is the journal category from `global.jrl`, NOT `plot.2da`.
+   *
+   * `plot.2da` is the experience table — 84 rows keyed for XP awards — while
+   * the quest list is the 117 categories in `global.jrl`. Gating on
+   * `PlotExists` rejected **all 117 of them** (measured live: 0 passing), so no
+   * quest could ever be journalled while the prologue tutorial announced them.
+   * `GetJournalQuestExperience` still reads `plot.2da`, which is what that
+   * table is for.
+   */
   static AddJournalQuestEntry(szPlotID: string = '', state: number = 0, allowOverrideHigher: boolean = false): boolean {
-    if(JournalManager.PlotExists(szPlotID)){
+    if(JournalManager.GetCategoryByTag(szPlotID)){
       GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.JOURNAL_ENTRY_ADDED);
       let entry = JournalManager.GeJournalEntryByTag(szPlotID);
       if(entry){
@@ -83,7 +93,13 @@ export class JournalManager {
         entry.date = 0; //TODO
         entry.time = 0; //TODO
         entry.load();
+        //The new entry used to be built, loaded, and then dropped on the floor.
+        //Nothing ever reached `Entries`, so the journal stayed empty for the
+        //whole game while the tutorial announced new quests: 117 categories
+        //loaded from global.jrl against 0 entries.
+        JournalManager.AddEntry(entry);
       }
+      return true;
     }
     return false;
   }

@@ -2617,21 +2617,27 @@ NWScriptDefK2.Actions = {
     name: 'AddJournalQuestEntry',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING, NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [string, number, number]) {
+      GameState.JournalManager.AddJournalQuestEntry(args[0], args[1], !!args[2]);
+    }
   },
   368: {
     comment: '368: Remove a journal quest entry from the player.\n- szPlotID: the plot identifier used in the toolset\'s Journal Editor',
     name: 'RemoveJournalQuestEntry',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [string]) {
+      GameState.JournalManager.RemoveJournalQuestEntry(args[0]);
+    }
   },
   369: {
     comment: '369: Gets the State value of a journal quest.  Returns 0 if no quest entry has been added for this szPlotID.\n- szPlotID: the plot identifier used in the toolset\'s Journal Editor',
     name: 'GetJournalEntry',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.STRING ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [string]) {
+      return GameState.JournalManager.GetJournalEntryState(args[0]);
+    }
   },
   370: {
     comment: '370: PlayRumblePattern\nStarts a defined rumble pattern playing',
