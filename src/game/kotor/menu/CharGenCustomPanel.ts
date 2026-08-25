@@ -68,7 +68,12 @@ export class CharGenCustomPanel extends GameMenu {
 
       this.BTN_STEPNAME2.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.manager.CharGenAbilities.setCreature(GameState.getCurrentPlayer());
+        // The creature under construction is CharGenManager.selectedCreature.
+        // This passed getCurrentPlayer(), which is undefined during character
+        // creation because no player exists in the world yet -- so every
+        // +/- handler, all of which are guarded on `this.creature`, silently
+        // did nothing while still playing their click sound.
+        this.manager.CharGenAbilities.setCreature(GameState.CharGenManager.selectedCreature);
         this.manager.CharGenAbilities.open();
       });
 
@@ -79,6 +84,10 @@ export class CharGenCustomPanel extends GameMenu {
 
       this.BTN_STEPNAME4.addEventListener('click', (e) => {
         e.stopPropagation();
+        // Feats never received a creature at all, so addGrantedFeats() and
+        // buildFeatList() -- both guarded on `this.creature` -- did nothing and
+        // the screen listed no feats and granted none.
+        this.manager.CharGenFeats.setCreature(GameState.CharGenManager.selectedCreature);
         this.manager.CharGenFeats.open();
       });
 
