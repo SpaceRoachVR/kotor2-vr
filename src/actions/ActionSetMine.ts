@@ -91,7 +91,16 @@ export class ActionSetMine extends Action {
         return ActionStatus.IN_PROGRESS;
       }
 
-      if(this.oItem && !this.usedItem){
+      if(!this.usedItem){
+        //An id that resolves to nothing at all used to skip this whole block and
+        //fall through to COMPLETE, so the action reported success having placed
+        //no trap and consumed no charge. Report it instead.
+        if(!this.oItem){
+          console.warn('ActionSetMine: parameter 0 resolved to no object, aborting.');
+          this.usedItem = true;
+          return ActionStatus.FAILED;
+        }
+
         //parameter 0 is stored as a DWORD id and resolved back through
         //ModuleObjectManager. If the id no longer maps to the ModuleItem it was set
         //from, we get some other object here - one without an item property list.
