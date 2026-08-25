@@ -114,6 +114,18 @@ describe('TSL menus vs their K1 parents', () => {
     expect(registeredListeners(journal).has('BTN_EXIT')).toBe(true);
     expect(registeredListeners(container).has('BTN_GIVEITEMS')).toBe(true);
   });
+
+  test('container give mode transfers one selected item without closing the menu', () => {
+    const container = fs.readFileSync(path.join(TSL_MENU_DIR, 'MenuContainer.ts'), 'utf8');
+
+    expect(container).toContain('const selectedItem = this.selectedItem;');
+    expect(container).toContain('if(this.mode == MenuContainerMode.TAKE_ITEMS)');
+    expect(container).toContain('GameState.InventoryManager.removeItem(selectedItem, 1);');
+    expect(container).toContain('const transferredItem = selectedItem.clone();');
+    expect(container).toContain('transferredItem.setStackSize(1);');
+    expect(container).toContain('this.container.addItem(transferredItem);');
+    expect(container).toContain('this.LB_ITEMS.removeItemByNode(selectedItem);');
+  });
 });
 
 describe('TSL menu method-name typos', () => {

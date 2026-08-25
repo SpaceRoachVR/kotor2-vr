@@ -48,15 +48,43 @@ export class MenuContainer extends K1_MenuContainer {
 
       this.BTN_OK.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.LB_ITEMS.setItems([]);
-        if(this.container instanceof ModulePlaceable){
-          this.container.retrieveInventory();
-          this.container.close(GameState.PartyManager.party[0]);
-        }else if(this.container instanceof ModuleCreature){
-          this.container.retrieveInventory();
-          //this.container.close(Game.player);
+        const selectedItem = this.selectedItem;
+        if(!selectedItem){
+          return;
         }
-        this.close();
+
+        if(this.mode == MenuContainerMode.TAKE_ITEMS){
+          this.LB_ITEMS.setItems([]);
+          if(this.container instanceof ModulePlaceable){
+            this.container.retrieveInventory();
+            this.container.close(GameState.PartyManager.party[0]);
+          }else if(this.container instanceof ModuleCreature){
+            this.container.retrieveInventory();
+            //this.container.close(Game.player);
+          }
+          this.close();
+          return;
+        }
+
+        if(selectedItem.getStackSize() <= 0){
+          return;
+        }
+
+        const willRemoveFromInventory = selectedItem.getStackSize() <= 1;
+        GameState.InventoryManager.removeItem(selectedItem, 1);
+        const transferredItem = selectedItem.clone();
+        transferredItem.setStackSize(1);
+        this.container.addItem(transferredItem);
+
+        if(willRemoveFromInventory){
+          this.LB_ITEMS.removeItemByNode(selectedItem);
+          return;
+        }
+
+        const control = this.LB_ITEMS.getListElementByNode(selectedItem);
+        if(control){
+          control.needsUpdate = true;
+        }
       });
       this._button_a = this.BTN_OK;
 
