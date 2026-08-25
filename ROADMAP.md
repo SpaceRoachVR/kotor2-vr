@@ -497,10 +497,52 @@ search rejecting both injected anchors, the shortcut trusting a line-of-sight
 test that cannot see most walls, and smoothing collapsing a route onto one
 point — and long routes improved substantially at each. What remains is that a
 30m+ cross-level approach still fails from some starting positions and
-succeeds from others. `Utility.LineLineIntersection` itself checks out, so the
-suspicion is the coverage of `area.walkEdges`. This is a driver-visible
-limitation rather than a player-facing one: a person steers with a thumbstick
-and does not ask the engine to plan a 30m route.
+succeeds from others. This is a driver-visible limitation rather than a
+player-facing one: a person steers with a thumbstick and does not ask the
+engine to plan a 30m route.
+
+**It is not the routing, and it is not the walkmesh data (2026-08-25).** The
+`area.walkEdges` coverage suspicion recorded here previously was tested against
+the retail data and does not survive. Two mechanisms were constructed and both
+are refuted:
+
+- **Edge/face index mismatch — refuted.** `OdysseyWalkMesh` attaches perimeter
+  edges by looking up `edges` at `allFaceIndex * 3 + side`, while the WOK stores
+  those keys as `walkableOrdinal * 3 + side`. Those agree only if walkable faces
+  precede every non-walkable one. In all 66 of `101PER`'s room walkmeshes they
+  do, exactly: zero misattached edges, zero unreachable. Not a vacuous pass —
+  1,499 of 2,328 faces (64%) are non-walkable, spread across 63 of the 64 rooms
+  that carry edges.
+- **Coordinate space — refuted.** All 64 walkmeshes carry a non-zero header
+  `position`, but the vertices are already world-space and the engine never
+  applies `position` to them; it only writes it back on export.
+
+All 849 perimeter edges are present and correctly attached. The routes are also
+sound: `101per.pth` holds 133 points and 270 connections, and the logged routes
+are genuine multi-node curves through it, not the two-point straight-line
+fallback `traverseToPoint` returns on search failure.
+
+**What the symptom actually is.** The actor walks about 2.7m from its origin —
+which is path point 20 exactly — completes the first leg of a 16-point route,
+stalls on the second, replans from the same node and repeats. Re-running the
+full playthrough with the `forceVector` locomotion fix changed nothing: both
+runs complete 76 steps and finish one centimetre apart, and all four hostiles
+reproduce the same four shortfalls (20.1m, 22.5m, 36.0m, 39.6m) across three
+approaches each, to within ±0.05m. Perfectly deterministic, so not a race or a
+timing effect. The remaining suspects are the driver's per-leg arrival
+threshold and a genuine engine stall at one walkmesh feature ~2.7m along.
+Next probe: resume from `morgue-door`, attempt one approach, and sample player
+position through leg 2.
+
+**Found alongside, not yet acted on:**
+- `101per.pth` splits into two components, 126 nodes and 7. Seven authored path
+  points are unreachable from the rest of the level. Not the cause above — the
+  origin and all four hostiles sit in the 126-node component — but a latent trap.
+- `OdysseyWalkMesh`'s adjacency parse computes `diff[1]` and `diff[2]` from
+  `adj1` instead of `adj2`/`adj3`. `adjacentDiff` does not appear to feed
+  pathfinding, so this is recorded rather than fixed.
+- The playthrough driver's failure message truncates mid-sentence
+  (`"no closed door offered a "`), which makes these logs harder to read.
 
 **Phase 1 exit:** Peragus completable in flatscreen. This is the baseline every VR
 change is measured against.
