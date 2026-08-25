@@ -38,10 +38,40 @@ export class CharGenFeats extends GameMenu {
     this.voidFill = true;
   }
 
+  /**
+   * Back and Accept are step navigation, and without them this screen is a
+   * dead end.
+   *
+   * It is reachable as step 4 of `CharGenCustomPanel` and had no handler on any
+   * of its four buttons, so entering it stranded the player inside character
+   * creation with no way back — which is why custom chargen was hidden rather
+   * than fixed.
+   *
+   * Manual feat *selection* (`BTN_SELECT`, `BTN_RECOMMENDED`) is still
+   * unimplemented. It is not needed for a valid character: `addGrantedFeats()`
+   * runs on `show()` and grants every feat the character's class entitles it
+   * to, so a custom character leaves this screen properly equipped.
+   *
+   * Lives here rather than in the initializer because TSL's subclass calls
+   * `super.menuControlInitializer(true)` and therefore skips this class's body.
+   */
+  protected wireStepNavigation(){
+    this.BTN_BACK?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.close();
+    });
+
+    this.BTN_ACCEPT?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.close();
+    });
+  }
+
   async menuControlInitializer(skipInit: boolean = false) {
     await super.menuControlInitializer();
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
+      this.wireStepNavigation();
       resolve();
     });
   }
