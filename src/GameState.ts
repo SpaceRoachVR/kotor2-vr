@@ -80,6 +80,8 @@ import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
 import {
   buildVRActionWheel,
 } from "@/vr/runtime/VRActionWheelModelBuilder";
+import { findCullingBoundsAnomalies, describeCullingBoundsAnomalies } from "@/module/CullingBoundsAudit";
+import type { BoundsSample } from "@/module/CullingBoundsAudit";
 import type {
   VRActionMenuEntry,
   VRActionWheelPartyMember,
@@ -2565,6 +2567,51 @@ export class GameState implements EngineContext {
    * whose projection is computed specifically to encompass both eye frusta for
    * exactly this purpose, so it is the correct culling source in XR.
    */
+  /**
+   * TEMPORARY (VR-PLAYTEST-FIX-PLAN.md issue 13): names objects whose culling
+   * bounds cannot describe where they are.
+   *
+   * `updateModelVisibility` hides anything `isOnScreen()` rejects, and that
+   * tests the bounding sphere derived from `box`. An empty `Box3` yields a
+   * zero-radius sphere at the world origin, so the object renders only while
+   * the origin is in view and stays interactable throughout — which is the
+   * reported "invisible until it is at the extreme left of my vision".
+   *
+   * Runs once per module load and says nothing when everything is sound.
+   */
+  static reportCullingBoundsAnomalies(){
+    try{
+      const area = GameState.module?.area;
+      if(!area) return;
+      const sphere = new THREE.Sphere();
+      const samples: BoundsSample[] = [];
+      const collect = (objects: any[], kind: string) => {
+        if(!Array.isArray(objects)) return;
+        for(const object of objects){
+          if(!object?.box || !object?.position) continue;
+          object.box.getBoundingSphere(sphere);
+          samples.push({
+            name: typeof object.getTag === 'function' ? (object.getTag() || kind) : kind,
+            kind,
+            position: { x: object.position.x, y: object.position.y, z: object.position.z },
+            empty: object.box.isEmpty(),
+            center: { x: sphere.center.x, y: sphere.center.y, z: sphere.center.z },
+            radius: sphere.radius,
+          });
+        }
+      };
+      collect(area.doors, 'door');
+      collect(area.placeables, 'placeable');
+      collect(area.creatures, 'creature');
+
+      const anomalies = findCullingBoundsAnomalies(samples);
+      if(!anomalies.length) return;
+      console.warn(describeCullingBoundsAnomalies(anomalies));
+    }catch(e){
+      // Diagnostics must never block a module becoming playable.
+    }
+  }
+
   static updateViewportFrustum(){
     let cullCamera: THREE.Camera = GameState.currentCamera;
     try {
@@ -2706,6 +2753,7 @@ export class GameState implements EngineContext {
         GameState.SetEngineMode(GameState.module.area.miniGame ? EngineMode.MINIGAME : EngineMode.INGAME);
         await GameState.module.area.initAreaObjects(runSpawnScripts);
         console.log('ModuleArea: ready to play');
+        GameState.reportCullingBoundsAnomalies();
         GameState.module.readyToProcessEvents = true;
 
         if(GameState.Mode == EngineMode.INGAME){
