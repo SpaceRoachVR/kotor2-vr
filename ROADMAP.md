@@ -483,10 +483,24 @@ it." The continuation is the 103PER turbolift, which is KeyRequired and opens
 through the rest of `101PER` — Kreia, the detention block, Atton, the fuel
 depot. That is the next slice, not a defect in this one.
 
-**Known weakness carried forward:** long-range routing in `101PER` can still
-return a two-point line for a 45m+ cross-level route. The two fixes above did
-not fully settle it and the remaining cause is unidentified;
-`Utility.LineLineIntersection` itself checks out.
+**Exactly how far a single continuous run gets.** `node tools/vr-emulator/playthrough.js`
+from a new game completes **50 of 53 steps**: the whole Ebon Hawk prologue
+across both passes, and Peragus through the Morgue Door. The last three —
+first kill, the droid sweep with levelling, and the boundary check — pass from
+the `morgue-door` checkpoint (verified in four separate runs: 8/8 droids for
+1125xp, level 1 -> 2 through the VR wheel Menu route) but not yet from the
+position the continuous run leaves the Exile in.
+
+**Known weakness carried forward:** long-range routing in `101PER`. Four
+separate causes were found and fixed — the discarded origin anchor, the
+search rejecting both injected anchors, the shortcut trusting a line-of-sight
+test that cannot see most walls, and smoothing collapsing a route onto one
+point — and long routes improved substantially at each. What remains is that a
+30m+ cross-level approach still fails from some starting positions and
+succeeds from others. `Utility.LineLineIntersection` itself checks out, so the
+suspicion is the coverage of `area.walkEdges`. This is a driver-visible
+limitation rather than a player-facing one: a person steers with a thumbstick
+and does not ask the engine to plan a 30m route.
 
 **Phase 1 exit:** Peragus completable in flatscreen. This is the baseline every VR
 change is measured against.
