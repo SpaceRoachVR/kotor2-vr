@@ -2717,6 +2717,22 @@ describe('GameState proactive world-prompt assembly', () => {
     expect(labels).toContain('Use: Low Security Door');
   });
 
+  test('labels a locked placeable destruction action as Bash, not creature combat', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const footlocker = harness.target({
+      id: 36,
+      name: 'Spike Footlocker',
+      objectType: harness.objectTypes.ModulePlaceable,
+      locked: true,
+      keyRequired: true,
+    });
+    harness.setTargets([footlocker], [harness.entry('iaction_attack')]);
+
+    expect(flattenPromptActions(harness.buildPrompt('module-object:36')).map((action) => action.label))
+      .toEqual(['Bash']);
+    expect(footlocker.use).not.toHaveBeenCalled();
+  });
+
   test('keeps Bash on an unlocked story-owned door exactly as the flat game offers it', () => {
     const harness = createGameStateWorldPromptHarness();
     // Bash is an authored ActionMenu route the engine owns and gates, so
