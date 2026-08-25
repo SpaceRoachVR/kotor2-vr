@@ -223,7 +223,7 @@ export class ModuleDoor extends ModuleObject {
   }
 
   getName(){
-    return this.locName.getValue();
+    return this.compileDisplayName(this.locName.getValue());
   }
 
   getGenericType(){

@@ -2856,7 +2856,7 @@ export class ModuleCreature extends ModuleObject {
   }
 
   getName(){
-    return this.firstName;
+    return this.compileDisplayName(this.firstName);
   }
 
   getAppearance(): SWCreatureAppearance {

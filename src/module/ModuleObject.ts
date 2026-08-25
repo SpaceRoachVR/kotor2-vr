@@ -53,6 +53,7 @@ import type { IHeardString } from "@/interface/dialog/IHeardString";
 import type { SWRange } from "@/engine/rules/SWRange";
 import { TURN_SPEED_SLOW } from "@/engine/TurnSpeeds";
 import { actionParameterToStruct } from "@/actions/actionParameterStructs";
+import { compileTalkString } from "@/resource/TalkStringCompiler";
 
 
 /**
@@ -1678,6 +1679,25 @@ export class ModuleObject {
   getName(): any {
     console.warn("Method not implemented.", this.tag);
     return '';
+  }
+
+  /**
+   * Resolves a raw TLK name into what the player should see.
+   *
+   * Object names never went through the token/comment handling that dialogue
+   * has, so they surfaced raw: the medbay dummy's name tag read
+   * `{Dummy Medbay PC}<FullName>` in the headset, and `001EBO`'s objects carry
+   * designer comments like `Body{Invis container}` and `Blast Door{HK-50}`
+   * that the retail game strips.
+   */
+  protected compileDisplayName(raw: unknown): string {
+    return compileTalkString(raw, {
+      firstName: GameState.PartyManager?.ActualPlayerTemplate
+        ?.getFieldByLabel('FirstName')?.getValue(),
+      lastName: GameState.PartyManager?.ActualPlayerTemplate
+        ?.getFieldByLabel('LastName')?.getValue(),
+      custom: (index: number) => GameState.module?.getCustomToken(index),
+    });
   }
 
   /**

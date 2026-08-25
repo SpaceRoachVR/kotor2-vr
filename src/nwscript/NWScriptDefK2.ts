@@ -2036,7 +2036,9 @@ NWScriptDefK2.Actions = {
     name: 'SetCustomToken',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.STRING ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, string]) {
+      GameState.module?.setCustomToken(args[0], args[1]);
+    }
   },
   285: {
     comment: '285: Determine whether oCreature has nFeat, and nFeat is useable.\nPLEASE NOTE!!! - This function will return FALSE if the target\nis not currently able to use the feat due to daily limits or\nother restrictions. Use GetFeatAcquired() if you just want to\nknow if they\'ve got it or not.\n- nFeat: FEAT_*\n- oCreature',

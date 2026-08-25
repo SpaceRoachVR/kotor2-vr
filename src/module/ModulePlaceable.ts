@@ -278,7 +278,8 @@ export class ModulePlaceable extends ModuleObject {
   }
 
   getName(){
-    return this.hasInventory && !this.getInventory().length ? this.name + ' (Empty)' : this.name;
+    const name = this.compileDisplayName(this.name);
+    return this.hasInventory && !this.getInventory().length ? name + ' (Empty)' : name;
   }
 
   getX(){
