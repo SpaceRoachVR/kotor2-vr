@@ -76,7 +76,15 @@ export class ComputedPath {
       const neighbors = currentNode.connections;
       for(let i = 0, il = neighbors.length; i < il; i++) {
         let neighbor = neighbors[i];
-        if(neighbor.closed || !neighbor.hasLOS(currentNode, this.owner)) {
+        //The origin and destination are synthetic points that traverseToPoint
+        //injects and deliberately anchors to the nearest authored path point.
+        //Gating those two hops on line of sight throws the anchor away again,
+        //so any actor - or target - standing out of sight of the graph made
+        //the whole search fail and the caller fell back to a straight line.
+        //A creature stood behind a corner in Peragus is the normal case, not
+        //an exception.
+        const isInjectedAnchor = neighbor === this.destination || currentNode === this.origin;
+        if(neighbor.closed || (!isInjectedAnchor && !neighbor.hasLOS(currentNode, this.owner))) {
           continue;
         }
         let gScore = currentNode.g + neighbor.cost;
