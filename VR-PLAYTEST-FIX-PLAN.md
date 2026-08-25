@@ -815,16 +815,49 @@ changing both at once moves the difficulty twice.
   ROADMAP 1.10's finding that the door is mine-only. Confirm before treating as
   a defect.
 
-## Hypothesis — needs a check, do not treat as cause
+## Issue 13 — mechanism confirmed, offenders not yet named
 
-- **`setCutsceneMode` re-enables skinned-mesh frustum culling.**
-  `ModuleObject.setCutsceneMode` does `skins[i].frustumCulled = !state`, so
-  leaving a cutscene sets culling **on** for skinned meshes, whose bounds are
-  the bind pose and do not follow animation. `ModuleCreature` deliberately sets
-  `frustumCulled = false` at load, so this undoes it. That would fit Kreia's
-  face vanishing at close range and 3C-FD disappearing after the `tr_3cfd_int`
-  conversation. **Against it:** `setCutsceneMode` logs on every call and does
-  not appear anywhere in this session's log. Verify it is reached before acting.
+**Confirmed, and it matches the most distinctive symptom exactly.**
+`ModuleObject.updateModelVisibility` hides anything `isOnScreen()` rejects, and
+that tests the bounding sphere derived from the object's `Box3`. An **empty
+Box3 yields a zero-radius sphere at the world ORIGIN** — verified against the
+project's three r149 in `culling-bounds-audit.test.ts` rather than asserted —
+so such an object is drawn only while the origin sits inside the view frustum,
+and remains fully interactable throughout because interaction uses `position`,
+not the box.
+
+That is "invisible assets sometimes become visible when they're only in the
+extreme left side of my vision". `001EBO` spans roughly x 20..60, y 20..80, so
+the world origin lies off one side of the ship and swings through view as the
+player turns. It also explains why every invisible thing reported is still
+targetable.
+
+**What is not yet known is which objects have empty or stale boxes**, and that
+is not worth guessing. `GameState.reportCullingBoundsAnomalies()` now runs once
+per module load and names every object whose box is empty, whose radius is
+zero, or whose bounds sit more than 5m from the object itself. One headset
+glance at the console settles it.
+
+Suspicion worth checking first when that report arrives: `loadDoors` computes
+the door box **twice, both times before** `GameState.group.doors.add(door.container)`,
+whereas `loadPlaceables` adds the container to the scene *before* computing.
+The orderings differ and doors are the headline symptom.
+
+## Refuted — do not pursue
+
+- **`setCutsceneMode` re-enabling skinned-mesh frustum culling.** Recorded as a
+  hypothesis in the first triage; it does not hold. `ModuleObject.setCutsceneMode`
+  does `skins[i].frustumCulled = !state`, but `ModuleCreature.update` re-applies
+  `frustumCulled = false` **every frame while `cutsceneMode` is true**. The
+  invariant is deliberate: skinned meshes are culled normally outside cutscenes
+  and force-uncalled during them, where stunt animation carries the mesh away
+  from its bind-pose bounds. It is also called only for DLG **stunt actors**,
+  which is why it appears nowhere in the session log.
+
+- **Frustum culling explaining Kreia's partially-missing face.** Frustum culling
+  is per-object and all-or-nothing; it cannot remove *part* of a mesh. A partial
+  disappearance at close range is near-plane clipping, which is a different
+  question and a much less serious one.
 
 ## Not reproduced — evidence points the other way
 
