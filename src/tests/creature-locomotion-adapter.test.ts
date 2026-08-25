@@ -22,6 +22,7 @@ function locomotion(overrides: Partial<ResolvedLocomotion> = {}): ResolvedLocomo
 function target(canMove = true): CreatureLocomotionTarget {
   return {
     force: 0,
+    forceVector: { x: 0, y: 0 },
     controlled: false,
     canMove: jest.fn(() => canMove),
     clearAllActions: jest.fn(),
@@ -34,11 +35,21 @@ describe('CreatureLocomotionAdapter', () => {
     const adapter = new CreatureLocomotionAdapter(Math.PI * 3);
     const creature = target();
 
-    expect(adapter.apply(creature, locomotion({ magnitude: 0.7 }))).toBe(true);
+    expect(adapter.apply(creature, locomotion({ magnitude: 0.7, worldDirection: new THREE.Vector2(0, 0.7) }))).toBe(true);
     expect(creature.clearAllActions).toHaveBeenCalledWith(true);
     expect(creature.force).toBe(1);
+    expect(creature.forceVector).toEqual({ x: 0, y: 0.7 });
     expect(creature.setFacing).toHaveBeenCalledWith(0, false, Math.PI * 3);
     expect(creature.controlled).toBe(true);
+  });
+
+  test('passes the resolved world direction to native collision movement', () => {
+    const adapter = new CreatureLocomotionAdapter(Math.PI * 3);
+    const creature = target();
+
+    adapter.apply(creature, locomotion({ worldDirection: new THREE.Vector2(-0.6, 0.8), magnitude: 1 }));
+
+    expect(creature.forceVector).toEqual({ x: -0.6, y: 0.8 });
   });
 
   test('applies rate-limited head yaw directly while stationary', () => {

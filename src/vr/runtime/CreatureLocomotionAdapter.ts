@@ -2,6 +2,7 @@ import { ResolvedLocomotion } from './LocomotionController';
 
 export interface CreatureLocomotionTarget {
   force: number;
+  forceVector: { x: number; y: number };
   controlled: boolean;
   canMove(): boolean;
   clearAllActions(includeCombatActions?: boolean): void;
@@ -23,6 +24,12 @@ export class CreatureLocomotionAdapter {
       // KOTOR decelerates on every frame where force is below one. Its W key
       // and legacy gamepad therefore use full force after accepting movement.
       target.force = 1;
+      // The native collision and avoidance code advances creatures through
+      // forceVector, not merely their visual facing. ActionMoveToPoint writes
+      // this vector every frame; omitting it from VR caused locomotion to stall
+      // at narrow walkmesh turns despite a valid controller direction.
+      target.forceVector.x = locomotion.worldDirection.x;
+      target.forceVector.y = locomotion.worldDirection.y;
       target.setFacing(
         CreatureLocomotionAdapter.directionToCreatureFacing(locomotion.worldDirection.x, locomotion.worldDirection.y),
         false,
