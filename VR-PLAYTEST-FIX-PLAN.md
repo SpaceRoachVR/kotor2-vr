@@ -745,36 +745,46 @@ clickable=false)]`. This is an upstream KotOR.js stub, not a regression here.
 Re-enabling is one line; making the screen work is a project. **Scope decision,
 not a defect.**
 
-### R2 — The security tunneler's bonus is never applied
+### R2 — An absent `UpgradeType` disabled every property an item granted ✅ FIXED
 `security tunneler does not activate ... same audio message as the regular skill`
 `locked container in combat training room doesn't unlock or start training combat`
 `security skill fails on some locked containers when it shouldn't`
 
-These are one bug. `ActionMenuManager` builds the tunneler variant with
-`action.setParameter(1, ActionParameterType.DWORD, securityTunnelers[0])` —
-passing the **ModuleItem object** where a DWORD id is expected
-(`ActionMenuManager.ts:107` and `:175`). `Action.getParameter` resolves DWORD via
-`ModuleObjectManager.GetObjectById`, which tolerates an object *only* when
-`id.id >= 1`; inventory items are not reliably registered in `ObjectList` — the
-exact trap ROADMAP 1.1 flagged. When it misses, `oItem` is undefined,
-`ActionUnlockObject` applies no `EffectSkillIncrease`, and the tunneler attempt
-is arithmetically identical to the plain one. The log agrees: both offered
-variants carry `item=null`.
+These are one bug, and it is far wider than the tunneler it was found through.
 
-Why that gates the combat training room, from the numbers in the log — actor
-`securitySkill=6`, and `total = d20 + wisdom/2 + securitySkill`:
+**Correction to the first triage of this item.** The mechanism recorded here
+initially — that `ActionMenuManager` passes a `ModuleItem` where a DWORD id
+belongs, and `GetObjectById` drops it — is **wrong**, and was retracted before
+any fix was written. `Action.setParameter` already converts a `ModuleObject` to
+a registered id via `EnsureObjectReference`, and `ModuleItem` carries the
+`ModuleObject` bit, so the parameter resolves correctly. The real cause is one
+step further in.
 
-| target | OpenLockDC | best possible total | outcome |
-|---|---|---|---|
-| Low Security Door | 21 | 31 | passes about half the time |
-| Metal Box — Combat Training | 33 | 31 | **impossible without the tunneler** |
-| High Security Cylinder | 36 | 31 | **impossible without the tunneler** |
+`ItemProperty.isUseable()` gates every property an item grants — armour,
+attack, damage, Disguise, all six ability bonuses, and ThievesTools.
+`UpgradeType` is an optional K2 upgrade-system field that most retail templates
+omit, so `this.upgradeType` stayed `undefined`. Then `1 << undefined` is `1`,
+`undefined == -1` is false, and `0 & 1` is `0` — so `isUseable()` answered
+**false** and the property silently granted nothing.
 
-So the two containers Allen could not open are exactly the two the authored
-content reserves for the tunneler — and the tunneler does nothing. The tutorial
-bark even says to use it. Fixing R2 should clear all three reports.
+Confirmed against the install rather than inferred: both security tunnelers,
+`g_i_secspike01` (ThievesTools +6) and `g_i_secspike02` (+10), ship **no
+`UpgradeType` field**. The tell was already in the tree — `ActionSetMine:121`
+has the identical check commented out with no explanation, a local workaround
+for the same defect.
 
-### R3 — The security roll uses the wrong ability, and the score not the modifier
+Why it gated the combat training room, from the log's own numbers
+(`securitySkill=6`, best possible total 31):
+
+| target | OpenLockDC | outcome before |
+|---|---|---|
+| Low Security Door | 21 | passes about half the time |
+| Metal Box — Combat Training | 33 | **impossible** — tunneler bonus never applied |
+| High Security Cylinder | 36 | **impossible** — tunneler bonus never applied |
+
+`upgradeType` now defaults to `-1`, which is what an absent field means.
+
+### R3 — The security roll used the wrong ability, and the score not the modifier ✅ FIXED
 `ObjectLockRules.resolveSecurityUnlock` computes
 `total = roll + (wisdom / 2) + securitySkill`, fed by `wisdom: object.getWIS()`
 (`ModuleDoor.ts:443`, `ModulePlaceable.ts:539`).
