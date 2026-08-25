@@ -313,15 +313,22 @@ are indistinguishable on an unstable base, so this comes first.
 
 Ordered by whether it blocks progression.
 
-### 1.1 — Mine parameter resolution ☐ blocked on user log
-`ActionSetMine` parameter 0 is set from a `ModuleItem` but resolves via
-`GetObjectById` to something without a `properties` array. A guard and a diagnostic
-are already in place; the next mine attempt names the culprit.
-- **Done when:** setting a mine completes and the object resolves to the real item.
-- **Files:** `src/actions/ActionSetMine.ts`, `src/actions/Action.ts`,
-  `src/managers/ModuleObjectManager.ts`.
-- **Watch for:** id `0` being mapped to `OBJECT_INVALID`, and inventory items not
-  being registered in `ObjectList`.
+### 1.1 — Mine parameter resolution ✅ resolves correctly; a silent-failure path closed (2026-08-25)
+
+**The log arrived, and it clears the resolution.** A full playthrough plants a
+mine end to end — step 31 opens the Engine Room Door with a recovered mine and
+reports `opened: true`, mines `2 -> 1`, door `dead: true` — and the standing
+diagnostic (`parameter 0 did not resolve to a ModuleItem`) fires **zero** times
+across the whole run. Parameter 0 does resolve to the real `ModuleItem`, with
+its `properties` array intact. The acceptance criterion is met.
+
+**A real hole was found next to it and closed.** Two things can come back from
+the id: the wrong object, or nothing. The wrong object was guarded — no
+`properties` array, reported and failed. Nothing at all was not:
+`if(this.oItem && !this.usedItem)` skipped the block entirely and fell through
+to `return ActionStatus.COMPLETE`, so the action claimed success having added
+no trap, queued no `OnTrapTriggered` event and consumed no charge, with nothing
+logged anywhere. An unresolved item now fails and says so.
 
 ### 1.2 — Missing textures / white boxes ✅ named and explained (2026-08-22)
 No longer blocked: `tools/vr-emulator/phase1-diagnostics.js` harvests
@@ -598,6 +605,26 @@ point — and long routes improved substantially at each. What remains is that a
 succeeds from others. This is a driver-visible limitation rather than a
 player-facing one: a person steers with a thumbstick and does not ask the
 engine to plan a 30m route.
+
+**The measurement was in the log all along, disguised (2026-08-25).** The
+driver's `line(text)` did `console.log(text)`, and the only bare `line()` call
+in the file was the stall-recovery nudge — fired when a leg has not advanced
+0.05m across six consecutive samples. So every stall printed the bare word
+`undefined` and read as noise. **The last full run contains 163 of them.**
+
+They cluster exactly on the targets that fail, all in `101PER`: Damaged Mining
+Droid 71, Door 43, Damaged Mining Droid{Loot} 13, Emergency Blast Door{105PER}
+12, plus Lift Controls 16 in `002EBO`. So the shape is not "the actor walks and
+falls short" but "the actor repeatedly stops advancing mid-route, gets nudged,
+and stops again until the leg times out". That is consistent with everything
+else established here: sound routes, sound walkmesh data, a deterministic
+end position.
+
+The stall path now names the position it stopped advancing from, the remaining
+distance and the queue depth, so the next run localises this without needing a
+bespoke probe. Note also that the nudge fires on `stalledSamples === 6`
+exactly, so a leg that never moves is nudged **once** and then spins to
+timeout — worth revisiting once the cause is known.
 
 **It is not the routing, and it is not the walkmesh data (2026-08-25).** The
 `area.walkEdges` coverage suspicion recorded here previously was tested against
