@@ -512,11 +512,23 @@ placeable itself loads: the prologue survey lists
   observation to characterise. Do not chase the walkmesh error for it.
 - **Files:** `src/module/ModulePlaceable.ts`.
 
-### 1.7 — Re-verify content gated by the transit fix
-`SetDisableTransit` (opcode 860) now gates the lift that let the player skip ahead.
-Empty containers and untriggered combat training may have been downstream of arriving
-before setup scripts ran — or of the wedged action queue.
-- **Done when:** a clean run from a new save confirms each, or files a fresh bug.
+### 1.7 — Re-verify content gated by the transit fix ✅ neither symptom reproduces (2026-08-25)
+`SetDisableTransit` (opcode 860) gates the lift that let the player skip ahead.
+Both symptoms suspected of being downstream of arriving before setup scripts
+ran were re-checked on a clean run from a new save, and neither reproduces.
+
+- **Empty containers — gone.** Every container the run opens has contents:
+  three opened, all `wasEmpty: false`, all looted successfully.
+- **Untriggered combat — gone.** The Peragus combat step enumerates four
+  hostiles (`Damaged Mining Droid` ×3 plus `Damaged Mining Droid{Loot}`), so the
+  encounter is spawned and flagged hostile. What fails is *reaching* them, which
+  is 1.10's navigation stall, not content setup. The distinction matters: the
+  creatures exist and are hostile; the actor cannot cross the room to them.
+- The transit gate itself works — the run takes the authored Utility Lift both
+  ways and the authored Galaxy Map route to Peragus.
+
+Run: `tools/vr-emulator/evidence/phase1-reverify.stdout.log`, 76 steps, one
+blocker (the 1.10 stall).
 
 ### 1.8 — T3-M4 spawn skips `getCurrentRoom()` ✅ premise stale; mitigation deliberately retained (2026-08-25)
 
