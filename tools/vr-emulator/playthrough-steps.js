@@ -4908,17 +4908,30 @@ async function runPlaythrough(harness, url, args) {
     if (resumedPast(args, 'first-kill')) return { skipped: 'resumed past it' };
 
     const survey = await surveyArea(harness);
-    const target = (survey.hostiles || [])[0];
-    if (!target) throw new Error('no live hostiles in this area');
-    line(`  · nearest hostile: ${target.name} (${target.distance}m)`);
+    // Nearest is not always reachable: on some arrivals the closest droid is
+    // the far side of the facility with a route nothing can follow, while the
+    // next one along is straightforward. Try a few in distance order rather
+    // than declaring combat broken because of the first.
+    const candidates = (survey.hostiles || []).slice(0, 4);
+    // Budgets are deliberately small. A generous loop spent twenty minutes per
+    // candidate before conceding, which reads as a hang; failing fast and
+    // moving to the next hostile finds a reachable one far sooner.
+    if (!candidates.length) throw new Error('no live hostiles in this area');
+    line(`  · hostiles: ${JSON.stringify(candidates.map((h) => `${h.name}@${h.distance}m`))}`);
+    let target = null;
+    let position = null;
+    let approached = false;
+    const approachFailures = [];
+    for (const candidate of candidates) {
 
-    const position = await harness.evaluate(`(() => {
-      const area = window.KotOR.GameState.module.area;
-      const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
-      if (!c) return null;
-      return { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) };
-    })()`);
-    if (!position) throw new Error(`hostile ${target.id} vanished before approach`);
+      target = candidate;
+      position = await harness.evaluate(`(() => {
+        const area = window.KotOR.GameState.module.area;
+        const c = (area.creatures || []).find((o) => o && o.id === ${Number(candidate.id)});
+        if (!c) return null;
+        return { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) };
+      })()`);
+      if (!position) { approachFailures.push(`${candidate.name}: vanished`); continue; }
 
     const targetState = async () => harness.evaluate(`(() => {
       const K = window.KotOR;
@@ -4942,33 +4955,40 @@ async function runPlaythrough(harness, url, args) {
     // The long haul across Peragus is where the approach is least reliable, and
     // the droid covers most of it by itself — but it stops well outside melee
     // reach, so alternate "let it come" with a short walk to where it now is.
-    let approached = false;
-    for (let round = 0; round < 6 && !approached; round += 1) {
-      const current = round === 0 ? { distance: target.distance, position } : await targetState();
-      if (!current) throw new Error(`${target.name} vanished during the approach`);
-      try {
-        await navigateTo(harness, { ...current.position, range: 1.4, label: target.name });
-        approached = true;
-        break;
-      } catch (error) {
-        line(`  · approach ${round + 1} fell short (${String(error.message).slice(0, 80)}); ` +
-          'waiting for the droid to close');
+      // approached is declared with the candidate loop above.
+      for (let round = 0; round < 3 && !approached; round += 1) {
+        const current = round === 0 ? { distance: target.distance, position } : await targetState();
+        if (!current) throw new Error(`${target.name} vanished during the approach`);
+        try {
+          await navigateTo(harness, { ...current.position, range: 1.4, label: target.name, maxAttempts: 2 });
+          approached = true;
+          break;
+        } catch (error) {
+          line(`  · approach ${round + 1} fell short (${String(error.message).slice(0, 80)}); ` +
+            'waiting for the droid to close');
+        }
+        let closing = null;
+        for (let wait = 0; wait < 6; wait += 1) {
+          await sleep(1500);
+          closing = await targetState();
+          if (!closing) throw new Error(`${target.name} vanished while waiting for it to close`);
+          if (closing.distance <= 2.0) { approached = true; break; }
+          // Stop waiting once it has clearly settled; a short walk finishes it.
+          if (wait >= 4 && closing.distance < current.distance - 1) break;
+        }
+        // Do not give up because one round made no headway: the walk and the
+        // droid's own approach both contribute, and either can stall for a
+        // round while the other does not.
+        if (closing) line(`  · ${target.name} is now ${closing.distance}m away`);
       }
-      let closing = null;
-      for (let wait = 0; wait < 12; wait += 1) {
-        await sleep(1500);
-        closing = await targetState();
-        if (!closing) throw new Error(`${target.name} vanished while waiting for it to close`);
-        if (closing.distance <= 2.0) { approached = true; break; }
-        // Stop waiting once it has clearly settled; a short walk finishes it.
-        if (wait >= 4 && closing.distance < current.distance - 1) break;
-      }
-      // Do not give up because one round made no headway: the walk and the
-      // droid's own approach both contribute, and either can stall for a
-      // round while the other does not.
-      if (closing) line(`  · ${target.name} is now ${closing.distance}m away`);
+      if (approached) break;
+      approachFailures.push(`${candidate.name}@${candidate.distance}m`);
+      line(`  · ${candidate.name} could not be reached; trying the next hostile`);
     }
-    if (!approached) throw new Error(`${target.name} could not be reached for combat`);
+    if (!approached || !target) {
+      throw new Error(`no hostile could be reached for combat: ${JSON.stringify(approachFailures)}`);
+    }
+    line(`  · engaging ${target.name}`);
     await sleep(1500);
     await clearBlockingModal(harness);
 
