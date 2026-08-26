@@ -40,6 +40,11 @@ export class CharGenCustomPanel extends K1_CharGenCustomPanel {
     this.voidFill = false;
   }
   
+  /** TSL opens on the Ebon Hawk; it ships no end_m01aa. */
+  protected getStartModule(): string {
+    return '001EBO';
+  }
+
   async menuControlInitializer(skipInit: boolean = false) {
     await super.menuControlInitializer(true);
     if(skipInit) return;

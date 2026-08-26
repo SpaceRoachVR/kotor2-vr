@@ -52,6 +52,20 @@ export class CharGenCustomPanel extends GameMenu {
    * worked. Reported from the headset: the panel opened with eight buttons and
    * none of them responded.
    */
+  /**
+   * The module a finished character is dropped into.
+   *
+   * K1 opens on the Endar Spire Command Module; TSL opens on the Ebon Hawk and
+   * ships no `end_m01aa` at all — its 246 modules do not include that name. The
+   * TSL subclass inherits this whole panel, so hard-coding K1's module here
+   * meant Play asked for a file that does not exist and the game sat on the
+   * loading screen forever. `CharGenQuickPanel` avoided it only because TSL
+   * overrides that panel's step 3 outright.
+   */
+  protected getStartModule(): string {
+    return 'end_m01aa';
+  }
+
   protected wireCustomPanel(){
 
       this.BTN_BACK.addEventListener('click', (e) => {
@@ -105,7 +119,7 @@ export class CharGenCustomPanel extends GameMenu {
         GameState.PartyManager.ActualPlayerTemplate = GameState.PartyManager.PlayerTemplate;
         GameState.PartyManager.AddPortraitToOrder(GameState.CharGenManager.selectedCreature.getPortraitResRef());
         CurrentGame.InitGameInProgressFolder(true).then( () => {
-          GameState.LoadModule('end_m01aa');
+          GameState.LoadModule(this.getStartModule());
         });
       });
 

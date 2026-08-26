@@ -148,12 +148,21 @@ export class CharGenFeats extends GameMenu {
             }
           }
         }
+        // Only a prerequisite-free feat roots a chain, and only then does the
+        // group contain anything. Pushing regardless left empty groups in the
+        // list, and the sort below then read `groupa[0].toolsCategories` off
+        // undefined and threw -- aborting the whole method before setItems ran,
+        // so the feats screen rendered an empty box.
+        groups.push(group);
       }
-      groups.push(group);
     }
-    groups.sort((groupa, groupb) => groupa[0].toolsCategories > groupb[0].toolsCategories ? 1 : -1);
+    groups.sort((groupa, groupb) => {
+      const a = groupa[0]?.toolsCategories;
+      const b = groupb[0]?.toolsCategories;
+      if(a === b) return 0;
+      return a > b ? 1 : -1;
+    });
     this.LB_FEATS.setItems(groups);
-    console.log(groups);
   }
   
 }

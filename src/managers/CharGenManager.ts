@@ -292,6 +292,69 @@ export class CharGenManager {
     return CharGenManager.selectedCreature.classes[0].skillstable.toLowerCase() + '_reco';
   }
 
+  /**
+   * Applies and COMMITS the class's recommended attributes and skill spread to
+   * a creature.
+   *
+   * Quick character creation is Portrait -> Name -> Play. It never opened the
+   * attributes or skills screens, and those screens are the only place a
+   * character's points are ever spent -- `CharGenSkills`'s Accept button is the
+   * sole writer of `skills[i].rank` in the whole engine. So every quick
+   * character started with the class template's base skills, and the
+   * `availSkillPoints` computed for it was discarded, which degraded every
+   * skill check in the game for that character.
+   *
+   * The distribution mirrors the two Recommended buttons; this commits it as
+   * well, since no Accept is pressed on the quick path. Those handlers should
+   * be refactored onto this method rather than keeping a second copy.
+   */
+  static applyRecommendedBuild(creature: any = CharGenManager.selectedCreature){
+    if(!creature || !creature.classes || !creature.classes[0]) return;
+
+    const characterClass = creature.classes[0];
+    CharGenManager.availPoints = 0;
+    CharGenManager.str = parseInt(characterClass.str as any);
+    CharGenManager.dex = parseInt(characterClass.dex as any);
+    CharGenManager.con = parseInt(characterClass.con as any);
+    CharGenManager.wis = parseInt(characterClass.wis as any);
+    CharGenManager.int = parseInt(characterClass.int as any);
+    CharGenManager.cha = parseInt(characterClass.cha as any);
+
+    creature.str = CharGenManager.str;
+    creature.dex = CharGenManager.dex;
+    creature.con = CharGenManager.con;
+    creature.wis = CharGenManager.wis;
+    creature.int = CharGenManager.int;
+    creature.cha = CharGenManager.cha;
+
+    CharGenManager.resetSkillPoints();
+    CharGenManager.availSkillPoints = CharGenManager.getMaxSkillPoints();
+    const skillOrder: any = CharGenManager.getRecommendedOrder();
+    const fields = ['computerUse','demolitions','stealth','awareness','persuade','repair','security','treatInjury'];
+
+    // The Recommended handlers decrement only when skillIndex >= 0, so an order
+    // of all -1 spins forever. Bound the loop by the points on offer instead.
+    let guard = CharGenManager.availSkillPoints * 8 + 8;
+    while(CharGenManager.availSkillPoints > 0 && guard-- > 0){
+      let spent = false;
+      for(let i = 0; i < 8; i++){
+        if(!CharGenManager.availSkillPoints) break;
+        const skillIndex = skillOrder[i];
+        if(skillIndex < 0 || skillIndex > 7) continue;
+        (CharGenManager as any)[fields[skillIndex]] += 1;
+        CharGenManager.availSkillPoints -= 1;
+        spent = true;
+      }
+      if(!spent) break;
+    }
+
+    if(Array.isArray(creature.skills)){
+      for(let i = 0; i < fields.length && i < creature.skills.length; i++){
+        creature.skills[i].rank = (CharGenManager as any)[fields[i]];
+      }
+    }
+  }
+
   static getRecommendedOrder() {
     let skillOrder: any = {
       '0': -1,
