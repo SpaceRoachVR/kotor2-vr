@@ -146,11 +146,90 @@ export class CharGenSkills extends GameMenu {
       });
   }
 
+
+  /**
+   * The eight skills, in `skills.2da` row order, paired with the controls that
+   * drive them and the `CharGenManager` field that stores the rank.
+   */
+  private static readonly SKILL_ROWS: ReadonlyArray<{
+    readonly row: number; readonly field: string;
+    readonly plus: string; readonly minus: string;
+  }> = [
+    { row: 0, field: 'computerUse',  plus: 'COM_PLUS_BTN', minus: 'COM_MINUS_BTN' },
+    { row: 1, field: 'demolitions',  plus: 'DEM_PLUS_BTN', minus: 'DEM_MINUS_BTN' },
+    { row: 2, field: 'stealth',      plus: 'STE_PLUS_BTN', minus: 'STE_MINUS_BTN' },
+    { row: 3, field: 'awareness',    plus: 'AWA_PLUS_BTN', minus: 'AWA_MINUS_BTN' },
+    { row: 4, field: 'persuade',     plus: 'PER_PLUS_BTN', minus: 'PER_MINUS_BTN' },
+    { row: 5, field: 'repair',       plus: 'REP_PLUS_BTN', minus: 'REP_MINUS_BTN' },
+    { row: 6, field: 'security',     plus: 'SEC_PLUS_BTN', minus: 'SEC_MINUS_BTN' },
+    { row: 7, field: 'treatInjury',  plus: 'TRE_PLUS_BTN', minus: 'TRE_MINUS_BTN' },
+  ];
+
+  /**
+   * A class skill costs one point per rank, a cross-class skill costs two.
+   * `skills.2da` marks which is which in the column named by
+   * `CharGenManager.getSkillTableColumn()` -- e.g. `jedi_guardian_class`.
+   */
+  private isClassSkill(row: number): boolean {
+    try {
+      const table = GameState.TwoDAManager.datatables.get('skills');
+      const column = GameState.CharGenManager.getSkillTableColumn();
+      return String(table?.rows?.[row]?.[column]) === '1';
+    } catch (e) {
+      return true;
+    }
+  }
+
+  private skillCost(row: number): number {
+    return this.isClassSkill(row) ? 1 : 2;
+  }
+
+  /**
+   * Ranks are capped the way the tabletop rules the game is built on cap them:
+   * a class skill at level + 3, a cross-class skill at half that.
+   */
+  private maxSkillRank(row: number): number {
+    const level = GameState.CharGenManager.selectedCreature?.getTotalClassLevel?.() || 1;
+    const ceiling = level + 3;
+    return this.isClassSkill(row) ? ceiling : Math.floor(ceiling / 2);
+  }
+
+  /**
+   * The per-skill +/- buttons had no handlers in either game -- only Back,
+   * Accept and Recommended were ever wired -- so skill points could not be
+   * spent by hand at all. Reported from the headset.
+   */
+  protected wireSkillAdjustControls(){
+    const manager: any = GameState.CharGenManager;
+    for(const skill of CharGenSkills.SKILL_ROWS){
+      (this as any)[skill.plus]?.addEventListener('click', (e: any) => {
+        e.stopPropagation();
+        const cost = this.skillCost(skill.row);
+        if(manager[skill.field] < this.maxSkillRank(skill.row) && cost <= manager.availSkillPoints){
+          manager[skill.field] += 1;
+          manager.availSkillPoints -= cost;
+        }
+        this.updateButtonStates();
+      });
+
+      (this as any)[skill.minus]?.addEventListener('click', (e: any) => {
+        e.stopPropagation();
+        const floor = GameState.CharGenManager.selectedCreature?.skills?.[skill.row]?.rank ?? 0;
+        if(manager[skill.field] > floor){
+          manager[skill.field] -= 1;
+          manager.availSkillPoints += this.skillCost(skill.row);
+        }
+        this.updateButtonStates();
+      });
+    }
+  }
+
   async menuControlInitializer(skipInit: boolean = false) {
     await super.menuControlInitializer();
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
       this.wireSkillControls();
+      this.wireSkillAdjustControls();
       resolve();
     });
   }

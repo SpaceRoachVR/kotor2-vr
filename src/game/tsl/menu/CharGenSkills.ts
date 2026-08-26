@@ -71,6 +71,7 @@ export class CharGenSkills extends K1_CharGenSkills {
     return new Promise<void>((resolve, reject) => {
       // super was called with skipInit, so nothing in the base class ran.
       this.wireSkillControls();
+      this.wireSkillAdjustControls();
       resolve();
     });
   }
