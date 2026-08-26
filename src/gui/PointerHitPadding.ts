@@ -49,3 +49,18 @@ export function hitsPaddedBox(
     && point.y >= box.min.y - grow
     && point.y <= box.max.y + grow;
 }
+
+/**
+ * The padding currently in force. Held here rather than on `GUIControl` so the
+ * engine can drive it without importing the GUI barrel — doing so pulls a
+ * module chain Jest cannot parse and broke the VR test suite.
+ */
+let activePadding = 0;
+
+export function setPointerHitPadding(padding: number): void {
+  activePadding = Number.isFinite(padding) && padding > 0 ? padding : 0;
+}
+
+export function getPointerHitPadding(): number {
+  return activePadding;
+}

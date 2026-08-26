@@ -27,7 +27,7 @@ import { GUIControlType } from "@/enums/gui/GUIControlType";
 import { KeyMapAction } from "@/enums/controls/KeyMapAction";
 import { GFFField } from "@/resource/GFFField";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
-import { hitsPaddedBox } from "@/gui/PointerHitPadding";
+import { hitsPaddedBox, getPointerHitPadding } from "@/gui/PointerHitPadding";
 
 const itemSize = 2
 const box = { min: [0, 0], max: [0, 0] }
@@ -107,12 +107,6 @@ export class GUIControl {
 
   allowClick: boolean = true;
 
-  /**
-   * Extra hit-test margin, in GUI units, granted to clickable controls.
-   * Zero for the mouse; set while an immersive session is presenting, where a
-   * 32x32 control is an unreasonably small target for a headset ray.
-   */
-  static pointerHitPadding: number = 0;
   disableSelection: boolean = false;
   disableHover: boolean = false;
   /** When set on a list row, overrides GameMenu hover suppression for custom PROTOITEM presenters. */
@@ -1698,7 +1692,7 @@ export class GUIControl {
       // not, because they default to allowClick and often overlap the very
       // controls they caption.
       const padding = control.isClickable && control.isClickable()
-        ? GUIControl.pointerHitPadding : 0;
+        ? getPointerHitPadding() : 0;
       if(control.box && hitsPaddedBox(control.box, Mouse.positionUI, padding) && (control.allowClick || control.editable)){
         controls.push(control);
       }else{

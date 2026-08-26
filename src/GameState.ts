@@ -89,8 +89,7 @@ import type {
 import {
   snapshotVRActionMenuPanelEntries,
 } from "@/vr/runtime/VRActionMenuEngineBridge";
-import { VR_POINTER_HIT_PADDING } from "@/gui/PointerHitPadding";
-import { GUIControl } from "@/gui";
+import { VR_POINTER_HIT_PADDING, setPointerHitPadding } from "@/gui/PointerHitPadding";
 import type {
   VRActionMenuBridgeDependencies,
   VRActionMenuPanel,
@@ -2997,7 +2996,7 @@ export class GameState implements EngineContext {
     // A headset ray needs a larger target than a mouse cursor; see
     // PointerHitPadding. Driven from presentation state so flatscreen keeps
     // the authored hit areas exactly.
-    GUIControl.pointerHitPadding = VRSpike.isPresenting ? VR_POINTER_HIT_PADDING : 0;
+    setPointerHitPadding(VRSpike.isPresenting ? VR_POINTER_HIT_PADDING : 0);
     GameState.Render(delta, timestamp);
     VRSpike.traceStartupStage('render-complete');
     // Rebuild the culling frustum now that the XR camera carries a world pose.

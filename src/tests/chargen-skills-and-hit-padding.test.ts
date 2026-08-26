@@ -84,10 +84,16 @@ describe('padding is applied only where it is safe', () => {
   test('only clickable controls are padded', () => {
     // Labels default to allowClick and overlap the controls they caption:
     // STR_LBL spans all three Strength buttons.
-    expect(control).toMatch(/isClickable\(\)\s*\n?\s*\?\s*GUIControl\.pointerHitPadding\s*:\s*0/);
+    expect(control).toMatch(/isClickable\(\)[\s\S]{0,40}getPointerHitPadding\(\)\s*:\s*0/);
   });
 
   test('flatscreen keeps the authored hit areas exactly', () => {
-    expect(state).toMatch(/VRSpike\.isPresenting \? VR_POINTER_HIT_PADDING : 0/);
+    expect(state).toMatch(/setPointerHitPadding\(VRSpike\.isPresenting \? VR_POINTER_HIT_PADDING : 0\)/);
+  });
+
+  test('the engine drives padding without importing the GUI barrel', () => {
+    // Importing @/gui into GameState pulls a module chain Jest cannot parse and
+    // took out the whole VR suite; the pure module exists to avoid that.
+    expect(state).not.toMatch(/^import \{ GUIControl \} from "@\/gui";$/m);
   });
 });
