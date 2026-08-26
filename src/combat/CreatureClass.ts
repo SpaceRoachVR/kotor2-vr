@@ -118,30 +118,39 @@ export class CreatureClass {
     return this.acbonuses[this.level];
   }
 
-  isFeatAvailable( feat: any ){
-    if(typeof feat != 'undefined'){
-      let status = parseInt(feat[this.featstable.toLowerCase()+'_list']);
-      if(isNaN(status)){
-        return false;
-      }
+  /**
+   * The per-class feat-availability column on a `feat.2da` row.
+   *
+   * The 2DA column is `scd_list`, but rows are normalised to camelCase when
+   * they are built, so the property is `scdList`. Looking up the snake_case
+   * name returned undefined, `parseInt` gave NaN, and EVERY feat was reported
+   * unavailable — the character-creation feats screen listed nothing at all for
+   * any class. Same shape as the skillstable casing bug fixed earlier.
+   *
+   * The snake_case form is still tried as a fallback in case a caller hands
+   * over a raw, un-normalised 2DA row.
+   */
+  private featListStatus( feat: any ): number {
+    if(typeof feat === 'undefined' || feat === null) return NaN;
+    const table = String(this.featstable || '').toLowerCase();
+    if(!table) return NaN;
+    const camel = `${table}List`;
+    const raw = feat[camel] !== undefined ? feat[camel] : feat[`${table}_list`];
+    return parseInt(raw as any);
+  }
 
-      if(status != 4){ //UNAVAILABLE
-        return true;
-      }
-    }
-    return false;
+  isFeatAvailable( feat: any ){
+    const status = this.featListStatus(feat);
+    if(isNaN(status)) return false;
+    return status != 4; //4 == UNAVAILABLE
   }
 
   getFeatStatus( feat: any ){
-    if(typeof feat != 'undefined'){
-      let status = parseInt(feat[this.featstable.toLowerCase()+'_list']);
-      if(isNaN(status)){
-        return false;
-      }
-
-      return status;
-    }
-    return -1;
+    const status = this.featListStatus(feat);
+    // -1 rather than false: callers compare with `status == 0`, and `false == 0`
+    // is true in JS, so returning false silently reported an unknown feat as
+    // the first available status.
+    return isNaN(status) ? -1 : status;
   }
 
   getFeatGrantedLevel( feat: any ){
