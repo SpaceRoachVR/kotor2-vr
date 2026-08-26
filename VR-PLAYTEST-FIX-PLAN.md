@@ -917,3 +917,73 @@ Peragus critical path, so they are queued behind the prologue.
 and its premise — that the subclass really does skip the base body — so the
 test starts failing rather than passing vacuously if a menu is later changed to
 run the base initializer normally.
+
+---
+
+# Dead-code sweep (2026-08-25)
+
+Prompted by four separate headset reports that each turned out to be something
+declared but never wired. Swept for the pattern rather than continuing to find
+instances by accident.
+
+## Correction: NWScript opcodes are NOT mostly stubs
+
+The obvious sweep — count `action: undefined` in `NWScriptDefK2.ts` — reports
+**39 of 877 implemented (4%)** and produces 563 apparent stubs including
+`Random`, `AssignCommand`, `ExecuteScript` and `ActionAttack`. That result is
+**wrong**, and it is worth recording because it is the first thing anyone
+looking at this file will try.
+
+The bottom of `NWScriptDefK2.ts` copies K1's implementation into any K2 entry
+whose action is `undefined`, matched by **opcode number**:
+
+```js
+for (let property in NWScriptDefK1.Actions) {
+  if (NWScriptDefK2.Actions[property].action === undefined) {
+    NWScriptDefK2.Actions[property].action = NWScriptDefK1.Actions[property].action;
+  }
+}
+```
+
+Measured at runtime in a live TSL session: **605 of 877 implemented**, not 39.
+So `action: undefined` in the K2 source means "inherit K1's", not "missing".
+
+**The hazard that rule implies was checked and is clear.** Inheriting by opcode
+number would silently graft the wrong function wherever a number means
+different things in the two games. Compared every shared opcode id: **0
+mismatched names**. The inheritance is safe.
+
+## The real inventory
+
+- **275 opcodes are unimplemented in both games** — the genuine dead list.
+- Confirmed examples already met in play: `DisableHealthRegen` (858) logged
+  during the prologue; `CreateObject` (243); `SetCustomToken` (284, since
+  fixed); the Galaxy Map set (739-744, fixed); the journal set (367-369, fixed).
+
+**These are not worth wiring blind.** 275 is too many, most are never called by
+the shipped scripts, and each needs its semantics understood before it is
+implemented — the journal set needed three separate fixes before one quest
+could appear, and wiring the opcode alone would have achieved nothing.
+
+## Prioritise by what the game actually calls
+
+`CALL_ACTION` already logs `NWScript Action <name> not found` whenever a script
+reaches an unimplemented opcode, so the shipped scripts tell us which of the 275
+matter. The harness stdout logs do **not** capture engine console output, so
+that evidence has to come from a live session.
+
+Next step: tally those warnings across a full prologue run and implement only
+the opcodes the game actually invokes, in call-frequency order.
+
+## Other dead-code categories found so far
+
+| Category | Instances | Status |
+|---|---|---|
+| TSL menus skipping the base initializer, wiring nothing | 9 | 3 fixed, 6 catalogued above |
+| Controls declared and never wired (`BTN_CANCEL`) | 1 found | fixed |
+| Controls hidden with no path to show them (`BTN_LEVELUP`, `CUST_CHAR_BTN`) | 2 | both fixed |
+| Labels never written (`LBL_BONUS_*`, `DESC_LBL`, `LB_DESC`, `COST_POINTS_LBL`) | 4+ | modifier fixed; description and cost open |
+| Step menus never given their creature (`CharGenAbilities`, `CharGenFeats`) | 2 | both fixed |
+
+The common shape is *declared, rendered, never connected* — which is why every
+one of them presented as "the button does nothing" rather than as an error.
