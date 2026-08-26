@@ -31,7 +31,32 @@ describe('canAttemptSecurityUnlock', () => {
 });
 
 describe('resolveSecurityUnlock', () => {
-  test('uses the supplied real d20 result for the authored Low Security Door', () => {
+  test('takes 20 outside combat rather than rolling, as the shipped game does', () => {
+    const rollD20 = jest.fn(() => 1);
+
+    const result = resolveSecurityUnlock({
+      locked: true, lockable: false, keyRequired: false,
+      securitySkill: 6, intelligence: 16, openLockDC: 21,
+    }, rollD20);
+
+    expect(rollD20).not.toHaveBeenCalled();
+    // 20 + Intelligence modifier 3 + rank 6 = 29 against DC 21.
+    expect(result).toEqual({ attempted: true, unlocked: true, roll: 20, total: 29 });
+  });
+
+  test('the authored tunneler thresholds only mean something under take 20', () => {
+    const attempt = (openLockDC: number) => resolveSecurityUnlock({
+      locked: true, lockable: false, keyRequired: false,
+      securitySkill: 6, intelligence: 16, openLockDC,
+    }, () => 1);
+    // T3-M4 reaches 29: the Low Security Doors open, and the combat-training
+    // containers stay shut until a tunneler adds its bonus.
+    expect(attempt(21).unlocked).toBe(true);
+    expect(attempt(33).unlocked).toBe(false);
+    expect(attempt(36).unlocked).toBe(false);
+  });
+
+  test('rolls for real while in combat', () => {
     const rollD20 = jest.fn(() => 1);
 
     const result = resolveSecurityUnlock({
@@ -41,6 +66,7 @@ describe('resolveSecurityUnlock', () => {
       securitySkill: 6,
       intelligence: 10,
       openLockDC: 21,
+      inCombat: true,
     }, rollD20);
 
     expect(rollD20).toHaveBeenCalledTimes(1);
@@ -56,6 +82,7 @@ describe('resolveSecurityUnlock', () => {
       securitySkill: 6,
       intelligence: 10,
       openLockDC: 21,
+      inCombat: true,
     }, () => 15);
 
     expect(result).toEqual({ attempted: true, unlocked: false, roll: 15, total: 21 });
@@ -66,19 +93,19 @@ describe('resolveSecurityUnlock', () => {
     // had not earned -- and collected it from the wrong ability entirely.
     const average = resolveSecurityUnlock({
       locked: true, lockable: false, keyRequired: false,
-      securitySkill: 6, intelligence: 10, openLockDC: 21,
+      securitySkill: 6, intelligence: 10, openLockDC: 21, inCombat: true,
     }, () => 10);
     expect(average.attempted && average.total).toBe(16);
 
     const clever = resolveSecurityUnlock({
       locked: true, lockable: false, keyRequired: false,
-      securitySkill: 6, intelligence: 16, openLockDC: 21,
+      securitySkill: 6, intelligence: 16, openLockDC: 21, inCombat: true,
     }, () => 10);
     expect(clever.attempted && clever.total).toBe(19);
 
     const dull = resolveSecurityUnlock({
       locked: true, lockable: false, keyRequired: false,
-      securitySkill: 6, intelligence: 8, openLockDC: 21,
+      securitySkill: 6, intelligence: 8, openLockDC: 21, inCombat: true,
     }, () => 10);
     expect(dull.attempted && dull.total).toBe(15);
   });

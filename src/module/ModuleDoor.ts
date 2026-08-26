@@ -441,6 +441,7 @@ export class ModuleDoor extends ModuleObject {
       keyRequired: this.keyRequired,
       securitySkill: object.getSkillLevel(SkillType.SECURITY),
       intelligence: object.getINT(),
+      inCombat: !!(object as any).combatData?.combatState,
       openLockDC: this.openLockDC,
     }, () => Dice.rollD20(1));
     if (!result.attempted) return false;

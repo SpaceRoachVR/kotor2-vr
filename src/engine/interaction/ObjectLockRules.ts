@@ -11,6 +11,11 @@ export interface SecurityUnlockAttempt extends ObjectLockState {
   /** Raw Intelligence score. The modifier is derived here, not by the caller. */
   readonly intelligence: number;
   readonly openLockDC: number;
+  /**
+   * Whether the actor is in combat. Outside combat the check takes 20 instead
+   * of rolling; see {@link resolveSecurityUnlock}.
+   */
+  readonly inCombat?: boolean;
 }
 
 export interface ObjectBashState {
@@ -55,10 +60,23 @@ function abilityModifier(score: number): number {
 }
 
 /**
- * Rolls an authored Security attempt. Security must use a genuine d20 rather
- * than treating all out-of-combat attempts as an automatic 20.
+ * Resolves an authored Security attempt.
  *
- * `d20 + Intelligence modifier + Security rank` against `OpenLockDC`.
+ * **Outside combat the check takes 20; it does not roll.** That is the rule the
+ * shipped game uses, and this engine used to model it — the upstream line was
+ * `let d20 = 20;//d20 rolls are auto 20's outside of combat`. A change in this
+ * fork replaced it with a genuine random roll, which turned every lock into a
+ * coin flip: reported from the headset as a dozen consecutive failures on each
+ * Low Security Door, where the odds of that are about 1 in 500.
+ *
+ * Taking 20 is also what makes the authored content cohere. T3-M4 has Security
+ * 6 and Intelligence 16, so it reaches 29: the Low Security Doors (DC 21) open
+ * every time, the combat training Metal Box (DC 33) needs a tunneler, and the
+ * High Security Cylinder (DC 36) needs the better one. With a random roll none
+ * of those thresholds mean anything.
+ *
+ * `20 + Intelligence modifier + Security rank` against `OpenLockDC`, or a real
+ * d20 in place of the 20 while in combat.
  *
  * Two things were wrong before. Security is governed by **Intelligence** in
  * KOTOR, not Wisdom; and the term was `wisdom / 2`, which is half the raw
@@ -76,7 +94,7 @@ export function resolveSecurityUnlock(
     return { attempted: false, unlocked: false };
   }
 
-  const roll = rollD20();
+  const roll = attempt.inCombat ? rollD20() : 20;
   if (!Number.isInteger(roll) || roll < 1 || roll > 20) {
     throw new RangeError('Security d20 roll must be an integer between 1 and 20');
   }
