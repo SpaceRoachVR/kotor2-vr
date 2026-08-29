@@ -12,9 +12,18 @@ const { spawn } = require('child_process');
 
 const ASSET_SERVER = path.join(__dirname, '..', 'asset-http', 'asset-server.js');
 
-function startAssetService() {
+/**
+ * @param {object} [options]
+ * @param {number} [options.port] port for the service. Defaults to the server's
+ *   own 8479. Pass one to run a second service alongside a running tool: the
+ *   port was previously fixed, so two harness runs could not coexist and the
+ *   second died with EADDRINUSE. That single constraint serialised every
+ *   emulator-driven session.
+ */
+function startAssetService(options = {}) {
+  const extraArgs = options.port ? ['--port', String(options.port)] : [];
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [ASSET_SERVER], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [ASSET_SERVER, ...extraArgs], { stdio: ['ignore', 'pipe', 'pipe'] });
     let buffered = '';
     const onData = (chunk) => {
       buffered += chunk.toString();
@@ -29,8 +38,9 @@ function startAssetService() {
     child.on('exit', (code) => {
       if (/EADDRINUSE/.test(buffered)) {
         reject(new Error(
-          'An asset service is already running on that port. Either stop it, or pass ' +
-          'its launch URL with --url "<url>" (the token cannot be guessed).'
+          'An asset service is already running on that port. Either stop it, pass its ' +
+          'launch URL with --url "<url>" (the token cannot be guessed), or start this ' +
+          'one on another port.'
         ));
         return;
       }

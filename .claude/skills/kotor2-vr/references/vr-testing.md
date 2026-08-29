@@ -114,3 +114,57 @@ npx jest --ci src/tests/<file>.test.ts
 its success banner regardless of exit code.** It once reported clean while
 esbuild rejected nine files a scripted edit had malformed. Jest and webpack are
 the real gates for that tree; do not trust a green tsc alone.
+
+## Breadth-first module sweep (`npm run vr:sweep`)
+
+Added 2026-08-29. Complements the playthrough driver rather than replacing it.
+
+The playthrough is depth-first: it must succeed at step N to reach step N+1, so
+one blocker shadows every defect behind it and defects arrive in encounter order.
+The sweep warps into each of the campaign's **82 modules** in turn, runs a fixed
+battery, records everything wrong, and moves on whether the module passed or not.
+Output is a whole-game defect inventory ranked by **how many modules each root
+cause breaks**, so fixes go in blast-radius order.
+
+    npm run vr:sweep                        # all 82, ~90 minutes
+    npm run vr:sweep -- --modules 101PER    # one module, ~35s after boot
+    npm run vr:sweep -- --limit 5           # smoke run
+    npm run vr:sweep -- --start 302NAR      # resume an interrupted sweep
+    npm run vr:sweep:test                   # 41 unit tests, no browser needed
+
+Evidence lands in `tools/vr-emulator/evidence/`: `module-sweep.jsonl` (one record
+per module, written incrementally so a crash mid-run costs nothing),
+`-summary.json` (ranking + coverage), `-defects.json` (`DefectRecord`s that pass
+`src/qa/DefectLedger.ts`).
+
+**What it settles:** area load and identity, model presence on rooms, creatures,
+doors and placeables, name and template resolution, item-property resolution
+across inventories and equipment, declared-vs-resolved conversations, N rendered
+frames, and console/page exceptions attributed to the module that caused them.
+
+**What it does not:** whether a quest is finishable, whether combat maths are
+right, whether a conversation dead-ends. Those still need the playthrough. And
+like everything here it says nothing about comfort or cadence.
+
+### Three traps it already walked into
+
+- **Readiness must be identity, not existence.** `loadingModule === false &&
+  module.area` is true *before* a load starts, because the outgoing module is
+  still resident. The first run passed that check in 1.7s and reported an area
+  with zero of everything as a blocker. Hold a reference to the outgoing module,
+  require a *different* one with `readyToProcessEvents === true`, settle, then
+  verify `filename` matches what was requested.
+- **`DLGObject` is not exported from the bundle**, and `FromResRef` is
+  synchronous. Probe what the engine itself resolved (`creature.conversation`
+  against the template's declared `Conversation` field) rather than trying to
+  force-load a `.dlg`.
+- **A benign probe will dominate a blast-radius ranking.** The engine's
+  `modules/NAME.mod` 404 fires for all 82 modules (ROADMAP 1.11). It is filtered
+  and counted separately — never silently dropped, or the filter becomes a place
+  real regressions go to hide.
+
+**A skipped probe is not a passed probe.** The battery reaches into engine
+internals that move; when an API is missing it records a `skipped` entry rather
+than inventing findings, and the run summary prints the skip count loudly. A
+sweep reporting zero findings *and* nonzero skips has not told you the game is
+healthy.

@@ -733,6 +733,91 @@ position through leg 2.
 - The playthrough driver's failure message truncates mid-sentence
   (`"no closed door offered a "`), which makes these logs harder to read.
 
+### 1.12 — Breadth-first module sweep ✅ built and first-run verified (2026-08-29)
+
+**The discovery loop was the bottleneck, not the fixing.** Every defect in
+Phase 1 was found depth-first, by a 40-70 minute playthrough that must succeed at
+step N to reach step N+1. That shape has three costs, and they compound: one
+blocker shadows every defect behind it, so nothing past the blocker can be known;
+reaching new ground means replaying ground that already passed; and defects arrive
+in encounter order, so a fault breaking forty modules is fixed at the same
+priority as one breaking a single door, because from inside one playthrough there
+is no way to tell them apart.
+
+Measured against the code, the imbalance is stark. Of the files touched by the
+last 40 commits, **3 were VR and 61 were engine** — the work has been finishing
+KotOR.js, not building a VR mod. And the campaign is **82 modules** (the 164
+`.rim` files in `modules/` are 82 base plus 82 `_s` companions; counting files
+overstates the game by three times). Two of those 82 have been walked.
+
+`npm run vr:sweep` inverts the loop. It warps into each module in turn, runs a
+fixed battery, records everything wrong, and moves on whether or not the module
+passed. One run yields a whole-game defect inventory ranked by **how many modules
+each root cause breaks**, so fixes go in blast-radius order.
+
+- **Files:** `tools/vr-emulator/module-sweep.js` (driver), `module-probe.js`
+  (the in-page battery), `module-list.js` (enumeration), `sweep-report.js`
+  (ranking, coverage, ledger emission). 38 unit tests in `module-sweep.test.js`
+  plus `src/tests/module-sweep-ledger.test.ts`, which proves emitted records pass
+  the real `createDefectRecord` validator rather than a restatement of its rules.
+- **Battery per module:** area load and identity, room/creature/door/placeable
+  model presence, name resolution, template presence, item-property resolution
+  across every inventory and equipment slot, declared-vs-resolved conversations,
+  N rendered frames, and a console/page-exception diff attributed to that module.
+- **Output:** `evidence/module-sweep.jsonl` (one record per module, written
+  incrementally so a crash 60 modules in costs nothing), `-summary.json`
+  (ranking + coverage), `-defects.json` (`DefectRecord`s).
+
+**Two things it found about itself on the first run, both now fixed and pinned by
+tests.** They are worth recording because both would have produced confident,
+entirely wrong data:
+
+- **Readiness was existence, not identity.** `loadingModule === false && module.area`
+  is already true *before* a load starts, because the outgoing module is still
+  resident. The first run passed that check in 1.7 s and reported an area with
+  zero rooms, zero creatures and zero of everything else as a blocker — it had
+  measured a module mid-teardown. The probe now holds a reference to the outgoing
+  module and requires a *different* one with `readyToProcessEvents === true`, then
+  settles, then verifies `filename` matches what was asked for.
+- **`DLGObject` is not exported from the bundle**, and `FromResRef` is
+  synchronous, not async. The dialogue probe assumed both and skipped itself on
+  every module. It now tests what the engine *itself* resolved — a creature whose
+  template declares a Conversation but whose `.conversation` is absent — which is
+  a better probe anyway, and needs no unexported API.
+
+**First verified run — 101PER and 001EBO, 128 s wall clock, both `ok`:**
+
+| | 101PER | 001EBO |
+|---|---|---|
+| load | 33 s | 25 s |
+| rooms / creatures / doors / placeables | 66 / 18 / 22 / 75 | 18 / 2 / 11 / 43 |
+| objects missing a model | **0** | **0** |
+| items inspected / faulted | 80 / **0** | 4 / **0** |
+| conversations declared / resolved | 17 / **17** | 1 / **1** |
+| probes skipped | **0** | **0** |
+
+Both areas are in materially better shape than the depth-first evidence implied.
+Two genuine findings across the pair: a `TypeError` in
+`NWScriptInstance.getInstrAtOffset` (reading `get` of undefined) on 101PER, and
+37 console errors there led by `Resource not found: ResRef: t_door01`.
+
+**Throughput: about 64 s per module, so all 82 in roughly 90 minutes** — the whole
+game inventoried in less time than one partial playthrough currently takes.
+
+**One benign class is filtered, and counted rather than discarded.** A retail
+install has no module-level `.mod` files, so the engine's `modules/NAME.mod`
+probe 404s for every module (the ROADMAP 1.11 class). Unfiltered it would top the
+blast-radius ranking at 82 of 82 modules and bury every real systemic fault
+beneath it. `benignErrors` is reported separately so the filter cannot quietly
+swallow a real regression in the same code path.
+
+- **Done when:** all 82 modules have been swept at least once and the ranked
+  root-cause list is the input to fix ordering. **Next:** run the full sweep.
+- **Not a replacement for the playthrough.** The sweep cannot tell you a quest is
+  unfinishable, that combat maths are wrong, or that a conversation dead-ends. It
+  answers a narrower and cheaper question — of everything the engine must load,
+  build and render for a module to be playable at all, what is broken?
+
 **Phase 1 exit:** Peragus completable in flatscreen. This is the baseline every VR
 change is measured against.
 
@@ -1232,5 +1317,7 @@ in-game credits/settings panel.
 - Never run `npm run dev` — it black-screens Electron. See the skill's workflow file.
 - One change per test run. The user tests each change individually and confounding two
   fixes wastes a playthrough.
+- Fix in blast-radius order, not encounter order. Before starting on a defect, check
+  `npm run vr:sweep` output for how many modules its root cause touches.
 - When a symptom is ambiguous, add a diagnostic that names the object and run again.
   Do not theorize from a log.

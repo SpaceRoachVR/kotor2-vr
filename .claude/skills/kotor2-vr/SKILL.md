@@ -29,7 +29,7 @@ Load the one that matches the task. Do not load all of them.
 | `references/engine-architecture.md` | Tracing a bug, adding engine behavior, implementing an opcode |
 | `references/data-formats.md` | Inspecting game files, checking what vanilla should do, resource loading |
 | `references/vr-design.md` | Writing any part of the VR layer |
-| `references/vr-testing.md` | Verifying VR behaviour, writing a probe, triaging a headset report |
+| `references/vr-testing.md` | Verifying VR behaviour, writing a probe, triaging a headset report, running the module sweep |
 | `references/project-map.md` | Finding a doc, a branch, a worktree, or a VR runtime file |
 | `references/game-knowledge.md` | Deciding whether a report is our bug or vanilla KOTOR II behaviour |
 
@@ -39,6 +39,11 @@ Load the one that matches the task. Do not load all of them.
 `publicPath`. Under Electron's `file://` that resolves to the drive root and the
 window is black with no error. Use `npm run webpack:dev-watch` plus `npm run start`.
 Full detail in `references/workflow.md`.
+
+**Fix in blast-radius order.** `npm run vr:sweep` inventories all 82 modules in
+about 90 minutes and ranks root causes by how many modules each breaks. Check its
+ranking before picking up a defect — the engine work is the bulk of what remains,
+and encounter order is a bad priority queue for it. See `references/vr-testing.md`.
 
 **Confirm through emulation before asking for a headset pass.** Allen's standing
 instruction: anything testable under `npm run vr:check` must be shown working

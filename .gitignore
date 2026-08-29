@@ -31,3 +31,7 @@ exports/
 tools/xr-probe/result.json
 tools/xr-probe/results.jsonl
 
+
+# Stray asset-service stdout logs from codex worktree sessions. These carry a
+# dead per-launch service token and are of no use to anyone.
+.codex-asset-*.stdout.log
