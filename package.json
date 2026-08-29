@@ -24,7 +24,8 @@
     "vr:check": "node tools/vr-emulator/run-checks.js",
     "vr:play": "node tools/vr-emulator/launch-headset.js",
     "vr:sweep": "node tools/vr-emulator/module-sweep.js",
-    "vr:sweep:test": "node --test tools/vr-emulator/module-sweep.test.js"
+    "vr:sweep:test": "node --test tools/vr-emulator/module-sweep.test.js",
+    "scan:secrets": "node tools/qa/scan-secrets.js"
   },
   "author": "KobaltBlu",
   "license": "GPL-3.0",

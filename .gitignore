@@ -35,3 +35,8 @@ tools/xr-probe/results.jsonl
 # Stray asset-service stdout logs from codex worktree sessions. These carry a
 # dead per-launch service token and are of no use to anyone.
 .codex-asset-*.stdout.log
+
+# Raw Chrome verbose logs. Multi-megabyte, and they capture the API key Google
+# compiles into chrome.dll, which trips GitHub secret scanning. Keep the written
+# acceptance notes beside them instead.
+evidence/**/chrome-*.log
