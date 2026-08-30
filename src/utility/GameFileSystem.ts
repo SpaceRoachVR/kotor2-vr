@@ -41,10 +41,19 @@ export class GameFileSystem {
   private static httpBackend: HttpGameFileSystemBackend | undefined;
   private static httpBackendUrl = '';
 
+  //A File is a snapshot, so re-reading one handle repeatedly does not need a new
+  //getFile() per call. Keyed on handle identity: getFileHandle() hands back a new
+  //object every time, so a fresh open() always gets a fresh snapshot and a file
+  //rewritten between opens is never served stale.
+  private static fileSnapshotCache = new WeakMap<FileSystemFileHandle, File>();
+
   private static normalizePath(filepath: string){
-    filepath = filepath.trim();
+    filepath = String(filepath ?? '').trim();
+    //Callers build paths with path.join on Windows, so separators arrive mixed.
+    //The web branch splits on '/' alone and would otherwise treat the whole
+    //thing as one filename.
+    filepath = filepath.replace(/\\/g, '/');
     filepath = filepath.replace(/^\/+/, '').replace(/\/+$/, '');
-    filepath = filepath.replace(/^\\+/, '').replace(/\\+$/, '');
     return filepath;
   }
 
@@ -84,16 +93,28 @@ export class GameFileSystem {
       const filename = dirs.pop();
       const dirHandle = await this.resolveFilePathDirectoryHandle(filepath);
       if(dirHandle){
-        const file = await dirHandle.getFileHandle(filename, {
-          create: false
-        });
-        if(file){
-          return file;
-        }else{
-          throw new Error('Failed to read file');
+        try{
+          const file = await dirHandle.getFileHandle(filename, {
+            create: false
+          });
+          if(file){
+            return file;
+          }
+        }catch(e){
+          //Fall through to a case-insensitive scan. The File System Access API
+          //matches names exactly, but the game's resrefs and the on-disk casing
+          //disagree constantly - Electron's fs is forgiving on Windows and hides
+          //this, so it only ever shows up in the browser build.
         }
+        const want = String(filename || '').toLowerCase();
+        for await (const entry of (dirHandle as any).values()){
+          if(entry.kind === 'file' && entry.name.toLowerCase() === want){
+            return await dirHandle.getFileHandle(entry.name, { create: false });
+          }
+        }
+        throw new Error('Failed to read file: ' + filepath);
       }else{
-        throw new Error('Failed to locate file directory');
+        throw new Error('Failed to locate file directory: ' + filepath);
       }
     }
   }
@@ -116,10 +137,18 @@ export class GameFileSystem {
       if(!(output instanceof Uint8Array)) throw new Error('No output buffer supplied!');
 
       try{
-        const file = await handle.getFile();
+        let file = GameFileSystem.fileSnapshotCache.get(handle);
+        if(!file){
+          file = await handle.getFile();
+          if(file){
+            GameFileSystem.fileSnapshotCache.set(handle, file);
+          }
+        }
         if(!file) throw new Error('Failed to read file from handle!');
 
-        let blob = await file.slice(position, position + length);
+        //Blob.slice is synchronous; awaiting it turned every archive read into an
+        //extra microtask for nothing.
+        let blob = file.slice(position, position + length);
         let arrayBuffer = await blob.arrayBuffer();
         output.set(new Uint8Array(arrayBuffer), offset);
       }catch(e: any){
@@ -154,7 +183,13 @@ export class GameFileSystem {
     if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
       return new Promise<Uint8Array>( (resolve, reject) => {
         fs.readFile(path.join(ApplicationProfile.directory, filepath), options, (err, buffer) => {
-          if(err) reject(undefined);
+          //Was `reject(undefined)` with no return: the caller got an undefined
+          //rejection reason, and execution fell through to construct a Uint8Array
+          //from an undefined buffer.
+          if(err){
+            reject(err);
+            return;
+          }
           resolve(new Uint8Array(buffer));
         })
       });
