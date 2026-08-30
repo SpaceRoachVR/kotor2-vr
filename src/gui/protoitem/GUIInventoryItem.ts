@@ -232,7 +232,7 @@ export class GUIInventoryItem extends GUIProtoItem {
     }
     this._iconLoadStarted = true;
     this._beginTextureLoad();
-    TextureLoader.Load(iconName).then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI(iconName).then((texture: OdysseyTexture) => {
       if (texture) {
         this.iconMaterial.map = texture;
         this.iconMaterial.needsUpdate = true;

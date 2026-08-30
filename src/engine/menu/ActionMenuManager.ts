@@ -9,6 +9,7 @@ import { ActionType } from "@/enums/actions/ActionType";
 import { SkillType } from "@/enums/nwscript/SkillType";
 import { ActionParameterType, ModuleObjectConstant, ModuleTriggerType } from "@/enums";
 import { TalentObject } from "@/talents/TalentObject";
+import { canAttemptSecurityUnlock, canBashObject, canPlaceMineOnObject } from "@/engine/interaction/ObjectLockRules";
 
 /**
  * ActionMenuManager class.
@@ -77,7 +78,12 @@ export class ActionMenuManager {
 
       if(ActionMenuManager.oTarget instanceof GameState.Module.ModuleArea.ModulePlaceable){
         if(ActionMenuManager.oTarget.isLocked()){
-          if(bHasSecuritySkill){
+          const securityUnlockAllowed = canAttemptSecurityUnlock({
+            locked: ActionMenuManager.oTarget.isLocked(),
+            lockable: ActionMenuManager.oTarget.lockable,
+            keyRequired: ActionMenuManager.oTarget.keyRequired,
+          });
+          if(securityUnlockAllowed && bHasSecuritySkill){
             const action = new GameState.ActionFactory.ActionUnlockObject();
             action.setOwner(ActionMenuManager.oPC as ModuleObject);
             action.setParameter(0, ActionParameterType.DWORD, this.oTarget);
@@ -92,7 +98,7 @@ export class ActionMenuManager {
             return item.baseItemId == 59
           });
 
-          if(securityTunnelers.length){
+          if(securityUnlockAllowed && securityTunnelers.length){
             const item = securityTunnelers[0];
             
             const action = new GameState.ActionFactory.ActionUnlockObject();
@@ -105,7 +111,7 @@ export class ActionMenuManager {
             }));
           }
           
-          if(!this.oTarget?.notBlastable){
+          if(canBashObject(ActionMenuManager.oTarget)){
             ActionMenuManager.ActionPanels.targetPanels[0].addAction(new GameState.ActionMenuManager.ActionMenuItem({
               action: {
                 type: ActionType.ActionPhysicalAttacks,
@@ -116,7 +122,7 @@ export class ActionMenuManager {
             }));
           }
 
-          if(!ActionMenuManager.oTarget?.notBlastable){
+          if(canPlaceMineOnObject(ActionMenuManager.oTarget)){
             const mineList = ActionMenuManager.oPC.getInventory().filter((item) => {
               return item.baseItemId == 58
             });
@@ -139,7 +145,12 @@ export class ActionMenuManager {
         }
       }else if(ActionMenuManager.oTarget instanceof GameState.Module.ModuleArea.ModuleDoor){
         if(ActionMenuManager.oTarget.isLocked()){
-          if(bHasSecuritySkill){
+          const securityUnlockAllowed = canAttemptSecurityUnlock({
+            locked: ActionMenuManager.oTarget.isLocked(),
+            lockable: ActionMenuManager.oTarget.lockable,
+            keyRequired: ActionMenuManager.oTarget.keyRequired,
+          });
+          if(securityUnlockAllowed && bHasSecuritySkill){
             const action = new GameState.ActionFactory.ActionUnlockObject();
             action.setOwner(ActionMenuManager.oPC as ModuleObject);
             action.setParameter(0, ActionParameterType.DWORD, this.oTarget);
@@ -155,7 +166,7 @@ export class ActionMenuManager {
             return item.baseItemId == 59
           });
 
-          if(securityTunnelers.length){
+          if(securityUnlockAllowed && securityTunnelers.length){
             const item = securityTunnelers[0];
             
             const action = new GameState.ActionFactory.ActionUnlockObject();
@@ -168,7 +179,7 @@ export class ActionMenuManager {
             }));
           }
           
-          if(!this.oTarget?.notBlastable){
+          if(canBashObject(ActionMenuManager.oTarget)){
             ActionMenuManager.ActionPanels.targetPanels[0].addAction(new GameState.ActionMenuManager.ActionMenuItem({
               action: {
                 type: ActionType.ActionPhysicalAttacks,
@@ -183,7 +194,7 @@ export class ActionMenuManager {
             return item.baseItemId == 58
           });
 
-          if(!this.oTarget?.notBlastable){
+          if(canPlaceMineOnObject(ActionMenuManager.oTarget)){
             for(let i = 0, len = mineList.length; i < len; i++){
               const item = mineList[i];
               const setMine = new GameState.ActionFactory.ActionSetMine();

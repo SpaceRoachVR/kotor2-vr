@@ -155,9 +155,9 @@ export class MenuJournal extends GameMenu {
   }
 
   UpdateLabels(){
-    this.BTN_SORT.setText(this.GetSortModeBTNLabel());
-    this.BTN_SWAPTEXT.setText(this.GetQuestModeBTNLabel());
-    this.LBL_TITLE.setText(this.GetMenuTitle());
+    this.BTN_SORT?.setText(this.GetSortModeBTNLabel());
+    this.BTN_SWAPTEXT?.setText(this.GetQuestModeBTNLabel());
+    this.LBL_TITLE?.setText(this.GetMenuTitle());
   }
 
   show() {
@@ -173,8 +173,20 @@ export class MenuJournal extends GameMenu {
     this.LB_ITEMS.setItems(this.getFilteredEntries());
   }
 
+  /**
+   * The active/completed toggle above the list had no effect: this returned
+   * every entry regardless of `this.mode`, so both tabs showed the same thing
+   * and finished quests never left the active list.
+   *
+   * A quest is complete when the category entry its current state points at is
+   * flagged `End`. An entry whose state failed to resolve counts as active:
+   * showing a quest in the wrong tab is recoverable, hiding it entirely is not.
+   */
   getFilteredEntries(){
-    const entries = GameState.JournalManager.Entries.slice();
+    const entries = GameState.JournalManager.Entries.filter( (entry: JournalEntry) => {
+      const completed = !!(entry.entry && entry.entry.end);
+      return this.mode == JournalQuestMode.COMPLETED ? completed : !completed;
+    });
 
     return entries.sort( (a, b) => {
       if(this.sort == JournalSort.NAME){

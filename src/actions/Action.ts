@@ -432,7 +432,7 @@ export class Action {
         break;
       case ActionParameterType.DWORD:
         if (BitWise.InstanceOfObject(value, ModuleObjectType.ModuleObject)) {
-          param.value = value.id ? value.id : ModuleObjectConstant.OBJECT_INVALID;
+          param.value = GameState.ModuleObjectManager.EnsureObjectReference(value);
         } else {
           param.value = !isNaN(parseInt(value)) ? parseInt(value) : 0;
         }

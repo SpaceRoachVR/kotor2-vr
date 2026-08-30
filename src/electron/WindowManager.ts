@@ -4,11 +4,13 @@ import { LauncherWindow } from "./LauncherWindow";
 import * as path from "path";
 //exec & execFile are used for launching the original games from the launcher
 import { execFile, exec } from "child_process";
+import { WindowsXRRuntimePreflight, XRRuntimePreflightRequest } from "./XRRuntimePreflight";
 
 export class WindowManager {
 
   static launcherWindow: LauncherWindow;
   static windows: ApplicationWindow[] = [];
+  private static readonly xrRuntimePreflight = new WindowsXRRuntimePreflight();
 
   static createLauncherWindow(){
     if(!WindowManager.launcherWindow){
@@ -54,6 +56,9 @@ export class WindowManager {
   }
 
   static initIPC(ipcMain: Electron.IpcMain) {
+    ipcMain.handle('xr-runtime-preflight', (_event, request: XRRuntimePreflightRequest) =>
+      WindowManager.xrRuntimePreflight.inspect(request)
+    );
     ipcMain.on('config-changed', (event, data) => {
       for(let i = 0, len = WindowManager.windows.length; i < len; i++){
         WindowManager.windows[i].send('config-changed', data);
@@ -99,9 +104,10 @@ export class WindowManager {
       });
     });
     
-    ipcMain.handle('open-file-dialog', (event, data: Electron.OpenDialogOptions) => {
+    // The preload bridge forwards its rest args, so the payload is [options].
+    ipcMain.handle('open-file-dialog', (event, args: [Electron.OpenDialogOptions?]) => {
       return new Promise( (resolve, reject) => {
-        dialog.showOpenDialog(data).then(result => {
+        dialog.showOpenDialog(args?.[0] ?? {}).then(result => {
           resolve(result);
         }).catch(err => {
           reject(err)
@@ -109,10 +115,10 @@ export class WindowManager {
       });
     });
     
-    ipcMain.handle('save-file-dialog', (event, data: Electron.SaveDialogOptions) => {
+    ipcMain.handle('save-file-dialog', (event, args: [Electron.SaveDialogOptions?]) => {
       return new Promise( (resolve, reject) => {
-        console.log('save-file-dialog2', event, data[0]);
-        dialog.showSaveDialog(data[0]).then(result => {
+        console.log('save-file-dialog2', event, args?.[0]);
+        dialog.showSaveDialog(args?.[0] ?? {}).then(result => {
           resolve(result);
         }).catch(err => {
           reject(err)

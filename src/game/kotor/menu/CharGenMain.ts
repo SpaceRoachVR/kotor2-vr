@@ -138,7 +138,7 @@ export class CharGenMain extends GameMenu {
     this.PORTRAIT_LBL.show();
     if (this.PORTRAIT_LBL.getFillTextureName() != portraitResRef) {
       this.PORTRAIT_LBL.setFillTextureName(portraitResRef);
-      TextureLoader.tpcLoader.fetch(portraitResRef).then((texture: OdysseyTexture) => {
+      TextureLoader.LoadGUI(portraitResRef).then((texture: OdysseyTexture) => {
         this.PORTRAIT_LBL.setFillTexture(texture);
       });
     }

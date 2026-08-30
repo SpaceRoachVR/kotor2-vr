@@ -49,6 +49,10 @@ export class CharGenQuickPanel extends K1_CharGenQuickPanel {
 
       this.BTN_STEPNAME3.addEventListener('click', (e) => {
         e.stopPropagation();
+        // Quick creation never opens the attributes or skills screens, so
+        // without this the character keeps the class template's base skills and
+        // spends none of its points. See CharGenManager.applyRecommendedBuild.
+        GameState.CharGenManager.applyRecommendedBuild();
         GameState.CharGenManager.selectedCreature.equipment.ARMOR = undefined;
         GameState.CharGenManager.selectedCreature.template.getFieldByLabel('Equip_ItemList').childStructs = [];
         GameState.GlobalVariableManager.Init();

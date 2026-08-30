@@ -1,0 +1,99 @@
+
+> kotor-js@2.1.0 dev
+> cross-env NODE_ENV=development webpack serve
+
+NODE_ENV development
+isProd false
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m6 warnings[39m[22m
+
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m30 warnings[39m[22m
+
+webpack compiled with [1m[33m21 warnings[39m[22m
+Entrypoint [1mKotOR[39m[22m 19.4 MiB = [1m[32mKotOR.js[39m[22m 19.4 MiB [1m[32mKotOR.4bbace07b99ad781ac93.hot-update.js[39m[22m 19.2 KiB
+Entrypoint [1mserver[39m[22m 394 KiB = [1m[32mserver.js[39m[22m 393 KiB [1m[32mserver.4bbace07b99ad781ac93.hot-update.js[39m[22m 847 bytes
+Entrypoint [1mbink-worker[39m[22m 816 KiB = [1m[32mbink-worker.js[39m[22m 815 KiB [1m[32mbink-worker.4bbace07b99ad781ac93.hot-update.js[39m[22m 852 bytes
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m6 warnings[39m[22m
+
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m30 warnings[39m[22m
+
+webpack compiled with [1m[33m21 warnings[39m[22m
+Entrypoint [1mKotOR[39m[22m 21.2 MiB = [1m[32mKotOR.js[39m[22m 19.3 MiB [1m[32mKotOR.7c693f6b4ca82170a281.hot-update.js[39m[22m 1.8 MiB
+Entrypoint [1mserver[39m[22m 394 KiB = [1m[32mserver.js[39m[22m 393 KiB [1m[32mserver.7c693f6b4ca82170a281.hot-update.js[39m[22m 847 bytes
+Entrypoint [1mbink-worker[39m[22m 816 KiB = [1m[32mbink-worker.js[39m[22m 815 KiB [1m[32mbink-worker.7c693f6b4ca82170a281.hot-update.js[39m[22m 852 bytes
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m6 warnings[39m[22m
+
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m30 warnings[39m[22m
+
+webpack compiled with [1m[33m21 warnings[39m[22m
+Entrypoint [1mKotOR[39m[22m 19.4 MiB = [1m[32mKotOR.js[39m[22m 19.4 MiB [1m[32mKotOR.6b95b8cc528e212ba348.hot-update.js[39m[22m 9.11 KiB
+Entrypoint [1mserver[39m[22m 394 KiB = [1m[32mserver.js[39m[22m 393 KiB [1m[32mserver.6b95b8cc528e212ba348.hot-update.js[39m[22m 847 bytes
+Entrypoint [1mbink-worker[39m[22m 816 KiB = [1m[32mbink-worker.js[39m[22m 815 KiB [1m[32mbink-worker.6b95b8cc528e212ba348.hot-update.js[39m[22m 852 bytes
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m6 warnings[39m[22m
+
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m30 warnings[39m[22m
+
+webpack compiled with [1m[33m21 warnings[39m[22m
+Entrypoint [1mKotOR[39m[22m 19.4 MiB = [1m[32mKotOR.js[39m[22m 19.4 MiB [1m[32mKotOR.1bda91a882c64c2afee4.hot-update.js[39m[22m 29.1 KiB
+Entrypoint [1mserver[39m[22m 394 KiB = [1m[32mserver.js[39m[22m 393 KiB [1m[32mserver.1bda91a882c64c2afee4.hot-update.js[39m[22m 847 bytes
+Entrypoint [1mbink-worker[39m[22m 816 KiB = [1m[32mbink-worker.js[39m[22m 815 KiB [1m[32mbink-worker.1bda91a882c64c2afee4.hot-update.js[39m[22m 852 bytes
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m6 warnings[39m[22m
+
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m30 warnings[39m[22m
+
+webpack compiled with [1m[33m21 warnings[39m[22m
+Entrypoint [1mKotOR[39m[22m 19.4 MiB = [1m[32mKotOR.js[39m[22m 19.4 MiB [1m[32mKotOR.dce15c9bdcb95165221c.hot-update.js[39m[22m 27.9 KiB
+Entrypoint [1mserver[39m[22m 394 KiB = [1m[32mserver.js[39m[22m 393 KiB [1m[32mserver.dce15c9bdcb95165221c.hot-update.js[39m[22m 847 bytes
+Entrypoint [1mbink-worker[39m[22m 816 KiB = [1m[32mbink-worker.js[39m[22m 815 KiB [1m[32mbink-worker.dce15c9bdcb95165221c.hot-update.js[39m[22m 852 bytes
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m6 warnings[39m[22m
+
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m30 warnings[39m[22m
+
+webpack compiled with [1m[33m21 warnings[39m[22m
+Entrypoint [1mKotOR[39m[22m 19.4 MiB = [1m[32mKotOR.js[39m[22m 19.4 MiB [1m[32mKotOR.07b6fb6a737fc1b720e1.hot-update.js[39m[22m 29.1 KiB
+Entrypoint [1mserver[39m[22m 394 KiB = [1m[32mserver.js[39m[22m 393 KiB [1m[32mserver.07b6fb6a737fc1b720e1.hot-update.js[39m[22m 847 bytes
+Entrypoint [1mbink-worker[39m[22m 816 KiB = [1m[32mbink-worker.js[39m[22m 815 KiB [1m[32mbink-worker.07b6fb6a737fc1b720e1.hot-update.js[39m[22m 852 bytes
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m6 warnings[39m[22m
+
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m30 warnings[39m[22m
+
+webpack compiled with [1m[33m21 warnings[39m[22m
+Entrypoint [1mKotOR[39m[22m 19.4 MiB = [1m[32mKotOR.js[39m[22m 19.4 MiB [1m[32mKotOR.f37b06d5a5a4466b353d.hot-update.js[39m[22m 28.6 KiB
+Entrypoint [1mserver[39m[22m 394 KiB = [1m[32mserver.js[39m[22m 393 KiB [1m[32mserver.f37b06d5a5a4466b353d.hot-update.js[39m[22m 847 bytes
+Entrypoint [1mbink-worker[39m[22m 816 KiB = [1m[32mbink-worker.js[39m[22m 815 KiB [1m[32mbink-worker.f37b06d5a5a4466b353d.hot-update.js[39m[22m 852 bytes
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m6 warnings[39m[22m
+
+webpack compiled [1m[32msuccessfully[39m[22m
+
+webpack compiled with [1m[33m30 warnings[39m[22m
+
+webpack compiled with [1m[33m21 warnings[39m[22m

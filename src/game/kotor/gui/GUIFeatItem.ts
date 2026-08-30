@@ -6,6 +6,7 @@ import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 import type { GFFStruct } from "@/resource/GFFStruct";
 import { GameState } from "@/GameState";
 import { TextureLoader } from "@/loaders";
+import { resolveGUIFeatActor } from "@/game/kotor/gui/resolveGUIFeatActor";
 
 /**
  * GUIFeatItem class.
@@ -17,6 +18,8 @@ import { TextureLoader } from "@/loaders";
  * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
  */
 export class GUIFeatItem extends GUIProtoItem {
+
+  private static missingActorWarningLogged = false;
 
   constructor(menu: GameMenu, control: GFFStruct, parent: GUIControl = null as any, scale = false){
     super(menu, control, parent, scale);
@@ -34,14 +37,33 @@ export class GUIFeatItem extends GUIProtoItem {
       super.createControl();
       //Create the actual control elements below
 
+      const actor = resolveGUIFeatActor(this.menu, GameState.getCurrentPlayer());
+      if (!actor) {
+        if (!GUIFeatItem.missingActorWarningLogged) {
+          GUIFeatItem.missingActorWarningLogged = true;
+          console.warn('GUIFeatItem: no feat actor is available for this menu');
+        }
+        return this.widget;
+      }
+
       let featList = this.node;
       let spacing = 5;
       for(let i = 0; i < featList.length; i++){
         let feat = featList[i];
 
-        let hasPrereqfeat1 = (feat.prereqfeat1 == '****' || GameState.getCurrentPlayer().getHasFeat(feat.prereqfeat1));
-        let hasPrereqfeat2 = (feat.prereqfeat2 == '****' || GameState.getCurrentPlayer().getHasFeat(feat.prereqfeat2));
-        let hasFeat = GameState.getCurrentPlayer().getHasFeat(feat.__index);
+        // feats.2da carries padding rows, so a filtered list can contain holes.
+        // One undefined entry threw here and aborted the whole list build,
+        // leaving the Abilities screen empty — reported from a headset session
+        // opening Abilities from the VR action wheel.
+        if(!feat) continue;
+
+        const prereqFeat1 = Number(feat.prereqFeat1);
+        const prereqFeat2 = Number(feat.prereqFeat2);
+        const featId = Number(feat.id);
+        if (!Number.isInteger(featId)) continue;
+        let hasPrereqfeat1 = (!Number.isInteger(prereqFeat1) || prereqFeat1 < 0 || actor.getHasFeat(prereqFeat1));
+        let hasPrereqfeat2 = (!Number.isInteger(prereqFeat2) || prereqFeat2 < 0 || actor.getHasFeat(prereqFeat2));
+        let hasFeat = actor.getHasFeat(featId);
 
         console.log(feat.constant, hasPrereqfeat1, hasPrereqfeat2);
 

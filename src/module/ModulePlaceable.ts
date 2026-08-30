@@ -32,6 +32,9 @@ import { ModulePlaceableObjectSound } from "@/enums/module/ModulePlaceableObject
 import { AudioPriorityGroup } from "@/enums/audio/AudioPriorityGroup";
 import { SWBodyBag } from "@/engine/rules/SWBodyBag";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { transferPlaceableInventory } from "@/module/PlaceableInventoryTransfer";
+import { resolveSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
+import { Dice } from "@/utility/Dice";
 
 interface AnimStateInfo {
   lastAnimState: ModulePlaceableAnimState;
@@ -85,6 +88,12 @@ export class ModulePlaceable extends ModuleObject {
   y: number;
   z: number;
   defaultAnimPlayed: boolean;
+  //Static placeables skip per-frame animation ticking below as a perf optimization (most
+  //never animate), but that also meant their initial pose was never applied even once -
+  //they'd sit in raw bind/T-pose forever. This counts down a few ticks after spawn so the
+  //authored pose (e.g. a corpse prop's held animation) actually gets baked in once, then
+  //ticking stops again. See update().
+  staticPoseSettleTicksRemaining: number = 5;
   useable: any;
   isBodyBag: any;
   lightState: any;
@@ -182,8 +191,14 @@ export class ModulePlaceable extends ModuleObject {
   }
 
   update(delta = 0){
-    
+
     super.update(delta);
+
+    //super.update() can destroy this object mid-call via its deferred-destroy timer,
+    //which clears actionQueue/model - bail before touching either.
+    if(this.willDestroy || this.destroyed){
+      return;
+    }
 
     if(this.collisionManager.walkmesh && this.model){
       this.collisionManager.walkmesh.matrixWorld.copy(this.model.matrix);
@@ -198,8 +213,11 @@ export class ModulePlaceable extends ModuleObject {
         }
       }
 
-      if(this.model.visible && !this.static){
+      if(this.model.visible && (!this.static || this.staticPoseSettleTicksRemaining > 0)){
         this.model.update(delta);
+        if(this.static && this.staticPoseSettleTicksRemaining > 0){
+          this.staticPoseSettleTicksRemaining--;
+        }
       }
 
       this.audioEmitter.setPosition(this.position.x, this.position.y, this.position.z);
@@ -260,7 +278,8 @@ export class ModulePlaceable extends ModuleObject {
   }
 
   getName(){
-    return this.hasInventory && !this.getInventory().length ? this.name + ' (Empty)' : this.name;
+    const name = this.compileDisplayName(this.name);
+    return this.hasInventory && !this.getInventory().length ? name + ' (Empty)' : name;
   }
 
   getX(){
@@ -406,13 +425,7 @@ export class ModulePlaceable extends ModuleObject {
   }
 
   retrieveInventory(){
-    while(this.inventory.length){
-      const item = this.inventory.pop();
-      const stackSize = item.getStackSize();
-      for(let i = 0; i < stackSize; i++){
-        GameState.InventoryManager.addItem(item);
-      }
-    }
+    transferPlaceableInventory(this.inventory, (item) => GameState.InventoryManager.addItem(item));
     const instance = this.scripts[ModuleObjectScript.PlaceableOnInvDisturbed];
     if(!instance){ return; }
     instance.lastDisturbed = GameState.PartyManager.party[0];
@@ -465,6 +478,7 @@ export class ModulePlaceable extends ModuleObject {
     this.attemptUnlockWithKey(object);
 
     if(this.isLocked()){
+      this.scripts[ModuleObjectScript.PlaceableOnFailToOpen]?.run(this);
       this.playObjectSound(ModulePlaceableObjectSound.LOCKED);
     }else{
       if(!this.isOpen() && (this.state == ModulePlaceableState.CLOSED || this.state == ModulePlaceableState.DEFAULT)){
@@ -494,7 +508,9 @@ export class ModulePlaceable extends ModuleObject {
         }
       }
 
-      object.playSoundSet(SSFType.UNLOCK_FAIL);
+      if(this.isLocked()){
+        object.playSoundSet(SSFType.UNLOCK_FAIL);
+      }
     }
   }
 
@@ -516,27 +532,29 @@ export class ModulePlaceable extends ModuleObject {
     instance.run(this);
   }
 
-  attemptUnlock(object: ModuleObject){
+  attemptUnlock(object: ModuleObject, signalFailure = true){
     if(!BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
       return false;
     }
 
-    const nSecuritySkill = object.getSkillLevel(SkillType.SECURITY);
-    if(this.isLocked() && !this.keyRequired && nSecuritySkill >= 1){
-      let d20 = 20;//d20 rolls are auto 20's outside of combat
-      let skillCheck = (((object.getWIS()/2) + nSecuritySkill) + d20) - this.openLockDC;
-      if(skillCheck >= 1 && nSecuritySkill >= 1){
-        this.unlock(object);
-        if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
-          object.playSoundSet(SSFType.UNLOCK_SUCCESS);
-        }
-      }else{
-        if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
-          object.playSoundSet(SSFType.UNLOCK_FAIL);
-        }
-      }
+    const result = resolveSecurityUnlock({
+      locked: this.isLocked(),
+      lockable: this.lockable,
+      keyRequired: this.keyRequired,
+      securitySkill: object.getSkillLevel(SkillType.SECURITY),
+      intelligence: object.getINT(),
+      inCombat: !!(object as any).combatData?.combatState,
+      openLockDC: this.openLockDC,
+    }, () => Dice.rollD20(1));
+    if (!result.attempted) return false;
+    if (!result.unlocked) {
+      object.playSoundSet(SSFType.UNLOCK_FAIL);
+      if (signalFailure) this.use(object);
+      return false;
     }
 
+    this.unlock(object);
+    object.playSoundSet(SSFType.UNLOCK_SUCCESS);
     this.use(object);
     return true;
   }
@@ -617,6 +635,7 @@ export class ModulePlaceable extends ModuleObject {
       ModuleObjectScript.PlaceableOnDeath,
       ModuleObjectScript.PlaceableOnDisarm,
       ModuleObjectScript.PlaceableOnEndDialogue,
+      ModuleObjectScript.PlaceableOnFailToOpen,
       ModuleObjectScript.PlaceableOnHeartbeat,
       ModuleObjectScript.PlaceableOnInvDisturbed,
       ModuleObjectScript.PlaceableOnLock,
@@ -668,7 +687,7 @@ export class ModulePlaceable extends ModuleObject {
     }
   }
 
-  async loadWalkmesh(resRef = ''): Promise<OdysseyWalkMesh> {
+  async loadWalkmesh(resRef = ''): Promise<OdysseyWalkMesh | undefined> {
     try{
       const buffer = await ResourceLoader.loadResource(ResourceTypes['pwk'], resRef);
       const walkmesh = new OdysseyWalkMesh(new BinaryReader(buffer));
@@ -679,13 +698,10 @@ export class ModulePlaceable extends ModuleObject {
 
       return walkmesh;
     }catch(e){
-      console.error(e);
-      const walkmesh = new OdysseyWalkMesh();
-      walkmesh.name = resRef;
-      walkmesh.moduleObject = this;
-      this.collisionManager.setWalkmesh(walkmesh);
-
-      return this.collisionManager.walkmesh;
+      // PWKs are optional. Several authored placeable models, including the
+      // prologue's p_kreiastunt body, intentionally have no collision mesh.
+      // Do not manufacture an empty walkmesh or report a missing retail asset.
+      return undefined;
     }
   }
 
@@ -794,6 +810,9 @@ export class ModulePlaceable extends ModuleObject {
 
     if(this.template.RootNode.hasField('Locked'))
       this.locked = this.template.getFieldByLabel('Locked').getValue();
+
+    if(this.template.RootNode.hasField('Lockable'))
+      this.lockable = !!this.template.getFieldByLabel('Lockable').getValue();
 
     if(this.template.RootNode.hasField('Min1HP'))
       this.min1HP = this.template.getFieldByLabel('Min1HP').getValue();
@@ -981,6 +1000,7 @@ export class ModulePlaceable extends ModuleObject {
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, ModuleObjectScript.PlaceableOnDeath) ).setValue(this.scripts[ModuleObjectScript.PlaceableOnDeath]?.name || '');
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, ModuleObjectScript.PlaceableOnDisarm) ).setValue(this.scripts[ModuleObjectScript.PlaceableOnDisarm]?.name || '');
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, ModuleObjectScript.PlaceableOnEndDialogue) ).setValue(this.scripts[ModuleObjectScript.PlaceableOnEndDialogue]?.name || '');
+    gff.RootNode.addField( new GFFField(GFFDataType.RESREF, ModuleObjectScript.PlaceableOnFailToOpen) ).setValue(this.scripts[ModuleObjectScript.PlaceableOnFailToOpen]?.name || '');
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, ModuleObjectScript.PlaceableOnHeartbeat) ).setValue(this.scripts[ModuleObjectScript.PlaceableOnHeartbeat]?.name || '');
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, ModuleObjectScript.PlaceableOnInvDisturbed) ).setValue(this.scripts[ModuleObjectScript.PlaceableOnInvDisturbed]?.name || '');
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, ModuleObjectScript.PlaceableOnLock) ).setValue(this.scripts[ModuleObjectScript.PlaceableOnLock]?.name || '');
@@ -995,6 +1015,11 @@ export class ModulePlaceable extends ModuleObject {
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Open') ).setValue(this.isOpen() ? 1 : 0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenLockDC') ).setValue(this.openLockDC);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PartyInteract') ).setValue(this.partyInteract);
+    // NotBlastable is loaded from the template but was never written back, so
+    // every door and placeable came back from a save as blastable. That
+    // silently unsealed every Blast Door in Peragus and, once the mine route
+    // stopped being gated on Plot, offered a mine on all of them.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotBlastable') ).setValue(this.notBlastable ? 1 : 0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Plot') ).setValue(this.plot);
     gff.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraitId') ).setValue(this.portraitId);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Ref') ).setValue(this.ref);
@@ -1114,6 +1139,7 @@ export class ModulePlaceable extends ModuleObject {
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenLockDC') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PaletteId') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PartyInteract') );
+    template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotBlastable') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Plot') );
     template.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraidId') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Ref') );

@@ -21,6 +21,7 @@ export * from "@/interface";
 
 export * from "@/LoadingScreen";
 export * from "@/engine/SaveGame";
+export * from "@/engine/Planetary";
 export * from "@/utility/ConfigClient";
 
 export * from "@/odyssey";
@@ -76,3 +77,18 @@ export * from "@/effects/GameEffectFactory";
 export * from "@/events/GameEventFactory";
 
 
+
+// VR runtime state. Exported so the emulated-headset harness in
+// `tools/vr-emulator/` can read rig/session state from the page; the VR layer
+// is otherwise reachable only through GameState's hooks.
+export * from "@/vr/VRSpike";
+
+// Interaction rules. Exported so the emulated-headset harness can assert the
+// approach-suppression policy (ROADMAP 3.10) directly rather than inferring it
+// from avatar motion, which would be timing-dependent.
+export * from "@/engine/interaction/ActionApproachPolicy";
+
+// XR input bindings. Exported so the emulated-headset harness can assert which
+// semantic actions are bound to physical buttons without reaching into the
+// bundle internals.
+export * from "@/vr/runtime/XRInputRouter";

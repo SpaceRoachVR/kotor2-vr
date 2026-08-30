@@ -2,6 +2,7 @@ import { GameEffect } from "@/effects/GameEffect";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
+import { calculateDamageAmount } from "@/effects/calculateDamageAmount";
 
 /**
  * EffectDamage class.
@@ -20,22 +21,10 @@ export class EffectDamage extends GameEffect {
     this.setNumIntegers(21);
     this.intList.fill(-1, 0, 16);
 
-    //intList[0] : -1 or Bludgeoning Damage Amount
-    //intList[1] : -1 or Piercing Damage Amount
-    //intList[2] : -1 or Slashing Damage Amount
-    //intList[3] : -1 or Universal Damage Amount
-    //intList[4] : -1 or Acid Damage Amount
-    //intList[5] : -1 or Cold Damage Amount
-    //intList[6] : -1 or Lightside Damage Amount
-    //intList[7] : -1 or Electrical Damage Amount
-    //intList[8] : -1 or Fire Damage Amount
-    //intList[9] : -1 or Darkside Damage Amount
-    //intList[10] : -1 or Sonic Damage Amount
-    //intList[11] : -1 or Ion Damage Amount
-    //intList[12] : -1 or Energy Damage Amount
-    //intList[13] : -1 or Poison Damage Amount
-    //intList[14] : -1 or Base Damage Amount
-    //intList[15] : -1 or Physical Damage Amount    
+    //intList[0-14] : -1 or a per-DamageType damage amount, indexed by the DamageType enum
+    //(BLUDGEONING=0 .. ENERGY=12, BASE=13, PHYSICAL=14 - see enums/combat/DamageType.ts).
+    //A single hit can populate several of these at once (e.g. weapon base damage plus a
+    //BASE-indexed power-attack/spec bonus), so the total damage is their sum, not one slot.
     //intList[16] : 1000
     //intList[17] : Damage Type
     //intList[18] : Damage Power
@@ -56,7 +45,7 @@ export class EffectDamage extends GameEffect {
   }
 
   getDamageAmount(){
-    return Math.min(Math.max(this.getInt(14), 1), 10000);
+    return calculateDamageAmount(this.intList);
   }
 
   getDamageType(){

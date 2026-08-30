@@ -13,6 +13,7 @@ import { AutoPauseState } from "@/enums/engine/AutoPauseState";
 import { BitWise } from "@/utility/BitWise";
 import { KeyMapAction, ModuleObjectType } from "@/enums";
 import type { ModuleObject } from "@/module/ModuleObject";
+import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
 
 const TLK_TOOLTIP_FULL_HEALTH = 42498;
 
@@ -450,7 +451,7 @@ export class InGameOverlay extends GameMenu {
       );
 
       for(const texture of preloadTextures){
-        const tex = await TextureLoader.Load(texture);
+        const tex = await TextureLoader.LoadGUI(texture);
         preloadTexturesMap.set(texture, tex);
       }
 
@@ -549,7 +550,7 @@ export class InGameOverlay extends GameMenu {
 
   SetMapTexture(sTexture = '') {
     try {
-      TextureLoader.Load(sTexture).then((texture: OdysseyTexture) => {
+      TextureLoader.LoadGUI(sTexture).then((texture: OdysseyTexture) => {
         this.miniMap.setTexture(texture);
       });
     } catch (e: any) {
@@ -557,15 +558,43 @@ export class InGameOverlay extends GameMenu {
     }
   }
 
+  /**
+   * TEMPORARY (VR-PLAYTEST-FIX-PLAN.md phase G): the whole target UI — name
+   * plate, health bar, the three action columns — hinges on this predicate,
+   * and every input is flatscreen mouse state that VR has to drive itself.
+   * When it returns false nothing is drawn and nothing is logged, which is
+   * indistinguishable from "no object nearby". Report each distinct outcome
+   * once so a headset pass names the failing condition.
+   */
+  private static _vrTargetUiTrace = '';
+
+  _traceCanShowTargetUI(result: boolean) {
+    try {
+      const cursor = GameState.CursorManager;
+      const trace = `result=${result}` +
+        ` container=${!!this.manager.MenuContainer.bVisible}` +
+        ` reticle2Visible=${!!cursor.reticle2?.visible}` +
+        ` selected=${!!cursor.selected}` +
+        ` selectedObject=${cursor.selectedObject ? cursor.selectedObject.getName?.() ?? 'yes' : 'none'}`;
+      if (trace === InGameOverlay._vrTargetUiTrace) return;
+      InGameOverlay._vrTargetUiTrace = trace;
+      console.info(`[VR targetUI] ${trace}`);
+    } catch (e) {
+      // Diagnostics must never break the overlay.
+    }
+  }
+
   _canShowTargetUI() {
     if (BitWise.InstanceOfObject(GameState.CursorManager.selectedObject, ModuleObjectType.ModuleCreature) && GameState.CursorManager.selectedObject.isDead())
       return false;
-    return (
+    const result = (
       !this.manager.MenuContainer.bVisible && 
       GameState.CursorManager.reticle2.visible && 
       BitWise.InstanceOfObject(GameState.CursorManager.selectedObject, ModuleObjectType.ModuleObject) &&
       !BitWise.InstanceOfObject(GameState.CursorManager.selectedObject, ModuleObjectType.ModuleRoom)
     );
+    this._traceCanShowTargetUI(result);
+    return result;
   }
 
   UpdateTargetUIIcon(index = 0) {
@@ -588,7 +617,7 @@ export class InGameOverlay extends GameMenu {
     if (guiControl.getFillTextureName() != action.icon) {
       guiControl.setFillTextureName(action.icon);
       guiControl.setHighlightFillTexture(action.icon);
-      TextureLoader.tpcLoader.fetch(action.icon).then((texture: OdysseyTexture) => {
+      TextureLoader.LoadGUI(action.icon).then((texture: OdysseyTexture) => {
         guiControl.setMaterialTexture(guiControl.border.fill.material, texture);
         guiControl.setMaterialTexture(guiControl.highlight.fill.material, texture);
         guiControl.border.fill.material.transparent = true;
@@ -605,7 +634,7 @@ export class InGameOverlay extends GameMenu {
       if (action && guiControl.getFillTextureName() != action.icon) {
         guiControl.setFillTextureName(action.icon);
         guiControl.setHighlightFillTexture(action.icon);
-        TextureLoader.tpcLoader.fetch(action.icon).then((texture: OdysseyTexture) => {
+        TextureLoader.LoadGUI(action.icon).then((texture: OdysseyTexture) => {
           guiControl.setMaterialTexture(guiControl.border.fill.material, texture);
           guiControl.setMaterialTexture(guiControl.highlight.fill.material, texture);
           guiControl.border.fill.material.transparent = true;
@@ -699,8 +728,14 @@ export class InGameOverlay extends GameMenu {
         this.namePlateArrowMaterial.map = preloadTexturesMap.get('friendlyarrow');
       }
     }
-    if (this.manager.InGameOverlay.LBL_NAME.text.text != GameState.CursorManager.selectedObject.getName()) {
-      this.LBL_NAME.setText(GameState.CursorManager.selectedObject.getName(), 25);
+    // Retail module data carries designer annotations inside object names —
+    // `Blast Door{HK-50}`, `Body{Invis container}`. They are authoring notes,
+    // never meant to reach a player, and they read especially badly on a
+    // world-space VR label. Strip for display only; diagnostics keep the raw
+    // name, where the annotations are genuinely useful.
+    const selectedDisplayName = resolveDisplayName(GameState.CursorManager.selectedObject.getName());
+    if (this.manager.InGameOverlay.LBL_NAME.text.text != selectedDisplayName) {
+      this.LBL_NAME.setText(selectedDisplayName, 25);
     }
     let health = 100 * Math.min(Math.max(GameState.CursorManager.selectedObject.getHP() / GameState.CursorManager.selectedObject.getMaxHP(), 0), 1);
     if (health > 100)
@@ -968,7 +1003,7 @@ export class InGameOverlay extends GameMenu {
       const portraitResRef = partyMember.getPortraitResRef();
       if (pmBG.getFillTextureName() != portraitResRef) {
         pmBG.setFillTextureName(portraitResRef);
-        TextureLoader.tpcLoader.fetch(portraitResRef).then((texture: OdysseyTexture) => {
+        TextureLoader.LoadGUI(portraitResRef).then((texture: OdysseyTexture) => {
           pmBG.setFillTexture(texture);
         });
       }
@@ -989,7 +1024,7 @@ export class InGameOverlay extends GameMenu {
       if (action0 != undefined) {
         if (this.LBL_QUEUE0.getFillTextureName() != action0.iconResRef) {
           this.LBL_QUEUE0.setFillTextureName(action0.iconResRef);
-          TextureLoader.tpcLoader.fetch(action0.iconResRef).then((texture: OdysseyTexture) => {
+          TextureLoader.LoadGUI(action0.iconResRef).then((texture: OdysseyTexture) => {
             this.LBL_QUEUE0.setFillTexture(texture);
             this.LBL_QUEUE0.border.fill.material.transparent = true;
           });
@@ -1001,7 +1036,7 @@ export class InGameOverlay extends GameMenu {
       if (action1 != undefined) {
         if (this.LBL_QUEUE1.getFillTextureName() != action1.iconResRef) {
           this.LBL_QUEUE1.setFillTextureName(action1.iconResRef);
-          TextureLoader.tpcLoader.fetch(action1.iconResRef).then((texture: OdysseyTexture) => {
+          TextureLoader.LoadGUI(action1.iconResRef).then((texture: OdysseyTexture) => {
             this.LBL_QUEUE1.setFillTexture(texture);
             this.LBL_QUEUE1.border.fill.material.transparent = true;
           });
@@ -1013,7 +1048,7 @@ export class InGameOverlay extends GameMenu {
       if (action2 != undefined) {
         if (this.LBL_QUEUE2.getFillTextureName() != action2.iconResRef) {
           this.LBL_QUEUE2.setFillTextureName(action2.iconResRef);
-          TextureLoader.tpcLoader.fetch(action2.iconResRef).then((texture: OdysseyTexture) => {
+          TextureLoader.LoadGUI(action2.iconResRef).then((texture: OdysseyTexture) => {
             this.LBL_QUEUE2.setFillTexture(texture);
             this.LBL_QUEUE2.border.fill.material.transparent = true;
           });
@@ -1025,7 +1060,7 @@ export class InGameOverlay extends GameMenu {
       if (action3 != undefined) {
         if (this.LBL_QUEUE3.getFillTextureName() != action3.iconResRef) {
           this.LBL_QUEUE3.setFillTextureName(action3.iconResRef);
-          TextureLoader.tpcLoader.fetch(action3.iconResRef).then((texture: OdysseyTexture) => {
+          TextureLoader.LoadGUI(action3.iconResRef).then((texture: OdysseyTexture) => {
             this.LBL_QUEUE3.setFillTexture(texture);
             this.LBL_QUEUE3.border.fill.material.transparent = true;
           });

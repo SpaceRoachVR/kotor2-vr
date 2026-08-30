@@ -11,6 +11,7 @@ import { DLGObject } from "@/resource/DLGObject";
 import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionDialogObject class.
@@ -47,8 +48,27 @@ export class ActionDialogObject extends Action {
 
     if(!this.validate_conversation_resref){
       this.validate_conversation_resref = true;
+      //Record what the script actually asked for versus what the object would
+      //supply, so a wrong-conversation bug can be traced to the request rather
+      //than guessed at from the dialogue that ends up playing.
+      console.log(
+        `ActionDialogObject: requested='${conversation_resref || '(none)'}'`,
+        `ownerDefault='${(this.owner as any)?.conversation?.resref ?? '(none)'}'`,
+        `owner='${this.owner?.getTag ? this.owner.getTag() : '?'}'`,
+        `target='${this.target?.getTag ? this.target.getTag() : '?'}'`
+      );
       if(conversation_resref){
         this.conversation = DLGObject.FromResRef(conversation_resref);
+        if(!this.conversation){
+          //FromResRef only consults the module resource cache, so an uncached
+          //dialogue resolves to undefined and the calls below silently fall
+          //back to the object's default conversation. That plays an entirely
+          //different scene with no indication anything went wrong.
+          console.warn(
+            `ActionDialogObject: could not resolve conversation '${conversation_resref}' - falling back to the default conversation of`,
+            this.owner?.getTag ? this.owner.getTag() : this.owner
+          );
+        }
       }
     }
 
@@ -64,7 +84,10 @@ export class ActionDialogObject extends Action {
     }
 
     let distance = Utility.Distance2D(this.owner.position, this.target.position);
-    if(distance > 4.5 && !ignoreStartRange){
+    // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if(distance > 4.5 && !ignoreStartRange &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
       // this.owner.openSpot = undefined;
       let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();
       actionMoveToTarget.setParameter(0, ActionParameterType.FLOAT, this.target.position.x);
@@ -86,7 +109,14 @@ export class ActionDialogObject extends Action {
 
       this.owner.heardStrings = [];
       this.target.heardStrings = [];
-      const onDialog = BitWise.InstanceOfObject(this.target, ModuleObjectType.ModuleCreature) ? this.target.scripts[ModuleObjectScript.CreatureOnDialog] : undefined;
+      //Only route through the target's OnDialog script when the target is not
+      //the player. That script exists so a creature the player approaches can
+      //select its own conversation. When an NPC initiates on the player it
+      //must not run: the player's OnDialog is the party-member handler, which
+      //calls BeginConversation with no resref and therefore starts the
+      //*player's* own dialogue - silently replacing the NPC's scene.
+      const targetIsPlayer = !!this.target?.isPlayer;
+      const onDialog = (!targetIsPlayer && BitWise.InstanceOfObject(this.target, ModuleObjectType.ModuleCreature)) ? this.target.scripts[ModuleObjectScript.CreatureOnDialog] : undefined;
       if(onDialog){
         this.target.onDialog(this.owner, -1, this.conversation);
       }else{

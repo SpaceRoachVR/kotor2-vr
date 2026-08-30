@@ -188,7 +188,7 @@ export class TalentSpell extends TalentObject {
       oCaster.resetExcitedDuration();
     }
 
-    const combatAction = new CombatRoundAction();
+    const combatAction = new CombatRoundAction(oCaster);
     combatAction.actionType = CombatActionType.CAST_SPELL;
     combatAction.target = oTarget;
     combatAction.setSpell(this);

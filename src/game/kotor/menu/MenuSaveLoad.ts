@@ -39,7 +39,7 @@ export class MenuSaveLoad extends GameMenu {
   // 1592: "Are you sure you want to delete the save game?"
   // 1591: "Are you sure you want to overwrite the save game?"
   private static readonly STRREF_CONFIRM_DELETE = 1592;
-  private static readonly STRREF_CONFIRM_OVERWRITE = 1591;
+  protected static readonly STRREF_CONFIRM_OVERWRITE = 1591;
 
   constructor(){
     super();

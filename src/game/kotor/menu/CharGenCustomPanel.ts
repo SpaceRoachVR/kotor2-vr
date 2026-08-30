@@ -43,10 +43,31 @@ export class CharGenCustomPanel extends GameMenu {
     this.voidFill = false;
   }
 
-  async menuControlInitializer(skipInit: boolean = false) {
-    await super.menuControlInitializer();
-    if(skipInit) return;
-    return new Promise<void>((resolve, reject) => {
+  /**
+   * Wires the six step buttons plus Back and Cancel.
+   *
+   * Lives in its own method because TSL's subclass calls
+   * `super.menuControlInitializer(true)`, which skips this class's initializer
+   * body — so every button on the TSL custom panel was dead while the K1 ones
+   * worked. Reported from the headset: the panel opened with eight buttons and
+   * none of them responded.
+   */
+  /**
+   * The module a finished character is dropped into.
+   *
+   * K1 opens on the Endar Spire Command Module; TSL opens on the Ebon Hawk and
+   * ships no `end_m01aa` at all — its 246 modules do not include that name. The
+   * TSL subclass inherits this whole panel, so hard-coding K1's module here
+   * meant Play asked for a file that does not exist and the game sat on the
+   * loading screen forever. `CharGenQuickPanel` avoided it only because TSL
+   * overrides that panel's step 3 outright.
+   */
+  protected getStartModule(): string {
+    return 'end_m01aa';
+  }
+
+  protected wireCustomPanel(){
+
       this.BTN_BACK.addEventListener('click', (e) => {
         e.stopPropagation();
         this.manager.CharGenMain.close();
@@ -61,7 +82,12 @@ export class CharGenCustomPanel extends GameMenu {
 
       this.BTN_STEPNAME2.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.manager.CharGenAbilities.setCreature(GameState.getCurrentPlayer());
+        // The creature under construction is CharGenManager.selectedCreature.
+        // This passed getCurrentPlayer(), which is undefined during character
+        // creation because no player exists in the world yet -- so every
+        // +/- handler, all of which are guarded on `this.creature`, silently
+        // did nothing while still playing their click sound.
+        this.manager.CharGenAbilities.setCreature(GameState.CharGenManager.selectedCreature);
         this.manager.CharGenAbilities.open();
       });
 
@@ -72,6 +98,10 @@ export class CharGenCustomPanel extends GameMenu {
 
       this.BTN_STEPNAME4.addEventListener('click', (e) => {
         e.stopPropagation();
+        // Feats never received a creature at all, so addGrantedFeats() and
+        // buildFeatList() -- both guarded on `this.creature` -- did nothing and
+        // the screen listed no feats and granted none.
+        this.manager.CharGenFeats.setCreature(GameState.CharGenManager.selectedCreature);
         this.manager.CharGenFeats.open();
       });
 
@@ -82,6 +112,11 @@ export class CharGenCustomPanel extends GameMenu {
 
       this.BTN_STEPNAME6.addEventListener('click', (e) => {
         e.stopPropagation();
+        const progression = GameState.CharGenManager.validateSelectedCreatureProgression();
+        if (progression.valid === false) {
+          console.error(`CharGenCustomPanel: cannot start with invalid progression (${progression.reason})`);
+          return;
+        }
         GameState.CharGenManager.selectedCreature.equipment.ARMOR = undefined;
         GameState.CharGenManager.selectedCreature.template.getFieldByLabel('Equip_ItemList').childStructs = [];
         GameState.GlobalVariableManager.Init();
@@ -89,10 +124,26 @@ export class CharGenCustomPanel extends GameMenu {
         GameState.PartyManager.ActualPlayerTemplate = GameState.PartyManager.PlayerTemplate;
         GameState.PartyManager.AddPortraitToOrder(GameState.CharGenManager.selectedCreature.getPortraitResRef());
         CurrentGame.InitGameInProgressFolder(true).then( () => {
-          GameState.LoadModule('end_m01aa');
+          GameState.LoadModule(this.getStartModule());
         });
       });
 
+      // Cancel was declared in both games and wired in neither, so the panel
+      // shipped a permanently dead button. It abandons character creation the
+      // same way Back steps out of it.
+      this.BTN_CANCEL?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.manager.CharGenMain.close();
+        this.manager.CharGenMain.childMenu = this.manager.CharGenQuickOrCustom;
+        this.manager.CharGenMain.open();
+      });
+  }
+
+  async menuControlInitializer(skipInit: boolean = false) {
+    await super.menuControlInitializer();
+    if(skipInit) return;
+    return new Promise<void>((resolve, reject) => {
+      this.wireCustomPanel();
       this.tGuiPanel.offset.x = -180;
       this.tGuiPanel.offset.y = 85;
       this.recalculatePosition();

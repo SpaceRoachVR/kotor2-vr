@@ -76,7 +76,15 @@ export class ComputedPath {
       const neighbors = currentNode.connections;
       for(let i = 0, il = neighbors.length; i < il; i++) {
         let neighbor = neighbors[i];
-        if(neighbor.closed || !neighbor.hasLOS(currentNode, this.owner)) {
+        //The origin and destination are synthetic points that traverseToPoint
+        //injects and deliberately anchors to the nearest authored path point.
+        //Gating those two hops on line of sight throws the anchor away again,
+        //so any actor - or target - standing out of sight of the graph made
+        //the whole search fail and the caller fell back to a straight line.
+        //A creature stood behind a corner in Peragus is the normal case, not
+        //an exception.
+        const isInjectedAnchor = neighbor === this.destination || currentNode === this.origin;
+        if(neighbor.closed || (!isInjectedAnchor && !neighbor.hasLOS(currentNode, this.owner))) {
           continue;
         }
         let gScore = currentNode.g + neighbor.cost;
@@ -180,7 +188,11 @@ export class ComputedPath {
 
     let connectionIndexStart = (pointCount * 2);
 
-    if(!bufferSize){
+    //An empty path gives connectionCount = -1, making bufferSize negative. That is
+    //truthy, so a bare !bufferSize check falls through to new Array(negative) and
+    //throws RangeError. pop() empties the path on the final point, so this is hit
+    //every time a creature finishes walking a route.
+    if(bufferSize <= 0){
       this.helperMesh.visible = false;
       this.helperMesh.removeFromParent();
       return;
@@ -357,9 +369,23 @@ export class ComputedPath {
 
     const safeDistance = this.owner?.getHitDistance();
 
-    this.points = curve.getPoints( divisions ).map( (v) => {
+    const smoothed = curve.getPoints( divisions ).map( (v) => {
       return PathPoint.FromVector3(this.owner ? this.owner.area.getNearestWalkablePoint(v, safeDistance) : v);
     });
+
+    //getNearestWalkablePoint can answer with the SAME point for every sample
+    //when the smoothed curve leaves the walkmesh - the whole route then
+    //collapses onto one position. A caller following it walks nowhere while
+    //reporting that it arrived at each waypoint in turn, which is what made
+    //the Ebon Hawk Security Console unreachable from six metres away with a
+    //route of eleven identical points. Drop repeats, and keep the searched
+    //route rather than a degenerate smoothing of it.
+    const distinct = smoothed.filter((point, index) =>
+      index === 0 || point.vector.distanceToSquared(smoothed[index - 1].vector) > 1e-6);
+    if(distinct.length < 2){
+      return;
+    }
+    this.points = distinct;
   }
 
   static FromPointsList(points: PathPoint[] = []): ComputedPath {

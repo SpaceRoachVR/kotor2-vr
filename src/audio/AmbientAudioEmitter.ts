@@ -79,7 +79,9 @@ export class AmbientAudioEmitter extends EventListener {
     }
 
     if(this.node || this.playing){
-      this.node.onended = undefined;
+      if(this.node){
+        this.node.onended = undefined;
+      }
       this.stop();
     }
 
@@ -91,20 +93,32 @@ export class AmbientAudioEmitter extends EventListener {
 
     this.onendedFired = false;
     this.loaded = false;
-    this.node = this.engine.audioCtx.createBufferSource();
-    this.node.buffer = await this.engine.audioCtx.decodeAudioData(this.data.slice(0));
-    this.node.loop = loop;
-    this.node.start(0, 0);
-    this.node.connect(this.gainNode);
+    const node = this.engine.audioCtx.createBufferSource();
+    this.node = node;
+    node.buffer = await this.engine.audioCtx.decodeAudioData(this.data.slice(0));
+
+    //stop() and the previous node's onended handler both null this.node, and
+    //either can run while the decode above is awaiting. If that happened this
+    //playback has been superseded, so drop it rather than writing to a node
+    //that has already been discarded.
+    if(this.node !== node || !this.gainNode || !this.destination){
+      return;
+    }
+
+    node.loop = loop;
+    node.start(0, 0);
+    node.connect(this.gainNode);
     this.gainNode.connect(this.destination);
     this.gainNode.gain.value = this.volume;
     this.playing = true;
     this.loaded = true;
-    this.node.onended = () => {
+    node.onended = () => {
       this.onendedFired = true;
       this.playing = false;
       this.loaded = false;
-      this.node = null;
+      if(this.node === node){
+        this.node = null;
+      }
       this.processEventListener('ended');
     };
     this.processEventListener('play');

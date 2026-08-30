@@ -10,6 +10,8 @@ import type { ModuleObject } from "@/module/ModuleObject";
 import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
+import { canExecuteMinePlacement } from "@/engine/interaction/ObjectLockRules";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionSetMine class.
@@ -44,10 +46,24 @@ export class ActionSetMine extends Action {
     this.oItem = this.getParameter<ModuleItem>(0);
     this.target = this.getParameter<ModuleObject>(1);
 
+    if(!this.target){
+      console.warn('ActionSetMine: target could not be resolved, aborting.');
+      return ActionStatus.FAILED;
+    }
+
+    // The explosives rule, not the Bash rule: a Plot door may still be mined.
+    if (!canExecuteMinePlacement(this.target)) {
+      console.warn('ActionSetMine: target does not permit mine placement, aborting.');
+      return ActionStatus.FAILED;
+    }
+
     if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
       const distance = Utility.Distance2D(this.owner.position, this.target.position);
             
-      if(distance > 2 && !this.target.box.intersectsBox(this.owner.box)){
+      // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if(distance > 2 && !this.target.box.intersectsBox(this.owner.box) &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
         const actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();
         actionMoveToTarget.setParameter(0, ActionParameterType.FLOAT, this.target.position.x);
         actionMoveToTarget.setParameter(1, ActionParameterType.FLOAT, this.target.position.y);
@@ -75,7 +91,31 @@ export class ActionSetMine extends Action {
         return ActionStatus.IN_PROGRESS;
       }
 
-      if(this.oItem && !this.usedItem){
+      if(!this.usedItem){
+        //An id that resolves to nothing at all used to skip this whole block and
+        //fall through to COMPLETE, so the action reported success having placed
+        //no trap and consumed no charge. Report it instead.
+        if(!this.oItem){
+          console.warn('ActionSetMine: parameter 0 resolved to no object, aborting.');
+          this.usedItem = true;
+          return ActionStatus.FAILED;
+        }
+
+        //parameter 0 is stored as a DWORD id and resolved back through
+        //ModuleObjectManager. If the id no longer maps to the ModuleItem it was set
+        //from, we get some other object here - one without an item property list.
+        if(!Array.isArray((this.oItem as any).properties)){
+          console.warn(
+            'ActionSetMine: parameter 0 did not resolve to a ModuleItem.',
+            'resolved=', this.oItem,
+            'id=', (this.oItem as any)?.id,
+            'objectType=', (this.oItem as any)?.objectType,
+            'tag=', (this.oItem as any)?.getTag ? (this.oItem as any).getTag() : '?'
+          );
+          this.usedItem = true;
+          return ActionStatus.FAILED;
+        }
+
         for(let i = 0, len = this.oItem.properties.length; i < len; i++){
           let property = this.oItem.properties[i];
           // if(!property.isUseable()){ continue; }

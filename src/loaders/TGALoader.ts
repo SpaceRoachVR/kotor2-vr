@@ -5,6 +5,7 @@ import { TXI } from "@/resource/TXI";
 import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 import type { TextureLoader } from "@/loaders/TextureLoader";
 import { GameFileSystem } from "@/utility/GameFileSystem";
+import { isTextureResrefUsable, normalizeTextureResref } from "@/loaders/TextureResolution";
 
 /**
  * TGALoader class.
@@ -25,37 +26,40 @@ export class TGALoader {
 
 	static TextureLoader: typeof TextureLoader;
 
-	async fetch( resRef: string ): Promise<OdysseyTexture> {
+	decode(buffer: Uint8Array, resRef: string, txiBuffer?: Uint8Array): OdysseyTexture {
+		const normalizedResRef = normalizeTextureResref(resRef);
+		if (!isTextureResrefUsable(normalizedResRef)) {
+			throw new TypeError(`Invalid texture resref '${normalizedResRef || '<empty>'}'`);
+		}
+		if (!(buffer instanceof Uint8Array) || buffer.length === 0) {
+			throw new TypeError(`TGA '${normalizedResRef}' requires a non-empty buffer`);
+		}
 		const texture = new OdysseyTexture();
-		
+		texture.image = this.parse(buffer, normalizedResRef);
+		texture.needsUpdate = true;
+		texture.name = normalizedResRef;
+		texture.bumpMapType = 'BUMP';
+		texture.generateMipmaps = true;
+		texture.txi = txiBuffer?.length ? new TXI(txiBuffer) : new TXI('');
+		return texture;
+	}
+
+	async fetch( resRef: string ): Promise<OdysseyTexture> {
+		resRef = normalizeTextureResref(resRef);
+		if (!isTextureResrefUsable(resRef)) {
+			return undefined;
+		}
 		try{
 			const buffer = await ResourceLoader.loadResource(ResourceTypes.tga, resRef);
 			if(!buffer || buffer.length == 0){
 				return undefined
 			}
 
-			texture.image = this.parse( buffer, resRef );
-			texture.needsUpdate = true;
-			texture.name = resRef;
-			texture.bumpMapType = 'BUMP';
-			texture.generateMipmaps = true;
-
-			texture.txi = new TXI('');
-
-			//Check for TXI info
+			let txiBuffer: Uint8Array | undefined;
 			try{
-				const txiBuffer = await ResourceLoader.loadResource(ResourceTypes.txi, resRef);
-
-				if(typeof txiBuffer !== 'undefined' && txiBuffer.length > 0){
-					texture.txi = new TXI(txiBuffer);
-					return texture;
-				}
-
-				return texture;
-			}catch(e){
-				// console.error(e);
-				return texture;
-			}
+				txiBuffer = await ResourceLoader.loadResource(ResourceTypes.txi, resRef);
+			}catch(e) { /* TXI sidecars are optional. */ }
+			return this.decode(buffer, resRef, txiBuffer);
 		}catch(e){
 			// console.error(e);
 			return undefined;
@@ -63,30 +67,21 @@ export class TGALoader {
 	}
 
 	async fetchOverride ( name: string ): Promise<OdysseyTexture> {
-		const dir = path.join('Override');
-		const texture = new OdysseyTexture();
-	
+		name = normalizeTextureResref(name);
+		if (!isTextureResrefUsable(name)) {
+			return undefined;
+		}
+		const tgaPath = ResourceLoader.getOverrideResourcePath(ResourceTypes.tga, name);
+		if (!tgaPath) {
+			return undefined;
+		}
 		try{
-			const buffer = await GameFileSystem.readFile(path.join(dir, name)+'.tga');
-
-			texture.image = this.parse( buffer, name );
-			texture.needsUpdate = true;
-			texture.name = name;
-			texture.bumpMapType = 'BUMP';
-			texture.generateMipmaps = true;
-			texture.txi = new TXI('');
-
-			const txiBuffer = await GameFileSystem.readFile(path.join(dir, name)+'.txi');
-
-			const tpcCheck = await TGALoader.TextureLoader.tpcLoader.fetch(name);
-
-			if(tpcCheck){
-				texture.txi = tpcCheck.txi;
-				return texture;
-			}else{
-				texture.txi = new TXI('');
-				return texture;
-			}
+			const buffer = await GameFileSystem.readFile(tgaPath);
+			const txiPath = ResourceLoader.getOverrideResourcePath(ResourceTypes.txi, name);
+			const txiBuffer = txiPath
+				? await GameFileSystem.readFile(txiPath).catch((): undefined => undefined)
+				: undefined;
+			return this.decode(buffer, name, txiBuffer);
 		}catch(e){
 			// console.error(e);
 			throw e;
@@ -94,41 +89,15 @@ export class TGALoader {
 	}
 	
 	async fetchLocal( resRef: string ) {
-		const texture = new OdysseyTexture();
-	
+		if (!isTextureResrefUsable(normalizeTextureResref(resRef))) {
+			return undefined;
+		}
 		try{
 			const buffer = await GameFileSystem.readFile(resRef);
-			texture.image = this.parse( buffer, resRef );
-			texture.needsUpdate = true;
-			texture.name = resRef;
-			texture.bumpMapType = 'BUMP';
-			texture.generateMipmaps = true;
-	
-			//fs.readFile(path.join(dir, name)+'.txi', (err, txiBuffer) => {
-	
-				//if(err){
-			
-				try{
-					const tpcCheck = await TGALoader.TextureLoader.tpcLoader.fetch(resRef);
-	
-					/*if(tpcCheck){
-						texture.txi = tpcCheck.txi;
-						onLoad( texture );
-					}else{*/
-						texture.txi = new TXI('');
-					//}
-				}catch(e){
-
-				}
-
-				/*}else{
-					texture.txi = new TXI(txiBuffer);
-					if(typeof onLoad == 'function')
-						onLoad( texture );
-				}*/
-	
-			//});
-			return texture;
+			const parsedPath = path.parse(resRef);
+			const txiPath = path.join(parsedPath.dir, `${parsedPath.name}.txi`);
+			const txiBuffer = await GameFileSystem.readFile(txiPath).catch((): undefined => undefined);
+			return this.decode(buffer, parsedPath.name, txiBuffer);
 		}catch(e){
 			throw e;
 		}

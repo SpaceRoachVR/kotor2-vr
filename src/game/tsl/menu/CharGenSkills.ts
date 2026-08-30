@@ -69,6 +69,9 @@ export class CharGenSkills extends K1_CharGenSkills {
     await super.menuControlInitializer(true);
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
+      // super was called with skipInit, so nothing in the base class ran.
+      this.wireSkillControls();
+      this.wireSkillAdjustControls();
       resolve();
     });
   }

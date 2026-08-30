@@ -322,6 +322,10 @@ export class NWScriptInstance {
   }
 
   getInstrAtOffset( offset: number ){
+    //dispose() clears this map, and a script that failed to parse never had one.
+    //Returning undefined lets runScript() break out of its loop the same way it
+    //does at the end of a script, instead of throwing mid-execution.
+    if(!this.instructions){ return undefined; }
     return this.instructions.get(offset);
   }
 

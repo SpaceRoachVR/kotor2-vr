@@ -9,6 +9,7 @@ import { MapMode } from "@/enums/engine/MapMode";
 import { Mouse } from "@/controls";
 import type { ModuleWaypoint } from "@/module";
 import { CExoLocString } from "@/resource/CExoLocString";
+import type { LegacyPanelRenderPass } from "@/vr/runtime/VRPanelHost";
 
 /**
  * MenuMap class.
@@ -37,6 +38,10 @@ export class MenuMap extends GameMenu {
   onTransitScript: NWScriptInstance;
   transitScript: string;
   miniMap: LBL_MapView;
+  private legacyPanelDelta = 0;
+  private readonly legacyPanelRenderPass: LegacyPanelRenderPass = {
+    render: (renderer) => this.miniMap?.render(this.legacyPanelDelta, renderer),
+  };
 
   constructor(){
     super();
@@ -111,13 +116,20 @@ export class MenuMap extends GameMenu {
         Mouse.positionUI.x + (this.LBL_Map.extent.width/2)  + (this.LBL_Map.widget.position.x * -1),
         Mouse.positionUI.y + (this.LBL_Map.extent.height/2) + (this.LBL_Map.widget.position.y * -1),
       )
-      this.miniMap.render(delta);
+      this.legacyPanelDelta = delta;
+      if (!GameState.renderer?.xr?.isPresenting) {
+        this.miniMap.render(delta);
+      }
     }
+  }
+
+  getLegacyPanelRenderPass(): LegacyPanelRenderPass | null {
+    return this.miniMap ? this.legacyPanelRenderPass : null;
   }
 
   SetMapTexture(sTexture = '') {
     try {
-      TextureLoader.Load(sTexture).then((texture: OdysseyTexture) => {
+      TextureLoader.LoadGUI(sTexture).then((texture: OdysseyTexture) => {
         this.miniMap.setTexture(texture);
       });
     } catch (e: any) {
@@ -133,12 +145,18 @@ export class MenuMap extends GameMenu {
 
     this.LBL_MapNote.setText('');
     this.miniMap.mapNoteSelected = this.miniMap.areaMap.getRevealedMapNotes()[0];
-    if(this.miniMap.mapNoteSelected){
+    if(this.miniMap.mapNoteSelected?.mapNote){
       this.LBL_MapNote.setText(this.miniMap.mapNoteSelected.mapNote.getValue());
     }
 
-    this.BTN_PRTYSLCT.disableSelection = (GameState.module.area.unescapable);
-    this.BTN_RETURN.disableSelection = (GameState.module.area.unescapable);
+    // TSL's map GUI has no BTN_PRTYSLCT, and `show()` is shared by both games
+    // through inheritance, so touching it unconditionally threw the moment the
+    // map was opened in TSL — reported from a headset session opening Map from
+    // the VR action wheel. Guarded rather than overridden, because the same
+    // hazard applies to any control one game's GUI omits.
+    const unescapable = GameState.module.area.unescapable;
+    if(this.BTN_PRTYSLCT) this.BTN_PRTYSLCT.disableSelection = unescapable;
+    if(this.BTN_RETURN) this.BTN_RETURN.disableSelection = unescapable;
   }
 
   triggerControllerBumperLPress() {

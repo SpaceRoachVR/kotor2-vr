@@ -30,7 +30,7 @@ export class LegalScreenManager {
     this.material = new THREE.MeshBasicMaterial({color: 0xFFFFFF, transparent: true, opacity: 1});
     this.plane = new THREE.Mesh(this.geometry, this.material);
     this.scene.add(this.plane);
-    TextureLoader.Load('Legal').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('Legal').then((texture: OdysseyTexture) => {
       this.texture = texture;
       this.material.map = texture;
       this.width = texture.image.width;
@@ -63,6 +63,6 @@ export class LegalScreenManager {
   static Dispose(){
     this.geometry.dispose();
     this.material.dispose();
-    this.texture.dispose();
+    TextureLoader.releaseGUITexture(this.texture);
   }
 }

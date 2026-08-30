@@ -16,6 +16,8 @@ import { SkillType } from "@/enums/nwscript/SkillType";
 import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 import { SignalEventType } from "@/enums/events/SignalEventType";
+import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionUnlockObject class.
@@ -31,6 +33,7 @@ export class ActionUnlockObject extends Action {
   shouted: boolean;
   usedItem: boolean;
   oItem: ModuleItem;
+  failureSignalled: boolean = false;
 
   constructor( actionId: number = -1, groupId: number = -1 ){
     super(actionId, groupId);
@@ -53,6 +56,20 @@ export class ActionUnlockObject extends Action {
     if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleDoor) || BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModulePlaceable)){
       return ActionStatus.FAILED;
     }
+
+    const lockTarget = this.target as ModuleObject & {
+      isLocked(): boolean;
+      lockable: boolean;
+      keyRequired: boolean;
+    };
+    if(!canAttemptSecurityUnlock({
+      locked: lockTarget.isLocked(),
+      lockable: lockTarget.lockable,
+      keyRequired: lockTarget.keyRequired,
+    })){
+      this.signalFailure();
+      return ActionStatus.FAILED;
+    }
     
     if(!this.shouted){
       this.shouted = true;
@@ -60,7 +77,10 @@ export class ActionUnlockObject extends Action {
     }
 
     let distance = Utility.Distance2D(this.owner.position, this.target.position);
-    if(distance > 1.5){
+    // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if(distance > 1.5 &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
         
       // this.owner.openSpot = undefined;
       let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();
@@ -119,15 +139,12 @@ export class ActionUnlockObject extends Action {
       this.timer -= delta;
 
       if(this.timer <= 0){
-        const unlocked = (this.target as any).attemptUnlock(this.owner);
+        // The queued action owns failure signalling below. Direct NWScript
+        // calls retain the target's own failure route, but routing both here
+        // would execute OnFailToOpen twice.
+        const unlocked = (this.target as any).attemptUnlock(this.owner, false);
         if(!unlocked){
-          const event = new GameState.GameEventFactory.EventSignalEvent();
-          event.setCaller(this.getOwner());
-          event.setObject(this.target);
-          event.setDay(GameState.module.timeManager.pauseDay);
-          event.setTime(GameState.module.timeManager.pauseTime);
-          event.eventType = SignalEventType.OnFailToOpen;
-          GameState.module.addEvent(event);
+          this.signalFailure();
         }
         return ActionStatus.COMPLETE;
       }
@@ -149,6 +166,18 @@ export class ActionUnlockObject extends Action {
     }
 
     return ActionStatus.FAILED;
+  }
+
+  private signalFailure(): void {
+    if (this.failureSignalled) return;
+    this.failureSignalled = true;
+    const event = new GameState.GameEventFactory.EventSignalEvent();
+    event.setCaller(this.getOwner());
+    event.setObject(this.target);
+    event.setDay(GameState.module.timeManager.pauseDay);
+    event.setTime(GameState.module.timeManager.pauseTime);
+    event.eventType = SignalEventType.OnFailToOpen;
+    GameState.module.addEvent(event);
   }
 
 }

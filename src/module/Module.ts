@@ -532,11 +532,9 @@ export class Module {
       }
     }
 
-    //Cleanup texture cache
-    Array.from(TextureLoader.textures.keys()).forEach( (key) => {
-      TextureLoader.textures.get(key).dispose();
-      TextureLoader.textures.delete(key); 
-    });
+    //Dispose only resources owned by the departing module generation. Shared
+    //GUI and global pack textures survive transitions and remain valid.
+    TextureLoader.endModule();
 
     //Clear walkmesh list
     while (GameState.walkmeshList.length){
@@ -545,10 +543,16 @@ export class Module {
       GameState.group.room_walkmeshes.remove(wlkmesh);
     }
 
-    if(GameState.PartyManager.Player){
-      GameState.PartyManager.Player.destroy();
-      GameState.PartyManager.Player = undefined;
-    }
+    //PartyManager.Player deliberately survives dispose(). This runs on every
+    //module-to-module transition (GameState.LoadModule calls it on the outgoing
+    //module before loading the next one), not just at game end. Destroying the
+    //player here - which also destroys their equipped inventory, per
+    //ModuleCreature.destroy() - left GameState.PartyManager.Player undefined
+    //by the time the next module's ModuleArea.loadPlayer() ran, so it always
+    //fell into the invented-placeholder-human branch instead of recognizing
+    //the real controlled character (e.g. T3-M4 during the prologue). The next
+    //module's loadPlayer() reloads the model and repositions the existing
+    //Player object; it does not need it destroyed first.
 
     //Clear emitters
     while (GameState.group.emitters.children.length){
@@ -865,6 +869,7 @@ export class Module {
     module.transWP = waypoint;
     if(!modName){ return module; }
     try{
+      TextureLoader.beginModule(modName);
       GameState.ModuleObjectManager.Reset();
       const archives = await Module.GetModuleArchives(modName);
       await ResourceLoader.InitModuleCache(archives);
@@ -896,6 +901,7 @@ export class Module {
 
       return module;
     }catch(e){
+      TextureLoader.endModule();
       console.log(`Module.Load: failed to load module.`);
       console.error(e);
     }

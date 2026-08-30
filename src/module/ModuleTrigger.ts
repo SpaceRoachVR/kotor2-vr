@@ -199,9 +199,9 @@ export class ModuleTrigger extends ModuleObject {
           this.trapModel = model;
           this.container.add(model);
           if(this.trapDetected){
-            this.model.playAnimation('detect', false);
+            this.trapModel.playAnimation('detect', false);
           }else{
-            this.model.playAnimation('default', false);
+            this.trapModel.playAnimation('default', false);
           }
         });
       });
@@ -251,9 +251,9 @@ export class ModuleTrigger extends ModuleObject {
     this.trapDetected = true;
 
     if(this.trapDetected){
-      this.model.playAnimation('detect', false);
+      this.trapModel?.playAnimation('detect', false);
     }else{
-      this.model.playAnimation('default', false);
+      this.trapModel?.playAnimation('default', false);
     }
   }
 
@@ -323,9 +323,15 @@ export class ModuleTrigger extends ModuleObject {
   }
 
   update(delta = 0){
-    
+
     super.update(delta);
-    
+
+    //super.update() can destroy this object mid-call via its deferred-destroy timer,
+    //which clears actionQueue/model - bail before touching either.
+    if(this.willDestroy || this.destroyed){
+      return;
+    }
+
     if(!this.room) this.getCurrentRoom();
     try{
       if(!this.room.model.visible)
@@ -459,7 +465,13 @@ export class ModuleTrigger extends ModuleObject {
       }
     }else if(this.linkedToModule && (GameState.Mode != EngineMode.DIALOG)){
       if(object == GameState.getCurrentPlayer()){
-        GameState.LoadModule(this.linkedToModule.toLowerCase(), this.linkedTo.toLowerCase());
+        if(GameState.disableTransit){
+          //SetDisableTransit is active - a scripted sequence has locked area
+          //changes. Ignore the trigger rather than loading the next module.
+          console.log('ModuleTrigger: transit disabled, ignoring transition to', this.linkedToModule);
+        }else{
+          GameState.LoadModule(this.linkedToModule.toLowerCase(), this.linkedTo.toLowerCase());
+        }
       }
       return;
     }

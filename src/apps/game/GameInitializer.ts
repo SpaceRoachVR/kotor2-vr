@@ -341,6 +341,7 @@ export class GameInitializer {
   static async LoadOverride(){
     KotOR.PerformanceMonitor.start('GameInitializer.LoadOverride');
     try{
+      await KotOR.ResourceLoader.InitOverrideCache();
       const files = await KotOR.GameFileSystem.readdir('Override', {recursive: false});
       const validOverrideFiles = files
         .map(f => {
@@ -350,11 +351,9 @@ export class GameInitializer {
         })
         .filter(({ resId }) => typeof resId !== 'undefined');
 
-      await Promise.all(validOverrideFiles.map(({ f, _parsed, resId }) => fsLimit(async () => {
-        const buffer = await KotOR.GameFileSystem.readFile(f);
-        if(!buffer || !buffer.length) return;
-        KotOR.ResourceLoader.setCache(KotOR.CacheScope.OVERRIDE, resId, _parsed.name.toLocaleLowerCase(), buffer);
-      })));
+      validOverrideFiles.forEach(({ f, _parsed, resId }) => {
+        KotOR.ResourceLoader.setOverrideResource(resId, _parsed.name, f);
+      });
     }catch(e){
       console.warn('GameInitializer.LoadOverride: Failed to load override');
       console.error(e);

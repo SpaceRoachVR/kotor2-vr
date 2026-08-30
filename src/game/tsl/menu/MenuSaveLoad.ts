@@ -54,6 +54,8 @@ export class MenuSaveLoad extends K1_MenuSaveLoad {
       this.BTN_SAVELOAD.addEventListener('click', (e) => {
         e.stopPropagation();
         const savegame = this.selected;
+
+        //LOADGAME mode: load the selected save
         if(this.mode == MenuSaveLoadMode.LOADGAME){
           if(savegame){
             this.manager.ClearMenus();
@@ -63,16 +65,28 @@ export class MenuSaveLoad extends K1_MenuSaveLoad {
             }
             savegame.load()
           }
-        }else{
-          if(savegame instanceof NewSaveItem){
-            this.manager.MenuSaveName.show();
-            this.manager.MenuSaveName.onSave = ( name = '' ) => {
-              console.log('SaveGame', name);
-            };
-          }else{
-
-          }
+          return;
         }
+
+        //SAVEGAME mode: new slot -> ask for a name
+        if(savegame instanceof NewSaveItem){
+          this.manager.MenuSaveName.open();
+          this.manager.MenuSaveName.onSave = async ( name = '' ) => {
+            await SaveGame.SaveCurrentGame(name.trim());
+            this.reloadSaves();
+          };
+          return;
+        }
+
+        //Existing slot -> confirm overwrite (no rename, matching the original)
+        this.manager.InGameConfirm.showConfirmDialog(
+          MenuSaveLoad.STRREF_CONFIRM_OVERWRITE,
+          async () => {
+            await SaveGame.OverwriteSave(savegame);
+            this.reloadSaves();
+          },
+          () => {}
+        );
       });
       this._button_a = this.BTN_SAVELOAD;
 

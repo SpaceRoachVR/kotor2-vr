@@ -1,4 +1,3 @@
-import * as path from "path";
 import { ResourceTypes } from "@/resource/ResourceTypes";
 import { ERFObject } from "@/resource/ERFObject";
 import { RIMObject } from "@/resource/RIMObject";
@@ -9,6 +8,7 @@ import { RIMManager } from "@/managers/RIMManager";
 import { IRIMResource } from "@/interface/resource/IRIMResource";
 import { IERFResource } from "@/interface/resource/IERFResource";
 import { GameFileSystem } from "@/utility/GameFileSystem";
+import { isTextureResrefUsable, normalizeTextureResref } from "@/loaders/TextureResolution";
 
 /**
  * ResourceLoader class.
@@ -29,6 +29,7 @@ export class ResourceLoader {
     module:   new Map(),
     project:  new Map(),
   };
+  private static OverrideResources: Map<number, Map<string, string>> = new Map();
   static ModuleArchives: (RIMObject | ERFObject)[] = [];
 
   static InitCache(){
@@ -44,7 +45,40 @@ export class ResourceLoader {
 
   static async InitOverrideCache(){
     ResourceLoader.ClearCache(CacheScope.OVERRIDE);
+    ResourceLoader.OverrideResources.clear();
+  }
 
+  static setOverrideResource(resId: number, resRef: string, filepath: string): void {
+    if (!Number.isInteger(resId) || resId <= 0) {
+      throw new TypeError(`Invalid override resource type: ${resId}`);
+    }
+    if (typeof resRef !== 'string' || !resRef.trim()) {
+      throw new TypeError('Override resource resref must be a non-empty string');
+    }
+    if (typeof filepath !== 'string' || !filepath.trim()) {
+      throw new TypeError('Override resource path must be a non-empty string');
+    }
+    const pathSegments = filepath.trim().replace(/\\/g, '/').split('/');
+    if (
+      pathSegments[0].toLowerCase() !== 'override' ||
+      pathSegments.some((segment) => !segment || segment === '.' || segment === '..')
+    ) {
+      throw new TypeError(`Override resource path must stay beneath Override: ${filepath}`);
+    }
+
+    let resourcesForType = ResourceLoader.OverrideResources.get(resId);
+    if (!resourcesForType) {
+      resourcesForType = new Map();
+      ResourceLoader.OverrideResources.set(resId, resourcesForType);
+    }
+    resourcesForType.set(resRef.toLowerCase(), filepath);
+  }
+
+  static getOverrideResourcePath(resId: number, resRef: string): string | undefined {
+    if (!Number.isInteger(resId) || resId <= 0 || typeof resRef !== 'string' || !resRef) {
+      return undefined;
+    }
+    return ResourceLoader.OverrideResources.get(resId)?.get(resRef.toLowerCase());
   }
 
   static async InitGlobalCache(){
@@ -63,7 +97,7 @@ export class ResourceLoader {
     await Promise.all(keys.map(async (key) => {
       const buffer = await KEYManager.Key.getFileBuffer(key);
       scope.get(key.resType).set(
-        key.resRef.toLocaleLowerCase(),
+        key.resRef.toLowerCase(),
         buffer
       );
     }));
@@ -85,7 +119,7 @@ export class ResourceLoader {
           const buffer = await archive.getResourceBuffer(resource);
           // console.log('InitModuleCache: RIM', resource.resRef.toLocaleLowerCase(), buffer);
           scope.get(resource.resType).set(
-            resource.resRef.toLocaleLowerCase(),
+            resource.resRef.toLowerCase(),
             buffer
           );
         }
@@ -96,7 +130,7 @@ export class ResourceLoader {
           const buffer = await archive.getResourceBufferByResRef(key.resRef, key.resType);
           // console.log('InitModuleCache: ERF', resource.resRef.toLocaleLowerCase(), buffer);
           scope.get(key.resType).set(
-            key.resRef.toLocaleLowerCase(),
+            key.resRef.toLowerCase(),
             buffer
           );
         }
@@ -121,9 +155,11 @@ export class ResourceLoader {
       throw new Error(`Invalid resId ${resId}`);
     }
 
-    if(!resRef){
+    if(!isTextureResrefUsable(normalizeTextureResref(resRef))){
       throw new Error(`Invalid resRef ${resRef}`);
     }
+
+    resRef = normalizeTextureResref(resRef);
 
     //Resource Cache
     let data = ResourceLoader.getCache(resId, resRef);
@@ -131,11 +167,11 @@ export class ResourceLoader {
       return data;
     }
 
-    // data = await this.searchLocal(resId, resRef);
-    // if(data){
-    //   ResourceLoader.setCache(null, resId, resRef, data);
-    //   return data;
-    // }
+    data = await this.searchOverride(resId, resRef);
+    if(data){
+      ResourceLoader.setCache(CacheScope.OVERRIDE, resId, resRef, data);
+      return data;
+    }
 
     data = await this.searchKeyTable(resId, resRef);
     if(data){
@@ -157,7 +193,7 @@ export class ResourceLoader {
   }
 
   static loadCachedResource(resId: number, resRef: string): Uint8Array {
-    return ResourceLoader.getCache(resId, resRef.toLocaleLowerCase());
+    return ResourceLoader.getCache(resId, resRef.toLowerCase());
   }
 
   static setResource(resId: number, resRef: string, opts = {}){
@@ -183,21 +219,22 @@ export class ResourceLoader {
   }
 
   static getCache(resId: number, resRef: string): Uint8Array {
-    if(ResourceLoader.CacheScopes[CacheScope.OVERRIDE].get(resId).has(resRef)){
-      return ResourceLoader.CacheScopes[CacheScope.OVERRIDE].get(resId).get(resRef);
+    const normalizedRef = resRef.toLowerCase();
+    if(ResourceLoader.CacheScopes[CacheScope.OVERRIDE].get(resId)?.has(normalizedRef)){
+      return ResourceLoader.CacheScopes[CacheScope.OVERRIDE].get(resId).get(normalizedRef);
     }
 
-    if(ResourceLoader.CacheScopes[CacheScope.MODULE].get(resId).has(resRef)){
-      return ResourceLoader.CacheScopes[CacheScope.MODULE].get(resId).get(resRef);
+    if(ResourceLoader.CacheScopes[CacheScope.MODULE].get(resId)?.has(normalizedRef)){
+      return ResourceLoader.CacheScopes[CacheScope.MODULE].get(resId).get(normalizedRef);
     }
 
-    if(ResourceLoader.CacheScopes[CacheScope.GLOBAL].get(resId).has(resRef)){
-      return ResourceLoader.CacheScopes[CacheScope.GLOBAL].get(resId).get(resRef);
+    if(ResourceLoader.CacheScopes[CacheScope.GLOBAL].get(resId)?.has(normalizedRef)){
+      return ResourceLoader.CacheScopes[CacheScope.GLOBAL].get(resId).get(normalizedRef);
     }
 
     if(typeof ResourceLoader.cache[resId] !== 'undefined'){
-      if(typeof ResourceLoader.cache[resId][resRef] !== 'undefined'){
-        return ResourceLoader.cache[resId][resRef];
+      if(typeof ResourceLoader.cache[resId][normalizedRef] !== 'undefined'){
+        return ResourceLoader.cache[resId][normalizedRef];
       }
     }
     return null;
@@ -206,14 +243,19 @@ export class ResourceLoader {
   static setCache(type: CacheScope, resId: number, resRef: string, buffer: Uint8Array){
     const cache = ResourceLoader.CacheScopes[type];
     if(cache){
-      ResourceLoader.CacheScopes[type].get(resId).set(resRef, buffer);
+      let resourcesForType = ResourceLoader.CacheScopes[type].get(resId);
+      if (!resourcesForType) {
+        resourcesForType = new Map();
+        ResourceLoader.CacheScopes[type].set(resId, resourcesForType);
+      }
+      resourcesForType.set(resRef.toLowerCase(), buffer);
       return;
     }
 
     if(typeof ResourceLoader.cache[resId] === 'undefined')
       ResourceLoader.cache[resId] = {};
 
-    ResourceLoader.cache[resId][resRef] = buffer;
+    ResourceLoader.cache[resId][resRef.toLowerCase()] = buffer;
   }
 
   static async searchLocal(resId: number, resRef = ''): Promise<Uint8Array> {
@@ -223,29 +265,17 @@ export class ResourceLoader {
     }
   }
 
-  /**
-   * Search for a resource in the game Override folder (loose files).
-   * Used when the resource was not pre-cached by InitOverrideCache (e.g. added after init)
-   * or when loading without a prior full override scan.
-   * Path is Override/{resRef}.{ext} where ext is derived from resId via ResourceTypes.
-   */
+  /** Search for a loose resource recorded by the startup Override scan. */
   static async searchOverride(resId: number, resRef = ''): Promise<Uint8Array> {
     if (!resRef) {
       return undefined;
     }
-    const ext = Object.keys(ResourceTypes).find(
-      (k) => typeof ResourceTypes[k] === "number" && ResourceTypes[k] === resId
-    );
-    if (!ext) {
+    const normalizedRef = resRef.toLowerCase();
+    const filepath = ResourceLoader.getOverrideResourcePath(resId, normalizedRef);
+    if (!filepath) {
       return undefined;
     }
-    const normalizedRef = resRef.toLowerCase();
-    const filepath = path.join("Override", `${normalizedRef}.${ext}`);
     try {
-      const exists = await GameFileSystem.exists(filepath);
-      if (!exists) {
-        return undefined;
-      }
       const buffer = await GameFileSystem.readFile(filepath);
       if (!buffer || !buffer.length) {
         return undefined;

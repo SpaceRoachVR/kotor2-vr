@@ -33,6 +33,9 @@ import { AudioPriorityGroup } from "@/enums/audio/AudioPriorityGroup";
 import { GameEffectFactory } from "@/effects/GameEffectFactory";
 import { CombatActionType, ModulePlaceableObjectSound, SkillType } from "@/enums";.3
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { resolveSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
+import { Dice } from "@/utility/Dice";
+import { synchronizeDoorWalkmeshCollisionState } from "@/module/DoorWalkmeshCollisionState";
 
 interface AnimStateInfo {
   lastAnimState: ModuleDoorAnimState;
@@ -220,7 +223,7 @@ export class ModuleDoor extends ModuleObject {
   }
 
   getName(){
-    return this.locName.getValue();
+    return this.compileDisplayName(this.locName.getValue());
   }
 
   getGenericType(){
@@ -303,23 +306,13 @@ export class ModuleDoor extends ModuleObject {
   }
 
   updateCollisionState(): void {
-    // if(!this.collisionManager?.walkmesh?.mesh){ return; }
-
-    let idx = -1;
-    switch(this.openState){
-      case ModuleDoorOpenState.DESTROYED:
-      case ModuleDoorOpenState.OPEN1:
-      case ModuleDoorOpenState.OPEN2:
-        GameState.group.room_walkmeshes.remove( this.collisionManager.walkmesh.mesh );
-        idx = this.area.doorWalkmeshes.indexOf(this.collisionManager.walkmesh);
-        if(idx >= 0){ this.area.doorWalkmeshes.splice(idx, 1); }
-      break;
-      default:
-        GameState.group.room_walkmeshes.add( this.collisionManager.walkmesh.mesh );
-        idx = this.area.doorWalkmeshes.indexOf(this.collisionManager.walkmesh);
-        if(idx == -1){ this.area.doorWalkmeshes.push(this.collisionManager.walkmesh); }
-      break;
-    }
+    synchronizeDoorWalkmeshCollisionState({
+      isPassable: this.isOpen() || this.openState === ModuleDoorOpenState.DESTROYED,
+      walkmesh: this.collisionManager?.walkmesh,
+      roomWalkmeshes: GameState.group?.room_walkmeshes,
+      doorWalkmeshes: this.area?.doorWalkmeshes,
+      walkmeshList: GameState.walkmeshList,
+    });
   }
 
   setOpenState(openState: ModuleDoorOpenState = ModuleDoorOpenState.CLOSED){
@@ -397,7 +390,9 @@ export class ModuleDoor extends ModuleObject {
         }
       }
 
-      object.playSoundSet(SSFType.UNLOCK_FAIL);
+      if(this.isLocked()){
+        object.playSoundSet(SSFType.UNLOCK_FAIL);
+      }
     }
 
     // If the door is still locked, run the on fail to open script
@@ -435,27 +430,33 @@ export class ModuleDoor extends ModuleObject {
     }
   }
 
-  attemptUnlock(object: ModuleObject){
+  attemptUnlock(object: ModuleObject, signalFailure = true){
     if(!BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleObject)){
       return false;
     }
     
-    const nSecuritySkill = object.getSkillLevel(SkillType.SECURITY);
-    if(this.isLocked() && !this.keyRequired && nSecuritySkill >= 1){
-      let d20 = 20;//d20 rolls are auto 20's outside of combat
-      let skillCheck = (((object.getWIS()/2) + nSecuritySkill) + d20) - this.openLockDC;
-      if(skillCheck >= 1 && nSecuritySkill >= 1){
-        this.unlock(object);
-        if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
-          object.playSoundSet(SSFType.UNLOCK_SUCCESS);
-        }
-      }else{
-        if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
-          object.playSoundSet(SSFType.UNLOCK_FAIL);
-        }
+    const result = resolveSecurityUnlock({
+      locked: this.isLocked(),
+      lockable: this.lockable,
+      keyRequired: this.keyRequired,
+      securitySkill: object.getSkillLevel(SkillType.SECURITY),
+      intelligence: object.getINT(),
+      inCombat: !!(object as any).combatData?.combatState,
+      openLockDC: this.openLockDC,
+    }, () => Dice.rollD20(1));
+    if (!result.attempted) return false;
+    if (!result.unlocked) {
+      if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
+        object.playSoundSet(SSFType.UNLOCK_FAIL);
       }
+      if (signalFailure) this.use(object);
+      return false;
     }
-        
+
+    this.unlock(object);
+    if(BitWise.InstanceOf(object?.objectType, ModuleObjectType.ModuleCreature)){
+      object.playSoundSet(SSFType.UNLOCK_SUCCESS);
+    }
     this.use(object);
     return true;
   }
@@ -631,8 +632,15 @@ export class ModuleDoor extends ModuleObject {
   }
 
   update(delta = 0){
-    
+
     super.update(delta);
+
+    //super.update() can destroy this object mid-call via its deferred-destroy timer,
+    //which clears actionQueue/model - bail before touching either.
+    if(this.willDestroy || this.destroyed){
+      return;
+    }
+
     if(this.model instanceof OdysseyModel3D){
       this.model.update(delta);
       //this.box.setFromObject(this.model);
@@ -861,6 +869,12 @@ export class ModuleDoor extends ModuleObject {
     if(!(object instanceof ModuleObject)) return;
     if(object != GameState.getCurrentPlayer()) return;
     if(this.getLinkedToModule() && !(GameState.Mode == EngineMode.DIALOG) && this.isOpen()){
+      if(GameState.disableTransit){
+        //SetDisableTransit is active - a scripted sequence has locked area
+        //changes. Leave the player where they are.
+        console.log('ModuleDoor: transit disabled, ignoring transition to', this.getLinkedToModule());
+        return;
+      }
       if(object.controlled){
         GameState.LoadModule(this.getLinkedToModule().toLowerCase(), this.getLinkedTo().toLowerCase());
       }else{
@@ -908,7 +922,17 @@ export class ModuleDoor extends ModuleObject {
   }
 
   loadModel(): Promise<OdysseyModel3D> {
-    let modelName = this.getDoorAppearance().modelname.replace(/\0[\s\S]*$/g,'').toLowerCase();
+    const appearance = this.getDoorAppearance();
+    // An appearance row with no usable modelname resolves to an empty load
+    // rather than an error, so the door ends up invisible while still solid
+    // and still interactable. Name it here instead of leaving it silent.
+    if(!appearance || typeof appearance.modelname !== 'string' || !appearance.modelname.trim()){
+      console.error(
+        `ModuleDoor.loadModel: door '${this.getTag()}' (${this.getName()}) has no model name ` +
+        `in its appearance row (appearance=${this.appearance}) — the door will be invisible`
+      );
+    }
+    let modelName = (appearance?.modelname ?? '').replace(/\0[\s\S]*$/g,'').toLowerCase();
     return new Promise<OdysseyModel3D>( (resolve, reject) => {
       MDLLoader.loader.load(modelName).then((mdl: OdysseyModel) => {
         OdysseyModel3D.FromMDL(mdl, {
@@ -957,11 +981,42 @@ export class ModuleDoor extends ModuleObject {
             break;
           }
 
+          // The model loaded, but "loaded" and "renders" are not the same
+          // thing: a door whose model carries no renderable mesh, or whose
+          // root comes back hidden, is exactly as invisible as one that
+          // failed outright — and until now, completely silent. Report which
+          // door it was so the next headset run names them.
+          let meshCount = 0;
+          this.model.traverse((node: THREE.Object3D) => {
+            if((node as { isMesh?: boolean }).isMesh) meshCount++;
+          });
+          if(!meshCount || !this.model.visible){
+            console.error(
+              `ModuleDoor.loadModel: door '${this.getTag()}' (${this.getName()}) built model ` +
+              `'${modelName}' with meshes=${meshCount} visible=${this.model.visible} ` +
+              `openState=${this.openState} — the door will not be seen`
+            );
+          }
+
           resolve(this.model);
-        }).catch(() => {
+        }).catch((error) => {
+          // Silently resolving here leaves an invisible but still solid and
+          // still interactable door in the level, which is what "some doors
+          // do not render at all" looks like from inside the headset. Name
+          // the door and its model so the failure is traceable.
+          console.error(
+            `ModuleDoor.loadModel: failed to build model '${modelName}' for door ` +
+            `'${this.getTag()}' (${this.getName()}) — the door will be invisible`,
+            error
+          );
           resolve(this.model);
         });
-      }).catch(() => {
+      }).catch((error) => {
+        console.error(
+          `ModuleDoor.loadModel: failed to load MDL '${modelName}' for door ` +
+          `'${this.getTag()}' (${this.getName()}) — the door will be invisible`,
+          error
+        );
         resolve(this.model);
       });
     });
@@ -1089,6 +1144,9 @@ export class ModuleDoor extends ModuleObject {
 
     if(this.template.RootNode.hasField('Locked'))
       this.locked = this.template.getFieldByLabel('Locked').getValue();
+
+    if(this.template.RootNode.hasField('Lockable'))
+      this.lockable = !!this.template.getFieldByLabel('Lockable').getValue();
 
     if(this.template.RootNode.hasField('Min1HP'))
       this.min1HP = this.template.getFieldByLabel('Min1HP').getValue();
@@ -1276,6 +1334,11 @@ export class ModuleDoor extends ModuleObject {
     
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenLockDC') ).setValue(this.openLockDC);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenState') ).setValue(this.openState);
+    // NotBlastable is loaded from the template but was never written back, so
+    // every door and placeable came back from a save as blastable. That
+    // silently unsealed every Blast Door in Peragus and, once the mine route
+    // stopped being gated on Plot, offered a mine on all of them.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotBlastable') ).setValue(this.notBlastable ? 1 : 0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Plot') ).setValue(this.plot);
     gff.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraitId') ).setValue(this.portraitId);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Ref') ).setValue(this.ref);
@@ -1377,6 +1440,7 @@ export class ModuleDoor extends ModuleObject {
     template.RootNode.addField( new GFFField(GFFDataType.RESREF, 'OnUserDefined') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'OpenLockDC') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PaletteId') ).setValue(6);
+    template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotBlastable') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Plot') );
     template.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraidId') );
     template.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Ref') );

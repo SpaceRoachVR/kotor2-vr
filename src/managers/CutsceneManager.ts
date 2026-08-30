@@ -77,7 +77,15 @@ export class CutsceneManager {
   }
 
   static startConversation(dialog: DLGObject, owner: ModuleObject, listener: ModuleObject = GameState.PartyManager.party[0]) {
-    console.log('CutsceneManager.startConversation', dialog, owner, listener);
+    //Name the actual dialogue file. Logging the object alone makes it
+    //impossible to tell which conversation is playing, which matters when the
+    //wrong one is selected - the symptom looks like a scripting bug.
+    console.log(
+      `CutsceneManager.startConversation dlg='${dialog?.resref ?? 'UNKNOWN'}'`,
+      `owner='${owner?.getTag ? owner.getTag() : '?'}'`,
+      `listener='${listener?.getTag ? listener.getTag() : '?'}'`,
+      dialog, owner, listener
+    );
     this.active = true;
     this.cameraState.currentCameraAnimation = undefined;
     this.owner = owner;
@@ -215,8 +223,13 @@ export class CutsceneManager {
     entry.initProperties();
     const isComputerCameraEntry = this.dialog.getConversationType() == DLGConversationType.COMPUTER && entry.cameraAngle == DLGCameraAngle.ANGLE_PLACEABLE_CAMERA;
     this.state = ConversationState.LISTENING_TO_SPEAKER;
-    if (GameState.Mode != EngineMode.DIALOG)
+    if (GameState.Mode != EngineMode.DIALOG){
+      //Everything past this point (camera, video effect, replies, participant
+      //animations) gets skipped for this entry with no other trace - previously
+      //silent, which made a black-screen report impossible to confirm against a log.
+      console.warn('CutsceneManager.showEntry: engine mode is', GameState.Mode, 'not DIALOG - skipping camera/replies/animations for this entry', entry);
       return;
+    }
     GameState.VideoEffectManager.SetVideoEffect(entry.getVideoEffect());
     this.lastSpokenString = entry.getCompiledString();
     if(this.dialog.getConversationType() == DLGConversationType.COMPUTER){
@@ -293,17 +306,41 @@ export class CutsceneManager {
    * @param index - The index of the reply to select
    */
   static selectReplyAtIndex(index: number) {
-    const reply = this.currentReplies[index];
+    //Both reply listboxes and the Dialog1-9 hotkeys address the *displayed*
+    //list, and setReplies() filters continue-dialog nodes out of that list.
+    //Indexing currentReplies directly therefore picks the wrong reply - or
+    //none at all - as soon as a continue node sits among the replies.
+    const displayedReplies = (this.currentReplies || []).filter(r => !r.isContinueDialog());
+    const reply = displayedReplies[index];
     if(!reply){
       console.warn('CutsceneManager.selectReplyAtIndex: No reply found');
       return;
     }
 
-    if(this.state != ConversationState.WAITING_FOR_PC_CHOICE){
-      console.warn('CutsceneManager.selectReplyAtIndex: Not in waiting for pc choice state');
-      return;
+    if(!this.isWaitingForPCChoice()){
+      //The reply list is already populated and clickable as soon as the entry is shown,
+      //but selection only unlocks once the line has been skipped/finished (state flips to
+      //WAITING_FOR_PC_CHOICE inside showReplies(), triggered by playerSkipEntry()). A click
+      //here is a legitimate "I'm done listening, and I choose this" - skip first instead of
+      //silently dropping it. If the entry genuinely isn't skippable yet, this is a no-op and
+      //the click is correctly ignored.
+      this.playerSkipEntry(this.currentEntry);
+      //playerSkipEntry() -> showReplies() is what flips the state, so re-check it.
+      //Read it through isWaitingForPCChoice() rather than inline: tsc keeps the
+      //narrowing from the outer check across the call and would otherwise treat
+      //this second comparison as statically false.
+      if(!this.isWaitingForPCChoice()){
+        return;
+      }
     }
     this.onReplySelect(reply);
+  }
+
+  /**
+   * Whether the conversation is currently accepting a PC reply selection.
+   */
+  static isWaitingForPCChoice(): boolean {
+    return this.state == ConversationState.WAITING_FOR_PC_CHOICE;
   }
 
   /**
@@ -804,10 +841,14 @@ export class CutsceneManager {
   static updateCamera(delta: number = 0) {
     if (!this.dialog || this.cutsceneMode == CutsceneMode.BARK) return;
 
+    //These run every frame, so only touch the menus when their visibility
+    //actually needs to change. show()/hide() add and remove from scene_gui.
     if(this.dialog.getConversationType() == DLGConversationType.COMPUTER){
-      GameState.MenuManager.InGameComputer.show();
-      GameState.MenuManager.InGameComputerCam.hide();
-    }else{
+      if(!GameState.MenuManager.InGameComputer.bVisible){
+        GameState.MenuManager.InGameComputer.show();
+      }
+    }
+    if(GameState.MenuManager.InGameComputerCam.bVisible){
       GameState.MenuManager.InGameComputerCam.hide();
     }
 
@@ -817,7 +858,9 @@ export class CutsceneManager {
     }
 
     if (this.cameraState.mode == CameraMode.PLACEABLE) {
-      this.setPlaceableCamera(this.currentEntry.cameraAnimation > -1 ? this.currentEntry.cameraAnimation : this.currentEntry.cameraID);
+      if(this.currentEntry){
+        this.setPlaceableCamera(this.currentEntry.cameraAnimation > -1 ? this.currentEntry.cameraAnimation : this.currentEntry.cameraID);
+      }
       if(this.dialog.getConversationType() == DLGConversationType.COMPUTER){
         GameState.MenuManager.InGameComputer.hide();
         GameState.MenuManager.InGameComputerCam.show();
@@ -1013,13 +1056,6 @@ export class CutsceneManager {
       this.cameraState.cameraAngle = DLGCameraAngle.ANGLE_SPEAKER;
       this.updateCameraAngleSpeaker();
       return;
-      const scaleFactor = adjustedDistance / behindDistance;
-      behindDistance = adjustedDistance;
-      leftDistance *= scaleFactor;
-      
-      cameraX = listenerCameraPosition.x + Math.cos(listenerRotation + Math.PI) * behindDistance + Math.cos(listenerRotation - HALF_PI) * leftDistance;
-      cameraY = listenerCameraPosition.y + Math.sin(listenerRotation + Math.PI) * behindDistance + Math.sin(listenerRotation - HALF_PI) * leftDistance;
-      cameraPosition.set(cameraX, cameraY, cameraZ);
     }
     
     // Set camera position and look at the midpoint between speaker and listener
@@ -1307,12 +1343,14 @@ export class CutsceneManager {
 
   static removeEventListener(type: string, listener: Function){
     let listeners = this.#eventListeners.get(type);
-    if(!listeners || listeners.indexOf(listener) !== -1){
+    if(!listeners){
       return;
     }
-    if(listeners){
-      listeners.splice(listeners.indexOf(listener), 1);
+    const index = listeners.indexOf(listener);
+    if(index === -1){
+      return;
     }
+    listeners.splice(index, 1);
   }
 
   static dispatchEvent(type: string, ...args: any[]){

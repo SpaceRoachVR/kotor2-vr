@@ -150,7 +150,18 @@ export class AppState {
     AppState.loaderShow();
     GameInitializer.SetLoadingMessage('Locating Game Directory...');
   
-    if(AppState.env == ApplicationEnvironment.ELECTRON){
+    //Assets over HTTP: the server is already rooted at the game directory, so
+    //there is no picker and no permission grant - just confirm it is really a
+    //game directory the same way every other path does.
+    if(KotOR.ApplicationProfile.usesHttpAssets){
+      if(await KotOR.GameFileSystem.exists('chitin.key')){
+        AppState.directoryLocated = true;
+        AppState.processEventListener('on-preload', []);
+        AppState.beginGame();
+        return;
+      }
+      alert(`No chitin.key at the asset server root (${KotOR.ApplicationProfile.assetBaseUrl}). Check the --game path the server was started with.`);
+    }else if(AppState.env == ApplicationEnvironment.ELECTRON){
       if(await KotOR.GameFileSystem.exists('chitin.key')){
         AppState.directoryLocated = true;
         AppState.processEventListener('on-preload', []);
@@ -179,6 +190,9 @@ export class AppState {
    * - Used for Electron and Browser
    */
   static async checkGameDirectory(){
+    if(KotOR.ApplicationProfile.usesHttpAssets){
+      return await KotOR.GameFileSystem.exists('chitin.key');
+    }
     if(AppState.env == ApplicationEnvironment.ELECTRON){
       if(await KotOR.GameFileSystem.exists('chitin.key')){
         return true;

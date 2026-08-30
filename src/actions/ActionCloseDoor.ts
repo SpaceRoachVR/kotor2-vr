@@ -9,6 +9,7 @@ import { ModuleDoor } from "@/module/ModuleDoor";
 import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionCloseDoor class.
@@ -44,7 +45,10 @@ export class ActionCloseDoor extends Action {
     if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
       let distance = Utility.Distance2D(this.owner.position, this.target.position);
             
-      if(distance > 2 && !this.target.box.intersectsBox(this.owner.box)){
+      // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if(distance > 2 && !this.target.box.intersectsBox(this.owner.box) &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
         
         // this.owner.openSpot = undefined;
         let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();

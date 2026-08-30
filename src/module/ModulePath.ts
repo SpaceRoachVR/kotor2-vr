@@ -377,6 +377,92 @@ export class ModulePath {
     return point;
   }
 
+  /**
+   * Samples the straight segment between two points and reports whether every
+   * sample stands on walkable ground.
+   *
+   * `PathPoint.hasLOS` answers a narrower question than the shortcut below
+   * needs. It tests the segment against `area.walkEdges` — the room walkmesh
+   * *perimeters* — and against creatures, which leaves it blind to anything
+   * bounded by a walkable/non-walkable face transition inside a room, and to
+   * whatever the edge list simply does not describe. A 14m diagonal across the
+   * Ebon Hawk's Main Hold and a 46m diagonal across the Peragus medical bay
+   * both came back "clear", so traverseToPoint short-circuited and handed the
+   * caller two points through several walls.
+   *
+   * Deliberately used only for the origin-to-destination shortcut, not inside
+   * hasLOS: that runs once per pathfind here, whereas hasLOS runs once per
+   * authored path point and could not carry this cost.
+   */
+  /**
+   * Whether a shut door stands on the straight segment between two points.
+   *
+   * Deliberately NOT part of `PathPoint.hasLOS`. That method is also what
+   * `ComputedPath.search` calls to validate every edge of the authored path
+   * graph, and the authored graph routes *through* doorways on purpose — an
+   * actor is expected to open the door. Teaching hasLOS about doors severed
+   * the graph wherever a door happened to be shut, the search then found no
+   * route at all, and traverseToPoint fell back to the very straight line the
+   * check was meant to prevent.
+   *
+   * The shortcut is a different question: "can this actor simply walk straight
+   * there right now", and a shut door is a no.
+   */
+  /** How far a sampled surface may sit from the segment height and still count. */
+  static readonly SEGMENT_HEIGHT_TOLERANCE = 1.0;
+
+  segmentBlockedByClosedDoor(origin: THREE.Vector3, dest: THREE.Vector3): boolean {
+    const doors = this.area?.doors;
+    if(!Array.isArray(doors) || !doors.length) return false;
+
+    const line = new THREE.Line3(origin.clone(), dest.clone());
+    for(let i = 0, len = doors.length; i < len; i++){
+      const door = doors[i];
+      if(!door) continue;
+      if(typeof door.isOpen === 'function' && door.isOpen()) continue;
+      if(typeof door.checkLineIntersectsObject !== 'function') continue;
+      if(door.checkLineIntersectsObject(line)) return true;
+    }
+    return false;
+  }
+
+  segmentStaysOnWalkableGround(origin: THREE.Vector3, dest: THREE.Vector3, sampleSpacing = 0.5): boolean {
+    const faces = this.area?.walkFaces;
+    if(!Array.isArray(faces) || !faces.length) return true;
+
+    const dx = dest.x - origin.x;
+    const dy = dest.y - origin.y;
+    const length = Math.hypot(dx, dy);
+    if(length <= sampleSpacing) return true;
+
+    const steps = Math.ceil(length / sampleSpacing);
+    const probe = origin.clone();
+    for(let step = 1; step < steps; step++){
+      const t = step / steps;
+      probe.set(origin.x + dx * t, origin.y + dy * t, origin.z + (dest.z - origin.z) * t);
+      //Height matters. pointInFace2d ignores z, and the Ebon Hawk exterior
+      //stacks the Utility Lift platform directly above the hull walkway: a
+      //straight line off the platform edge samples as "walkable" the whole
+      //way because the ground two metres below is underneath it in plan view.
+      //Require the surface found to be near the segment height it belongs to.
+      let walkable = false;
+      for(let i = 0, len = faces.length; i < len; i++){
+        const face = faces[i];
+        if(!face || typeof face.pointInFace2d !== 'function') continue;
+        if(!face.pointInFace2d(probe)) continue;
+        const triangle = (face as any).triangle;
+        if(!triangle){ walkable = true; break; }
+        const faceZ = (triangle.a.z + triangle.b.z + triangle.c.z) / 3;
+        if(Math.abs(faceZ - probe.z) <= ModulePath.SEGMENT_HEIGHT_TOLERANCE){
+          walkable = true;
+          break;
+        }
+      }
+      if(!walkable) return false;
+    }
+    return true;
+  }
+
   traverseToPoint(owner: ModuleObject, origin: THREE.Vector3, dest: THREE.Vector3, smooth: boolean = true): ComputedPath {
     this.reset();
 
@@ -389,7 +475,15 @@ export class ModulePath {
     const fallbackPath = ComputedPath.FromPointsList([originPoint, destPoint]);
     if(!this.points.length) return fallbackPath;
 
-    if(originPoint.hasLOS(destPoint, owner)) return fallbackPath;
+    //Both conditions, not just line of sight: hasLOS cannot see a wall that
+    //the room walkmesh edge list does not describe, and a shortcut that leaves
+    //walkable ground is not a shortcut. Without the second test this returned
+    //two points straight through the Ebon Hawk's Main Hold walls.
+    if(originPoint.hasLOS(destPoint, owner) &&
+       this.segmentStaysOnWalkableGround(origin, dest) &&
+       !this.segmentBlockedByClosedDoor(origin, dest)){
+      return fallbackPath;
+    }
 
     const closest_origin_point = this.getClosestPathPoint(origin);
     const closest_destination_point = this.getClosestPathPoint(dest);
@@ -402,9 +496,22 @@ export class ModulePath {
     closest_destination_point.addConnection(destPoint);
     destPoint.addConnection(closest_destination_point);
 
-    originPoint.connections = this.points.slice(0).filter( (p) => {
+    //Keep the anchor added above. This assignment used to REPLACE
+    //originPoint.connections outright, discarding the deliberate link to
+    //closest_origin_point four lines up. Where no path point happens to have
+    //line of sight to the actor - standing in an alcove, or on the far side
+    //of a room boundary, both common in Peragus - the origin was left with no
+    //connections at all, search() failed, and traverseToPoint fell through to
+    //fallbackPath: a straight line from the actor to the destination that
+    //hasLOS had ALREADY rejected. That is how a 46m route across the medical
+    //bay came back as two points through several walls.
+    const visibleFromOrigin = this.points.slice(0).filter( (p) => {
       return p.hasLOS(originPoint, owner);
     });
+    if(visibleFromOrigin.indexOf(closest_origin_point) == -1){
+      visibleFromOrigin.push(closest_origin_point);
+    }
+    originPoint.connections = visibleFromOrigin;
 
     const path = new ComputedPath(owner, originPoint, destPoint);
     path.setOwner(owner);

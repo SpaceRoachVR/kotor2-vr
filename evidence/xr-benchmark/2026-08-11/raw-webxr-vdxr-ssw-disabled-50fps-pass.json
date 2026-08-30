@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "caseId": "raw-webxr",
+  "rendererVersion": "WebGL2 WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+  "runtimeHz": 72,
+  "acceptanceHz": 50,
+  "framebuffer": {
+    "width": 4224,
+    "height": 2304
+  },
+  "frames": 3110,
+  "durationSec": 60,
+  "fps": 51.82,
+  "intervalMs": {
+    "min": 8.8,
+    "p50": 15.8,
+    "p90": 31,
+    "p99": 46.1,
+    "max": 78.9
+  },
+  "overBudget": {
+    "budgetMs": 20,
+    "frames": 682,
+    "percent": 21.94
+  },
+  "estimatedMissedRuntimeFrames": 759,
+  "duplicateTimestamps": 0,
+  "gpuMs": {
+    "supported": true,
+    "samples": 3109,
+    "disjointSamples": 0,
+    "min": 0.03,
+    "p50": 0.05,
+    "p90": 0.05,
+    "p99": 0.76,
+    "max": 3.15
+  },
+  "verdict": {
+    "status": "pass",
+    "failed": [],
+    "missing": []
+  },
+  "environment": {
+    "headset": "Quest 3",
+    "runtime": "VDXR",
+    "browser": "Chrome",
+    "gpu": "RTX 3060",
+    "virtualDesktopVersion": "1.34.18",
+    "synchronousSpacewarp": "disabled",
+    "headsetRefreshHz": 72
+  }
+}

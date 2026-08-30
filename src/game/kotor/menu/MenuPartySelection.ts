@@ -364,7 +364,7 @@ export class MenuPartySelection extends GameMenu {
       let portrait = GameState.PartyManager.GetPortraitByIndex(i);
       if (LBL_NA.getFillTextureName() != portrait && !!portrait) {
         LBL_CHAR.setFillTextureName(portrait);
-        const texture = await TextureLoader.Load(portrait);
+        const texture = await TextureLoader.LoadGUI(portrait);
         if(texture)LBL_CHAR.setFillTexture(texture);
       }
       (LBL_CHAR.getFill().material as THREE.ShaderMaterial).uniforms.opacity.value = this.isSelectable(i) ? 1 : 0.5;

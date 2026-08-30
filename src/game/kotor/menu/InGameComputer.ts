@@ -42,9 +42,14 @@ export class InGameComputer extends GameMenu {
   LB_MESSAGE: GUIListBox;
   LBL_OBSCURE: GUILabel;
 
+  //GameMenu.show() applies this. Without it the base class sets GUI mode and
+  //show() below immediately corrects it to DIALOG - which thrashes the engine
+  //mode once per frame, because updateCamera() calls show() every frame.
+  engineMode: EngineMode = EngineMode.DIALOG;
+
   owner: ModuleObject;
   listener: ModuleObject;
-  
+
   ended: boolean = false;
 
   dialog: DLGObject;

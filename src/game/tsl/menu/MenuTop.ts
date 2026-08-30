@@ -203,7 +203,7 @@ export class MenuTop extends K1_MenuTop {
       let pmBG = this.getControlByName('LBL_CHAR' + (i + 1));
       if (pmBG.getFillTextureName() != portTextureRef) {
         pmBG.setFillTextureName(portTextureRef);
-        TextureLoader.Load(portTextureRef).then((texture: OdysseyTexture) => {
+        TextureLoader.LoadGUI(portTextureRef).then((texture: OdysseyTexture) => {
           pmBG.setFillTexture(texture);
         });
       }

@@ -172,7 +172,7 @@ export class GameMenu {
      * Background texture of the menu
      */
     if(this.background){
-      const texture: OdysseyTexture = await TextureLoader.tpcLoader.fetch(this.background);
+      const texture: OdysseyTexture = await TextureLoader.LoadGUI(this.background);
       const geometry = new THREE.PlaneGeometry( 1600, 1200, 1 );
       this.backgroundMaterial = new THREE.ShaderMaterial({
         uniforms: THREE.UniformsUtils.merge([
@@ -190,7 +190,7 @@ export class GameMenu {
   }
 
   async loadTexture( resRef: string ): Promise<OdysseyTexture> {
-    return await TextureLoader.Load(resRef);
+    return await TextureLoader.LoadGUI(resRef);
   }
 
   getControlByName(name: string): GUIControl {
@@ -320,7 +320,13 @@ export class GameMenu {
       controls = this.tGuiPanel.getActiveControls();
     }
     if(this.childMenu){
-      controls = controls.concat(controls, this.childMenu.getActiveControls());
+      // `concat(controls, ...)` appended this menu's own controls a second
+      // time, so every hit-test result arrived duplicated — visible in the
+      // headset logs as "[LBL_BAR3(...), LBL_BAR3(...)]" for a single label.
+      // Duplicates make each control receive mouseDown twice on the legacy
+      // mouse path and made the VR miss diagnostics twice as long as the
+      // truth.
+      controls = controls.concat(this.childMenu.getActiveControls());
     }
     return controls;
   }

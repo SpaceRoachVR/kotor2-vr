@@ -240,6 +240,19 @@ export class CharGenAbilities extends GameMenu {
     this.creature = creature;
   }
 
+  /**
+   * The ability modifier for a score, matching `CombatRound.GetMod`, formatted
+   * the way the screen's own authored placeholder implies: a signed two-digit
+   * field. The retail column between the attribute name and its score is the
+   * modifier, and it was never written — every row read the placeholder `00`
+   * regardless of the score beside it.
+   */
+  private static formatAbilityModifier(score: number): string {
+    const modifier = Math.floor((Number(score) - 10) / 2);
+    const magnitude = Math.abs(modifier).toString().padStart(2, '0');
+    return `${modifier < 0 ? '-' : '+'}${magnitude}`;
+  }
+
   updateButtonStates(){
     this.STR_POINTS_BTN.setText(GameState.CharGenManager.str);
     this.DEX_POINTS_BTN.setText(GameState.CharGenManager.dex);
@@ -248,11 +261,16 @@ export class CharGenAbilities extends GameMenu {
     this.INT_POINTS_BTN.setText(GameState.CharGenManager.int);
     this.CHA_POINTS_BTN.setText(GameState.CharGenManager.cha);
 
+    const mod = CharGenAbilities.formatAbilityModifier;
+    (this as any).LBL_BONUS_STR?.setText(mod(GameState.CharGenManager.str));
+    (this as any).LBL_BONUS_DEX?.setText(mod(GameState.CharGenManager.dex));
+    (this as any).LBL_BONUS_CON?.setText(mod(GameState.CharGenManager.con));
+    (this as any).LBL_BONUS_WIS?.setText(mod(GameState.CharGenManager.wis));
+    (this as any).LBL_BONUS_INT?.setText(mod(GameState.CharGenManager.int));
+    (this as any).LBL_BONUS_CHA?.setText(mod(GameState.CharGenManager.cha));
+
     //Selected Attribute Cost
     //this.COST_POINTS_LBL
-
-    //Selected Attribute Modifier
-    //this.LBL_ABILITY_MOD
 
     this.STR_MINUS_BTN.show();
     this.DEX_MINUS_BTN.show();
@@ -267,6 +285,11 @@ export class CharGenAbilities extends GameMenu {
     this.WIS_PLUS_BTN.show();
     this.INT_PLUS_BTN.show();
     this.CHA_PLUS_BTN.show();
+
+    // The minus-button rules below all read this.creature. Without a creature
+    // this threw partway through the refresh on every click, so nothing redrew.
+    // The show() calls above deliberately stay outside the guard.
+    if(!this.creature) return;
 
     if(GameState.CharGenManager.str <= 8 || this.creature.str == GameState.CharGenManager.str)
       this.STR_MINUS_BTN.hide();

@@ -158,21 +158,21 @@ export class LBL_MapView {
     this.scene.add(this.mapGroup);
     this.scene.add(this.fogGroup);
 
-    TextureLoader.Load('blackdot').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('blackdot').then((texture: OdysseyTexture) => {
       fogPlaneMaterial.uniforms.map.value = texture;
       this.fogTexture = texture;
     });
 
-    TextureLoader.Load('mm_barrow').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('mm_barrow').then((texture: OdysseyTexture) => {
       this.arrowTexture = texture;
       (this.arrowPlane.material as THREE.MeshBasicMaterial).map = texture;
     });
 
-    TextureLoader.Load('whitetarget').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('whitetarget').then((texture: OdysseyTexture) => {
       this.noteTexture = texture;
     });
 
-    TextureLoader.Load('lbl_mapcircle').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('lbl_mapcircle').then((texture: OdysseyTexture) => {
       this.pmTexture = pmCircleMaterial.map = texture;
     });
   }
@@ -306,7 +306,7 @@ export class LBL_MapView {
     if(!this.areaMap) return;
   }
 
-  render(delta: number = 0){
+  render(delta: number = 0, renderer: THREE.WebGLRenderer = GameState.renderer){
     if(!this.visible || !this.control)
       return;
 
@@ -406,15 +406,20 @@ export class LBL_MapView {
       }
     }
 
-    let oldClearColor = new THREE.Color();
-    GameState.renderer.getClearColor(oldClearColor);
-    GameState.renderer.setClearColor(this.clearColor, 1);
-    GameState.renderer.setRenderTarget(this.texture);
-    GameState.renderer.clear();
-    GameState.renderer.render(this.scene, this.currentCamera);
-    (this.texture as any).needsUpdate = true;
-    GameState.renderer.setRenderTarget(null);
-    GameState.renderer.setClearColor(oldClearColor, 1);
+    const oldClearColor = new THREE.Color();
+    const oldClearAlpha = renderer.getClearAlpha();
+    const oldRenderTarget = renderer.getRenderTarget();
+    renderer.getClearColor(oldClearColor);
+    try {
+      renderer.setClearColor(this.clearColor, 1);
+      renderer.setRenderTarget(this.texture);
+      renderer.clear();
+      renderer.render(this.scene, this.currentCamera);
+      (this.texture as any).needsUpdate = true;
+    } finally {
+      renderer.setRenderTarget(oldRenderTarget);
+      renderer.setClearColor(oldClearColor, oldClearAlpha);
+    }
 
     if(this.control){
       let material = this.control.getFill().material;

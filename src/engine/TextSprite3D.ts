@@ -123,7 +123,7 @@ export class TextSprite3D {
       this.text.material.uniformsNeedUpdate = true;
       this.buildText();
       this.ready = true;
-    });
+    }, undefined, 'font');
     
     this.container.add(this.text.mesh);
   }

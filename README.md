@@ -108,6 +108,23 @@ For build-to-disk without a server (CI, quick compiles):
 npm run webpack:dev-watch
 ```
 
+For the KOTOR II VR browser path, build to `dist` and start the authenticated
+loopback asset service instead of exposing the retail directory through the dev
+server:
+
+```powershell
+npm run webpack:dev
+node tools/asset-http/asset-server.js `
+  --game "D:\SteamLibrary\steamapps\common\Knights of the Old Republic II" `
+  --user "$env:LOCALAPPDATA\Kotor2VR"
+```
+
+Open the one-time `/launch?token=...` URL printed by the service in a fresh
+Chrome or Edge process. It selects the TSL profile automatically. Retail assets
+are read-only; saves, configuration, screenshots, caches, and logs are routed
+to the user-data root. Stop the service with `Ctrl+C` when the browser session
+ends.
+
 ---
 
 #### Option C — VS Code launch configurations

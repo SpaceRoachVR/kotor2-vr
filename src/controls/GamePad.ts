@@ -12,6 +12,24 @@ import { KeyInput } from "@/controls/KeyInput";
  */
 export class GamePad {
 
+  /**
+   * Suspends the flatscreen gamepad layer while an immersive XR session owns
+   * input.
+   *
+   * WebXR controllers are also exposed through the Gamepad API, so in the
+   * headset every VR controller press was additionally being read as a
+   * flatscreen pad press and running the desktop keymap on top of the VR
+   * binding. The right trigger is `trigger_r` (SelectNext) and the face button
+   * is `button_y` (Flourish) — and `flourish()` calls `resetExcitedDuration()`,
+   * which forces `combatData.combatState = true` for ten seconds. That is the
+   * phantom combat with no enemy: not the VR combat path at all, which cannot
+   * fire without a nominated target, but the legacy pad layer firing behind it.
+   *
+   * VR supplies its own explicit bindings for everything here, so the legacy
+   * layer has nothing to contribute during a session.
+   */
+  static suppressed = false;
+
   button_a = new KeyInput('A');
   button_b = new KeyInput('B');
   button_x = new KeyInput('X');
@@ -52,6 +70,7 @@ export class GamePad {
   }
 
   updateState(delta = 0){
+    if(GamePad.suppressed) return;
     if(this.gamePad instanceof Gamepad){
       this.button_a.update(this.gamePad, delta);
       this.button_b.update(this.gamePad, delta);

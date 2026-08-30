@@ -2,6 +2,11 @@ import { GameState } from "@/GameState";
 import { GUILabel, GUIListBox, GUIButton } from "@/gui";
 import { ModuleCreature, ModulePlaceable } from "@/module";
 import { MenuContainer as K1_MenuContainer } from "@/game/kotor/KOTOR";
+// BTN_GIVEITEMS' handler switches on this and it was never imported, so the
+// take/give toggle threw `MenuContainerMode is not defined` the moment it was
+// pressed — in flatscreen and VR alike. K1's MenuContainer imports it from the
+// same place; the TSL copy dropped the import.
+import { MenuContainerMode } from "@/enums/gui/MenuContainerMode";
 
 /**
  * MenuContainer class.
@@ -43,17 +48,62 @@ export class MenuContainer extends K1_MenuContainer {
 
       this.BTN_OK.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.LB_ITEMS.setItems([]);
-        if(this.container instanceof ModulePlaceable){
-          this.container.retrieveInventory();
-          this.container.close(GameState.PartyManager.party[0]);
-        }else if(this.container instanceof ModuleCreature){
-          this.container.retrieveInventory();
-          //this.container.close(Game.player);
+        const selectedItem = this.selectedItem;
+        if(!selectedItem){
+          return;
         }
-        this.close();
+
+        if(this.mode == MenuContainerMode.TAKE_ITEMS){
+          this.LB_ITEMS.setItems([]);
+          if(this.container instanceof ModulePlaceable){
+            this.container.retrieveInventory();
+            this.container.close(GameState.PartyManager.party[0]);
+          }else if(this.container instanceof ModuleCreature){
+            this.container.retrieveInventory();
+            //this.container.close(Game.player);
+          }
+          this.close();
+          return;
+        }
+
+        if(selectedItem.getStackSize() <= 0){
+          return;
+        }
+
+        const willRemoveFromInventory = selectedItem.getStackSize() <= 1;
+        GameState.InventoryManager.removeItem(selectedItem, 1);
+        const transferredItem = selectedItem.clone();
+        transferredItem.setStackSize(1);
+        this.container.addItem(transferredItem);
+
+        if(willRemoveFromInventory){
+          this.LB_ITEMS.removeItemByNode(selectedItem);
+          return;
+        }
+
+        const control = this.LB_ITEMS.getListElementByNode(selectedItem);
+        if(control){
+          control.needsUpdate = true;
+        }
       });
       this._button_a = this.BTN_OK;
+
+      // Dropped the same way BTN_EXIT was in MenuJournal: the parent's
+      // registration is skipped and this one was never re-added, so the
+      // take/give toggle did nothing in either flatscreen or VR.
+      this.BTN_GIVEITEMS.addEventListener('click', (e) => {
+        e.stopPropagation();
+        switch(this.mode){
+          case MenuContainerMode.TAKE_ITEMS:
+            this.setMode(MenuContainerMode.GIVE_ITEMS);
+          break;
+          case MenuContainerMode.GIVE_ITEMS:
+            this.setMode(MenuContainerMode.TAKE_ITEMS);
+          break;
+        }
+      });
+      this._button_x = this.BTN_GIVEITEMS;
+
       resolve();
     });
   }

@@ -289,7 +289,30 @@ export class DLGNode {
         this.checkList.voiceOverComplete = true;
       }
     }
-    return this.checkList.isComplete();
+    const complete = this.checkList.isComplete();
+
+    //A node whose checklist is never satisfied stalls the entire conversation
+    //silently - no error, no end, nothing on screen. Report the blocking flags
+    //once so the cause is visible instead of having to be inferred.
+    if(!complete && !this.checkList.alreadyAllowed && !this.checkList.stallReported && this.elapsed > 10000){
+      this.checkList.stallReported = true;
+      console.warn('DLGNode: node has not completed after 10s', {
+        text: this.getCompiledString(),
+        delay: this.delay,
+        elapsed: Math.round(this.elapsed),
+        voiceOverComplete: this.checkList.voiceOverComplete,
+        voiceOverError: this.checkList.voiceOverError,
+        fadeComplete: this.checkList.fadeComplete,
+        cameraAnimationComplete: this.checkList.cameraAnimationComplete,
+        isSkipped: this.checkList.isSkipped,
+        hasAnimatedCamera: !!this.dialog.animatedCamera,
+        cameraID: this.cameraID,
+        cameraAngle: this.cameraAngle,
+        fade: this.fade,
+      });
+    }
+
+    return complete;
   }
 
   setNodeDelay(delay: number = 0){
@@ -361,6 +384,12 @@ export class DLGNode {
           }
           return true;
         }
+        //A missing voice over resolves undefined here rather than throwing, so
+        //this path has to flag the error too. Without it nothing ever sets
+        //voiceOverComplete - there is no audioNode to fire onended and no
+        //error for update() to time out on - and the conversation hangs on
+        //this node forever.
+        this.checkList.voiceOverError = true;
         return false;
       }catch(e){
         this.checkList.voiceOverError = true;
@@ -394,6 +423,7 @@ export class DLGNode {
       alreadyAllowed: false,
       fadeComplete: false,
       voiceOverError: false,
+      stallReported: false,
       isComplete: (): boolean => {
         if (this.checkList.alreadyAllowed || this.checkList.isSkipped) {
           return false;

@@ -11,6 +11,7 @@ import { GFFStruct } from "@/resource/GFFStruct";
 import { TwoDAObject } from "@/resource/TwoDAObject";
 import { BitWise } from "@/utility/BitWise";
 import { TalentObject } from "@/talents/TalentObject";
+import { readFeatClassColumn } from '@/talents/featClassColumns';
 
 const FEAT_PENALTY_DURATION = CombatRound.ROUND_LENGTH;
 
@@ -272,115 +273,22 @@ export class TalentFeat extends TalentObject {
 
   }
 
+  /**
+   * Per-class `feat.2da` columns. The lookup itself lives in
+   * `featClassColumns.ts`, free of engine imports, because it is pure data
+   * logic and was previously three copies of a switch that silently returned
+   * -1 for every class — see that file for what that broke.
+   */
   getGranted(classData: CreatureClass): number {
-    switch(classData.skillstable){
-      case 'scd':
-        return this.scdGranted;
-      case 'sol':
-        return this.solGranted;
-      case 'sct':
-        return this.sctGranted;
-      case 'jcn':
-        return this.jcnGranted;
-      case 'jgd':
-        return this.jgdGranted;
-      case 'jsn':
-        return this.jsnGranted; 
-      case 'sas':
-        return this.sasGranted;
-      case 'sld':
-        return this.sldGranted;
-      case 'sma':
-        return this.smaGranted;   
-      case 'jwa':
-        return this.jwaGranted;
-      case 'jma':
-        return this.jmaGranted;
-      case 'jwm':
-        return this.jwmGranted; 
-      case 'tec':
-        return this.tecGranted;
-      case 'drx':
-        return this.drxGranted;
-      case 'drc':
-        return this.drcGranted; 
-      default:
-        return -1;
-    }
+    return readFeatClassColumn(this, classData?.skillstable, 'Granted');
   }
 
   getRecom(classData: CreatureClass): number {
-    switch(classData.skillstable){
-      case 'scd':
-        return this.scdRecom;
-      case 'sol':
-        return this.solRecom; 
-      case 'sct':
-        return this.sctRecom;
-      case 'jcn':
-        return this.jcnRecom;
-      case 'jgd':
-        return this.jgdRecom; 
-      case 'jsn':
-        return this.jsnRecom;
-      case 'sas':
-        return this.sasRecom;
-      case 'sld':
-        return this.sldRecom;   
-      case 'sma':
-        return this.smaRecom;
-      case 'jwa':
-        return this.jwaRecom;
-      case 'jma':
-        return this.jmaRecom;
-      case 'jwm':
-        return this.jwmRecom;
-      case 'tec':
-        return this.tecRecom;
-      case 'drx':
-        return this.drxRecom;
-      case 'drc':
-        return this.drcRecom;
-      default:
-        return -1;
-    }
+    return readFeatClassColumn(this, classData?.skillstable, 'Recom');
   }
 
   getList(classData: CreatureClass): number {
-    switch(classData.skillstable){
-      case 'scd':
-        return this.scdList;
-      case 'sol':
-        return this.solList;
-      case 'sct':
-        return this.sctList;
-      case 'jcn':
-        return this.jcnList;
-      case 'jgd':
-        return this.jgdList;
-      case 'jsn':
-        return this.jsnList;
-      case 'sas':
-        return this.sasList;
-      case 'sld':
-        return this.sldList;
-      case 'sma':
-        return this.smaList;
-      case 'jwa':
-        return this.jwaList;
-      case 'jma':
-        return this.jmaList;  
-      case 'jwm':
-        return this.jwmList;
-      case 'tec':
-        return this.tecList;
-      case 'drx':
-        return this.drxList;
-      case 'drc':
-        return this.drcList;
-      default:
-        return -1;
-    }
+    return readFeatClassColumn(this, classData?.skillstable, 'List');
   }
 
   apply2DA(row: any = {}){
@@ -664,6 +572,8 @@ export class TalentFeat extends TalentObject {
 
   static From2DA(row: any = {}) {
     const talentFeat = new TalentFeat();
+    const sourceId = row?.__index !== undefined ? row.__index : row?.id;
+    talentFeat.id = TwoDAObject.normalizeValue(sourceId, 'number', -1);
     talentFeat.apply2DA(row);
     return talentFeat;
   }

@@ -15,6 +15,7 @@ import type {
   SemanticBreakNode,
   SemanticContinueNode,
   SemanticStructNode,
+  SemanticStructPropertyNode,
   SemanticVariableNode,
   SemanticVariableListNode,
   SemanticVariableReferenceNode,
@@ -62,7 +63,8 @@ export type CompilerFunctionNode = SemanticFunctionNode & {
 };
 
 export type CompilerStructNode = SemanticStructNode & { properties: CompilerStructPropertyNode[] };
-export type CompilerStructPropertyNode = SemanticPropertyNode;
+// Struct member declarations, not member-access expressions (that is CompilerPropertyNode).
+export type CompilerStructPropertyNode = SemanticStructPropertyNode;
 export type CompilerVariableNode = SemanticVariableNode;
 export type CompilerVariableListNode = SemanticVariableListNode & { variables?: CompilerVariableNode[] };
 export type CompilerVariableReferenceNode = SemanticVariableReferenceNode;

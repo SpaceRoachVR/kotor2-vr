@@ -2,14 +2,14 @@ import * as THREE from "three";
 import { TextureLoader } from "@/loaders";
 import { Mouse } from "@/controls/Mouse";
 import type { ModuleObject } from "@/module";
-import { ApplicationProfile } from "@/utility/ApplicationProfile";
-import { EngineMode, GameEngineType } from "@/enums/engine";
+import { EngineMode } from "@/enums/engine";
 import type { MenuManager } from "@/managers/MenuManager";
 import { GameState } from "@/GameState";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
 import { GUIControlTypeMask } from "@/enums/gui/GUIControlTypeMask";
 import { OdysseyObject3D } from "@/three/odyssey/OdysseyObject3D";
+import { getAttackCursorTextures } from "@/managers/cursor/CursorTextureBindings";
 
 /**
  * Manages the in-game cursor, reticles, and selection/hover logic.
@@ -126,13 +126,9 @@ export class CursorManager {
 		TextureLoader.enQueue('gui_mp_talkD', CursorManager.cursorMaterials.get('talkD'));
 		TextureLoader.enQueue('gui_mp_useU', CursorManager.cursorMaterials.get('use'));
 		TextureLoader.enQueue('gui_mp_useD', CursorManager.cursorMaterials.get('useD'));
-		if(ApplicationProfile.GameKey == GameEngineType.TSL){
-			TextureLoader.enQueue('gui_mp_killU', CursorManager.cursorMaterials.get('attack'));
-			TextureLoader.enQueue('gui_mp_killD', CursorManager.cursorMaterials.get('attackD'));
-		}else{
-			TextureLoader.enQueue('gui_mp_attackU', CursorManager.cursorMaterials.get('attack'));
-			TextureLoader.enQueue('gui_mp_attackD', CursorManager.cursorMaterials.get('attackD'));
-		}
+		const attackTextures = getAttackCursorTextures(GameState.GameKey);
+		TextureLoader.enQueue(attackTextures.released, CursorManager.cursorMaterials.get('attack'));
+		TextureLoader.enQueue(attackTextures.pressed, CursorManager.cursorMaterials.get('attackD'));
 		TextureLoader.enQueue('gui_mp_dismineU', CursorManager.cursorMaterials.get('trap'));
 		TextureLoader.enQueue('gui_mp_dismineD', CursorManager.cursorMaterials.get('trapD'));
 		TextureLoader.enQueue('gui_mp_selectU', CursorManager.cursorMaterials.get('select'));

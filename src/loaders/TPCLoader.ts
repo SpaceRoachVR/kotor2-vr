@@ -7,6 +7,12 @@ import { KEYManager } from "@/managers/KEYManager";
 import { OdysseyCompressedTexture } from "@/three/odyssey";
 import { IFindTPCResult } from "@/interface/graphics/IFindTPCResult";
 import { TextureLoaderState } from "@/loaders/TextureLoaderState";
+import { isTextureResrefUsable, normalizeTextureResref } from "@/loaders/TextureResolution";
+
+const GUI_TEXTURE_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  border1: 'border1c',
+  border2: 'border2c',
+});
 
 /**
  * TPCLoader class.
@@ -20,16 +26,90 @@ import { TextureLoaderState } from "@/loaders/TextureLoaderState";
  * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
  */
 export class TPCLoader {
+
+  decode(buffer: Uint8Array, resRef: string, pack: number = TextureLoaderState.TextureQuality || 2): OdysseyCompressedTexture {
+    const normalizedResRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(normalizedResRef)) {
+      throw new TypeError(`Invalid texture resref '${normalizedResRef || '<empty>'}'`);
+    }
+    if (!(buffer instanceof Uint8Array) || buffer.length === 0) {
+      throw new TypeError(`TPC '${normalizedResRef}' requires a non-empty buffer`);
+    }
+    return new TPCObject({
+      filename: normalizedResRef,
+      file: buffer,
+      pack,
+    }).toCompressedTexture();
+  }
+
+  async findInGuiPack(resRef: string): Promise<IFindTPCResult | undefined> {
+    return this.findInPack('swpc_tex_gui', resRef, 0);
+  }
+
+  async findInTexturePack(resRef: string): Promise<IFindTPCResult | undefined> {
+    const packName = TextureLoaderState.TextureQuality === 1
+      ? 'swpc_tex_tpb'
+      : TextureLoaderState.TextureQuality === 0
+        ? 'swpc_tex_tpc'
+        : 'swpc_tex_tpa';
+    return this.findInPack(packName, resRef, TextureLoaderState.TextureQuality || 2);
+  }
+
+  async findInKeyTable(resRef: string): Promise<IFindTPCResult | undefined> {
+    const normalizedResRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(normalizedResRef)) {
+      throw new TypeError(`Invalid texture resref '${normalizedResRef || '<empty>'}'`);
+    }
+    const resourceKey = KEYManager.Key?.getFileKey(normalizedResRef, ResourceTypes.tpc);
+    if (!resourceKey) {
+      return undefined;
+    }
+    return {
+      pack: TextureLoaderState.TextureQuality || 2,
+      buffer: await KEYManager.Key.getFileBuffer(resourceKey),
+    };
+  }
+
+  private async findInPack(packName: string, resRef: string, pack: number): Promise<IFindTPCResult | undefined> {
+    const normalizedResRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(normalizedResRef)) {
+      throw new TypeError(`Invalid texture resref '${normalizedResRef || '<empty>'}'`);
+    }
+    const archive = ERFManager.ERFs.get(packName);
+    if (!archive) {
+      return undefined;
+    }
+    const resource = archive.getResourceInfo(normalizedResRef, ResourceTypes.tpc);
+    if (!resource) {
+      return undefined;
+    }
+    return { pack, buffer: await archive.getResourceBuffer(resource) };
+  }
   
   async findTPC( resRef: string ): Promise<IFindTPCResult> {
-    resRef = resRef.toLocaleLowerCase();
-  
-    let erfResource = ERFManager.ERFs.get('swpc_tex_gui').getResourceInfo(resRef, ResourceTypes['tpc']);
-    if(erfResource){
-      const buffer = await ERFManager.ERFs.get('swpc_tex_gui').getResourceBuffer(erfResource);
-      return { pack: 0, buffer: buffer };
+    resRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(resRef)) {
+      throw new TypeError(`Invalid texture resref '${resRef || '<empty>'}'`);
     }
   
+    const guiPack = ERFManager.ERFs.get('swpc_tex_gui');
+    let erfResource = guiPack.getResourceInfo(resRef, ResourceTypes['tpc']);
+    if(erfResource){
+      const buffer = await guiPack.getResourceBuffer(erfResource);
+      return { pack: 0, buffer: buffer };
+    }
+
+    // These two GUI resources ship only under c-suffixed names in the retail TSL pack.
+    // Keep the mapping explicit so an unrelated texture cannot be silently substituted.
+    const guiAlias = GUI_TEXTURE_ALIASES[resRef];
+    if(guiAlias){
+      erfResource = guiPack.getResourceInfo(guiAlias, ResourceTypes['tpc']);
+      if(erfResource){
+        const buffer = await guiPack.getResourceBuffer(erfResource);
+        return { pack: 0, buffer: buffer };
+      }
+    }
+
     let activeTexturePack;
     switch(TextureLoaderState.TextureQuality){
       case 2:
@@ -65,13 +145,7 @@ export class TPCLoader {
   async fetch(resRef: string = ''): Promise<OdysseyCompressedTexture>{
     try{
       const result = await this.findTPC(resRef);
-      const tpc = new TPCObject({
-        filename: resRef,
-        file: result.buffer,
-        pack: result.pack,
-      });
-
-      let texture = tpc.toCompressedTexture();
+      const texture = this.decode(result.buffer, resRef, result.pack);
       //console.log("loaded texture", resRef);
 
       return texture;
@@ -82,6 +156,10 @@ export class TPCLoader {
   }
   
   async fetchOverride(resRef: string = ''): Promise<OdysseyCompressedTexture> {
+    resRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(resRef)) {
+      return undefined;
+    }
     const dir = path.join('Override');
   
     try{

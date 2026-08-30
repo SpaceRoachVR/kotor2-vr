@@ -37,6 +37,9 @@ export class CharGenFeats extends K1_CharGenFeats {
     await super.menuControlInitializer(true);
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
+      // super was called with skipInit, so the base class's own body did not
+      // run and Back/Accept would otherwise have no handlers here either.
+      this.wireStepNavigation();
       resolve();
     });
   }

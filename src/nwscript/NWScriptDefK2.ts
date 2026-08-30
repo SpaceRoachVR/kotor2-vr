@@ -1,13 +1,16 @@
 import { ModuleObjectScript, ModuleObjectType } from "@/enums";
 import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
+import { EngineMode } from "@/enums/engine/EngineMode";
 import { NWScriptDataType } from "@/enums/nwscript/NWScriptDataType";
 import { GameState } from "@/GameState";
+import { Planetary } from "@/engine/Planetary";
 import type { ModuleCreature, ModuleObject } from "@/module";
 import { BitWise } from "@/utility/BitWise";
 import { NW_FALSE, NW_TRUE } from "@/nwscript/NWScriptConstants";
 import { NWScriptDef } from "@/nwscript/NWScriptDef";
 import { NWScriptDefK1 } from "@/nwscript/NWScriptDefK1";
 import { NWScriptInstance } from "@/nwscript/NWScriptInstance";
+import { getRandomWalkableDestination } from "@/nwscript/actions/GetRandomDestination";
 
 /**
  * NWScriptDefK2 class.
@@ -2033,7 +2036,9 @@ NWScriptDefK2.Actions = {
     name: 'SetCustomToken',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.STRING ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, string]) {
+      GameState.module?.setCustomToken(args[0], args[1]);
+    }
   },
   285: {
     comment: '285: Determine whether oCreature has nFeat, and nFeat is useable.\nPLEASE NOTE!!! - This function will return FALSE if the target\nis not currently able to use the feat due to daily limits or\nother restrictions. Use GetFeatAcquired() if you just want to\nknow if they\'ve got it or not.\n- nFeat: FEAT_*\n- oCreature',
@@ -2614,21 +2619,27 @@ NWScriptDefK2.Actions = {
     name: 'AddJournalQuestEntry',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING, NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [string, number, number]) {
+      GameState.JournalManager.AddJournalQuestEntry(args[0], args[1], !!args[2]);
+    }
   },
   368: {
     comment: '368: Remove a journal quest entry from the player.\n- szPlotID: the plot identifier used in the toolset\'s Journal Editor',
     name: 'RemoveJournalQuestEntry',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [string]) {
+      GameState.JournalManager.RemoveJournalQuestEntry(args[0]);
+    }
   },
   369: {
     comment: '369: Gets the State value of a journal quest.  Returns 0 if no quest entry has been added for this szPlotID.\n- szPlotID: the plot identifier used in the toolset\'s Journal Editor',
     name: 'GetJournalEntry',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.STRING ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [string]) {
+      return GameState.JournalManager.GetJournalEntryState(args[0]);
+    }
   },
   370: {
     comment: '370: PlayRumblePattern\nStarts a defined rumble pattern playing',
@@ -5178,6 +5189,10 @@ NWScriptDefK2.Actions = {
     name: 'PlayMovie',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING, NWScriptDataType.INTEGER ],
+    //Inherits K1's implementation via the merge at the bottom of this file.
+    //Do not reimplement to pass args[1] as the skippable flag - its meaning is
+    //unverified, TSL passes 0 for the prologue crawl, and doing so makes that
+    //movie unskippable.
     action: undefined
   },
   734: {
@@ -5220,42 +5235,57 @@ NWScriptDefK2.Actions = {
     name: 'ShowGalaxyMap',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]) {
+      Planetary.SetSelectedPlanet(args[0]);
+      GameState.MenuManager.MenuGalaxyMap.open();
+    }
   },
   740: {
     comment: '740: SetPlanetSelectable\nSets \'nPlanet\' selectable on the Galaxy Map Gui.',
     name: 'SetPlanetSelectable',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, number]) {
+      Planetary.SetPlanetSelectable(args[0], !!args[1]);
+    }
   },
   741: {
     comment: '741: GetPlanetSelectable\nReturns wheter or not \'nPlanet\' is selectable.',
     name: 'GetPlanetSelectable',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]) {
+      const planet = Planetary.GetPlanetByIndex(args[0]);
+      return planet && planet.selectable ? NW_TRUE : NW_FALSE;
+    }
   },
   742: {
     comment: '742: SetPlanetAvailable\nSets \'nPlanet\' available on the Galaxy Map Gui.',
     name: 'SetPlanetAvailable',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, number]) {
+      Planetary.SetPlanetAvailable(args[0], !!args[1]);
+    }
   },
   743: {
     comment: '743: GetPlanetAvailable\nReturns wheter or not \'nPlanet\' is available.',
     name: 'GetPlanetAvailable',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]) {
+      const planet = Planetary.GetPlanetByIndex(args[0]);
+      return planet && planet.enabled ? NW_TRUE : NW_FALSE;
+    }
   },
   744: {
     comment: '744: GetSelectedPlanet\nReturns the ID of the currently selected planet.  Check Planetary.2da\nfor which planet the return value corresponds to. If the return is -1\nno planet is selected.',
     name: 'GetSelectedPlanet',
     type: NWScriptDataType.INTEGER,
     args: [],
-    action: undefined
+    action: function(this: NWScriptInstance, args: []) {
+      return Planetary.selectedIndex;
+    }
   },
   745: {
     comment: '745: SoundObjectFadeAndStop\nFades a sound object for \'fSeconds\' and then stops it.',
@@ -5709,21 +5739,36 @@ NWScriptDefK2.Actions = {
     name: 'IsMoviePlaying',
     type: NWScriptDataType.INTEGER,
     args: [],
-    action: undefined
+    action: function(this: NWScriptInstance, args: []){
+      return GameState.VideoManager.isPlaying ? NW_TRUE : NW_FALSE;
+    }
   },
   806: {
     comment: '806 QueueMovie',
     name: 'QueueMovie',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.STRING, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [string, number]){
+      //args[1] is the skippable flag. Queued movies do not play until
+      //PlayMovieQueue is called.
+      GameState.VideoManager.queueMovie(args[0], !!args[1]);
+    }
   },
   807: {
     comment: '807',
     name: 'PlayMovieQueue',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      //Mirrors the startup movie sequence: switch to MOVIE mode for the
+      //duration, then hand play mode back once the queue drains. Without the
+      //restore the engine would stay in MOVIE mode and the world would never
+      //resume.
+      GameState.SetEngineMode(EngineMode.MOVIE);
+      GameState.VideoManager.playMovieQueue( () => {
+        GameState.RestoreEnginePlayMode();
+      });
+    }
   },
   808: {
     comment: '808',
@@ -5787,7 +5832,12 @@ NWScriptDefK2.Actions = {
     name: 'GetRandomDestination',
     type: NWScriptDataType.VECTOR,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleCreature, number]){
+      const creature = BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)
+        ? args[0]
+        : undefined;
+      return getRandomWalkableDestination(creature, args[1]);
+    }
   },
   816: {
     comment: '816\nDJS-OEI 3/25/2004\nReturns whether the given creature is currently in the\nrequested Lightsaber/Consular Form and can make use of\nits benefits. This function will perform trumping checks\nand lightsaber-wielding checks for those Forms that require\nthem.',
@@ -6146,7 +6196,10 @@ NWScriptDefK2.Actions = {
     name: 'SetDisableTransit',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      console.log('SetDisableTransit', !!args[0]);
+      GameState.disableTransit = !!args[0];
+    }
   },
   861: {
     comment: '861\n//RWT-OEI 09/09/04\nThis will set the specific input class.\nThe valid options are:\n0 - Normal PC control\n1 - Mini game control\n2 - GUI control\n3 - Dialog Control\n4 - Freelook control',

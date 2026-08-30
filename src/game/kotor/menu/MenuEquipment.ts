@@ -65,7 +65,8 @@ export class MenuEquipment extends GameMenu {
   defaultControl: GUIControl;
   slot: ModuleCreatureArmorSlot;
   equipmentSelectionActive: boolean;
-  selectedItem: ModuleItem;
+  /** The list's 'None' row is a selectable value, not an absent selection. */
+  selectedItem: ModuleItem | GUIItemNone;
 
   constructor(){
     super();
@@ -203,9 +204,9 @@ export class MenuEquipment extends GameMenu {
         e.stopPropagation();
         if(this.selectedItem instanceof ModuleItem){
           //console.log('selectedItem', this.selectedItem, this.slot, );
-          let currentPC = GameState.PartyManager.party[0];
+          let currentPC = this.getEquipmentTarget();
           if(this.selectedItem instanceof GUIItemNone){
-            currentPC.unequipSlot(this.slot);
+            currentPC.unequipSlot(this.slot, true);
           }else if(this.selectedItem instanceof ModuleItem){
             currentPC.equipItem(this.slot, this.selectedItem).then( () => {
               this.updateSlotIcons();
@@ -252,7 +253,7 @@ export class MenuEquipment extends GameMenu {
   updateListHover(slot: number) {
     if (slot) {
       const inv = GameState.InventoryManager.getInventory(slot, GameState.getCurrentPlayer());
-      const currentPC = GameState.PartyManager.party[0];
+      const currentPC = this.getEquipmentTarget();
       this.LB_ITEMS.mutate(tx => {
         tx.clear();
         tx.add(new GUIItemNone());
@@ -329,7 +330,7 @@ export class MenuEquipment extends GameMenu {
     }
     this.selectedItem = null;
     this.updateSelected(null);
-    const currentPC = GameState.PartyManager.party[0];
+    const currentPC = this.getEquipmentTarget();
     if (this.slot) {
       const inv = GameState.InventoryManager.getInventory(this.slot, currentPC);
       this.LB_ITEMS.mutate(tx => {
@@ -354,21 +355,51 @@ export class MenuEquipment extends GameMenu {
     let description = '';
     if (item instanceof ModuleItem) {
       this.selectedItem = item;
-      description = this.selectedItem.getDescription();
+      description = item.getDescription();
     } else if(item instanceof GUIItemEquipped) {
       description = item.node.getDescription();
+    } else if(item instanceof GUIItemNone) {
+      //The list's 'None' row IS a selection. BTN_EQUIP branches on
+      //`selectedItem instanceof GUIItemNone` to call unequipSlot(), but this
+      //method left selectedItem undefined for it, so that branch was
+      //unreachable and nothing could ever be unequipped through the equipment
+      //screen - the click was accepted and silently did nothing.
+      this.selectedItem = item;
     }
     this.LB_DESC.setItem(description);
+  }
+
+  /**
+   * The character this screen is currently showing.
+   *
+   * K1's equipment screen only ever edits the party leader, so this answers
+   * party[0]. TSL's switches party member with BTN_NEXTNPC and overrides it.
+   *
+   * It exists so every read on the screen resolves to the SAME character.
+   * They did not: TSL overrode updateSlotIcons and updateCharacterStats to
+   * follow currentNPCIndex and its BTN_EQUIP equipped onto that character,
+   * but updateList delegates to this class and updateListHover is not
+   * overridden at all -- so both went on offering party[0]'s equippable items
+   * and party[0]'s worn row. Select any companion and the screen listed one
+   * character's inventory and equipped it onto another.
+   */
+  getEquipmentTarget(): ModuleCreature {
+    return GameState.PartyManager.party[0];
   }
 
   /**
    * Update the slot icons.
    */
   updateSlotIcons(force: boolean = false) {
-    const currentPC = GameState.PartyManager.party[0];
+    const currentPC = this.getEquipmentTarget();
     if(!currentPC) return;
 
-    if (currentPC.getRace() == 6) {
+    //Every slot icon below used to be gated behind `currentPC.getRace() == 6` with an
+    //empty else - meaning nothing ever updated for any creature that didn't match that
+    //exact race value (this was true for the droid party member being tested against,
+    //and would be equally true for anyone else). No other code in this class gates on
+    //race this way; removed so slot icons refresh unconditionally.
+    {
       let implant = currentPC.GetItemInSlot(ModuleCreatureArmorSlot.IMPLANT);
       if (implant) {
         let icon = 'i' + implant.baseItem.itemClass + '_' + ('000' + implant.getModelVariation()).slice(-3);
@@ -451,8 +482,6 @@ export class MenuEquipment extends GameMenu {
       } else if (force || this.LBL_INV_WEAP_R.getFillTextureName() != 'iweap_r') {
         this.LBL_INV_WEAP_R.setFillTextureName('iweap_r');
       }
-    } else {
-
     }
   }
 
@@ -462,7 +491,7 @@ export class MenuEquipment extends GameMenu {
   updateCharacterStats(){
     this.selectedControl = this.defaultControl;
     this.equipmentSelectionActive = false;
-    const currentPC = GameState.PartyManager.party[0];
+    const currentPC = this.getEquipmentTarget();
     if (!currentPC) {
       return;
     }

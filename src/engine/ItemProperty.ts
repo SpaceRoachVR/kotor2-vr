@@ -33,7 +33,20 @@ export class ItemProperty {
   subType: number;
   costTable: number;
   costValue: number;
-  upgradeType: number;
+  /**
+   * -1 means "no upgrade is required to use this property", and that is the
+   * correct default: `UpgradeType` is an optional K2 upgrade-system field that
+   * most retail templates simply omit. Both security tunnelers
+   * (`g_i_secspike01/02`) omit it, as do the great majority of the install's
+   * 994 item templates.
+   *
+   * Left undefined, `isUseable()` computed `1 << undefined` === 1, compared it
+   * against `upgrades` (0), and answered false — so EVERY property on such a
+   * template read as unusable. That silently disabled armour, attack, damage,
+   * Disguise and all six ability bonuses in `ModuleItem`, and the security
+   * tunneler's ThievesTools bonus in `ActionUnlockObject`.
+   */
+  upgradeType: number = -1;
   param1: number;
   param1Value: number;
   chanceAppear: number;
@@ -62,9 +75,13 @@ export class ItemProperty {
       if(subTypeDef){
         const row = subTypeDef.rows[this.subType];
         if(!row){
+          //Bail rather than build from the miss. From2DA's default parameter
+          //turns an absent row into a subtype with id -1 and an empty label,
+          //which reads downstream as a real definition and hides the gap.
           console.error(`Invalid Item Property Sub Type: ${this.subType}`);
+        }else{
+          this.subTypeDefinition = SWSubTypeBase.From2DA(row);
         }
-        this.subTypeDefinition = SWSubTypeBase.From2DA(row);
       }else{
         console.error(`Invalid Item Property Sub Type: ${this.propertyDefinition.subtyperesref}`);
       }
@@ -72,8 +89,14 @@ export class ItemProperty {
 
     //Load the cost table definition
     this.costTableLookupDefinition = GameState.SWRuleSet.costTables[this.costTable];
-    if(!this.costTableLookupDefinition && this.costTable > -1){
-      console.error(`Invalid Item Property Cost Table: ${this.costTable}`);
+    if(!this.costTableLookupDefinition){
+      //The old shape only reported the miss when costTable > -1, and fell into
+      //the else for everything else -- so an absent lookup with costTable <= -1
+      //dereferenced .name on undefined and threw, turning a data gap into a
+      //crash on the item-loading path.
+      if(this.costTable > -1){
+        console.error(`Invalid Item Property Cost Table: ${this.costTable}`);
+      }
     }else{
       const costTable = GameState.TwoDAManager.datatables.get(this.costTableLookupDefinition.name.toLowerCase());
       this.costTableDefinition = costTable;
@@ -113,9 +136,15 @@ export class ItemProperty {
 
   //Determine if the property requires an upgrade to use, or if it is always useable
   isUseable(){
+    //Defensive as well as defaulted: a template that carries UpgradeType as a
+    //non-numeric value would otherwise shift by NaN and land back on the same
+    //silent "unusable" answer the default above exists to prevent.
+    if(!Number.isInteger(this.upgradeType) || this.upgradeType < 0){
+      return true;
+    }
     const upgrade_flag = (1 << this.upgradeType);
     //If no upgrade is required or the upgrade is present on the item
-    if(this.upgradeType == -1 || ((this.item.upgrades & upgrade_flag) == upgrade_flag)){
+    if(((this.item?.upgrades ?? 0) & upgrade_flag) == upgrade_flag){
       return true;
     }
     return false;
@@ -218,8 +247,13 @@ export class ItemProperty {
     if(this.template.RootNode.hasField('PropertyName'))
       this.propertyName = this.template.RootNode.getFieldByLabel('PropertyName').getValue();
     
+    //'SubType' is not a retail spelling. It is what this engine's own save()
+    //used to write, so every item round-tripped through a save before the
+    //writer was corrected carries it. Read both so those saves still load.
     if(this.template.RootNode.hasField('Subtype'))
       this.subType = this.template.RootNode.getFieldByLabel('Subtype').getValue();
+    else if(this.template.RootNode.hasField('SubType'))
+      this.subType = this.template.RootNode.getFieldByLabel('SubType').getValue();
 
     if(this.template.RootNode.hasField('CostTable'))
       this.costTable = this.template.RootNode.getFieldByLabel('CostTable').getValue();
@@ -239,8 +273,12 @@ export class ItemProperty {
     if(this.template.RootNode.hasField('UsesPerDay'))
       this.usesPerDay = this.template.RootNode.getFieldByLabel('UsesPerDay').getValue();
 
+    //Same story as Subtype above: 'Usable' is this engine's own former
+    //misspelling, not a retail one.
     if(this.template.RootNode.hasField('Useable'))
       this.useable = this.template.RootNode.getFieldByLabel('Useable').getValue();
+    else if(this.template.RootNode.hasField('Usable'))
+      this.useable = this.template.RootNode.getFieldByLabel('Usable').getValue();
 
     if(this.template.RootNode.hasField('UpgradeType'))
       this.upgradeType = this.template.RootNode.getFieldByLabel('UpgradeType').getValue();
@@ -250,14 +288,14 @@ export class ItemProperty {
     let propStruct = new GFFStruct(0);
 
     propStruct.addField( new GFFField(GFFDataType.WORD, 'PropertyName') )?.setValue( this.propertyName == -1 ? 255 : this.propertyName);
-    propStruct.addField( new GFFField(GFFDataType.WORD, 'SubType') )?.setValue( this.subType == -1 ? 255 : this.subType);
+    propStruct.addField( new GFFField(GFFDataType.WORD, 'Subtype') )?.setValue( this.subType == -1 ? 255 : this.subType);
     propStruct.addField( new GFFField(GFFDataType.BYTE, 'CostTable') )?.setValue( this.costTable == -1 ? 255 : this.costTable);
     propStruct.addField( new GFFField(GFFDataType.WORD, 'CostValue') )?.setValue( this.costValue == -1 ? 255 : this.costValue);
     propStruct.addField( new GFFField(GFFDataType.BYTE, 'Param1') )?.setValue( this.param1 == -1 ? 255 : this.param1);
     propStruct.addField( new GFFField(GFFDataType.BYTE, 'Param1Value') )?.setValue( this.param1Value == -1 ? 255 : this.param1Value);
     propStruct.addField( new GFFField(GFFDataType.BYTE, 'ChanceAppear') )?.setValue( this.chanceAppear == -1 ? 255 : this.chanceAppear);
     propStruct.addField( new GFFField(GFFDataType.BYTE, 'UsesPerDay') )?.setValue( this.usesPerDay == -1 ? 255 : this.usesPerDay);
-    propStruct.addField( new GFFField(GFFDataType.BYTE, 'Usable') )?.setValue( this.useable == -1 ? 255 : this.useable);
+    propStruct.addField( new GFFField(GFFDataType.BYTE, 'Useable') )?.setValue( this.useable == -1 ? 255 : this.useable);
     propStruct.addField( new GFFField(GFFDataType.BYTE, 'UpgradeType') )?.setValue( this.upgradeType == -1 ? 255 : this.upgradeType);
 
     return propStruct;

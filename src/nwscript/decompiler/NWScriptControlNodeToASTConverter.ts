@@ -991,15 +991,11 @@ export class NWScriptControlNodeToASTConverter {
                 futureInstr.code === OP_MUL || futureInstr.code === OP_DIV ||
                 futureInstr.code === OP_LOGANDII || futureInstr.code === OP_LOGORII ||
                 futureInstr.code === OP_CPDOWNSP) {
-              if (
-                futureInstr.code === OP_CPDOWNSP &&
-                expr.dataType === NWScriptDataType.VOID
-              ) {
-                // Void ACTION (e.g. DelayCommand) leaves no result; CPDOWNSP ahead is unrelated cleanup.
-              } else {
-                isPartOfExpression = true;
-                break;
-              }
+              // Void ACTIONs (e.g. DelayCommand) never reach here: the branch above
+              // emits them as statements outright, which also covers the case where a
+              // CPDOWNSP ahead is unrelated cleanup rather than a consumer of a result.
+              isPartOfExpression = true;
+              break;
             }
             
             // If we hit a terminator (JMP, JZ, JNZ, RETN, JSR), stop looking ahead

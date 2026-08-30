@@ -52,6 +52,8 @@ import type { SWPortrait } from "@/engine/rules/SWPortrait";
 import type { IHeardString } from "@/interface/dialog/IHeardString";
 import type { SWRange } from "@/engine/rules/SWRange";
 import { TURN_SPEED_SLOW } from "@/engine/TurnSpeeds";
+import { actionParameterToStruct } from "@/actions/actionParameterStructs";
+import { compileTalkString } from "@/resource/TalkStringCompiler";
 
 
 /**
@@ -1680,6 +1682,25 @@ export class ModuleObject {
   }
 
   /**
+   * Resolves a raw TLK name into what the player should see.
+   *
+   * Object names never went through the token/comment handling that dialogue
+   * has, so they surfaced raw: the medbay dummy's name tag read
+   * `{Dummy Medbay PC}<FullName>` in the headset, and `001EBO`'s objects carry
+   * designer comments like `Body{Invis container}` and `Blast Door{HK-50}`
+   * that the retail game strips.
+   */
+  protected compileDisplayName(raw: unknown): string {
+    return compileTalkString(raw, {
+      firstName: GameState.PartyManager?.ActualPlayerTemplate
+        ?.getFieldByLabel('FirstName')?.getValue(),
+      lastName: GameState.PartyManager?.ActualPlayerTemplate
+        ?.getFieldByLabel('LastName')?.getValue(),
+      custom: (index: number) => GameState.module?.getCustomToken(index),
+    });
+  }
+
+  /**
    * Get the race
    * @returns 
    */
@@ -2542,6 +2563,15 @@ export class ModuleObject {
    * @returns 
    */
   getWIS(): number {
+    return 0;
+  }
+
+  /**
+   * Get the INT
+   * Overridden by ModuleCreature; non-creatures have no ability scores.
+   * @returns 
+   */
+  getINT(): number {
     return 0;
   }
 
@@ -3652,7 +3682,8 @@ export class ModuleObject {
 
       const params = struct.addField(new GFFField(GFFDataType.LIST, 'Paramaters'));
       for(let j = 0, len2 = action.parameters.length; j < len2; j++){
-        params.addChildStruct(action.parameters[j].toStruct());
+        // Holes are legitimate on a loaded action; see actionParameterToStruct.
+        params.addChildStruct(actionParameterToStruct(action.parameters[j]));
       }
 
       actionList.addChildStruct(struct);

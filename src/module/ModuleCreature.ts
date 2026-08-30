@@ -23,7 +23,9 @@ import { TalentSkill } from "@/talents/TalentSkill";
 import { TalentSpell } from "@/talents/TalentSpell";
 import { OdysseyModel3D, OdysseyObject3D } from "@/three/odyssey";
 import { OdysseyModel, OdysseyModelAnimation } from "@/odyssey";
+import { resolveEquipmentSlotRule } from "@/module/CreatureEquipmentSlots";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
+import { CREATURE_EQUIPMENT_PERSISTENCE_SLOTS } from "@/module/creature/CreatureEquipmentPersistence";
 import { LIPObject } from "@/resource/LIPObject";
 import { Utility } from "@/utility/Utility";
 import { EngineMode } from "@/enums/engine/EngineMode";
@@ -32,6 +34,7 @@ import { ActionType } from "@/enums/actions/ActionType";
 import { ActionParameterType } from "@/enums/actions/ActionParameterType";
 import EngineLocation from "@/engine/EngineLocation";
 import { AttackResult } from "@/enums/combat/AttackResult";
+import { CombatFeatType } from "@/enums/combat/CombatFeatType";
 // import { ICombatAction } from "@/interface/combat/ICombatAction";
 import { DLGObject } from "@/resource/DLGObject";
 import { ITwoDAAnimation } from "@/interface/twoDA/ITwoDAAnimation";
@@ -58,6 +61,7 @@ import { TextSprite3D } from "@/engine/TextSprite3D";
 import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { ExperienceType } from "@/enums/engine/ExperienceType";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { resolveKillExperience } from "@/combat/killExperience";
 
 /**
 * ModuleCreature class.
@@ -414,6 +418,14 @@ export class ModuleCreature extends ModuleObject {
 
     if(this.willDestroy || this.destroyed){
       return;
+    }
+
+    //Creatures created outside the standard spawn helpers can end up with no
+    //room, and CollisionManager then rejects every step - the creature has no
+    //floor and no surrounding geometry is drawn. ModuleTrigger already
+    //resolves its room lazily for the same reason; do the same here.
+    if(!this.room){
+      this.getCurrentRoom();
     }
 
     if(this.audioEmitter){
@@ -778,8 +790,10 @@ export class ModuleCreature extends ModuleObject {
 
       //Loop through and update the effects
       if(this.deferEventUpdate){
-        for(let i = 0, len = this.effects.length; i < len; i++){
-          this.effects[i].update(delta);
+        //Length is re-read each pass because an effect can remove itself from
+        //the array while updating, which leaves a stale cached length behind.
+        for(let i = 0; i < this.effects.length; i++){
+          this.effects[i]?.update(delta);
         }
       }
 
@@ -1678,59 +1692,31 @@ export class ModuleCreature extends ModuleObject {
   }
 
   getCombatAnimationAttackType(): string {
-    let weapon = this.equipment.RIGHTHAND;
-    let weaponType = 0;
-    //let weaponWield = this.getCombatAnimationWeaponType();
-
+    //The animation key is melee ('m') vs. ranged ('b'), which is a property of how the
+    //weapon is WIELDED (WeaponWield), not its damage TYPE (WeaponType, e.g. piercing vs.
+    //bludgeoning). Using WeaponType here previously matched by damage-type coincidence
+    //and returned undefined for any weapon (e.g. droid blasters) whose damage type wasn't
+    //exactly 1 or 4 - silently dropping the whole attack animation (and its sound, since
+    //sound is driven by animation events).
     if(this.equipment.RIGHTHAND){
-      weaponType = (this.equipment.RIGHTHAND.getWeaponType());
-
-      switch(weaponType){
-        case 4:
+      switch(this.equipment.RIGHTHAND.getWeaponWield()){
+        case WeaponWield.STUN_BATON:
+        case WeaponWield.ONE_HANDED_SWORD:
+        case WeaponWield.TWO_HANDED_SWORD:
+          return 'm';
+        case WeaponWield.BLASTER_PISTOL:
+        case WeaponWield.BLASTER_RIFLE:
+        case WeaponWield.BLASTER_HEAVY:
           return 'b';
-        case 1:
-          return 'm';
-        break;
-      }
-
-    }else if(this.equipment.CLAW1){
-      weaponType = (this.equipment.CLAW1.getWeaponType());
-
-      switch(weaponType){
-        case 1:
-        case 3:
-        case 4:
+        default:
           return 'm';
       }
-    }else if(this.equipment.CLAW2){
-      weaponType = (this.equipment.CLAW2.getWeaponType());
-
-      switch(weaponType){
-        case 1:
-        case 3:
-        case 4:
-          return 'm';
-      }
-    }else if(this.equipment.CLAW3){
-      weaponType = (this.equipment.CLAW3.getWeaponType());
-
-      switch(weaponType){
-        case 1:
-        case 3:
-        case 4:
-          return 'm';
-      }
+    }else if(this.equipment.CLAW1 || this.equipment.CLAW2 || this.equipment.CLAW3){
+      //Natural claw weapons are always melee.
+      return 'm';
     }else{
       return 'g';
     }
-
-    /*if(weaponWield == 0)//this.isSimpleCreature())
-      return 'm';
-
-    if(weaponWield == 5 || weaponWield == 6 || weaponWield == 7 || weaponWield == 8 || weaponWield == 9){
-      return 'b';
-    }
-    return 'c';*/
   }
 
   //Return the WeaponType ID for the current equipped items
@@ -2194,8 +2180,41 @@ export class ModuleCreature extends ModuleObject {
     instance.run(this);
   }
 
+  /**
+   * Awards the party the experience this creature was worth.
+   *
+   * `xptable.2da` was loaded and consulted nowhere: ChallengeRating was read
+   * from the template and written back on save, but combat awarded no XP at
+   * all, so a character could never level from fighting. Found by killing a
+   * mining droid on Peragus and watching XP stay at 0.
+   *
+   * Only hostiles pay out, and never a party member — a companion going down
+   * must not reward the player. Failure is silent by design: a kill worth
+   * nothing is a balance question, but a throw here would abort onDeath and
+   * strand the corpse mid-animation.
+   */
+  awardKillExperience(){
+    try {
+      if(this.isPartyMember()) return;
+      const player = GameState.PartyManager.Player;
+      if(!player || this === player) return;
+      if(typeof this.isHostile === 'function' && !this.isHostile(player)) return;
+
+      const table = GameState.TwoDAManager.datatables.get('xptable');
+      const experience = resolveKillExperience(
+        table?.rows as any,
+        player.getTotalClassLevel(),
+        this.challengeRating,
+      );
+      if(experience > 0) GameState.PartyManager.GiveXP(experience);
+    } catch (e) {
+      console.warn('ModuleCreature.awardKillExperience', this.getTag ? this.getTag() : this.id, e);
+    }
+  }
+
   onDeath(){
     this.weaponPowered(false);
+    this.awardKillExperience();
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnDeath];
     if(!nwscript){ return true; }
     const instance = nwscript.newInstance();
@@ -2627,6 +2646,59 @@ export class ModuleCreature extends ModuleObject {
     return baseac + classBonus + armorAC + dexBonus;
   }
 
+  /**
+   * Blaster bolt deflection (Jedi Defense feat line). Per the feat
+   * descriptions and NWScriptDef comments for opcodes 469/470: a lightsaber
+   * in the main hand plus the Jedi Defense feat lets a creature attempt an
+   * opposed roll against an incoming ranged attack; Advanced/Master Jedi
+   * Defense give +3/+6 (replacing the prior tier, not stacking), the
+   * Weapon Master "Deflect" feat adds floor((level + 1) / 2), and
+   * EffectBlasterDeflectionIncrease/Decrease apply their stored intList[0]
+   * on top. Returns null when the creature cannot attempt deflection at all
+   * (no feat, or no lightsaber equipped in the main hand).
+   */
+  getBlasterDeflectionBonus(): number | null {
+    if(!this.getHasFeat(CombatFeatType.JEDI_DEFENSE)) return null;
+    if(!this.equipment.RIGHTHAND?.isLightsaber()) return null;
+
+    let bonus = 0;
+    if(this.getHasFeat(CombatFeatType.MASTER_JEDI_DEFENSE)){
+      bonus = 6;
+    }else if(this.getHasFeat(CombatFeatType.ADVANCED_JEDI_DEFENSE)){
+      bonus = 3;
+    }
+
+    if(this.getHasFeat(CombatFeatType.DEFLECT)){
+      const totalLevel = this.classes.reduce((sum, creatureClass) => sum + creatureClass.level, 0);
+      bonus += Math.floor((totalLevel + 1) / 2);
+    }
+
+    for(let i = 0, len = this.effects.length; i < len; i++){
+      const effect = this.effects[i];
+      if(effect.type == GameEffectType.EffectBlasterDeflectionIncrease){
+        bonus += (effect.getInt(0) || 0);
+      }else if(effect.type == GameEffectType.EffectBlasterDeflectionDecrease){
+        bonus -= (effect.getInt(0) || 0);
+      }
+    }
+
+    return bonus;
+  }
+
+  /**
+   * EffectAssuredDeflection (opcode 252): deflects every incoming ranged
+   * attack with no opposed roll. `intList[0]` is an optional flag for
+   * whether the deflected bolt reflects back at the attacker for damage.
+   */
+  hasAssuredDeflection(): boolean {
+    return this.hasEffect(GameEffectType.EffectAssuredDeflection);
+  }
+
+  assuredDeflectionReflectsDamage(): boolean {
+    const effect = this.getEffect(GameEffectType.EffectAssuredDeflection);
+    return !!effect && (effect.getInt(0) || 0) !== 0;
+  }
+
   getSTR(calculateBonuses = true){
     if(!calculateBonuses){
       return this.str;
@@ -2784,7 +2856,7 @@ export class ModuleCreature extends ModuleObject {
   }
 
   getName(){
-    return this.firstName;
+    return this.compileDisplayName(this.firstName);
   }
 
   getAppearance(): SWCreatureAppearance {
@@ -3339,7 +3411,7 @@ export class ModuleCreature extends ModuleObject {
       return;
     }
 
-    this.unequipSlot(slot);
+    this.unequipSlot(slot, true);
     item.onEquip(this);
     await item.loadModel();
     switch(slot){
@@ -3350,13 +3422,17 @@ export class ModuleCreature extends ModuleObject {
       case ModuleCreatureArmorSlot.RIGHTHAND:
         this.equipment.RIGHTHAND = item;
         await item.loadModel();
-        if(item.model instanceof OdysseyModel3D)
+        //Droid bodies have no rhand/lhand attachment node (they're not humanoid), so
+        //this threw for any droid equipping a weapon - the equipment reference above
+        //had already been assigned, but the throw prevented the caller's promise from
+        //ever resolving, which is why the UI never refreshed to show it as equipped.
+        if(item.model instanceof OdysseyModel3D && this.model?.rhand)
           this.model.rhand.add(item.model);
       break;
       case ModuleCreatureArmorSlot.LEFTHAND:
         this.equipment.LEFTHAND = item;
         await item.loadModel();
-        if(item.model instanceof OdysseyModel3D)
+        if(item.model instanceof OdysseyModel3D && this.model?.lhand)
           this.model.lhand.add(item.model);
       break;
       case ModuleCreatureArmorSlot.RIGHTHAND2:
@@ -3364,6 +3440,25 @@ export class ModuleCreature extends ModuleObject {
       break;
       case ModuleCreatureArmorSlot.LEFTHAND2:
         this.equipment.LEFTHAND2 = item;
+      break;
+      case ModuleCreatureArmorSlot.HEAD:
+        this.equipment.HEAD = item;
+        await this.loadModel();
+      break;
+      case ModuleCreatureArmorSlot.ARMS:
+        this.equipment.ARMS = item;
+      break;
+      case ModuleCreatureArmorSlot.LEFTARMBAND:
+        this.equipment.LEFTARMBAND = item;
+      break;
+      case ModuleCreatureArmorSlot.RIGHTARMBAND:
+        this.equipment.RIGHTARMBAND = item;
+      break;
+      case ModuleCreatureArmorSlot.IMPLANT:
+        this.equipment.IMPLANT = item;
+      break;
+      case ModuleCreatureArmorSlot.BELT:
+        this.equipment.BELT = item;
       break;
       case ModuleCreatureArmorSlot.CLAW1:
         this.equipment.CLAW1 = item;
@@ -3377,150 +3472,63 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
-  unequipSlot(slot = 0x1){
+  /**
+   * Removes whatever occupies the given slot.
+   *
+   * `returnToInventory` distinguishes the player taking something off — which
+   * must put it back in the party inventory, or the item is simply gone — from
+   * the cutscene helpers below, which stow weapons for the duration of a
+   * conversation and re-equip the same objects afterwards. Every player-facing
+   * route (the equipment screen, ActionUnequipItem, and the swap inside
+   * equipItem) passes true.
+   */
+  unequipSlot(slot = 0x1, returnToInventory = false){
+    const rule = resolveEquipmentSlotRule(slot);
+    if(!rule){ return; }
+    const equipment = this.equipment as any;
+    const item = equipment[rule.key];
+    if(!item){ return; }
+
     try{
-      switch(slot){
-        case ModuleCreatureArmorSlot.IMPLANT:
-          try{
-            if(this.equipment.IMPLANT){
-              this.equipment.IMPLANT.onUnEquip(this);
-              this.equipment.IMPLANT.destroy();
-              this.equipment.IMPLANT = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.HEAD:
+      item.onUnEquip(this);
+    }catch(e){
+      console.error('unequipSlot: onUnEquip threw', rule.key, e);
+    }
 
-          if(this.equipment.HEAD){
-            this.equipment.HEAD.onUnEquip(this);
-          }
-
-          try{
-            this.equipment.HEAD.model.parent.remove(this.equipment.HEAD.model);
-          }catch(e){}
-
-          this.equipment.HEAD = undefined;
-          this.loadModel();
-        break;
-        case ModuleCreatureArmorSlot.ARMS:
-          try{
-            if(this.equipment.ARMS){
-              this.equipment.ARMS.onUnEquip(this);
-              this.equipment.ARMS.destroy();
-              this.equipment.ARMS = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.RIGHTARMBAND:
-          try{
-            if(this.equipment.RIGHTARMBAND){
-              this.equipment.RIGHTARMBAND.onUnEquip(this);
-              this.equipment.RIGHTARMBAND.destroy();
-              this.equipment.RIGHTARMBAND = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.LEFTARMBAND:
-          try{
-            if(this.equipment.LEFTARMBAND){
-              this.equipment.LEFTARMBAND.onUnEquip(this);
-              this.equipment.LEFTARMBAND.destroy();
-              this.equipment.LEFTARMBAND = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.ARMOR:
-
-          if(this.equipment.ARMOR){
-            this.equipment.ARMOR.onUnEquip(this);
-          }
-
-          this.equipment.ARMOR = undefined;
-          this.loadModel();
-        break;
-        case ModuleCreatureArmorSlot.RIGHTARMBAND:
-          try{
-            if(this.equipment.RIGHTARMBAND){
-              this.equipment.RIGHTARMBAND.onUnEquip(this);
-              this.model.rhand.remove(this.equipment.RIGHTARMBAND.model);
-              this.equipment.RIGHTARMBAND.destroy();
-              this.equipment.RIGHTARMBAND = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.RIGHTHAND:
-          try{
-            if(this.equipment.RIGHTHAND){
-              this.equipment.RIGHTHAND.onUnEquip(this);
-              this.model.rhand.remove(this.equipment.RIGHTHAND.model);
-              this.equipment.RIGHTHAND.destroy();
-              this.equipment.RIGHTHAND = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.RIGHTHAND2:
-          try{
-            if(this.equipment.RIGHTHAND2){
-              this.equipment.RIGHTHAND2.onUnEquip(this);
-              // this.model.rhand.remove(this.equipment.RIGHTHAND2.model);
-              this.equipment.RIGHTHAND2.destroy();
-              this.equipment.RIGHTHAND2 = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.BELT:
-          try{
-            if(this.equipment.BELT){
-              this.equipment.BELT.onUnEquip(this);
-              this.model.rhand.remove(this.equipment.BELT.model);
-              this.equipment.BELT.destroy();
-              this.equipment.BELT = undefined;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.LEFTHAND:
-          try{
-            if(this.equipment.LEFTHAND){
-              this.equipment.LEFTHAND.onUnEquip(this);
-              this.model.lhand.remove(this.equipment.LEFTHAND.model);
-              this.equipment.LEFTHAND.destroy();
-              this.equipment.LEFTHAND = null;
-            }
-          }catch(e){
-            
-          }
-        break;
-        case ModuleCreatureArmorSlot.LEFTHAND2:
-          try{
-            if(this.equipment.LEFTHAND2){
-              this.equipment.LEFTHAND2.onUnEquip(this);
-              // this.model.lhand.remove(this.equipment.LEFTHAND2.model);
-              this.equipment.LEFTHAND2.destroy();
-              this.equipment.LEFTHAND2 = null;
-            }
-          }catch(e){
-            
-          }
-        break;
+    //Detaching the model must never gate clearing the slot. Droid bodies have
+    //no rhand/lhand attachment node, so `this.model.rhand.remove(...)` threw
+    //for T3-M4, the surrounding catch swallowed it, and the assignment below
+    //never ran - the Mining Laser stayed equipped and nothing could be
+    //unequipped through the equipment screen at all. `equipItem` already
+    //carries a guard for the same reason; this is its missing counterpart.
+    try{
+      if(rule.attach === 'parent'){
+        item.model?.parent?.remove(item.model);
+      }else if(rule.attach && item.model){
+        (this.model as any)?.[rule.attach]?.remove(item.model);
       }
     }catch(e){
-      console.error('unequipItem', e);
+      console.error('unequipSlot: detaching the model threw', rule.key, e);
+    }
+
+    if(returnToInventory){
+      try{
+        GameState.InventoryManager.addItem(item);
+      }catch(e){
+        console.error('unequipSlot: returning the item to inventory threw', rule.key, e);
+      }
+    }else if(rule.destroyOnUnequip){
+      try{
+        item.destroy();
+      }catch(e){
+        console.error('unequipSlot: destroy threw', rule.key, e);
+      }
+    }
+
+    equipment[rule.key] = undefined;
+
+    if(rule.reloadModelOnUnequip){
+      this.loadModel();
     }
   }
 
@@ -4246,7 +4254,7 @@ export class ModuleCreature extends ModuleObject {
     //TODO: CombatRoundData
 
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Commandable') ).setValue(this.getCommadable() ? 1 : 0);
-    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Con') ).setValue(this.str);
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Con') ).setValue(this.con);
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, 'Conversation') ).setValue(this.conversation ? this.conversation.resref : '');
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'CreatnScrptFird') ).setValue( this.spawned ? 1 : 0 );
     gff.RootNode.addField( new GFFField(GFFDataType.INT, 'CreatureSize') ).setValue(3);
@@ -4269,82 +4277,14 @@ export class ModuleCreature extends ModuleObject {
     //Equipment
     let equipItemList = gff.RootNode.addField( new GFFField(GFFDataType.LIST, 'Equip_ItemList') );
 
-    if(this.equipment.ARMOR){
-      let equipItem = this.equipment.ARMOR.save();
-      equipItem.setType(ModuleCreatureArmorSlot.ARMOR);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.ARMS){
-      let equipItem = this.equipment.ARMS.save();
-      equipItem.setType(ModuleCreatureArmorSlot.ARMS);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.BELT){
-      let equipItem = this.equipment.BELT.save();
-      equipItem.setType(ModuleCreatureArmorSlot.BELT);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.CLAW1){
-      let equipItem = this.equipment.CLAW1.save();
-      equipItem.setType(ModuleCreatureArmorSlot.CLAW1);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.CLAW2){
-      let equipItem = this.equipment.CLAW2.save();
-      equipItem.setType(ModuleCreatureArmorSlot.CLAW2);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.CLAW3){
-      let equipItem = this.equipment.CLAW3.save();
-      equipItem.setType(ModuleCreatureArmorSlot.CLAW3);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.HEAD){
-      let equipItem = this.equipment.HEAD.save();
-      equipItem.setType(ModuleCreatureArmorSlot.HEAD);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.HIDE){
-      let equipItem = this.equipment.HIDE.save();
-      equipItem.setType(ModuleCreatureArmorSlot.HIDE);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.IMPLANT){
-      let equipItem = this.equipment.IMPLANT.save();
-      equipItem.setType(ModuleCreatureArmorSlot.IMPLANT);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.LEFTARMBAND){
-      let equipItem = this.equipment.LEFTARMBAND.save();
-      equipItem.setType(ModuleCreatureArmorSlot.LEFTARMBAND);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.LEFTHAND){
-      let equipItem = this.equipment.LEFTHAND.save();
-      equipItem.setType(ModuleCreatureArmorSlot.LEFTHAND);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.RIGHTARMBAND){
-      let equipItem = this.equipment.RIGHTARMBAND.save();
-      equipItem.setType(ModuleCreatureArmorSlot.RIGHTARMBAND);
-      equipItemList.addChildStruct(equipItem)
-    }
-
-    if(this.equipment.RIGHTHAND){
-      let equipItem = this.equipment.RIGHTHAND.save();
-      equipItem.setType(ModuleCreatureArmorSlot.RIGHTHAND);
-      equipItemList.addChildStruct(equipItem)
+    for (const [equipmentKey, slot] of CREATURE_EQUIPMENT_PERSISTENCE_SLOTS) {
+      const item = this.equipment[equipmentKey];
+      if (!item) {
+        continue;
+      }
+      const itemStruct = item.save();
+      itemStruct.setType(slot);
+      equipItemList.addChildStruct(itemStruct);
     }
 
     gff.RootNode.addField( new GFFField(GFFDataType.DWORD, 'Experience') ).setValue(this.experience);

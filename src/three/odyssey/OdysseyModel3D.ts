@@ -547,19 +547,22 @@ export class OdysseyModel3D extends OdysseyObject3D {
   disposeMaterial(material: THREE.Material){
     if(material instanceof THREE.ShaderMaterial){
       if(material.uniforms.map && material.uniforms.map.value)
-        material.uniforms.map.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.map.value);
 
       if(material.uniforms.envMap && material.uniforms.envMap.value)
-        material.uniforms.envMap.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.envMap.value);
 
       if(material.uniforms.alphaMap && material.uniforms.alphaMap.value)
-        material.uniforms.alphaMap.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.alphaMap.value);
 
       if(material.uniforms.lightMap && material.uniforms.lightMap.value)
-        material.uniforms.lightMap.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.lightMap.value);
 
       if(material.uniforms.bumpMap && material.uniforms.bumpMap.value)
-        material.uniforms.bumpMap.value.dispose();
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.bumpMap.value);
+
+      if(material.uniforms.normalMap && material.uniforms.normalMap.value)
+        TextureLoader.disposeModelOwnedTexture(material.uniforms.normalMap.value);
     }
   }
 
@@ -954,7 +957,7 @@ export class OdysseyModel3D extends OdysseyObject3D {
 
       if(typeof shieldTexName == 'string' && shieldTexName.length){
         skinMaterial.userData.shield = shieldTexName;
-        TextureLoader.enQueue(shieldTexName, skinMaterial, TextureType.TEXTURE);
+        TextureLoader.enQueue(shieldTexName, skinMaterial, TextureType.TEXTURE, undefined, undefined, 'diffuse');
       }
 
       //Reuse the same skeleton
@@ -1606,7 +1609,7 @@ export class OdysseyModel3D extends OdysseyObject3D {
 
       if(!!tMap1 && tMap1 != 'toolcolors'){
         material.userData.map = tMap1;
-        TextureLoader.enQueue(tMap1, material, TextureType.TEXTURE, undefined, fallbackTexture);
+        TextureLoader.enQueue(tMap1, material, TextureType.TEXTURE, undefined, fallbackTexture, 'diffuse');
       }else{
         if(material instanceof THREE.ShaderMaterial){
           material.uniforms.diffuse.value.copy(odysseyNode.diffuse);
@@ -1729,7 +1732,7 @@ export class OdysseyModel3D extends OdysseyObject3D {
       for(let i = 0, len = odysseyNode.flare.textures.length; i < len; i++){
         TextureLoader.enQueue(odysseyNode.flare.textures[i], null, TextureType.TEXTURE, (texture: OdysseyTexture) => {
           lensFlare.addElement( new LensflareElement( texture, odysseyNode.flare.sizes[i],  odysseyNode.flare.positions[i],  odysseyNode.flare.colorShifts[i] ) );
-        });
+        }, undefined, 'particle');
       }
 
       if(!options.manageLighting){

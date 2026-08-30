@@ -273,9 +273,9 @@ export class MenuEquipment extends K1_MenuEquipment {
       this.BTN_EQUIP.addEventListener('click', (e) => {
         e.stopPropagation();
         if(this.selectedItem instanceof ModuleItem || this.selectedItem instanceof GUIItemNone){
-          const currentPC = GameState.PartyManager.party[this.currentNPCIndex];
+          const currentPC = this.getEquipmentTarget();
           if(this.selectedItem instanceof GUIItemNone){
-            currentPC.unequipSlot(this.slot);
+            currentPC.unequipSlot(this.slot, true);
           }else{
             currentPC.equipItem(this.slot, this.selectedItem).then(() => {
               this.updateSlotIcons();
@@ -310,7 +310,7 @@ export class MenuEquipment extends K1_MenuEquipment {
       });
 
       this.BTN_SWAPWEAPONS.addEventListener('click', (e) => {
-        const currentPC = GameState.PartyManager.party[this.currentNPCIndex];
+        const currentPC = this.getEquipmentTarget();
         if(currentPC){
           const right_1 = currentPC.equipment.RIGHTHAND;
           const right_2 = currentPC.equipment.RIGHTHAND2;
@@ -342,6 +342,16 @@ export class MenuEquipment extends K1_MenuEquipment {
 
       resolve();
     });
+  }
+
+  /**
+   * TSL's equipment screen switches party member with BTN_NEXTNPC/BTN_PREVNPC,
+   * so every read on it has to follow that selection -- including the two
+   * inherited from K1 (updateList's offered items and updateListHover), which
+   * previously went on answering for party[0].
+   */
+  getEquipmentTarget(): ModuleCreature {
+    return GameState.PartyManager.party[this.currentNPCIndex];
   }
 
   updateList() {
@@ -395,7 +405,7 @@ export class MenuEquipment extends K1_MenuEquipment {
   }
 
   updateSlotIcons(force: boolean = false) {
-    const currentPC = GameState.PartyManager.party[this.currentNPCIndex];
+    const currentPC = this.getEquipmentTarget();
     if(!currentPC) return;
 
     if(currentPC.getRace() == 6){
@@ -514,7 +524,7 @@ export class MenuEquipment extends K1_MenuEquipment {
   updateCharacterStats() {
     this.selectedControl = this.defaultControl;
     this.equipmentSelectionActive = false;
-    const currentPC = GameState.PartyManager.party[this.currentNPCIndex];
+    const currentPC = this.getEquipmentTarget();
     if(!currentPC) return;
 
     this.LB_DESC?.setItem(null);
@@ -540,7 +550,7 @@ export class MenuEquipment extends K1_MenuEquipment {
   }
 
   private isSlotLocked(slot: ModuleCreatureArmorSlot): boolean {
-    const npc = GameState.PartyManager.party[this.currentNPCIndex];
+    const npc = this.getEquipmentTarget();
     if(!npc) return false;
     const locked = npc.creatureAppearance?.equipslotslocked ?? 0;
     if(locked === -1) return false;

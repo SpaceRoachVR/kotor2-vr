@@ -54,7 +54,7 @@ export class EffectIcon extends GameEffect {
               priority: priority
             };
             this.object.effectIconList.push(icon)
-            TextureLoader.Load(iconResRef).then((texture: OdysseyTexture) => {
+            TextureLoader.LoadGUI(iconResRef).then((texture: OdysseyTexture) => {
               icon.texture = texture;
             });
           }
@@ -74,11 +74,10 @@ export class EffectIcon extends GameEffect {
         const idx = this.object.effectIconList.indexOf(icon);
         if(idx >= 0) this.object.effectIconList.splice( idx, 1 );
         if(icon.texture){
-          icon.texture.dispose();
+          TextureLoader.releaseGUITexture(icon.texture);
         }
       }
     }
   }
 
 }
-

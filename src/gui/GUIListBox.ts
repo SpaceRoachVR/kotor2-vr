@@ -18,6 +18,9 @@ import {
   type GUIListItemCallbacks,
 } from "@/gui/listrow/defaultListRows";
 import { applyCustomProtoRowSkin } from "@/gui/listrow/applyProtoTemplateSkin";
+import { renderGuiSceneToTexture } from "@/gui/renderGuiSceneToTexture";
+import type { LegacyGUIVRPointerSemanticTarget } from "@/vr/runtime/LegacyGUIVRPointerAdapter";
+import { getGUIListBoxVRPointerTargetsAtPointer } from "@/vr/runtime/GUIListBoxVRPointerTargets";
 
 /**
  * GUIListBox class.
@@ -344,20 +347,16 @@ export class GUIListBox extends GUIControl {
   }
 
   render(){
-    const oldClearColor = new THREE.Color();
-    this.menu.context.renderer.getClearColor(oldClearColor);
-    const oldClearAlpha =
-      typeof (this.menu.context.renderer as any).getClearAlpha === 'function'
-        ? (this.menu.context.renderer as any).getClearAlpha()
-        : 1;
-    this.menu.context.renderer.setClearColor(this.clearColor, 0);
-    this.menu.context.renderer.setRenderTarget(this.texture);
-    this.menu.context.renderer.clear(true, true, true);
-    this.menu.context.renderer.render(this.scene, this.camera);
+    renderGuiSceneToTexture(
+      this.menu.context.renderer,
+      this.texture,
+      this.scene,
+      this.camera,
+      this.clearColor,
+      0,
+    );
     (this.texture as any).needsUpdate = true;
-    this.menu.context.renderer.setRenderTarget(null);
     this.targetMaterial.needsUpdate = true;
-    this.menu.context.renderer.setClearColor(oldClearColor, oldClearAlpha);
   }
 
   calculatePosition(){
@@ -715,6 +714,16 @@ export class GUIListBox extends GUIControl {
     return controls;
   }
 
+  /**
+   * Exposes list interaction by meaning, not by the incidental order of
+   * generic GUI controls. The VR pointer adapter gives these targets priority
+   * so reply and skill rows always flow through this list's existing
+   * `onSelected` callback.
+   */
+  getVRPointerTargetsAtPointer(): readonly LegacyGUIVRPointerSemanticTarget[] {
+    return getGUIListBoxVRPointerTargetsAtPointer(this, () => Mouse.positionUI);
+  }
+
   calculateBox(){
     let worldPosition = this.parent.widget.position.clone();
     //console.log('worldPos', worldPosition);
@@ -885,18 +894,18 @@ GUIListBox.InitTextures = function(){
       }else{
         name = 'lbl_hex_'+(i+1);
       }
-      TextureLoader.Load(name).then((texture: OdysseyTexture) => {
+      TextureLoader.LoadGUI(name).then((texture: OdysseyTexture) => {
         GUIListBox.hexTextures.set(texture?.name, texture);
       });
     }
   }else{
-    TextureLoader.Load('uibit_eqp_itm1').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('uibit_eqp_itm1').then((texture: OdysseyTexture) => {
       GUIListBox.hexTextures.set(texture?.name, texture);
     });
-    TextureLoader.Load('uibit_eqp_itm2').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('uibit_eqp_itm2').then((texture: OdysseyTexture) => {
       GUIListBox.hexTextures.set(texture?.name, texture);
     });
-    TextureLoader.Load('uibit_eqp_itm3').then((texture: OdysseyTexture) => {
+    TextureLoader.LoadGUI('uibit_eqp_itm3').then((texture: OdysseyTexture) => {
       GUIListBox.hexTextures.set(texture?.name, texture);
     });
   }

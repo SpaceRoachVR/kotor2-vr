@@ -2,7 +2,6 @@ import { GameMenu } from "@/gui";
 import type { GUIListBox, GUILabel, GUIButton } from "@/gui";
 import { GUIFeatItem } from "@/game/kotor/gui/GUIFeatItem";
 import type { ModuleCreature } from "@/module";
-import { TalentFeat } from "@/talents";
 import { GameState } from "@/GameState";
 
 /**
@@ -38,10 +37,40 @@ export class CharGenFeats extends GameMenu {
     this.voidFill = true;
   }
 
+  /**
+   * Back and Accept are step navigation, and without them this screen is a
+   * dead end.
+   *
+   * It is reachable as step 4 of `CharGenCustomPanel` and had no handler on any
+   * of its four buttons, so entering it stranded the player inside character
+   * creation with no way back — which is why custom chargen was hidden rather
+   * than fixed.
+   *
+   * Manual feat *selection* (`BTN_SELECT`, `BTN_RECOMMENDED`) is still
+   * unimplemented. It is not needed for a valid character: `addGrantedFeats()`
+   * runs on `show()` and grants every feat the character's class entitles it
+   * to, so a custom character leaves this screen properly equipped.
+   *
+   * Lives here rather than in the initializer because TSL's subclass calls
+   * `super.menuControlInitializer(true)` and therefore skips this class's body.
+   */
+  protected wireStepNavigation(){
+    this.BTN_BACK?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.close();
+    });
+
+    this.BTN_ACCEPT?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.close();
+    });
+  }
+
   async menuControlInitializer(skipInit: boolean = false) {
     await super.menuControlInitializer();
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
+      this.wireStepNavigation();
       resolve();
     });
   }
@@ -62,15 +91,16 @@ export class CharGenFeats extends GameMenu {
     let granted = [];
     for (let i = 0; i < featCount; i++) {
       const feat = GameState.SWRuleSet.feats[i];
+      if (!feat) continue;
       if(this.creature){
         const mainClass = this.creature.getMainClass();
         if (mainClass && feat.constant != '****') {
           if (mainClass.isFeatAvailable(feat)) {
             const status = mainClass.getFeatStatus(feat);
             if (status == 3 && this.creature.getTotalClassLevel() >= mainClass.getFeatGrantedLevel(feat)) {
-              if (!this.creature.getHasFeat(i)) {
+              if (!this.creature.getHasFeat(feat.id)) {
                 console.log('Feat Granted', feat);
-                this.creature.addFeat(TalentFeat.From2DA(feat));
+                this.creature.addFeat(feat.id);
                 granted.push(feat);
               }
             }
@@ -89,10 +119,10 @@ export class CharGenFeats extends GameMenu {
       if(mainClass){
         for (let i = 0; i < featCount; i++) {
           const feat = feats[i];
-          if (feat.constant != '****') {
+          if (feat && feat.constant != '****') {
             if (mainClass.isFeatAvailable(feat)) {
               const status = mainClass.getFeatStatus(feat);
-              if (this.creature.getHasFeat(i) || status == 0 || status == 1) {
+              if (this.creature.getHasFeat(feat.id) || status == 0 || status == 1) {
                 list.push(feat);
               }
             }
@@ -110,7 +140,8 @@ export class CharGenFeats extends GameMenu {
         group.push(feat);
         for (let j = 0; j < featCount; j++) {
           const chainFeat = GameState.SWRuleSet.feats[j];
-          if (chainFeat.prereqFeat1 == i || chainFeat.prereqFeat2 == i) {
+          if (!chainFeat) continue;
+          if (chainFeat.prereqFeat1 == feat.id || chainFeat.prereqFeat2 == feat.id) {
             if (chainFeat.prereqFeat1 != -1 && chainFeat.prereqFeat2 != -1) {
               group[2] = chainFeat;
             } else {
@@ -118,12 +149,21 @@ export class CharGenFeats extends GameMenu {
             }
           }
         }
+        // Only a prerequisite-free feat roots a chain, and only then does the
+        // group contain anything. Pushing regardless left empty groups in the
+        // list, and the sort below then read `groupa[0].toolsCategories` off
+        // undefined and threw -- aborting the whole method before setItems ran,
+        // so the feats screen rendered an empty box.
+        groups.push(group);
       }
-      groups.push(group);
     }
-    groups.sort((groupa, groupb) => groupa[0].toolsCategories > groupb[0].toolsCategories ? 1 : -1);
+    groups.sort((groupa, groupb) => {
+      const a = groupa[0]?.toolsCategories;
+      const b = groupb[0]?.toolsCategories;
+      if(a === b) return 0;
+      return a > b ? 1 : -1;
+    });
     this.LB_FEATS.setItems(groups);
-    console.log(groups);
   }
   
 }

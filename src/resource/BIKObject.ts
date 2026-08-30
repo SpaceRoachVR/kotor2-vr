@@ -37,6 +37,9 @@ export class BIKObject {
   audio_nodes: AudioBufferSourceNode[] = [];
   /** Stream time 0 in audio context time; set from first buffer PTS so video and audio share the same clock. */
   audioStartTime: number = 0;
+  /** Distinguishes a valid audio clock origin of zero from no clock origin. */
+  audioClockInitialized: boolean = false;
+  private lastAudioContextTime: number = 0;
   playbackPosition: number = 0;
   isPlaying: boolean;
   disposed: boolean;
@@ -65,6 +68,8 @@ export class BIKObject {
     this.disposed = false;
     this.audio_nodes = [];
     this.audioStartTime = 0;
+    this.audioClockInitialized = false;
+    this.lastAudioContextTime = 0;
     this.worker = null;
     this.workerReady = false;
     this.header = null;
@@ -213,6 +218,8 @@ export class BIKObject {
       this.audioCtx = AudioEngine.GetAudioEngine().audioCtx;
       this.audio_nodes = [];
       this.audioStartTime = 0;
+      this.audioClockInitialized = false;
+      this.lastAudioContextTime = 0;
       this.playbackPosition = 0;
       this.frameBuffer.clear();
       this.nextFrameToRequest = 0;
@@ -256,6 +263,8 @@ export class BIKObject {
       this.audioCtx = AudioEngine.GetAudioEngine().audioCtx;
       this.audio_nodes = [];
       this.audioStartTime = 0;
+      this.audioClockInitialized = false;
+      this.lastAudioContextTime = 0;
       this.playbackPosition = 0;
       this.frameBuffer.clear();
       this.nextFrameToRequest = 0;
@@ -320,8 +329,10 @@ export class BIKObject {
     }
 
     const currentTime = audioCtx.currentTime;
-    if (!this.audioStartTime) {
+    if (!this.audioClockInitialized) {
       this.audioStartTime = currentTime - audio.ptsSamples / audio.sampleRate;
+      this.audioClockInitialized = true;
+      this.lastAudioContextTime = currentTime;
     }
     const startTime = this.audioStartTime + audio.ptsSamples / audio.sampleRate;
     const pastTolerance = 0.001;
@@ -365,9 +376,18 @@ export class BIKObject {
     if (this.disposed || !this.isPlaying || !this.workerReady || !this.header) return;
 
     // Use same clock as audio when we've started streaming so video and audio stay in sync
-    if (this.audioStartTime > 0 && this.audioCtx && this.hasAudio) {
-      this.playbackPosition = this.audioCtx.currentTime - this.audioStartTime;
-    } else if (!this.hasAudio) {
+    if (this.audioClockInitialized && this.audioCtx && this.hasAudio) {
+      const audioTime = this.audioCtx.currentTime;
+      // Chromium can keep an AudioContext suspended during immersive startup.
+      // Its clock then remains at zero, so use the engine delta until audio
+      // resumes and never let the video clock move backwards.
+      if (audioTime > this.lastAudioContextTime + 1e-6) {
+        this.playbackPosition = Math.max(this.playbackPosition, audioTime - this.audioStartTime);
+        this.lastAudioContextTime = audioTime;
+      } else {
+        this.playbackPosition += Math.max(0, delta);
+      }
+    } else {
       this.playbackPosition += delta;
     }
 

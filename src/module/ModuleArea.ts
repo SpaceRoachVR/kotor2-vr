@@ -57,6 +57,7 @@ import type { Module } from "@/module/Module";
 import { IVISRoom } from "@/interface/module/IVISRoom";
 import { BackgroundMusicMode } from "@/enums/audio/BackgroundMusicMode";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { detachPartyForModuleTransition } from "@/module/transition/detachPartyForModuleTransition";
 
 type AreaScriptKeys = 'OnEnter'|'OnExit'|'OnHeartbeat'|'OnUserDefined';
 
@@ -390,62 +391,61 @@ export class ModuleArea extends ModuleObject {
       this.sounds[0].destroy();
     }
 
-    while (GameState.PartyManager.party.length){
-      const pm = GameState.PartyManager.party.shift();
-      pm.destroy();
-    }
+    detachPartyForModuleTransition(
+      GameState.PartyManager.party,
+      GameState.PartyManager.Player,
+    );
 
     this.weather.destroy();
   }
 
   update(delta: number = 0){
-    let roomCount = this.rooms.length;
-    let aoeCount = this.areaOfEffects.length;
-    let trigCount = this.triggers.length;
-    let encounterCount = this.encounters.length;
-    let creatureCount = this.creatures.length;
-    let placeableCount = this.placeables.length;
-    let doorCount = this.doors.length;
-    let partyCount = GameState.PartyManager.party.length;
+    //Bounds are re-checked live (not cached) and elements optionally-chained: any
+    //update() below can run a script that destroys another object of the same type
+    //(e.g. DestroyObject from a dialogue reply), which splices it out of these arrays
+    //mid-loop. A cached length then overruns the now-shorter array - confirmed via a
+    //real crash on this.placeables when that happened. Mirrors the existing
+    //defensive pattern already used below for spellInstances/textSprites.
 
     //update triggers
-    for(let i = 0; i < trigCount; i++){
-      this.triggers[i].update(delta);
+    for(let i = 0; i < this.triggers.length; i++){
+      this.triggers[i]?.update(delta);
     }
 
     //update encounters
-    for(let i = 0; i < encounterCount; i++){
-      this.encounters[i].update(delta);
+    for(let i = 0; i < this.encounters.length; i++){
+      this.encounters[i]?.update(delta);
     }
-    
+
     //update aoe
-    for(let i = 0; i < aoeCount; i++){
-      this.areaOfEffects[i].update(delta);
+    for(let i = 0; i < this.areaOfEffects.length; i++){
+      this.areaOfEffects[i]?.update(delta);
     }
 
     //update party
-    for(let i = 0; i < partyCount; i++){
-      GameState.PartyManager.party[i].update(delta);
+    for(let i = 0; i < GameState.PartyManager.party.length; i++){
+      GameState.PartyManager.party[i]?.update(delta);
     }
-    
+
     //update creatures
-    for(let i = 0; i < creatureCount; i++){
-      this.creatures[i].update(delta);
+    for(let i = 0; i < this.creatures.length; i++){
+      this.creatures[i]?.update(delta);
     }
-    
+
     //update placeables
-    for(let i = 0; i < placeableCount; i++){
-      this.placeables[i].update(delta);
+    for(let i = 0; i < this.placeables.length; i++){
+      this.placeables[i]?.update(delta);
     }
-    
+
     //update doors
-    for(let i = 0; i < doorCount; i++){
-      this.doors[i].update(delta);
+    for(let i = 0; i < this.doors.length; i++){
+      this.doors[i]?.update(delta);
     }
 
     //unset party controlled
-    for(let i = 0; i < partyCount; i++){
-      GameState.PartyManager.party[i].controlled = false;
+    for(let i = 0; i < GameState.PartyManager.party.length; i++){
+      const partyMember = GameState.PartyManager.party[i];
+      if(partyMember) partyMember.controlled = false;
     }
 
     if(GameState.Mode == EngineMode.MINIGAME){
@@ -453,8 +453,8 @@ export class ModuleArea extends ModuleObject {
     }
 
     //update rooms
-    for(let i = 0; i < roomCount; i++){
-      this.rooms[i].update(delta);
+    for(let i = 0; i < this.rooms.length; i++){
+      this.rooms[i]?.update(delta);
       // this.rooms[i].hide();
     }
 
@@ -833,6 +833,12 @@ export class ModuleArea extends ModuleObject {
       default:
         const player = GameState.getCurrentPlayer();
         if(!player){ return; }
+        //Bail before touching visibility if the player has no resolved room -
+        //spawned off the walkmesh, or mid-transition. Falling through hides
+        //every room and then returns, leaving nothing on screen but the player
+        //model itself. Keeping the previous frame's visibility is far better
+        //than blanking the world.
+        if(!player.room){ return; }
         //Check to see if the player has moved to a new room
         if(this.lastRoom && this.lastRoom == player.room){
           return;
@@ -850,10 +856,6 @@ export class ModuleArea extends ModuleObject {
           room.hide();
         }
 
-        if(!player.room){
-          return;
-        }
-
         //Show the current room and all of it's linked rooms
         player.room.show(true);
       break;
@@ -864,11 +866,13 @@ export class ModuleArea extends ModuleObject {
     GameState.MenuManager.LoadScreen.open();
     GameState.MenuManager.LoadScreen.LBL_HINT.setText('');
     GameState.loadingTextures = true;
-    //Cleanup texture cache
-    Array.from(TextureLoader.textures.keys()).forEach( (key) => {
-      TextureLoader.textures.get(key).dispose();
-      TextureLoader.textures.delete(key); 
-    });
+    //Refresh only module-owned material resources. Shared GUI/global textures
+    //remain live while the current module receives a new cache generation.
+    const moduleName = this.module?.filename;
+    TextureLoader.endModule();
+    if (moduleName) {
+      TextureLoader.beginModule(moduleName);
+    }
 
 
     for(let i = 0; i < this.rooms.length; i++){
@@ -1400,7 +1404,10 @@ export class ModuleArea extends ModuleObject {
 
       try { await this.loadDoors(); } catch(e){ console.error(e); }
 
-      this.doorWalkmeshes = this.doors.filter( (d) => { return d?.collisionManager?.walkmesh}).map( (d) => { return d.collisionManager.walkmesh; });
+      this.doorWalkmeshes = [];
+      for (const door of this.doors) {
+        door?.updateCollisionState();
+      }
 
       try { await this.loadStores(); } catch(e){ console.error(e); }
 
@@ -1601,8 +1608,13 @@ export class ModuleArea extends ModuleObject {
       if(GameState.PartyManager.Player instanceof ModuleCreature){
         GameState.PartyManager.Player.npcId = -1;
 
+        //The player's `area` is normally refreshed once per frame by ModuleCreature.update(),
+        //which hasn't run yet in the new module. Set it now so the getCurrentRoom() call below
+        //searches this area's rooms instead of the just-disposed previous area's.
+        GameState.PartyManager.Player.area = this;
+
         if(!this.miniGame){
-          GameState.PartyManager.party[ GameState.PartyManager.GetCreatureStartingPartyIndex(GameState.currentLeader) ] = GameState.currentLeader;
+          GameState.PartyManager.party[ GameState.PartyManager.GetCreatureStartingPartyIndex(GameState.PartyManager.Player) ] = GameState.PartyManager.Player;
           GameState.group.party.add( GameState.PartyManager.Player.container );
         }
 
@@ -1814,10 +1826,10 @@ export class ModuleArea extends ModuleObject {
       const model = await plc.loadModel();
       GameState.group.placeables.add( plc.container );
       const pwk = await plc.loadWalkmesh(model.name);
-      GameState.walkmeshList.push( pwk.mesh );
       plc.computeBoundingBox();
 
-      if(pwk.mesh instanceof THREE.Object3D){
+      if(pwk?.mesh instanceof THREE.Object3D){
+        GameState.walkmeshList.push(pwk.mesh);
         pwk.mat4.makeRotationFromEuler(plc.rotation);
         pwk.mat4.setPosition( plc.position.x, plc.position.y, plc.position.z + .01 );
         pwk.mesh.geometry.applyMatrix4(pwk.mat4);

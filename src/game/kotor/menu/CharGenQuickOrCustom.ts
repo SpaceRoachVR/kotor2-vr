@@ -99,9 +99,16 @@ export class CharGenQuickOrCustom extends GameMenu {
         this.manager.CharGenMain.close();
       });
 
-      //Hide because this submenu is very incomplete.
-      //Comment out this line to work on the custom chargen screen
-      this.CUST_CHAR_BTN.hide();
+      // Custom character creation is enabled. Upstream hid this button as
+      // "very incomplete", but the screens behind it are largely built: of the
+      // six steps in CharGenCustomPanel, Portrait, Attributes, Skills, Name and
+      // Play are all wired. Only Feats lacked handlers, and it lacked Back in
+      // particular, which turned step 4 into a trap -- that is now fixed in
+      // CharGenFeats.wireStepNavigation().
+      //
+      // Still unimplemented: manual feat SELECTION. Class feats are granted
+      // automatically by CharGenFeats.addGrantedFeats() on show, so a custom
+      // character is valid; it simply cannot hand-pick optional feats yet.
 
       this.tGuiPanel.offset.x = -180;
       this.tGuiPanel.offset.y = 100;

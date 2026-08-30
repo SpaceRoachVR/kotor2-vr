@@ -10,8 +10,149 @@ import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 import { OdysseyMaterialBuilder } from "@/three/odyssey/OdysseyMaterialBuilder";
 import { GameFileSystem } from "@/utility/GameFileSystem";
 import { GameEngineType } from "@/enums/engine";
+import { ResourceLoader } from "@/loaders/ResourceLoader";
+import { ResourceTypes } from "@/resource/ResourceTypes";
+import { TXI } from "@/resource/TXI";
+import {
+  ExplicitTextureAlias,
+  ResolvedTextureSource,
+  TextureLifetimeRegistry,
+  TextureOwnership,
+  TextureRequest,
+  TextureResolution,
+  TextureResolver,
+  TextureSemantic,
+  TextureSourceArtifact,
+  TextureSourceProvider,
+  isOptionalTextureSemantic,
+  isTextureResrefUsable,
+  normalizeTextureResref,
+  validateTextureResolution,
+} from "@/loaders/TextureResolution";
 
 type onProgressCallback = (ref: ITextureLoaderQueuedRef, index: number, total: number) => void;
+
+const PRODUCTION_TEXTURE_ALIASES: readonly ExplicitTextureAlias[] = Object.freeze([
+  {
+    requestedResref: 'border1',
+    resolvedResref: 'border1c',
+    evidence: 'retail-tsl-gui-pack:swpc_tex_gui.erf',
+  },
+  {
+    requestedResref: 'border2',
+    resolvedResref: 'border2c',
+    evidence: 'retail-tsl-gui-pack:swpc_tex_gui.erf',
+  },
+]);
+
+export interface TextureRoutingDiagnostic {
+  readonly requestedResref: string;
+  readonly resolvedResref?: string;
+  readonly semantic: TextureSemantic;
+  readonly activeModule?: string;
+  readonly status: TextureResolution<OdysseyTexture>['status'];
+  readonly searchedSources: readonly ResolvedTextureSource[];
+  readonly selectedSource: TextureResolution<OdysseyTexture>['source'];
+  readonly txiSource?: TextureResolution<OdysseyTexture>['txiSource'];
+  readonly fallback?: string;
+  readonly diagnosticCode?: string;
+  readonly cacheGeneration: number;
+}
+
+export class OdysseyTextureSourceProvider implements TextureSourceProvider<OdysseyTexture> {
+  constructor(
+    private readonly tgaLoader: TGALoader,
+    private readonly tpcLoader: TPCLoader,
+  ) {}
+
+  async load(
+    source: ResolvedTextureSource,
+    resref: string,
+    activeModule?: string,
+  ): Promise<TextureSourceArtifact<OdysseyTexture> | undefined> {
+    switch (source) {
+      case 'override-tga':
+        {
+          const tgaBuffer = await ResourceLoader.searchOverride(ResourceTypes.tga, resref);
+          if (!tgaBuffer?.length) {
+            return undefined;
+          }
+          return this.loadTga(
+            tgaBuffer,
+            resref,
+            await ResourceLoader.searchOverride(ResourceTypes.txi, resref),
+            'override-txi',
+          );
+        }
+      case 'override-tpc':
+        return this.loadTpc(
+          await ResourceLoader.searchOverride(ResourceTypes.tpc, resref),
+          resref,
+          undefined,
+        );
+      case 'active-module': {
+        if (!activeModule) {
+          return undefined;
+        }
+        const tgaBuffer = await ResourceLoader.searchModuleArchives(ResourceTypes.tga, resref);
+        if (tgaBuffer) {
+          return this.loadTga(
+            tgaBuffer,
+            resref,
+            await ResourceLoader.searchModuleArchives(ResourceTypes.txi, resref),
+            'active-module-txi',
+          );
+        }
+        return this.loadTpc(
+          await ResourceLoader.searchModuleArchives(ResourceTypes.tpc, resref),
+          resref,
+          undefined,
+        );
+      }
+      case 'gui-pack': {
+        const result = await this.tpcLoader.findInGuiPack(resref);
+        return result ? this.loadTpc(result.buffer, resref, result.pack) : undefined;
+      }
+      case 'texture-pack': {
+        const result = await this.tpcLoader.findInTexturePack(resref);
+        return result ? this.loadTpc(result.buffer, resref, result.pack) : undefined;
+      }
+      case 'key-bif': {
+        const result = await this.tpcLoader.findInKeyTable(resref);
+        return result ? this.loadTpc(result.buffer, resref, result.pack) : undefined;
+      }
+    }
+  }
+
+  private loadTga(
+    buffer: Uint8Array | undefined,
+    resref: string,
+    txiBuffer: Uint8Array | undefined,
+    txiSource: 'override-txi' | 'active-module-txi',
+  ): TextureSourceArtifact<OdysseyTexture> | undefined {
+    if (!buffer?.length) {
+      return undefined;
+    }
+    return {
+      texture: this.tgaLoader.decode(buffer, resref, txiBuffer),
+      ...(txiBuffer?.length ? { txiSource } : {}),
+    };
+  }
+
+  private loadTpc(
+    buffer: Uint8Array | undefined,
+    resref: string,
+    pack: number | undefined,
+  ): TextureSourceArtifact<OdysseyTexture> | undefined {
+    if (!buffer?.length) {
+      return undefined;
+    }
+    return {
+      texture: this.tpcLoader.decode(buffer, resref, pack),
+      txiSource: 'embedded-tpc',
+    };
+  }
+}
 
 /**
  * TextureLoader class.
@@ -31,9 +172,30 @@ export class TextureLoader {
   static lightmaps: any = {};
   static particles: any = {};
   static queue: ITextureLoaderQueuedRef[] = [];
+
+  /** Names already reported as unresolvable, so each is warned about only once. */
+  static MISSING_REPORTED = new Set<string>();
   static Anisotropy = 8;
-  static loadInflight: Map<string, Promise<OdysseyTexture>> = new Map();
+  static loadInflight: Map<string, Promise<TextureResolution<OdysseyTexture>>> = new Map();
   static pendingSubscribers: Map<string, ITextureLoaderQueuedRef[]> = new Map();
+  private static sourceProvider: TextureSourceProvider<OdysseyTexture> = TextureLoader.createDefaultSourceProvider();
+  private static resolver = TextureLoader.createResolver(TextureLoader.sourceProvider);
+  private static lifetimeRegistry = new TextureLifetimeRegistry<OdysseyTexture>();
+  private static resolutionCache = new Map<string, {
+    resolution: TextureResolution<OdysseyTexture>;
+    ownership: TextureOwnership;
+    generation: number;
+    /**
+     * A cache entry resolved while a module is active cannot survive that
+     * module's lifetime, even when its winning texture is shared.  The module
+     * can shadow the same resref on a later visit.
+     */
+    activeModule?: string;
+    semantic: TextureSemantic;
+  }>();
+  private static routingDiagnostics: TextureRoutingDiagnostic[] = [];
+  private static activeModule?: string;
+  private static diagnosticFallbackTexture?: OdysseyTexture;
 
   static GameKey: GameEngineType;
   
@@ -48,47 +210,187 @@ export class TextureLoader {
   static NOCACHE = true;
 
   static async Load(resRef: string, noCache: boolean = false): Promise<OdysseyTexture> {
-    resRef = resRef.toLowerCase();
-    if(!noCache && (TextureLoader.textures.has(resRef) || TextureLoader.guiTextures.has(resRef))){
-      return TextureLoader.textures.get(resRef) ?? TextureLoader.guiTextures.get(resRef);
-    }
-    if(TextureLoader.loadInflight.has(resRef)){
-      return TextureLoader.loadInflight.get(resRef);
-    }
-    const loadPromise = TextureLoader._load(resRef, noCache).finally(() => {
-      TextureLoader.loadInflight.delete(resRef);
-    });
-    TextureLoader.loadInflight.set(resRef, loadPromise);
-    return loadPromise;
+    return TextureLoader.unwrap(await TextureLoader.Resolve({
+      resref: resRef,
+      semantic: 'diffuse',
+      allowAlias: false,
+    }, noCache));
   }
 
-  private static async _load(resRef: string, noCache: boolean): Promise<OdysseyTexture> {
-    const tga = await TextureLoader.tgaLoader.fetch(resRef);
-    if(!!tga){
-      tga.anisotropy = TextureLoader.Anisotropy;
-      tga.wrapS = tga.wrapT = THREE.RepeatWrapping;
-      if(!noCache) TextureLoader.textures.set(resRef, tga);
-      return tga;
-    }
+  static async LoadGUI(resRef: string, noCache: boolean = false): Promise<OdysseyTexture> {
+    return TextureLoader.unwrap(await TextureLoader.Resolve({
+      resref: resRef,
+      semantic: 'gui',
+      allowAlias: true,
+    }, noCache));
+  }
 
-    const texture = await TextureLoader.tpcLoader.fetch(resRef);
-    if(!!texture){
-      texture.anisotropy = TextureLoader.Anisotropy;
-      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-      if(!noCache){
-        if(texture.pack === 0){
-          TextureLoader.guiTextures.set(resRef, texture);
-        }else{
-          TextureLoader.textures.set(resRef, texture);
+  static async Resolve(
+    request: TextureRequest,
+    noCache: boolean = false,
+  ): Promise<TextureResolution<OdysseyTexture>> {
+    const normalizedRequest: TextureRequest = {
+      ...request,
+      resref: normalizeTextureResref(request.resref),
+      ...(request.activeModule === undefined && TextureLoader.activeModule
+        ? { activeModule: TextureLoader.activeModule }
+        : {}),
+    };
+    const cacheKey = TextureLoader.getCacheKey(normalizedRequest);
+    const cached = noCache ? undefined : TextureLoader.resolutionCache.get(cacheKey);
+    if (cached) {
+      TextureLoader.recordDiagnostic(normalizedRequest, cached.resolution);
+      return validateTextureResolution(cached.resolution);
+    }
+    const inflight = noCache ? undefined : TextureLoader.loadInflight.get(cacheKey);
+    if (inflight) {
+      return inflight;
+    }
+    const resolutionPromise = TextureLoader.resolver.resolve(normalizedRequest).then((result) => {
+      const validatedResolution = validateTextureResolution(result);
+      const resolution = noCache
+        ? validatedResolution
+        : TextureLoader.retainSharedResolution(normalizedRequest, validatedResolution);
+      if (resolution.status === 'resolved') {
+        TextureLoader.prepareTexture(resolution.texture);
+        if (!noCache) {
+          TextureLoader.cacheResolution(cacheKey, normalizedRequest, resolution);
         }
       }
-      return texture;
+      TextureLoader.recordDiagnostic(normalizedRequest, resolution);
+      return resolution;
+    }).finally(() => {
+      TextureLoader.loadInflight.delete(cacheKey);
+    });
+    if (!noCache) {
+      TextureLoader.loadInflight.set(cacheKey, resolutionPromise);
     }
+    return resolutionPromise;
+  }
 
-    return undefined;
+  static setSourceProvider(provider: TextureSourceProvider<OdysseyTexture>): void {
+    if (!provider || typeof provider.load !== 'function') {
+      throw new TypeError('Texture source provider must implement load');
+    }
+    TextureLoader.sourceProvider = provider;
+    TextureLoader.resolver = TextureLoader.createResolver(provider);
+    TextureLoader.clearRoutingCaches();
+  }
+
+  static beginModule(moduleName: string): void {
+    const normalizedModule = normalizeTextureResref(moduleName);
+    if (!isTextureResrefUsable(normalizedModule)) {
+      throw new TypeError(`Invalid active module '${moduleName}'`);
+    }
+    if (TextureLoader.activeModule && TextureLoader.activeModule !== normalizedModule) {
+      throw new Error(`Texture module '${TextureLoader.activeModule}' must unload before '${normalizedModule}' begins`);
+    }
+    TextureLoader.activeModule = normalizedModule;
+  }
+
+  static endModule(): { disposed: number; nextGeneration: number } {
+    if (!TextureLoader.activeModule) {
+      return {
+        disposed: 0,
+        nextGeneration: TextureLoader.lifetimeRegistry.currentGeneration,
+      };
+    }
+    const closingModule = TextureLoader.activeModule;
+    const generation = TextureLoader.lifetimeRegistry.currentGeneration;
+    const result = TextureLoader.lifetimeRegistry.disposeModuleGeneration(generation);
+    for (const [key, entry] of TextureLoader.resolutionCache) {
+      const ownedByClosingGeneration = entry.ownership === 'module' && entry.generation === generation;
+      const scopedToClosingModule = entry.activeModule === closingModule;
+      if (ownedByClosingGeneration || scopedToClosingModule) {
+        TextureLoader.resolutionCache.delete(key);
+        if (ownedByClosingGeneration && entry.resolution.status === 'resolved') {
+          const resref = entry.resolution.requestedResref;
+          if (TextureLoader.textures.get(resref) === entry.resolution.texture) {
+            TextureLoader.textures.delete(resref);
+          }
+          if (TextureLoader.lightmaps[resref] === entry.resolution.texture) {
+            delete TextureLoader.lightmaps[resref];
+          }
+          if (TextureLoader.guiTextures.get(resref) === entry.resolution.texture) {
+            TextureLoader.guiTextures.delete(resref);
+          }
+          TextureLoader.restoreSharedLegacyCache(resref, entry.semantic);
+        }
+      }
+    }
+    TextureLoader.activeModule = undefined;
+    return result;
+  }
+
+  static getDiagnostics(): readonly TextureRoutingDiagnostic[] {
+    return TextureLoader.routingDiagnostics.slice();
+  }
+
+  static getDiagnosticFallbackTexture(): OdysseyTexture {
+    if (!TextureLoader.diagnosticFallbackTexture) {
+      const pixels = new Uint8Array([
+        255, 0, 255, 255, 32, 32, 32, 255,
+        32, 32, 32, 255, 255, 0, 255, 255,
+      ]);
+      const fallback = new THREE.DataTexture(pixels, 2, 2, THREE.RGBAFormat) as unknown as OdysseyTexture;
+      fallback.name = 'diagnostic-checker';
+      fallback.txi = new TXI('');
+      fallback.needsUpdate = true;
+      TextureLoader.diagnosticFallbackTexture = fallback;
+    }
+    return TextureLoader.diagnosticFallbackTexture;
+  }
+
+  /**
+   * Releases a GUI texture acquired by a short-lived UI consumer.
+   *
+   * Normal LoadGUI calls return a borrowed shared-cache texture.  Individual
+   * effects and screens therefore must not dispose it, because another UI
+   * consumer may still be using the same GPU resource.  A no-cache caller
+   * receives an uncached texture and remains responsible for its disposal.
+   */
+  static releaseGUITexture(texture: OdysseyTexture | undefined): void {
+    if (!texture || texture === TextureLoader.diagnosticFallbackTexture) {
+      return;
+    }
+    if (TextureLoader.isResolverOwnedTexture(texture)) {
+      return;
+    }
+    texture.dispose();
+  }
+
+  /**
+   * Disposes a texture created by a model while preserving resolver-owned
+   * textures until their cache ownership releases them. Model materials borrow
+   * TGA/TPC, GUI, lightmap, envmap, and bump textures from the loader; direct
+   * material teardown must not poison those cache entries.
+   */
+  static disposeModelOwnedTexture(texture: THREE.Texture | null | undefined): boolean {
+    if (!texture || texture === TextureLoader.diagnosticFallbackTexture) {
+      return false;
+    }
+    if (TextureLoader.isResolverOwnedTexture(texture)) {
+      return false;
+    }
+    texture.dispose();
+    return true;
+  }
+
+  static resetRoutingForTests(): void {
+    TextureLoader.sourceProvider = TextureLoader.createDefaultSourceProvider();
+    TextureLoader.resolver = TextureLoader.createResolver(TextureLoader.sourceProvider);
+    TextureLoader.lifetimeRegistry = new TextureLifetimeRegistry<OdysseyTexture>();
+    TextureLoader.activeModule = undefined;
+    TextureLoader.routingDiagnostics = [];
+    TextureLoader.diagnosticFallbackTexture = undefined;
+    TextureLoader.clearRoutingCaches();
   }
 
   static async LoadLocal(resRef: string, noCache: boolean = false): Promise<OdysseyTexture> {
+
+    if (!isTextureResrefUsable(normalizeTextureResref(resRef))) {
+      return undefined;
+    }
 
     let dir = resRef;
     const tga_exists = await GameFileSystem.exists(path.join(dir, resRef));
@@ -107,64 +409,26 @@ export class TextureLoader {
   }
 
   static async LoadLightmap(resRef: string, noCache: boolean = false){
-    resRef = resRef.toLowerCase();
-    if(TextureLoader.lightmaps.hasOwnProperty(resRef) && !noCache){
-      return TextureLoader.lightmaps[resRef];
-    }
-    
-    if(TextureLoader.GameKey == GameEngineType.TSL){
-      const lightmap = await TextureLoader.tpcLoader.fetch(resRef);
-      if(!lightmap){ return undefined; }
-
-      lightmap.wrapS = lightmap.wrapT = THREE.RepeatWrapping;
-      lightmap.anisotropy = TextureLoader.Anisotropy;
-
-      TextureLoader.lightmaps[resRef] = lightmap;
-      return TextureLoader.lightmaps[resRef];
-    }else{
-      const lightmap = await TextureLoader.tgaLoader.fetch(resRef);
-      if(!lightmap){ return undefined; }
-
-      lightmap.wrapS = lightmap.wrapT = THREE.RepeatWrapping;
-      lightmap.anisotropy = TextureLoader.Anisotropy;
-
-      TextureLoader.lightmaps[resRef] = lightmap;
-      return TextureLoader.lightmaps[resRef];
-    }
+    return TextureLoader.unwrap(await TextureLoader.Resolve({
+      resref: resRef,
+      semantic: 'lightmap',
+      allowAlias: false,
+    }, noCache));
   }
 
-  static enQueue(name: string|string[], material: THREE.Material, type = TextureType.TEXTURE, onLoad?: Function, fallback?: string){
+  static enQueue(
+    name: string|string[],
+    material: THREE.Material,
+    type = TextureType.TEXTURE,
+    onLoad?: Function,
+    fallback?: string,
+    semantic: TextureSemantic = type === TextureType.LIGHTMAP ? 'lightmap' : 'gui',
+  ){
     if(typeof name == 'string' && name.length){
-      name = name.toLowerCase();
-      const obj = { name: name, material: material, type: type, fallback: fallback, onLoad: onLoad } as ITextureLoaderQueuedRef;
-      const cached = TextureLoader.textures.get(name) ?? TextureLoader.guiTextures.get(name);
-      if(cached){
-        TextureLoader.UpdateMaterial(obj);
-        if(typeof onLoad == 'function')
-          onLoad(cached, obj);
-      }else if(type === TextureType.TEXTURE && TextureLoader.pendingSubscribers.has(name)){
-        TextureLoader.pendingSubscribers.get(name).push(obj);
-      }else{
-        if(type === TextureType.TEXTURE)
-          TextureLoader.pendingSubscribers.set(name, [obj]);
-        TextureLoader.queue.push(obj);
-      }
+      TextureLoader.enqueueTypedTextureRequest(name, material, type, onLoad, fallback, semantic);
     }else if(Array.isArray(name)){
       for(let i = 0, len = name.length; i < len; i++){
-        const texName = name[i].toLowerCase();
-        const obj = { name: texName, material: material, type: type, fallback: fallback, onLoad: onLoad } as ITextureLoaderQueuedRef;
-        const cached = TextureLoader.textures.get(texName) ?? TextureLoader.guiTextures.get(texName);
-        if(cached){
-          TextureLoader.UpdateMaterial(obj);
-          if(typeof onLoad == 'function')
-            onLoad(cached, obj);
-        }else if(type === TextureType.TEXTURE && TextureLoader.pendingSubscribers.has(texName)){
-          TextureLoader.pendingSubscribers.get(texName).push(obj);
-        }else{
-          if(type === TextureType.TEXTURE)
-            TextureLoader.pendingSubscribers.set(texName, [obj]);
-          TextureLoader.queue.push(obj);
-        }
+        TextureLoader.enqueueTypedTextureRequest(name[i], material, type, onLoad, fallback, semantic);
       }
     }else{
       console.warn('unhandled enQueue', name);
@@ -185,7 +449,7 @@ export class TextureLoader {
 
     const promises = queue.map(async (primaryTex) => {
       await TextureLoader.UpdateMaterial(primaryTex);
-      const allSubs = subscriberMap.get(primaryTex.name);
+      const allSubs = subscriberMap.get(TextureLoader.getQueuedRequestKey(primaryTex));
       if(allSubs && allSubs.length > 1){
         await Promise.all(allSubs.slice(1).map(sub => TextureLoader.UpdateMaterial(sub)));
       }
@@ -200,120 +464,64 @@ export class TextureLoader {
 
   static async UpdateMaterial(tex: ITextureLoaderQueuedRef){
     switch(tex.type){
-      case TextureType.TEXTURE:
-        let texture: OdysseyTexture = await TextureLoader.Load(tex.name, TextureLoader.CACHE);
-        if(!!texture && tex.material instanceof THREE.Material){
+      case TextureType.TEXTURE: {
+        const semantic = tex.semantic ?? 'gui';
+        const request: TextureRequest = {
+          resref: tex.name,
+          semantic,
+          allowAlias: semantic === 'gui' || semantic === 'font',
+          ...(tex.activeModule ? { activeModule: tex.activeModule } : {}),
+        };
+        const primaryResolution = await TextureLoader.Resolve(request, TextureLoader.CACHE);
+        let appliedTexture = TextureLoader.unwrap(primaryResolution);
+        let fallbackName: string | undefined;
 
-          if(tex.material instanceof THREE.RawShaderMaterial || tex.material instanceof THREE.ShaderMaterial){
-            //console.log('THREE.RawShaderMaterial', tex);
-            tex.material.uniforms.map.value = texture;
-            (tex.material as any).map = texture;
-            tex.material.uniformsNeedUpdate = true;
-            tex.material.needsUpdate = true; //This is required for cached textures. If not models will not update with a cached texture
-          }else{
-            (tex.material as any).map = texture;
-            (tex.material as any).needsUpdate = true; //This is required for cached textures. If not models will not update with a cached texture
-          }
-
-          /*
-            //Obsolete now that the alpha value was discovered in the TPC Header
-            //This was causing all DTX5 textures to enable transparency even if they were opaque
-            //This lead to bad issues with auto sorting objects in the renderer because opaque and
-            //objects with transparency need to be on separate layers when rendering to keep everything
-            //blending smoothly. I'm leaving the commented code below just because :/
-          
-            if(texture.format == THREE.RGBA_S3TC_DXT5_Format){
-              tex.material.transparent = true;
-            }
-          */
-
-          await TextureLoader.ParseTXI(texture, tex);
-
-          //Check to see if alpha value is set in the TPC Header
-          //I think this has to do with alphaTesting... Not sure...
-          if(typeof texture.header === 'object'){
-            if(texture.header.alphaTest != 1 && texture.txi.envMapTexture == null){
-              if(texture.txi.blending != TXIBlending.PUNCHTHROUGH){
-                tex.material.transparent = true;
-              }
-              
-              if(texture.txi.blending == TXIBlending.ADDITIVE){
-                //tex.material.alphaTest = 0;
-              }
-
-              if( (texture.header.alphaTest && texture.header.format != PixelFormat.DXT5) || texture.txi.blending == TXIBlending.PUNCHTHROUGH){
-                if(tex.material instanceof THREE.RawShaderMaterial || tex.material instanceof THREE.ShaderMaterial){
-                  tex.material.alphaTest = texture.header.alphaTest;
-                  if(tex.material.uniforms?.alphaTest){
-                    tex.material.uniforms.alphaTest.value = texture.header.alphaTest;
-                  }
-                }
-                tex.material.transparent = false;
-              }
-
-              //if(!texture.txi.blending)
-              //  tex.material.alphaTest = texture.header.alphaTest;
-            }
-          }
-
-          //tex.material.needsUpdate = true;
-          if(typeof tex.onLoad == 'function')
-            tex.onLoad(texture, tex)
-        }else if(!texture && !!tex.fallback){
-          let fallback: OdysseyTexture = await TextureLoader.Load(tex.fallback, TextureLoader.CACHE);
-          if(!!fallback && tex.material instanceof THREE.Material){
-
-            if(tex.material instanceof THREE.RawShaderMaterial || tex.material instanceof THREE.ShaderMaterial){
-              //console.log('THREE.RawShaderMaterial', tex);
-              tex.material.uniforms.map.value = fallback;
-              (tex.material as any).map = fallback;
-              tex.material.uniformsNeedUpdate = true;
-              tex.material.needsUpdate = true; //This is required for cached textures. If not models will not update with a cached texture
-            }else{
-              (tex.material as any).map = fallback;
-              (tex.material as any).needsUpdate = true; //This is required for cached textures. If not models will not update with a cached texture
-            }
-
-            /*
-              //Obsolete now that the alpha value was discovered in the TPC Header
-              //This was causing all DTX5 textures to enable transparency even if they were opaque
-              //This lead to bad issues with auto sorting objects in the renderer because opaque and
-              //objects with transparency need to be on separate layers when rendering to keep everything
-              //blending smoothly. I'm leaving the commented code below just because :/
-            
-              if(fallback.format == THREE.RGBA_S3TC_DXT5_Format){
-                tex.material.transparent = true;
-              }
-            */
-
-            await TextureLoader.ParseTXI(fallback, tex);
-
-            //Check to see if alpha value is set in the TPC Header
-            //I think this has to do with alphaTesting... Not sure...
-            if(typeof fallback.header === 'object'){
-              if(fallback.header.alphaTest != 1 && fallback.txi.envMapTexture == null){
-                if(fallback.txi.blending != TXIBlending.PUNCHTHROUGH){
-                  tex.material.transparent = true;
-                }
-                if(fallback.txi.blending == TXIBlending.ADDITIVE){
-                  //tex.material.alphaTest = 0;
-                }
-                //tex.material.alphaTest = fallback.header.alphaTest;
-              }
-            }
-
-            //tex.material.needsUpdate = true;
-          }
-
-          if(typeof tex.onLoad == 'function')
-            tex.onLoad(texture, tex)
-        }else{
-          if(typeof tex.onLoad == 'function')
-            tex.onLoad(texture, tex)
+        if (!appliedTexture && tex.fallback) {
+          const fallbackResolution = await TextureLoader.Resolve({
+            ...request,
+            resref: tex.fallback,
+          }, TextureLoader.CACHE);
+          appliedTexture = TextureLoader.unwrap(fallbackResolution);
+          fallbackName = fallbackResolution.status === 'resolved'
+            ? fallbackResolution.resolvedResref
+            : undefined;
         }
-      break;
+        if (!appliedTexture && !isOptionalTextureSemantic(semantic)) {
+          appliedTexture = TextureLoader.getDiagnosticFallbackTexture();
+          fallbackName = appliedTexture.name;
+        }
+
+        if (tex.material instanceof THREE.Material) {
+          OdysseyMaterialBuilder.resetMaterialTXIState(tex.material);
+          if (appliedTexture) {
+            TextureLoader.assignMaterialTexture(tex.material, appliedTexture, 'map');
+            if (appliedTexture !== TextureLoader.diagnosticFallbackTexture) {
+              await TextureLoader.ParseTXI(appliedTexture, tex);
+              TextureLoader.applyHeaderMaterialProfile(appliedTexture, tex.material);
+            }
+          } else {
+            TextureLoader.assignMaterialTexture(tex.material, null, 'map');
+          }
+        }
+        if (fallbackName) {
+          TextureLoader.recordDiagnostic(request, primaryResolution, fallbackName);
+        }
+        if (!appliedTexture && !TextureLoader.MISSING_REPORTED.has(tex.name)) {
+          TextureLoader.MISSING_REPORTED.add(tex.name);
+          console.warn(`TextureLoader: optional ${semantic} texture '${tex.name}' was disabled`);
+        }
+        if (typeof tex.onLoad === 'function') {
+          tex.onLoad(appliedTexture, tex);
+        }
+        break;
+      }
       case TextureType.LIGHTMAP:
-        let lightmap: OdysseyTexture = await TextureLoader.LoadLightmap(tex.name, TextureLoader.CACHE);
+        let lightmap = TextureLoader.unwrap(await TextureLoader.Resolve({
+          resref: tex.name,
+          semantic: 'lightmap',
+          allowAlias: false,
+          ...(tex.activeModule ? { activeModule: tex.activeModule } : {}),
+        }, TextureLoader.CACHE));
         if(!!lightmap){
           if(tex.material instanceof THREE.RawShaderMaterial || tex.material instanceof THREE.ShaderMaterial){
             tex.material.uniforms.lightMap.value = lightmap;
@@ -339,8 +547,14 @@ export class TextureLoader {
           tex.material.needsUpdate = true;
         }else{
           if(tex.material instanceof THREE.RawShaderMaterial || tex.material instanceof THREE.ShaderMaterial){
+            if (tex.material.uniforms.lightMap) {
+              tex.material.uniforms.lightMap.value = null;
+            }
+            delete tex.material.defines.USE_LIGHTMAP;
             delete tex.material.defines.IGNORE_LIGHTING;
             tex.material.uniformsNeedUpdate = true;
+          } else if (tex.material) {
+            (tex.material as any).lightMap = null;
           }
         }
 
@@ -348,7 +562,11 @@ export class TextureLoader {
           tex.onLoad(lightmap, tex)
       break;
       case TextureType.PARTICLE:
-        let particle_texture = await TextureLoader.Load(tex.name, TextureLoader.CACHE);
+        let particle_texture = TextureLoader.unwrap(await TextureLoader.Resolve({
+          resref: tex.name,
+          semantic: 'particle',
+          allowAlias: false,
+        }, TextureLoader.CACHE));
         if(!!particle_texture){
           if(tex.partGroup?.type == 'OdysseyEmitter'){
             tex.partGroup.material.uniforms.map.value = particle_texture;
@@ -364,7 +582,7 @@ export class TextureLoader {
         }
 
         if(typeof tex.onLoad == 'function')
-          tex.onLoad(texture, tex)
+          tex.onLoad(particle_texture, tex)
       break;
       default:
         console.warn('TextureLoader.UpdateMaterial: Unhandled Texture Type', tex);
@@ -379,11 +597,297 @@ export class TextureLoader {
       texture,
       tex.material,
       {
-        resolveTexture: (resRef: string, noCache?: boolean) => TextureLoader.Load(resRef, !!noCache),
+        resolveTexture: async (resRef: string, noCache?: boolean) => {
+          const semantic: TextureSemantic = texture.txi?.envMapTexture === resRef
+            ? 'environment'
+            : texture.txi?.bumpMapTexture === resRef
+              ? 'bump'
+              : 'other';
+          return TextureLoader.unwrap(await TextureLoader.Resolve({
+            resref: resRef,
+            semantic,
+            allowAlias: false,
+            ...(tex.activeModule ? { activeModule: tex.activeModule } : {}),
+          }, !!noCache));
+        },
       },
     ).catch((e) => {
       console.error("TextureLoader.parseTXI", e);
     });
+  }
+
+  private static createDefaultSourceProvider(): TextureSourceProvider<OdysseyTexture> {
+    return new OdysseyTextureSourceProvider(TextureLoader.tgaLoader, TextureLoader.tpcLoader);
+  }
+
+  private static createResolver(provider: TextureSourceProvider<OdysseyTexture>): TextureResolver<OdysseyTexture> {
+    return new TextureResolver(provider, {
+      aliases: PRODUCTION_TEXTURE_ALIASES,
+      cacheGeneration: () => TextureLoader.lifetimeRegistry?.currentGeneration ?? 1,
+    });
+  }
+
+  private static unwrap(resolution: TextureResolution<OdysseyTexture>): OdysseyTexture | undefined {
+    return resolution.status === 'resolved' ? resolution.texture : undefined;
+  }
+
+  private static prepareTexture(texture: OdysseyTexture): void {
+    texture.anisotropy = TextureLoader.Anisotropy;
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  }
+
+  private static cacheResolution(
+    cacheKey: string,
+    request: TextureRequest,
+    resolution: Extract<TextureResolution<OdysseyTexture>, { status: 'resolved' }>,
+  ): void {
+    const ownership = TextureLoader.getOwnership(request.semantic, resolution.source);
+    const generation = TextureLoader.lifetimeRegistry.currentGeneration;
+    TextureLoader.lifetimeRegistry.set(resolution.requestedResref, resolution.texture, ownership, generation);
+    const activeModule = normalizeTextureResref(request.activeModule) || undefined;
+    const entry = { resolution, ownership, generation, activeModule, semantic: request.semantic };
+    TextureLoader.resolutionCache.set(cacheKey, entry);
+    if (ownership !== 'module') {
+      const sharedCacheKey = TextureLoader.getCacheKey({
+        ...request,
+        activeModule: undefined,
+      });
+      TextureLoader.resolutionCache.set(sharedCacheKey, {
+        ...entry,
+        activeModule: undefined,
+      });
+    }
+    if (request.semantic === 'gui' || request.semantic === 'font') {
+      TextureLoader.guiTextures.set(resolution.requestedResref, resolution.texture);
+    } else if (request.semantic === 'lightmap') {
+      TextureLoader.lightmaps[resolution.requestedResref] = resolution.texture;
+    } else {
+      TextureLoader.textures.set(resolution.requestedResref, resolution.texture);
+    }
+  }
+
+  /**
+   * Reuses an already-live compatible shared source after every
+   * module-specific lookup. Resolution-cache entries are semantic-scoped,
+   * while shared lifetime ownership is resource-scoped; a diffuse and a
+   * lightmap request for the same shared asset must therefore borrow the same
+   * texture instead of replacing (and disposing) a material-bound texture.
+   *
+   * The lookup still runs, so an active module can shadow the asset. Only an
+   * unscoped cached result with the same ownership, source provenance, and
+   * resolved/requested resrefs is compatible with the candidate.
+   */
+  private static retainSharedResolution(
+    request: TextureRequest,
+    resolution: TextureResolution<OdysseyTexture>,
+  ): TextureResolution<OdysseyTexture> {
+    if (resolution.status !== 'resolved') {
+      return resolution;
+    }
+    const ownership = TextureLoader.getOwnership(request.semantic, resolution.source);
+    if (ownership === 'module') {
+      return resolution;
+    }
+    const existing = [...TextureLoader.resolutionCache.values()].find((entry) => (
+      entry.ownership === ownership
+      && entry.activeModule === undefined
+      && entry.resolution.status === 'resolved'
+      && entry.resolution.source === resolution.source
+      && entry.resolution.requestedResref === resolution.requestedResref
+      && entry.resolution.resolvedResref === resolution.resolvedResref
+    ));
+    if (
+      !existing
+      || existing.resolution.status !== 'resolved'
+    ) {
+      return resolution;
+    }
+    if (resolution.texture !== existing.resolution.texture) {
+      resolution.texture.dispose();
+    }
+    return {
+      ...resolution,
+      texture: existing.resolution.texture,
+    };
+  }
+
+  private static getOwnership(
+    semantic: TextureSemantic,
+    source: ResolvedTextureSource,
+  ): TextureOwnership {
+    if (source === 'active-module') {
+      return 'module';
+    }
+    return semantic === 'gui' || semantic === 'font' ? 'shared-gui' : 'shared-global';
+  }
+
+  private static getCacheKey(request: TextureRequest): string {
+    return [
+      request.semantic,
+      normalizeTextureResref(request.activeModule),
+      request.allowAlias ? 'alias' : 'exact',
+      normalizeTextureResref(request.resref),
+    ].join(':');
+  }
+
+  private static enqueueTypedTextureRequest(
+    name: unknown,
+    material: THREE.Material,
+    type: TextureType,
+    onLoad: Function | undefined,
+    fallback: string | undefined,
+    semantic: TextureSemantic,
+  ): void {
+    const normalizedName = normalizeTextureResref(name);
+    if (!isTextureResrefUsable(normalizedName)) {
+      console.warn('TextureLoader.enQueue rejected invalid texture resref', name);
+      return;
+    }
+    const request: ITextureLoaderQueuedRef = {
+      name: normalizedName,
+      material,
+      type,
+      fallback,
+      semantic,
+      ...(TextureLoader.activeModule ? { activeModule: TextureLoader.activeModule } : {}),
+      onLoad,
+    };
+    const requestKey = TextureLoader.getQueuedRequestKey(request);
+    const subscribers = TextureLoader.pendingSubscribers.get(requestKey);
+    if (subscribers) {
+      subscribers.push(request);
+      return;
+    }
+    TextureLoader.pendingSubscribers.set(requestKey, [request]);
+    TextureLoader.queue.push(request);
+  }
+
+  private static getQueuedRequestKey(request: ITextureLoaderQueuedRef): string {
+    return [
+      request.type,
+      request.semantic ?? (request.type === TextureType.LIGHTMAP ? 'lightmap' : 'gui'),
+      normalizeTextureResref(request.activeModule),
+      normalizeTextureResref(request.name),
+      normalizeTextureResref(request.fallback),
+    ].join(':');
+  }
+
+  private static isResolverOwnedTexture(texture: THREE.Texture): boolean {
+    if (TextureLoader.lifetimeRegistry.hasTexture(texture as OdysseyTexture)) {
+      return true;
+    }
+    for (const cached of TextureLoader.resolutionCache.values()) {
+      if (cached.resolution.status === 'resolved' && cached.resolution.texture === texture) {
+        return true;
+      }
+    }
+    return (
+      (TextureLoader.textures.has(texture.name)
+        && TextureLoader.textures.get(texture.name) === texture)
+      || (TextureLoader.guiTextures.has(texture.name)
+        && TextureLoader.guiTextures.get(texture.name) === texture)
+      || TextureLoader.lightmaps[texture.name] === texture
+    );
+  }
+
+  /** Restores a shared legacy cache entry after a module-local texture stopped shadowing it. */
+  private static restoreSharedLegacyCache(resref: string, semantic: TextureSemantic): void {
+    const normalizedResref = normalizeTextureResref(resref);
+    if (!isTextureResrefUsable(normalizedResref)) {
+      return;
+    }
+    const sharedEntry = [...TextureLoader.resolutionCache.values()].find((entry) => (
+      entry.ownership !== 'module'
+      && entry.activeModule === undefined
+      && entry.semantic === semantic
+      && entry.resolution.status === 'resolved'
+      && entry.resolution.requestedResref === normalizedResref
+    ));
+    if (!sharedEntry || sharedEntry.resolution.status !== 'resolved') {
+      return;
+    }
+    const { texture } = sharedEntry.resolution;
+    if (semantic === 'gui' || semantic === 'font') {
+      TextureLoader.guiTextures.set(normalizedResref, texture);
+    } else if (semantic === 'lightmap') {
+      TextureLoader.lightmaps[normalizedResref] = texture;
+    } else {
+      TextureLoader.textures.set(normalizedResref, texture);
+    }
+  }
+
+  private static recordDiagnostic(
+    request: TextureRequest,
+    resolution: TextureResolution<OdysseyTexture>,
+    fallback?: string,
+  ): void {
+    const diagnostic: TextureRoutingDiagnostic = Object.freeze({
+      requestedResref: resolution.requestedResref,
+      ...(resolution.resolvedResref ? { resolvedResref: resolution.resolvedResref } : {}),
+      semantic: request.semantic,
+      ...(normalizeTextureResref(request.activeModule)
+        ? { activeModule: normalizeTextureResref(request.activeModule) }
+        : {}),
+      status: resolution.status,
+      searchedSources: Object.freeze([...(resolution.searchedSources ?? [])]),
+      selectedSource: resolution.source,
+      ...(resolution.txiSource ? { txiSource: resolution.txiSource } : {}),
+      ...(fallback ? { fallback } : {}),
+      ...(resolution.diagnostic?.code ? { diagnosticCode: resolution.diagnostic.code } : {}),
+      cacheGeneration: resolution.cacheGeneration,
+    });
+    TextureLoader.routingDiagnostics.push(diagnostic);
+    if (TextureLoader.routingDiagnostics.length > 10000) {
+      TextureLoader.routingDiagnostics.shift();
+    }
+  }
+
+  private static assignMaterialTexture(
+    material: THREE.Material,
+    texture: OdysseyTexture | null,
+    slot: 'map' | 'lightMap',
+  ): void {
+    if (material instanceof THREE.RawShaderMaterial || material instanceof THREE.ShaderMaterial) {
+      if (material.uniforms[slot]) {
+        material.uniforms[slot].value = texture;
+      }
+      (material as any)[slot] = texture;
+      material.uniformsNeedUpdate = true;
+    } else {
+      (material as any)[slot] = texture;
+    }
+    material.needsUpdate = true;
+  }
+
+  private static applyHeaderMaterialProfile(texture: OdysseyTexture, material: THREE.Material): void {
+    if (typeof texture.header !== 'object' || texture.header.alphaTest === 1 || texture.txi.envMapTexture != null) {
+      return;
+    }
+    if (texture.txi.blending !== TXIBlending.PUNCHTHROUGH) {
+      material.transparent = true;
+    }
+    if (
+      (texture.header.alphaTest && texture.header.format !== PixelFormat.DXT5) ||
+      texture.txi.blending === TXIBlending.PUNCHTHROUGH
+    ) {
+      material.alphaTest = texture.header.alphaTest;
+      if ((material as THREE.ShaderMaterial).uniforms?.alphaTest) {
+        (material as THREE.ShaderMaterial).uniforms.alphaTest.value = texture.header.alphaTest;
+      }
+      material.transparent = false;
+    }
+  }
+
+  private static clearRoutingCaches(): void {
+    TextureLoader.resolutionCache.clear();
+    TextureLoader.loadInflight.clear();
+    TextureLoader.textures.clear();
+    TextureLoader.guiTextures.clear();
+    TextureLoader.lightmaps = {};
+    TextureLoader.particles = {};
+    TextureLoader.queue = [];
+    TextureLoader.pendingSubscribers = new Map();
+    TextureLoader.MISSING_REPORTED.clear();
   }
 
 

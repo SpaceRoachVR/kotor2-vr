@@ -62,8 +62,11 @@ export class CurrentGame {
   static async CleanGameInProgressFolder(create: boolean = true): Promise<boolean> {
     console.log(`CurrentGame.CleanGameInProgressFolder`, `Cleaning...`);
     try{
-      if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON){
-        console.log(`CurrentGame.CleanGameInProgressFolder`, `Mode: ELECTRON`);
+      //The HTTP asset backend goes down the same path as Electron: it implements
+      //exists/rmdir/mkdir generically, so it does not need the directory handle
+      //that the File System Access branch below reaches for directly.
+      if(ApplicationProfile.ENV == ApplicationEnvironment.ELECTRON || ApplicationProfile.usesHttpAssets){
+        console.log(`CurrentGame.CleanGameInProgressFolder`, `Mode: ${ApplicationProfile.usesHttpAssets ? 'HTTP' : 'ELECTRON'}`);
         let rm_response: boolean;
         if(await GameFileSystem.exists(CurrentGame.gameinprogress_dir)){
           rm_response = await GameFileSystem.rmdir(CurrentGame.gameinprogress_dir, { recursive: true });

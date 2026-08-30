@@ -153,7 +153,12 @@ export class EventSignalEvent extends GameEvent {
         }
       break;
       case SignalEventType.OnFailToOpen:
-        if(BitWise.InstanceOfObject(obj, ModuleObjectType.ModuleDoor)){
+        if(BitWise.InstanceOfObject(obj, ModuleObjectType.ModulePlaceable)){
+          const instance = obj.getScriptInstance(ModuleObjectScript.PlaceableOnFailToOpen);
+          if(instance){
+            instance.run(obj);
+          }
+        }else if(BitWise.InstanceOfObject(obj, ModuleObjectType.ModuleDoor)){
           const instance = obj.getScriptInstance(ModuleObjectScript.DoorOnFailToOpen);
           if(instance){
             instance.run(obj);
@@ -233,4 +238,3 @@ export class EventSignalEvent extends GameEvent {
   }
 
 }
-

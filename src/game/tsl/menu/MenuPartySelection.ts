@@ -358,7 +358,13 @@ export class MenuPartySelection extends K1_MenuPartySelection {
           creature.position.set(0, 0, 0);
           creature.model.rotation.z = -Math.PI / 2;
           this.LBL_3D_VIEW.group.creatures.add(creature.model);
-          this.char.LoadModel();
+          // `loadModel`, not `LoadModel`. ModuleCreature has only the
+          // lower-case method, so this threw every time the party selection
+          // screen built a portrait model — an uncaught promise rejection that
+          // left the character with no model at all. Reported from a headset
+          // session as the player being invisible in the med bay while
+          // rendering correctly in flatscreen.
+          void this.char.loadModel();
         }
       });
     }

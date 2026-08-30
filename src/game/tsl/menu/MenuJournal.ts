@@ -85,6 +85,18 @@ export class MenuJournal extends K1_MenuJournal {
         this.updateList();
       });
 
+      // TSL calls `super.menuControlInitializer(true)`, which makes the K1
+      // parent return before registering any of its listeners, and TSL then
+      // re-registers only some of them. BTN_EXIT was declared here but never
+      // wired, so the journal could not be closed from its own Exit button —
+      // with a mouse or a VR ray. Reported from a headset session where the
+      // 2D UI stayed up after interactions.
+      this.BTN_EXIT.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.close();
+      });
+      this._button_b = this.BTN_EXIT;
+
       resolve();
     });
   }

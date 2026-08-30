@@ -54,6 +54,7 @@ export enum ModuleObjectScript {
   PlaceableOnDeath = 'OnDeath',
   PlaceableOnDisarm = 'OnDisarm',
   PlaceableOnEndDialogue = 'OnEndDialogue',
+  PlaceableOnFailToOpen = 'OnFailToOpen',
   PlaceableOnHeartbeat = 'OnHeartbeat',
   PlaceableOnInvDisturbed = 'OnInvDisturbed',
   PlaceableOnLock = 'OnLock',

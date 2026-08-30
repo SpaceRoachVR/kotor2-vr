@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "caseId": "raw-webxr",
+  "rendererVersion": "WebGL2 WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+  "runtimeHz": 72,
+  "acceptanceHz": 72,
+  "framebuffer": { "width": 4224, "height": 2304 },
+  "frames": 2099,
+  "durationSec": 60.01,
+  "fps": 34.96,
+  "intervalMs": { "min": 13.8, "p50": 27.8, "p90": 31.1, "p99": 46.7, "max": 106.1 },
+  "overBudget": { "budgetMs": 13.89, "frames": 2097, "percent": 99.95 },
+  "estimatedMissedRuntimeFrames": 2136,
+  "duplicateTimestamps": 0,
+  "gpuMs": {
+    "supported": true,
+    "samples": 2098,
+    "disjointSamples": 0,
+    "min": 0.04,
+    "p50": 0.06,
+    "p90": 0.06,
+    "p99": 0.07,
+    "max": 8.34
+  },
+  "verdict": {
+    "status": "fail",
+    "failed": ["p90", "p99", "overBudget", "runtimeFrames"],
+    "missing": []
+  }
+}

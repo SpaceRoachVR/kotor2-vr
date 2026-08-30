@@ -14,10 +14,12 @@ import { GUIControlEventFactory } from "@/gui/GUIControlEventFactory";
 import { Keyboard } from "@/controls/Keyboard";
 import { GamePad } from "@/controls/GamePad";
 import { Mouse } from "@/controls/Mouse";
+import { activateSelectedObject } from "@/engine/interaction/SelectedObjectActivation";
 import { KeyMapper } from "@/controls/KeyMapper";
 import { AnalogInput } from "@/controls/AnalogInput";
 import { TGAObject } from "@/resource/TGAObject";
 import { GameFileSystem } from "@/utility/GameFileSystem";
+import { buildScreenshotPath, ensureScreenshotDirectory } from "@/utility/filesystem/ScreenshotPath";
 import { TURN_SPEED_FAST } from "@/engine/TurnSpeeds";
 import { EventManager } from "@/managers/EventManager";
 
@@ -119,6 +121,11 @@ export class IngameControls {
         const screenshot = new Image();
         screenshot.src = GameState.canvas.toDataURL('image/png');
         screenshot.onload = async function() {
+          if(!await ensureScreenshotDirectory(GameFileSystem)){
+            console.error('IngameControls: unable to create the Screenshots directory');
+            return;
+          }
+          try{
           /**
            * Draw the contents of the Image onto an OffscreenCanvas
            */
@@ -136,10 +143,9 @@ export class IngameControls {
           /**
            * Generate the export filename
            */
-          const count = (await GameFileSystem.readdir('')).filter( (file) => {
-            return !!file.match(/KotOR\d{4}.tga/);
-          }).length;
           const isK1 = GameState.GameKey == 'KOTOR';
+          const screenshotPattern = isK1 ? /KotOR\d{4}\.tga$/i : /K2_\d{5}\.tga$/i;
+          const count = (await GameFileSystem.readdir('Screenshots')).filter((file) => screenshotPattern.test(file)).length;
           const ssName = isK1 ? 'KotOR' : 'K2_';
           const ssNumber = "00000" + count;
           const ssMaxDigits = isK1 ? 4 : 5;
@@ -148,7 +154,11 @@ export class IngameControls {
           /**
            * Export the generated TGAObject as a TGA Image
            */
-          GameFileSystem.writeFile(ssFilename, await tga.toExportBuffer());
+          const written = await GameFileSystem.writeFile(buildScreenshotPath(ssFilename), await tga.toExportBuffer());
+          if(!written) console.error(`IngameControls: failed to write screenshot '${ssFilename}'`);
+          }catch(error){
+            console.error('IngameControls: screenshot capture failed', error);
+          }
         };
       }
 
@@ -343,8 +353,7 @@ export class IngameControls {
 
                 if(GameState.CursorManager.selectedObject == moduleObject && distance <= distanceThreshold){
                   if(typeof moduleObject.onClick === 'function'){
-                    GameState.getCurrentPlayer().clearAllActions();
-                    moduleObject.onClick(GameState.getCurrentPlayer());
+                    activateSelectedObject(GameState.getCurrentPlayer(), moduleObject);
                   }else{
                     let distance = GameState.getCurrentPlayer().position.distanceTo(moduleObject.position);
                     //console.log(distance);

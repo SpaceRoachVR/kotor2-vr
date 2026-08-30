@@ -212,6 +212,8 @@ function putStaticController(
 ): void {
   const gen: IOdysseyControllerGeneric = {
     type,
+    // ASCII MDL carries no supermodel link; -1 is the binary reader's "none" sentinel.
+    supermodelLink: -1,
     nodeType: node.nodeType,
     frameCount: frames.length,
     timeKeyIndex: 0,
@@ -249,6 +251,8 @@ function applyGeometryController(
     const sc = s.takeNumber();
     const gen: IOdysseyControllerGeneric = {
       type: OdysseyModelControllerType.Scale,
+      // ASCII MDL carries no supermodel link; -1 is the binary reader's "none" sentinel.
+      supermodelLink: -1,
       nodeType: node.nodeType,
       frameCount: 1,
       timeKeyIndex: 0,
@@ -810,7 +814,9 @@ function parseKeyedList(
       }
     } else if (type === OdysseyModelControllerType.Scale) {
       frames.push({ time, value: vals[0] ?? 0 } as IOdysseyControllerFrameGeneric);
-    } else if (spec.bezier && type !== OdysseyModelControllerType.Position && type !== OdysseyModelControllerType.Orientation && type !== OdysseyModelControllerType.Scale) {
+    } else if (spec.bezier) {
+      // Orientation/Position/Scale are handled by the branches above, so anything
+      // reaching here is a non-transform bezier controller.
       if (defaultCols === 3) {
         frames.push({
           time,
@@ -835,6 +841,8 @@ function parseKeyedList(
 
   const gen: IOdysseyControllerGeneric = {
     type,
+    // ASCII MDL carries no supermodel link; -1 is the binary reader's "none" sentinel.
+    supermodelLink: -1,
     nodeType,
     frameCount: frames.length,
     timeKeyIndex: 0,

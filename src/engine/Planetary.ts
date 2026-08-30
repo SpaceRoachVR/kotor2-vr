@@ -53,11 +53,20 @@ export class Planetary {
   }
 
   static SetPlanetAvailable(index: number, bState: boolean){
-    Planetary.planets[index].enabled = bState;
+    const planet = Planetary.getPlanetForMutation(index);
+    planet.enabled = bState;
   }
 
   static SetPlanetSelectable(index: number, bState: boolean){
-    Planetary.planets[index].selectable = bState;
+    const planet = Planetary.getPlanetForMutation(index);
+    planet.selectable = bState;
+  }
+
+  private static getPlanetForMutation(index: number): Planet {
+    if (!Number.isInteger(index) || index < 0 || !Array.isArray(Planetary.planets) || !Planetary.planets[index]) {
+      throw new RangeError(`Galaxy Map planet index is invalid: ${index}`);
+    }
+    return Planetary.planets[index];
   }
 
   static GetPlanetByGUITag(sTag = ''): Planet{

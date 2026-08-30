@@ -374,13 +374,14 @@ export class InGameOverlay extends K1_InGameOverlay {
       //this.lbl_combatbg2.visible = false;
 
       for(const texture of preloadTextures){
-        const tex = await TextureLoader.Load(texture);
+        const tex = await TextureLoader.LoadGUI(texture);
         preloadTexturesMap.set(texture, tex);
       }
 
       const arrowGeometry = new THREE.PlaneGeometry( 1, 1, 1 );
       const arrowMaterial = new THREE.MeshBasicMaterial( { color: 0xffffff, transparent: false, blending: THREE.AdditiveBlending } );
       arrowMaterial.map = preloadTexturesMap.get('friendlyarrow');
+      this.namePlateArrowMaterial = arrowMaterial;
       this.namePlateArrow = new THREE.Mesh( arrowGeometry, arrowMaterial );
       this.namePlateArrow.scale.x = 32;
       this.namePlateArrow.scale.y = 32;

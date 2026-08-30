@@ -18,9 +18,19 @@ export const ModalGrantAccess = () => {
   }
   
   const showBrowserDirectoryPicker = async () => {
-    const handle = await window.showDirectoryPicker({
-      mode: "readwrite"
-    });
+    let handle: FileSystemDirectoryHandle;
+    try{
+      handle = await window.showDirectoryPicker({
+        mode: "readwrite"
+      });
+    }catch(e: any){
+      // Dismissing the picker rejects with AbortError. Without this catch it
+      // escapes as an unhandled rejection and trips the dev-server overlay.
+      if(e?.name != 'AbortError'){
+        console.error(e);
+      }
+      return;
+    }
     if(!handle) return;
 
     if (!(await appState.validateDirectoryHandle(handle))) {

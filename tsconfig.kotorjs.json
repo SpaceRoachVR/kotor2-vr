@@ -1,19 +1,34 @@
 // tsconfig.kotorjs.json
+//
+// Type-check gate for the KotOR.js engine sources. Covers all of src/ except
+// src/apps/**, which is owned by the per-app configs (tsconfig.forge.json,
+// tsconfig.debugger.json, tsconfig.launcher.json, tsconfig.game.json) — those
+// need "jsx"/react types this config does not carry.
+//
+// Previously this only included src/index.d.ts, so tsc checked nothing but the
+// handful of files index.d.ts transitively referenced and the engine went
+// unchecked. Keep the include broad; if a new top-level source dir is added it
+// is covered automatically.
 {
+  "extends": "./tsconfig.json",
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
       "@/*": [
         "src/*"
       ]
-    }
+    },
+    "noEmit": true,
+    "listFiles": false,
+    "skipLibCheck": true
   },
-  "extends": "./tsconfig.json",
   "include": [
+    "src/**/*.ts",
     "src/index.d.ts"
   ],
-  "compilerOptions": {
-    // "noResolve": true
-  },
-  "skipLibCheck": true
+  "exclude": [
+    "node_modules",
+    "src/**/*.spec.ts",
+    "src/apps/**"
+  ]
 }

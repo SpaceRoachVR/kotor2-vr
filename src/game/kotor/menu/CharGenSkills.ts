@@ -1,6 +1,11 @@
 import { GameState } from "@/GameState";
 import { GameMenu } from "@/gui";
 import type { GUIListBox, GUILabel, GUIButton } from "@/gui";
+import {
+  allocateRecommendedCharGenSkills,
+  applyCharGenSkillIncrease,
+  resolveCharGenSkillAllocation,
+} from "@/game/kotor/menu/CharGenSkillRules";
 
 /**
  * CharGenSkills class.
@@ -58,6 +63,9 @@ export class CharGenSkills extends GameMenu {
   BTN_BACK: GUIButton;
   TRE_PLUS_BTN: GUIButton;
 
+  private activeSkillRow = 0;
+  private readonly warnedUnavailableSkillRows = new Set<string>();
+
   constructor(){
     super();
     this.gui_resref = 'skchrgen';
@@ -65,10 +73,16 @@ export class CharGenSkills extends GameMenu {
     this.voidFill = true;
   }
 
-  async menuControlInitializer(skipInit: boolean = false) {
-    await super.menuControlInitializer();
-    if(skipInit) return;
-    return new Promise<void>((resolve, reject) => {
+  /**
+   * Wires Back, Accept and Recommended.
+   *
+   * Separated because TSL's subclass calls `super.menuControlInitializer(true)`
+   * and so never runs this class's initializer body — leaving every button on
+   * the TSL skills step dead. That step is reachable now that custom character
+   * creation is offered.
+   */
+  protected wireSkillControls(){
+
       
       this.BTN_BACK.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -90,54 +104,159 @@ export class CharGenSkills extends GameMenu {
       });
 
       this.BTN_RECOMMENDED.addEventListener('click', (e) => {
-
+        e.stopPropagation();
         GameState.CharGenManager.resetSkillPoints();
         GameState.CharGenManager.availSkillPoints = GameState.CharGenManager.getMaxSkillPoints();
-        let skillOrder = GameState.CharGenManager.getRecommendedOrder();
-        
-        while(GameState.CharGenManager.availSkillPoints > 0){
-          for(let i = 0; i < 8; i++){
-            let skillIndex = skillOrder[i];
-
-            if(!GameState.CharGenManager.availSkillPoints)
-              break;
-
-            switch(skillIndex){
-              case 0:
-                GameState.CharGenManager.computerUse++;
-              break;
-              case 1:
-                GameState.CharGenManager.demolitions++;
-              break;
-              case 2:
-                GameState.CharGenManager.stealth++;
-              break;
-              case 3:
-                GameState.CharGenManager.awareness++;
-              break;
-              case 4:
-                GameState.CharGenManager.persuade++;
-              break;
-              case 5:
-                GameState.CharGenManager.repair++;
-              break;
-              case 6:
-                GameState.CharGenManager.security++;
-              break;
-              case 7:
-                GameState.CharGenManager.treatInjury++;
-              break;
-            }
-            
-            if(skillIndex >= 0){
-              GameState.CharGenManager.availSkillPoints -= 1;
-            }
-          }
-        }
-
+        this.applyRecommendedSkillAllocation();
         this.updateButtonStates();
-
       });
+  }
+
+
+  /**
+   * The eight skills, in `skills.2da` row order, paired with the controls that
+   * drive them and the `CharGenManager` field that stores the rank.
+   */
+  private static readonly SKILL_ROWS: ReadonlyArray<{
+    readonly row: number; readonly field: string;
+    readonly plus: string; readonly minus: string;
+  }> = [
+    { row: 0, field: 'computerUse',  plus: 'COM_PLUS_BTN', minus: 'COM_MINUS_BTN' },
+    { row: 1, field: 'demolitions',  plus: 'DEM_PLUS_BTN', minus: 'DEM_MINUS_BTN' },
+    { row: 2, field: 'stealth',      plus: 'STE_PLUS_BTN', minus: 'STE_MINUS_BTN' },
+    { row: 3, field: 'awareness',    plus: 'AWA_PLUS_BTN', minus: 'AWA_MINUS_BTN' },
+    { row: 4, field: 'persuade',     plus: 'PER_PLUS_BTN', minus: 'PER_MINUS_BTN' },
+    { row: 5, field: 'repair',       plus: 'REP_PLUS_BTN', minus: 'REP_MINUS_BTN' },
+    { row: 6, field: 'security',     plus: 'SEC_PLUS_BTN', minus: 'SEC_MINUS_BTN' },
+    { row: 7, field: 'treatInjury',  plus: 'TRE_PLUS_BTN', minus: 'TRE_MINUS_BTN' },
+  ];
+
+  private getSkillRows(): Array<Record<string, unknown> | undefined> {
+    const table = GameState.TwoDAManager.datatables.get('skills');
+    return CharGenSkills.SKILL_ROWS.map((skill) => table?.rows?.[skill.row]);
+  }
+
+  private getCharacterLevel(): number {
+    const level = GameState.CharGenManager.selectedCreature?.getTotalClassLevel?.();
+    return typeof level === 'number' && Number.isInteger(level) && level >= 1 ? level : 1;
+  }
+
+  private getSkillAllocation(row: number, currentRank: number, availablePoints: number) {
+    return resolveCharGenSkillAllocation({
+      skillRow: this.getSkillRows()[row],
+      classSkillColumn: GameState.CharGenManager.getSkillTableColumn(),
+      level: this.getCharacterLevel(),
+      currentRank,
+      availablePoints,
+    });
+  }
+
+  private warnUnavailableSkillRow(row: number): void {
+    const classColumn = GameState.CharGenManager.getSkillTableColumn();
+    const diagnosticKey = `${classColumn}:${row}`;
+    if (this.warnedUnavailableSkillRows.has(diagnosticKey)) return;
+    this.warnedUnavailableSkillRows.add(diagnosticKey);
+    console.warn(`CharGenSkills: unavailable skill row ${row} for class column ${classColumn}`);
+  }
+
+  private updateActiveSkillStatus(): void {
+    const manager: any = GameState.CharGenManager;
+    const skill = CharGenSkills.SKILL_ROWS[this.activeSkillRow] || CharGenSkills.SKILL_ROWS[0];
+    const allocation = this.getSkillAllocation(
+      skill.row,
+      Number(manager[skill.field]),
+      Number(manager.availSkillPoints),
+    );
+
+    if (allocation.kind === 'unavailable') {
+      this.warnUnavailableSkillRow(skill.row);
+    }
+
+    const classLabel = allocation.kind === 'class'
+      ? 'Class Skill'
+      : allocation.kind === 'cross-class'
+        ? 'Cross-Class Skill'
+        : 'Unavailable';
+    this.CLASSSKL_LBL?.setText(classLabel);
+    this.COST_LBL?.setText(allocation.kind === 'unavailable' ? '' : 'Cost');
+    this.COST_POINTS_LBL?.setText(allocation.kind === 'unavailable' ? '' : allocation.rankCost);
+  }
+
+  private applyRecommendedSkillAllocation(): void {
+    const manager: any = GameState.CharGenManager;
+    const fields = CharGenSkills.SKILL_ROWS.map((skill) => skill.field);
+    const recommendation = GameState.CharGenManager.getRecommendedOrder();
+    const result = allocateRecommendedCharGenSkills({
+      skillRows: this.getSkillRows(),
+      classSkillColumn: GameState.CharGenManager.getSkillTableColumn(),
+      level: this.getCharacterLevel(),
+      ranks: fields.map((field) => Number(manager[field])),
+      availablePoints: Number(manager.availSkillPoints),
+      recommendedOrder: fields.map((_, priority) => Number(recommendation[priority])),
+    });
+
+    for (let index = 0; index < fields.length; index += 1) {
+      manager[fields[index]] = result.ranks[index];
+    }
+    manager.availSkillPoints = result.remainingPoints;
+    const firstRecommendedRow = fields.map((_, priority) => Number(recommendation[priority]))
+      .find((skillRow) => Number.isInteger(skillRow) && skillRow >= 0 && skillRow < fields.length);
+    if (firstRecommendedRow !== undefined) this.activeSkillRow = firstRecommendedRow;
+  }
+
+  /**
+   * The per-skill +/- buttons had no handlers in either game -- only Back,
+   * Accept and Recommended were ever wired -- so skill points could not be
+   * spent by hand at all. Reported from the headset.
+   */
+  protected wireSkillAdjustControls(){
+    const manager: any = GameState.CharGenManager;
+    for(const skill of CharGenSkills.SKILL_ROWS){
+        (this as any)[skill.plus]?.addEventListener('click', (e: any) => {
+          e.stopPropagation();
+          this.activeSkillRow = skill.row;
+          const result = applyCharGenSkillIncrease({
+            skillRow: this.getSkillRows()[skill.row],
+            classSkillColumn: GameState.CharGenManager.getSkillTableColumn(),
+            level: this.getCharacterLevel(),
+            currentRank: Number(manager[skill.field]),
+            availablePoints: Number(manager.availSkillPoints),
+          });
+          if (result.canIncrease) {
+            manager[skill.field] = result.nextRank;
+            manager.availSkillPoints = result.remainingPoints;
+          } else if (result.kind === 'unavailable') {
+            this.warnUnavailableSkillRow(skill.row);
+          }
+          this.updateButtonStates();
+          });
+
+          (this as any)[skill.minus]?.addEventListener('click', (e: any) => {
+            e.stopPropagation();
+            this.activeSkillRow = skill.row;
+            const floor = GameState.CharGenManager.selectedCreature?.skills?.[skill.row]?.rank ?? 0;
+            const allocation = this.getSkillAllocation(
+              skill.row,
+              Number(manager[skill.field]),
+              Number(manager.availSkillPoints),
+            );
+            if (allocation.kind === 'unavailable') {
+              this.warnUnavailableSkillRow(skill.row);
+            } else if (manager[skill.field] > floor) {
+              manager[skill.field] -= 1;
+              manager.availSkillPoints += allocation.rankCost;
+            }
+            this.updateButtonStates();
+          });
+    }
+  }
+
+  async menuControlInitializer(skipInit: boolean = false) {
+    await super.menuControlInitializer();
+    if(skipInit) return;
+    return new Promise<void>((resolve, reject) => {
+      this.wireSkillControls();
+      this.wireSkillAdjustControls();
       resolve();
     });
   }
@@ -157,6 +276,7 @@ export class CharGenSkills extends GameMenu {
     this.SECURITY_POINTS_BTN.setText(GameState.CharGenManager.security);
     this.TREAT_INJURY_POINTS_BTN.setText(GameState.CharGenManager.treatInjury);
     this.REMAINING_SELECTIONS_LBL.setText(GameState.CharGenManager.availSkillPoints);
+    this.updateActiveSkillStatus();
   }
 
   reset() {

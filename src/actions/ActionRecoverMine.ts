@@ -12,6 +12,7 @@ import { ResourceTypes } from "@/resource/ResourceTypes";
 import { BitWise } from "@/utility/BitWise";
 import { Utility } from "@/utility/Utility";
 import { Action } from "@/actions/Action";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
 /**
  * ActionRecoverMine class.
@@ -43,7 +44,10 @@ export class ActionRecoverMine extends Action {
     if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
       let distance = Utility.Distance2D(this.owner.position, this.target.position);
             
-      if(distance > 3){
+      // VR owns the player's position; walking them to the target drags them
+      // through the world. Actor-scoped so party and NPC movement is untouched.
+      if(distance > 3 &&
+        !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
         // this.owner.openSpot = undefined;
         let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint();
         actionMoveToTarget.setParameter(0, ActionParameterType.FLOAT, this.target.position.x);
@@ -69,10 +73,14 @@ export class ActionRecoverMine extends Action {
         //todo: recover skill check
 
         trap.destroy();
-        const buffer = ResourceLoader.loadCachedResource(ResourceTypes['utp'], trap.trapResRef);
+        const buffer = ResourceLoader.loadCachedResource(ResourceTypes['uti'], trap.trapResRef);
         if(buffer){
           const item = new GameState.Module.ModuleArea.ModuleItem(new GFFObject(buffer));
-          this.owner.addItem(item);
+          if(GameState.PartyManager.party.indexOf(this.owner as any) > -1){
+            GameState.InventoryManager.addItem(item);
+          }else{
+            this.owner.addItem(item);
+          }
         }
       }
 

@@ -147,7 +147,22 @@ export class ActionQueue extends Array {
     let action = this[0];
     if(!action){ return; }
     action.owner = this.owner;
-    let status = action.update( delta );
+
+    let status: ActionStatus;
+    try{
+      status = action.update( delta );
+    }catch(e){
+      //Without this the throwing action is never shifted off the queue, so it
+      //re-throws on every frame forever and the owner can never act again.
+      console.error(
+        `ActionQueue: action type ${action.type} threw for owner`,
+        `'${this.owner?.getTag ? this.owner.getTag() : '?'}'`,
+        `- dropping it from the queue.`, e
+      );
+      this.shift();
+      return;
+    }
+
     if(status != ActionStatus.IN_PROGRESS){
       this.shift();
     }

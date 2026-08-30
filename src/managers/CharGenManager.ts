@@ -16,6 +16,8 @@ import { AudioEngine } from "@/audio/AudioEngine";
 import { LTRObject } from "@/resource/LTRObject";
 import { MDLLoader, ResourceLoader } from "@/loaders";
 import { ResourceTypes } from "@/resource/ResourceTypes";
+import { allocateRecommendedCharGenSkills } from "@/game/kotor/menu/CharGenSkillRules";
+import { validateCharGenProgression } from "@/game/kotor/menu/CharGenProgression";
 
 /**
  * CharGenManager class.
@@ -193,6 +195,7 @@ export class CharGenManager {
     template.RootNode.addField(new GFFField(GFFDataType.WORD, 'CurrentHitPoints')).setValue(8);
     template.RootNode.addField(new GFFField(GFFDataType.WORD, 'MaxHitPoints')).setValue(20);
     template.RootNode.addField(new GFFField(GFFDataType.WORD, 'ForcePoints')).setValue(0);
+    template.RootNode.addField(new GFFField(GFFDataType.WORD, 'MaxForcePoints')).setValue(0);
     template.RootNode.addField(new GFFField(GFFDataType.WORD, 'CurrentForce')).setValue(0);
     template.RootNode.addField(new GFFField(GFFDataType.BYTE, 'Gender')).setValue(gender);
     let equipment = template.RootNode.addField(new GFFField(GFFDataType.LIST, 'Equip_ItemList'));
@@ -292,6 +295,65 @@ export class CharGenManager {
     return CharGenManager.selectedCreature.classes[0].skillstable.toLowerCase() + '_reco';
   }
 
+  /**
+   * Applies and COMMITS the class's recommended attributes and skill spread to
+   * a creature.
+   *
+   * Quick character creation is Portrait -> Name -> Play. It never opened the
+   * attributes or skills screens, and those screens are the only place a
+   * character's points are ever spent -- `CharGenSkills`'s Accept button is the
+   * sole writer of `skills[i].rank` in the whole engine. So every quick
+   * character started with the class template's base skills, and the
+   * `availSkillPoints` computed for it was discarded, which degraded every
+   * skill check in the game for that character.
+   *
+   * The distribution mirrors the two Recommended buttons; this commits it as
+   * well, since no Accept is pressed on the quick path. Those handlers should
+   * be refactored onto this method rather than keeping a second copy.
+   */
+  static applyRecommendedBuild(creature: any = CharGenManager.selectedCreature){
+    if(!creature || !creature.classes || !creature.classes[0]) return;
+
+    const characterClass = creature.classes[0];
+    CharGenManager.availPoints = 0;
+    CharGenManager.str = parseInt(characterClass.str as any);
+    CharGenManager.dex = parseInt(characterClass.dex as any);
+    CharGenManager.con = parseInt(characterClass.con as any);
+    CharGenManager.wis = parseInt(characterClass.wis as any);
+    CharGenManager.int = parseInt(characterClass.int as any);
+    CharGenManager.cha = parseInt(characterClass.cha as any);
+
+    creature.str = CharGenManager.str;
+    creature.dex = CharGenManager.dex;
+    creature.con = CharGenManager.con;
+    creature.wis = CharGenManager.wis;
+    creature.int = CharGenManager.int;
+    creature.cha = CharGenManager.cha;
+
+    CharGenManager.resetSkillPoints();
+    CharGenManager.availSkillPoints = CharGenManager.getMaxSkillPoints();
+    const fields = ['computerUse','demolitions','stealth','awareness','persuade','repair','security','treatInjury'];
+    const skillsTable = TwoDAManager.datatables.get('skills');
+    const result = allocateRecommendedCharGenSkills({
+      skillRows: fields.map((_, index) => skillsTable?.rows?.[index]),
+      classSkillColumn: `${String(characterClass.skillstable || '').toLowerCase()}_class`,
+      level: creature.getTotalClassLevel?.() || 1,
+      ranks: fields.map((field) => Number((CharGenManager as any)[field])),
+      availablePoints: CharGenManager.availSkillPoints,
+      recommendedOrder: fields.map((_, priority) => Number(CharGenManager.getRecommendedOrder()[priority])),
+    });
+    for(let i = 0; i < fields.length; i++){
+      (CharGenManager as any)[fields[i]] = result.ranks[i];
+    }
+    CharGenManager.availSkillPoints = result.remainingPoints;
+
+    if(Array.isArray(creature.skills)){
+      for(let i = 0; i < fields.length && i < creature.skills.length; i++){
+        creature.skills[i].rank = (CharGenManager as any)[fields[i]];
+      }
+    }
+  }
+
   static getRecommendedOrder() {
     let skillOrder: any = {
       '0': -1,
@@ -311,6 +373,10 @@ export class CharGenManager {
       }
     }
     return skillOrder;
+  }
+
+  static validateSelectedCreatureProgression() {
+    return validateCharGenProgression(CharGenManager.selectedCreature);
   }
 
   static generateRandomName(gender: number = 0){
