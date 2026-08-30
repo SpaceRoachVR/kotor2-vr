@@ -84,8 +84,13 @@ export class NWScript {
 
   /**
    * The instructions of the script
+   *
+   * Always a Map, even for a script that failed to parse. init() replaces it, and
+   * newInstance() hands this reference to every NWScriptInstance - leaving it
+   * undefined made a script that failed the NCS header check crash at execution
+   * time instead of at load time.
    */
-  instructions: Map<number, NWScriptInstruction>;
+  instructions: Map<number, NWScriptInstruction> = new Map();
   
   /**
    * Whether the script is a global script
@@ -128,8 +133,17 @@ export class NWScript {
       });
     }else if ( dataOrFile instanceof Uint8Array ){
       const textDecoder = new TextDecoder();
-      if(textDecoder.decode(dataOrFile.slice(0, 8)) == 'NCS V1.0'){
+      const header = textDecoder.decode(dataOrFile.slice(0, 8));
+      if(header == 'NCS V1.0'){
         this.init(dataOrFile);
+      }else{
+        //Silently skipping init() here left a script object that looked loaded but
+        //had no instructions, and the failure only surfaced later as a TypeError
+        //deep inside execution. Name the bad resource at load time instead.
+        console.warn(
+          'NWScript: refusing to load a buffer that is not NCS V1.0 -',
+          `header '${header}',`, `${dataOrFile.length} bytes`
+        );
       }
     }
   }
@@ -362,6 +376,16 @@ export class NWScript {
     //Pass the buffer to a new script object
     const script = new NWScript( buffer );
     script.name = scriptName;
+
+    //A valid NCS always parses to at least one instruction. An empty table means
+    //the header check or the parse failed, and handing out instances of it just
+    //defers the failure to execution. Refuse it by name, and do not cache it -
+    //the resource may resolve correctly on a later load.
+    if(!script.instructions.size){
+      console.warn(`NWScript.Load: '${scriptName}' produced no instructions, skipping`);
+      return undefined;
+    }
+
     //Store a refernece to the script object inside the static "scripts" variable
     NWScript.scripts.set( scriptName, script );
 
