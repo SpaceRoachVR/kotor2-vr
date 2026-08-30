@@ -65,7 +65,8 @@ export class MenuEquipment extends GameMenu {
   defaultControl: GUIControl;
   slot: ModuleCreatureArmorSlot;
   equipmentSelectionActive: boolean;
-  selectedItem: ModuleItem;
+  /** The list's 'None' row is a selectable value, not an absent selection. */
+  selectedItem: ModuleItem | GUIItemNone;
 
   constructor(){
     super();
@@ -354,7 +355,7 @@ export class MenuEquipment extends GameMenu {
     let description = '';
     if (item instanceof ModuleItem) {
       this.selectedItem = item;
-      description = this.selectedItem.getDescription();
+      description = item.getDescription();
     } else if(item instanceof GUIItemEquipped) {
       description = item.node.getDescription();
     } else if(item instanceof GUIItemNone) {

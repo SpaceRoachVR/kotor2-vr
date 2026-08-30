@@ -1,4 +1,4 @@
-import { ArrayLiteralNode, CallNode, IndexNode, LiteralNode } from "@/nwscript/compiler/ASTTypes";
+import { ArgumentNode, ArrayLiteralNode, CallNode, IndexNode, LiteralNode } from "@/nwscript/compiler/ASTTypes";
 import type { Token } from "@/nwscript/compiler/NWScriptToken";
 
 export type SourceInfo = Token["source"] | undefined;
@@ -55,6 +55,8 @@ export interface SemanticStructPropertyNode extends AnnotatedNode {
   type: "property";
   name: string;
   datatype: SemanticDataType;
+  /** Struct members carry no scope of their own; present so property-access nodes can copy it through. */
+  is_global?: boolean;
 }
 
 // Functions
@@ -122,11 +124,17 @@ export interface SemanticFunctionCallNode extends AnnotatedNode {
   action_id?: number; // engine action index, -1 if script function
 }
 
+/**
+ * An entry from the parsed nwscript.nss engine action table. These come straight
+ * off the raw AST - they are never run through the semantic pass - so their
+ * arguments stay {@link ArgumentNode}s.
+ */
 export interface EngineActionRef {
   index: number;
   name: string;
   returntype: SemanticDataType;
-  arguments: SemanticArgumentNode[];
+  arguments: ArgumentNode[];
+  is_engine_action?: boolean;
 }
 
 export interface SemanticPropertyNode extends AnnotatedNode {
@@ -223,7 +231,7 @@ export interface SemanticCompareNode extends AnnotatedNode {
 }
 
 export interface SemanticBinaryNode extends AnnotatedNode {
-  type: "add" | "sub" | "mul" | "div" | "mod" | "incor" | "xor" | "booland" | "assign" | "compare";
+  type: "add" | "sub" | "mul" | "div" | "mod" | "incor" | "xor" | "booland" | "shift" | "assign" | "compare";
   left: SemanticExpressionNode;
   right: SemanticExpressionNode;
   operator?: { type: "operator"; value: string };

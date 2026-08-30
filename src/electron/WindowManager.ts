@@ -104,9 +104,10 @@ export class WindowManager {
       });
     });
     
-    ipcMain.handle('open-file-dialog', (event, data: Electron.OpenDialogOptions) => {
+    // The preload bridge forwards its rest args, so the payload is [options].
+    ipcMain.handle('open-file-dialog', (event, args: [Electron.OpenDialogOptions?]) => {
       return new Promise( (resolve, reject) => {
-        dialog.showOpenDialog(data).then(result => {
+        dialog.showOpenDialog(args?.[0] ?? {}).then(result => {
           resolve(result);
         }).catch(err => {
           reject(err)
@@ -114,10 +115,10 @@ export class WindowManager {
       });
     });
     
-    ipcMain.handle('save-file-dialog', (event, data: Electron.SaveDialogOptions) => {
+    ipcMain.handle('save-file-dialog', (event, args: [Electron.SaveDialogOptions?]) => {
       return new Promise( (resolve, reject) => {
-        console.log('save-file-dialog2', event, data[0]);
-        dialog.showSaveDialog(data[0]).then(result => {
+        console.log('save-file-dialog2', event, args?.[0]);
+        dialog.showSaveDialog(args?.[0] ?? {}).then(result => {
           resolve(result);
         }).catch(err => {
           reject(err)

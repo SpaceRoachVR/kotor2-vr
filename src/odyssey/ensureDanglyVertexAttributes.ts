@@ -17,14 +17,15 @@ export function ensureDanglyConstraintAttribute(
   const expected = n * 4;
   if (node.danglyVec4 && node.danglyVec4.length === expected) return;
 
-  let nx = geometry.getAttribute("normal");
+  // getAttribute() also admits GLBufferAttribute, which has no CPU-side accessors.
+  let nx = geometry.getAttribute("normal") as THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
   if (!nx || nx.count !== n) {
     geometry.computeVertexNormals();
-    nx = geometry.getAttribute("normal");
+    nx = geometry.getAttribute("normal") as THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
   }
-  if (!nx || nx.count !== n) return;
+  if (!nx || nx.count !== n || typeof nx.getX !== "function") return;
 
-  const constraints = node.constraints ?? [];
+  const constraints: ArrayLike<number> = node.constraints ?? [];
   const out: number[] = new Array(expected);
 
   for (let i = 0; i < n; i++) {

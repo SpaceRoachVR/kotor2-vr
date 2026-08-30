@@ -95,6 +95,8 @@ export interface FunctionNode {
   arguments: ArgumentNode[];
   statements: StatementNode[];
   source: SourceInfo;
+  /** Lexical declaration order among script subroutines (0-based); stamped by the parser and carried onto SemanticFunctionNode. */
+  declarationOrder?: number;
 }
 
 export interface ElseIfNode {

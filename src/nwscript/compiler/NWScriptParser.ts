@@ -130,7 +130,12 @@ export class NWScriptParser {
     }
   }
 
-  postProcessFunctionDefinition(statement: FunctionNode): FunctionNode {
+  /**
+   * Normalizes negated literal defaults on a function's arguments. Runs over both
+   * script FunctionNodes and the EngineAction records built from nwscript.nss, so
+   * it is structural over the two fields it actually touches.
+   */
+  postProcessFunctionDefinition<T extends { type: string; arguments: ArgumentNode[] }>(statement: T): T {
     if(!statement || (typeof statement !== 'object') || statement.type !== 'function'){
       this.throwError("Invalid function node", statement, statement);
     }
@@ -280,6 +285,7 @@ export class NWScriptParser {
             is_engine_constant: true,
             name: statement.name,
             value: statement.value,
+            source: statement.source,
             type: statement.type,
           });
         }
@@ -792,7 +798,7 @@ export class NWScriptParser {
         const argRefDataType = this.getValueDataType(arg_ref);
         
         if(arg_ref.datatype.value == 'action'){
-          if(!arg.function_reference){
+          if(arg.type !== 'function_call' || !arg.function_reference){
             this.throwError(`Can't pass a function call to ${arg_ref.datatype.value} ${arg_ref.name}`, semanticNode, arg);
           }
         }else{
@@ -816,7 +822,9 @@ export class NWScriptParser {
     if(this.isNameInUse(statement.name)){
       this.throwError("Struct name is already in use", statement, statement);
     }
-    const semanticNode = Object.assign({}, statement) as SemanticStructNode;
+    //`properties` is replaced with its parsed form two lines down, so the copy
+    //starts out holding raw StructPropertyNodes and cannot be cast directly.
+    const semanticNode = Object.assign({}, statement) as unknown as SemanticStructNode;
     this.program.structs.push(semanticNode);
     this.scope.addVariable(semanticNode);
     semanticNode.properties = statement.properties.map( p => this.parsePropertyNode(p) as SemanticStructPropertyNode );
@@ -912,19 +920,23 @@ export class NWScriptParser {
           this.throwError(`Tried to access a struct [${semanticNode.struct}], but the returned type was [${structVar.type}].`, semanticNode, structVar);
         }
       }else{
-        if(structVar.datatype.value == 'struct'){
-          if(structVar.struct_reference){
-            if(structVar.struct_reference.type == 'struct'){
-              //object.struct_reference = structVar.struct_reference;
-              semanticNode.struct_reference = structVar;
+        //Reaching here means a struct is being *used*, not declared, so the lookup
+        //resolved to a struct-typed variable. The other members of the lookup union
+        //(struct/argument/property declarations) carry no datatype or struct_reference.
+        const structValue = structVar as SemanticVariableNode;
+        if(structValue.datatype.value == 'struct'){
+          if(structValue.struct_reference){
+            if(structValue.struct_reference.type == 'struct'){
+              //object.struct_reference = structValue.struct_reference;
+              semanticNode.struct_reference = structValue;
             }else{
-              this.throwError(`Tried to access a variable [${semanticNode.struct}] expecting a type of [struct], but the returned type was [${structVar.datatype.value}].`, semanticNode, semanticNode);
+              this.throwError(`Tried to access a variable [${semanticNode.struct}] expecting a type of [struct], but the returned type was [${structValue.datatype.value}].`, semanticNode, semanticNode);
             }
           }else{
             this.throwError(`Tried to access a variable [${semanticNode.struct}], but struct_reference is undefined.`, semanticNode, semanticNode);
           }
         }else{
-          this.throwError(`Tried to access a variable [${semanticNode.struct}] with a type of [${structVar.datatype.value}], but expected type of [struct].`, semanticNode, structVar);
+          this.throwError(`Tried to access a variable [${semanticNode.struct}] with a type of [${structValue.datatype.value}], but expected type of [struct].`, semanticNode, structValue);
         }
       }
     }else{
@@ -938,7 +950,7 @@ export class NWScriptParser {
     if(semanticNode.declare){
       this.scope.addVariable(semanticNode);
       if(semanticNode.datatype.struct){
-        const structReference = this.getVariableByName(semanticNode.datatype.struct);
+        const structReference = this.getVariableByName(semanticNode.datatype.struct) as SemanticStructNode;
         if(structReference){
           semanticNode.struct_reference = structReference;
         }else{
@@ -992,10 +1004,9 @@ export class NWScriptParser {
     if(!statement || (typeof statement !== 'object') || statement.type !== 'literal'){
       this.throwError("Invalid literal node", statement, statement);
     }
+    //NWScriptASTBuilder only ever emits primitive literal values, so there is no
+    //nested literal node to recurse into here.
     const semanticNode = Object.assign({}, statement) as SemanticLiteralNode;
-    if(!!statement.value && typeof statement.value == 'object' && statement.value.type == 'literal'){
-      semanticNode.value = this.parseASTStatement(statement.value);
-    }
     return semanticNode;
   }
 
@@ -1507,7 +1518,9 @@ export class NWScriptParser {
     }
     const semanticNode = Object.assign({}, statement) as SemanticIncDecNode;
     const value_type = this.getValueDataType(semanticNode.value);
-    semanticNode.variable_reference = this.getVariableByName(statement?.value?.name);
+    semanticNode.variable_reference = this.getVariableByName(
+      (statement?.value as VariableReferenceNode)?.name
+    ) as SemanticVariableNode;
     if(semanticNode.variable_reference){
       semanticNode.datatype = semanticNode.variable_reference.datatype;
       semanticNode.is_global = semanticNode.variable_reference.is_global;

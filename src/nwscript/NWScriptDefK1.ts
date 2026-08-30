@@ -5827,8 +5827,11 @@ NWScriptDefK1.Actions = {
         const dy = creature.position.y - caller.position.y;
         if(dx * dx + dy * dy > 100) continue; // 10m radius = 100 sq
         if(creature.isHostile(caller)){
+          // "stop what they are doing" + go neutral. There is no effect-clearing
+          // step in the documented behavior, and the clearAllEffects() call that
+          // used to sit here does not exist on ModuleCreature - it threw on the
+          // first hostile and aborted the rest of the sweep.
           creature.clearAllActions();
-          creature.clearAllEffects();
           GameState.FactionManager.SetFactionReputation(caller, creature, 50);
         }
       }
@@ -8623,7 +8626,7 @@ NWScriptDefK1.Actions = {
         return;
       }
       if(BitWise.InstanceOfObject(args[1], ModuleObjectType.ModuleCreature)){
-        npc.moduleObject = args[1];
+        npc.moduleObject = args[1] as ModuleCreature;
       }
     }
   },

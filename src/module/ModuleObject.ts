@@ -2567,6 +2567,15 @@ export class ModuleObject {
   }
 
   /**
+   * Get the INT
+   * Overridden by ModuleCreature; non-creatures have no ability scores.
+   * @returns 
+   */
+  getINT(): number {
+    return 0;
+  }
+
+  /**
    * Get the skill level
    * @param value 
    * @returns 

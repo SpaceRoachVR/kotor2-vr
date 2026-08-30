@@ -317,7 +317,7 @@ export class CutsceneManager {
       return;
     }
 
-    if(this.state != ConversationState.WAITING_FOR_PC_CHOICE){
+    if(!this.isWaitingForPCChoice()){
       //The reply list is already populated and clickable as soon as the entry is shown,
       //but selection only unlocks once the line has been skipped/finished (state flips to
       //WAITING_FOR_PC_CHOICE inside showReplies(), triggered by playerSkipEntry()). A click
@@ -325,11 +325,22 @@ export class CutsceneManager {
       //silently dropping it. If the entry genuinely isn't skippable yet, this is a no-op and
       //the click is correctly ignored.
       this.playerSkipEntry(this.currentEntry);
-      if(this.state != ConversationState.WAITING_FOR_PC_CHOICE){
+      //playerSkipEntry() -> showReplies() is what flips the state, so re-check it.
+      //Read it through isWaitingForPCChoice() rather than inline: tsc keeps the
+      //narrowing from the outer check across the call and would otherwise treat
+      //this second comparison as statically false.
+      if(!this.isWaitingForPCChoice()){
         return;
       }
     }
     this.onReplySelect(reply);
+  }
+
+  /**
+   * Whether the conversation is currently accepting a PC reply selection.
+   */
+  static isWaitingForPCChoice(): boolean {
+    return this.state == ConversationState.WAITING_FOR_PC_CHOICE;
   }
 
   /**
