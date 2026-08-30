@@ -7,6 +7,7 @@ import { TwoDAObject } from "@/resource/TwoDAObject";
 import type { TalentSpell } from "@/talents/TalentSpell";
 import { SWSavingThrow } from "@/engine/rules/SWSavingThrow";
 import { SWAttackBonus } from "@/engine/rules/SWAttackBonus";
+import { readFeatClassColumn } from "@/talents/featClassColumns";
 
 /**
  * CreatureClass class.
@@ -154,15 +155,7 @@ export class CreatureClass {
   }
 
   getFeatGrantedLevel( feat: any ){
-    if(typeof feat != 'undefined'){
-      let granted = parseInt(feat[this.featstable.toLowerCase()+'_granted']);
-      if(isNaN(granted)){
-        return -1;
-      }
-
-      return granted;
-    }
-    return -1;
+    return readFeatClassColumn(feat, this.featstable, 'Granted');
   }
 
   static FromCreatureClassStruct(cls_struct: GFFStruct){

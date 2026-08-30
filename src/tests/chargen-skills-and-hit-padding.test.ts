@@ -14,6 +14,7 @@ const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), 'utf8')
 describe('skill points can be spent by hand', () => {
   const k1 = read('src/game/kotor/menu/CharGenSkills.ts');
   const tsl = read('src/game/tsl/menu/CharGenSkills.ts');
+  const manager = read('src/managers/CharGenManager.ts');
 
   test.each([
     'COM_PLUS_BTN', 'DEM_PLUS_BTN', 'STE_PLUS_BTN', 'AWA_PLUS_BTN',
@@ -29,7 +30,19 @@ describe('skill points can be spent by hand', () => {
   });
 
   test('a cross-class skill costs two points and a class skill one', () => {
-    expect(k1).toMatch(/isClassSkill\(row\) \? 1 : 2/);
+    expect(k1).toMatch(/applyCharGenSkillIncrease/);
+    expect(k1).toMatch(/resolveCharGenSkillAllocation/);
+  });
+
+  test('shows the active skill class and rank cost through the authored controls', () => {
+    expect(k1).toMatch(/CLASSSKL_LBL\?\.setText\(/);
+    expect(k1).toMatch(/COST_LBL\?\.setText\(/);
+    expect(k1).toMatch(/COST_POINTS_LBL\?\.setText\(/);
+  });
+
+  test('custom and quick recommendations use the same rule-backed allocator', () => {
+    expect(k1).toMatch(/allocateRecommendedCharGenSkills/);
+    expect(manager).toMatch(/allocateRecommendedCharGenSkills/);
   });
 
   test('both games call the adjust wiring', () => {

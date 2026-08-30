@@ -2729,8 +2729,9 @@ async function newGameThroughCharacterCreation(harness) {
   await waitForMenu(harness, 'CharGenClass');
   line('  · class selection up');
 
-  // Consular: the prologue's Force powers are the interesting case for the
-  // action wheel's Force Powers page, and a Consular has some from level 1.
+  // The retail pregame choices are Soldier, Scout, and Scoundrel. They have no
+  // level-one Force powers; later Jedi progression is granted by the authored
+  // campaign rather than character creation.
   await clickGuiControl(harness, 'CharGenClass', 'BTN_SEL3');
   await waitForMenu(harness, 'CharGenQuickOrCustom');
   const selectedClass = await harness.evaluate('window.KotOR.GameState.CharGenManager.selectedClass');

@@ -60,6 +60,11 @@ describe('the feat list survives feats that have prerequisites', () => {
   test('the list is still applied to the control', () => {
     expect(source).toMatch(/this\.LB_FEATS\.setItems\(groups\)/);
   });
+
+  test('uses source feat indexes rather than positions in a filtered list', () => {
+    expect(source).toMatch(/chainFeat\.prereqFeat1 == feat\.id/);
+    expect(source).toMatch(/chainFeat\.prereqFeat2 == feat\.id/);
+  });
 });
 
 /**
@@ -81,10 +86,9 @@ describe('a quick character actually spends its points', () => {
   });
 
   test('the distribution cannot spin forever on an empty recommended order', () => {
-    // The Recommended handlers decrement only when skillIndex >= 0, so an order
-    // of all -1 loops indefinitely.
-    expect(manager).toMatch(/guard-- > 0/);
-    expect(manager).toMatch(/if\(!spent\) break;/);
+    // The pure allocator makes a pass only while at least one legal rank is
+    // purchased, so an all--1 recommendation exits without spending points.
+    expect(manager).toMatch(/allocateRecommendedCharGenSkills/);
   });
 
   test.each([

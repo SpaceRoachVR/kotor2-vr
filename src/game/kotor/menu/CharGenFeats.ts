@@ -2,7 +2,6 @@ import { GameMenu } from "@/gui";
 import type { GUIListBox, GUILabel, GUIButton } from "@/gui";
 import { GUIFeatItem } from "@/game/kotor/gui/GUIFeatItem";
 import type { ModuleCreature } from "@/module";
-import { TalentFeat } from "@/talents";
 import { GameState } from "@/GameState";
 
 /**
@@ -92,15 +91,16 @@ export class CharGenFeats extends GameMenu {
     let granted = [];
     for (let i = 0; i < featCount; i++) {
       const feat = GameState.SWRuleSet.feats[i];
+      if (!feat) continue;
       if(this.creature){
         const mainClass = this.creature.getMainClass();
         if (mainClass && feat.constant != '****') {
           if (mainClass.isFeatAvailable(feat)) {
             const status = mainClass.getFeatStatus(feat);
             if (status == 3 && this.creature.getTotalClassLevel() >= mainClass.getFeatGrantedLevel(feat)) {
-              if (!this.creature.getHasFeat(i)) {
+              if (!this.creature.getHasFeat(feat.id)) {
                 console.log('Feat Granted', feat);
-                this.creature.addFeat(TalentFeat.From2DA(feat));
+                this.creature.addFeat(feat.id);
                 granted.push(feat);
               }
             }
@@ -119,10 +119,10 @@ export class CharGenFeats extends GameMenu {
       if(mainClass){
         for (let i = 0; i < featCount; i++) {
           const feat = feats[i];
-          if (feat.constant != '****') {
+          if (feat && feat.constant != '****') {
             if (mainClass.isFeatAvailable(feat)) {
               const status = mainClass.getFeatStatus(feat);
-              if (this.creature.getHasFeat(i) || status == 0 || status == 1) {
+              if (this.creature.getHasFeat(feat.id) || status == 0 || status == 1) {
                 list.push(feat);
               }
             }
@@ -140,7 +140,8 @@ export class CharGenFeats extends GameMenu {
         group.push(feat);
         for (let j = 0; j < featCount; j++) {
           const chainFeat = GameState.SWRuleSet.feats[j];
-          if (chainFeat.prereqFeat1 == i || chainFeat.prereqFeat2 == i) {
+          if (!chainFeat) continue;
+          if (chainFeat.prereqFeat1 == feat.id || chainFeat.prereqFeat2 == feat.id) {
             if (chainFeat.prereqFeat1 != -1 && chainFeat.prereqFeat2 != -1) {
               group[2] = chainFeat;
             } else {

@@ -46,7 +46,12 @@ export function readFeatClassColumn(
   const code = normalizeFeatClassCode(skillsTable);
   if (!code) return FEAT_CLASS_COLUMN_ABSENT;
 
-  const value = (row as Record<string, unknown>)[`${code}${suffix}`];
+  const normalizedColumn = `${code}${suffix}`;
+  const rawColumn = `${code}_${suffix.toLowerCase()}`;
+  const fields = row as Record<string, unknown>;
+  const value = fields[normalizedColumn] !== undefined
+    ? fields[normalizedColumn]
+    : fields[rawColumn];
   if (value === undefined || value === null) return FEAT_CLASS_COLUMN_ABSENT;
 
   const numeric = Number(value);

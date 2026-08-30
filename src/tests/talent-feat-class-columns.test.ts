@@ -3,6 +3,13 @@ import {
   FEAT_CLASS_COLUMN_CODES,
   readFeatClassColumn,
 } from '@/talents/featClassColumns';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const creatureClassSource = fs.readFileSync(
+  path.join(process.cwd(), 'src/combat/CreatureClass.ts'),
+  'utf8',
+);
 
 /**
  * `classes.2da` stores `skillstable` uppercase ("SCD"). These lookups used to
@@ -72,4 +79,9 @@ test('a -1 column is preserved, since that is a real "not offered" value', () =>
   const feat = featWith({ jgdGranted: -1 });
 
   expect(feat.getGranted('JGD')).toBe(-1);
+});
+
+test('reads raw 2DA granted columns when a normalized property is unavailable', () => {
+  expect(readFeatClassColumn({ sol_granted: '3' }, 'SOL', 'Granted')).toBe(3);
+  expect(creatureClassSource).toMatch(/readFeatClassColumn\(feat, this\.featstable, 'Granted'\)/);
 });

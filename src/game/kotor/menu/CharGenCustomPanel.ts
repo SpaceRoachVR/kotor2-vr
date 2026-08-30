@@ -112,6 +112,11 @@ export class CharGenCustomPanel extends GameMenu {
 
       this.BTN_STEPNAME6.addEventListener('click', (e) => {
         e.stopPropagation();
+        const progression = GameState.CharGenManager.validateSelectedCreatureProgression();
+        if (progression.valid === false) {
+          console.error(`CharGenCustomPanel: cannot start with invalid progression (${progression.reason})`);
+          return;
+        }
         GameState.CharGenManager.selectedCreature.equipment.ARMOR = undefined;
         GameState.CharGenManager.selectedCreature.template.getFieldByLabel('Equip_ItemList').childStructs = [];
         GameState.GlobalVariableManager.Init();

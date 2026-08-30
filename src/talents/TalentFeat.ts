@@ -572,6 +572,8 @@ export class TalentFeat extends TalentObject {
 
   static From2DA(row: any = {}) {
     const talentFeat = new TalentFeat();
+    const sourceId = row?.__index !== undefined ? row.__index : row?.id;
+    talentFeat.id = TwoDAObject.normalizeValue(sourceId, 'number', -1);
     talentFeat.apply2DA(row);
     return talentFeat;
   }

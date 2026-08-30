@@ -16,6 +16,8 @@ import { AudioEngine } from "@/audio/AudioEngine";
 import { LTRObject } from "@/resource/LTRObject";
 import { MDLLoader, ResourceLoader } from "@/loaders";
 import { ResourceTypes } from "@/resource/ResourceTypes";
+import { allocateRecommendedCharGenSkills } from "@/game/kotor/menu/CharGenSkillRules";
+import { validateCharGenProgression } from "@/game/kotor/menu/CharGenProgression";
 
 /**
  * CharGenManager class.
@@ -193,6 +195,7 @@ export class CharGenManager {
     template.RootNode.addField(new GFFField(GFFDataType.WORD, 'CurrentHitPoints')).setValue(8);
     template.RootNode.addField(new GFFField(GFFDataType.WORD, 'MaxHitPoints')).setValue(20);
     template.RootNode.addField(new GFFField(GFFDataType.WORD, 'ForcePoints')).setValue(0);
+    template.RootNode.addField(new GFFField(GFFDataType.WORD, 'MaxForcePoints')).setValue(0);
     template.RootNode.addField(new GFFField(GFFDataType.WORD, 'CurrentForce')).setValue(0);
     template.RootNode.addField(new GFFField(GFFDataType.BYTE, 'Gender')).setValue(gender);
     let equipment = template.RootNode.addField(new GFFField(GFFDataType.LIST, 'Equip_ItemList'));
@@ -329,24 +332,20 @@ export class CharGenManager {
 
     CharGenManager.resetSkillPoints();
     CharGenManager.availSkillPoints = CharGenManager.getMaxSkillPoints();
-    const skillOrder: any = CharGenManager.getRecommendedOrder();
     const fields = ['computerUse','demolitions','stealth','awareness','persuade','repair','security','treatInjury'];
-
-    // The Recommended handlers decrement only when skillIndex >= 0, so an order
-    // of all -1 spins forever. Bound the loop by the points on offer instead.
-    let guard = CharGenManager.availSkillPoints * 8 + 8;
-    while(CharGenManager.availSkillPoints > 0 && guard-- > 0){
-      let spent = false;
-      for(let i = 0; i < 8; i++){
-        if(!CharGenManager.availSkillPoints) break;
-        const skillIndex = skillOrder[i];
-        if(skillIndex < 0 || skillIndex > 7) continue;
-        (CharGenManager as any)[fields[skillIndex]] += 1;
-        CharGenManager.availSkillPoints -= 1;
-        spent = true;
-      }
-      if(!spent) break;
+    const skillsTable = TwoDAManager.datatables.get('skills');
+    const result = allocateRecommendedCharGenSkills({
+      skillRows: fields.map((_, index) => skillsTable?.rows?.[index]),
+      classSkillColumn: `${String(characterClass.skillstable || '').toLowerCase()}_class`,
+      level: creature.getTotalClassLevel?.() || 1,
+      ranks: fields.map((field) => Number((CharGenManager as any)[field])),
+      availablePoints: CharGenManager.availSkillPoints,
+      recommendedOrder: fields.map((_, priority) => Number(CharGenManager.getRecommendedOrder()[priority])),
+    });
+    for(let i = 0; i < fields.length; i++){
+      (CharGenManager as any)[fields[i]] = result.ranks[i];
     }
+    CharGenManager.availSkillPoints = result.remainingPoints;
 
     if(Array.isArray(creature.skills)){
       for(let i = 0; i < fields.length && i < creature.skills.length; i++){
@@ -374,6 +373,10 @@ export class CharGenManager {
       }
     }
     return skillOrder;
+  }
+
+  static validateSelectedCreatureProgression() {
+    return validateCharGenProgression(CharGenManager.selectedCreature);
   }
 
   static generateRandomName(gender: number = 0){
