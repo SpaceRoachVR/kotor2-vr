@@ -144,6 +144,117 @@ describe('asset service', () => {
     expect(fs.readFileSync(path.join(assetRoot, 'chitin.key'), 'utf8')).toBe('0123456789');
   });
 
+  test('merges read-only Override layers with the final layer taking precedence', async () => {
+    const baseLayer = path.join(tempRoot, 'base-layer');
+    const finalLayer = path.join(tempRoot, 'final-layer');
+    fs.mkdirSync(path.join(assetRoot, 'Override'), { recursive: true });
+    fs.mkdirSync(path.join(baseLayer, 'Override'), { recursive: true });
+    fs.mkdirSync(path.join(finalLayer, 'Override'), { recursive: true });
+    fs.writeFileSync(path.join(assetRoot, 'Override', 'shared.tpc'), 'retail');
+    fs.writeFileSync(path.join(assetRoot, 'Override', 'retail-only.tpc'), 'retail-only');
+    fs.writeFileSync(path.join(baseLayer, 'Override', 'shared.tpc'), 'base');
+    fs.writeFileSync(path.join(baseLayer, 'Override', 'base-only.tpc'), 'base-only');
+    fs.writeFileSync(path.join(finalLayer, 'Override', 'shared.tpc'), 'final');
+    fs.writeFileSync(path.join(finalLayer, 'Override', 'final-only.tpc'), 'final-only');
+    await start(1024, { modRoots: [baseLayer, finalLayer] });
+
+    const shared = await request('/assets/Override/shared.tpc');
+    const retailOnly = await request('/assets/Override/retail-only.tpc');
+    const listing = await request('/directories?root=assets&path=Override');
+    const writeAttempt = await request('/assets/Override/shared.tpc', { method: 'PUT', body: 'changed' });
+
+    expect(shared.status).toBe(200);
+    expect(await shared.text()).toBe('final');
+    expect(await retailOnly.text()).toBe('retail-only');
+    expect(await listing.json()).toEqual({
+      isDirectory: true,
+      entries: [
+        { name: 'base-only.tpc', directory: false, layer: 'mod-1' },
+        { name: 'final-only.tpc', directory: false, layer: 'mod-2' },
+        { name: 'retail-only.tpc', directory: false, layer: 'retail' },
+        { name: 'shared.tpc', directory: false, layer: 'mod-2' },
+      ],
+    });
+    expect(writeAttempt.status).toBe(405);
+    expect(fs.readFileSync(path.join(assetRoot, 'Override', 'shared.tpc'), 'utf8')).toBe('retail');
+    expect(fs.readFileSync(path.join(baseLayer, 'Override', 'shared.tpc'), 'utf8')).toBe('base');
+    expect(fs.readFileSync(path.join(finalLayer, 'Override', 'shared.tpc'), 'utf8')).toBe('final');
+  });
+
+  test('rejects mod roots without a contained Override directory or overlapping configured roots', () => {
+    const missingOverride = path.join(tempRoot, 'missing-override');
+    fs.mkdirSync(missingOverride);
+
+    expect(() => createAssetService({
+      assetRoot,
+      userRoot,
+      distRoot,
+      modRoots: [missingOverride],
+      token,
+    })).toThrow('modRoots[0] must contain an Override directory');
+    fs.mkdirSync(path.join(assetRoot, 'Override'));
+    expect(() => createAssetService({
+      assetRoot,
+      userRoot,
+      distRoot,
+      modRoots: [assetRoot],
+      token,
+    })).toThrow('mod roots must not overlap configured roots');
+
+    const nonModUserLayer = path.join(userRoot, 'ordinary-layer');
+    fs.mkdirSync(path.join(nonModUserLayer, 'Override'), { recursive: true });
+    expect(() => createAssetService({
+      assetRoot,
+      userRoot,
+      distRoot,
+      modRoots: [nonModUserLayer],
+      token,
+    })).toThrow('mod roots nested under userRoot must be inside userRoot/mods');
+  });
+
+  test('allows external layers below userRoot/mods without exposing them to browser user-data routes', async () => {
+    const modLayer = path.join(userRoot, 'mods', 'external-layer');
+    fs.mkdirSync(path.join(modLayer, 'Override'), { recursive: true });
+    fs.writeFileSync(path.join(modLayer, 'Override', 'external.tpc'), 'external-layer');
+    await start(1024, { modRoots: [modLayer] });
+
+    const asset = await request('/assets/Override/external.tpc');
+    const userRead = await request('/user/mods/external-layer/Override/external.tpc');
+    const userWrite = await request('/user/mods/external-layer/Override/injected.tpc', {
+      method: 'PUT',
+      body: 'browser-write',
+    });
+    const userDelete = await request('/user/mods/external-layer/Override/external.tpc', { method: 'DELETE' });
+    const rootListing = await request('/directories?root=user&path=');
+    const modListing = await request('/directories?root=user&path=mods');
+
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe('external-layer');
+    expect(userRead.status).toBe(404);
+    expect(userWrite.status).toBe(404);
+    expect(userDelete.status).toBe(404);
+    expect(await rootListing.json()).toEqual({ isDirectory: true, entries: [] });
+    expect(modListing.status).toBe(404);
+    expect(fs.readFileSync(path.join(modLayer, 'Override', 'external.tpc'), 'utf8')).toBe('external-layer');
+    expect(fs.existsSync(path.join(modLayer, 'Override', 'injected.tpc'))).toBe(false);
+  });
+
+  test('rejects a mod Override junction that escapes the validated mod root', () => {
+    const layerRoot = path.join(tempRoot, 'unsafe-layer');
+    const outsideRoot = path.join(tempRoot, 'outside-layer');
+    fs.mkdirSync(layerRoot);
+    fs.mkdirSync(outsideRoot);
+    fs.symlinkSync(outsideRoot, path.join(layerRoot, 'Override'), 'junction');
+
+    expect(() => createAssetService({
+      assetRoot,
+      userRoot,
+      distRoot,
+      modRoots: [layerRoot],
+      token,
+    })).toThrow('path escapes configured root');
+  });
+
   test('supports HEAD, open-ended, and suffix byte ranges', async () => {
     await start();
 

@@ -30,6 +30,7 @@ export interface MaterialAuditRecord {
   selectedSource: TextureResolution<unknown>['source'];
   searchedSources: readonly TextureResolutionSource[];
   txiSource?: TextureTxiSource;
+  sourceLayerId?: string;
   diagnosticCode?: string;
   cacheGeneration: number;
   aliasEvidence?: string;
@@ -68,6 +69,7 @@ export function createMaterialAuditRecord<TTexture>(
     selectedSource: resolution.source,
     searchedSources: Object.freeze([...(resolution.searchedSources ?? [])]),
     ...(resolution.txiSource ? { txiSource: resolution.txiSource } : {}),
+    ...(resolution.sourceLayerId ? { sourceLayerId: resolution.sourceLayerId } : {}),
     ...(diagnosticCode ? { diagnosticCode } : {}),
     cacheGeneration: resolution.cacheGeneration,
     ...(resolution.aliasEvidence ? { aliasEvidence: resolution.aliasEvidence } : {}),

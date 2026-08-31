@@ -29,9 +29,16 @@ export interface HttpGameFileSystemBackendOptions {
   fetch?: typeof fetch;
 }
 
+export interface HttpGameFileSystemDirectoryEntryMetadata {
+  path: string;
+  layerId: string;
+  layerOrder: number;
+}
+
 interface DirectoryEntry {
   name: string;
   directory: boolean;
+  layer?: string;
 }
 
 interface DirectoryListing {
@@ -192,6 +199,27 @@ export class HttpGameFileSystemBackend implements GameFileSystemBackend {
 
     const missingUserDirectoryIsEmpty = classified.mount === 'user' && USER_DIRECTORIES.has(classified.path.split('/')[0].toLocaleLowerCase());
     return [...files, ...await this.readdirMount(classified.mount, classified.path, options, missingUserDirectoryIsEmpty)];
+  }
+
+  async readdirWithMetadata(filepath: string): Promise<readonly HttpGameFileSystemDirectoryEntryMetadata[]> {
+    const classified = classifyGameFileSystemPath(filepath);
+    if (classified.mount !== 'assets' || classified.path === '') {
+      throw new Error('GameFileSystem.readdirWithMetadata requires a non-root read-only asset directory');
+    }
+    const listing = await this.getDirectoryListing(classified.mount, classified.path);
+    if (!listing || !listing.isDirectory) {
+      return [];
+    }
+    return Object.freeze(listing.entries
+      .filter((entry) => this.isValidDirectoryEntry(entry) && !entry.directory)
+      .map((entry) => {
+        const layerId = this.resolveLayerId(entry.layer);
+        return Object.freeze({
+          path: this.joinRelativePath(classified.path, entry.name),
+          layerId,
+          layerOrder: this.getLayerOrder(layerId),
+        });
+      }));
   }
 
   async exists(filepath: string): Promise<boolean> {
@@ -364,6 +392,23 @@ export class HttpGameFileSystemBackend implements GameFileSystemBackend {
       !(value as DirectoryEntry).name.includes('\\') &&
       !(value as DirectoryEntry).name.includes('\0') &&
       typeof (value as DirectoryEntry).directory === 'boolean';
+  }
+
+  private resolveLayerId(layer: unknown): string {
+    if (layer === undefined) return 'retail';
+    if (typeof layer !== 'string' || !/^(?:retail|mod-[1-9]\d*)$/.test(layer)) {
+      throw new Error('GameFileSystem.readdirWithMetadata: invalid asset layer metadata');
+    }
+    return layer;
+  }
+
+  private getLayerOrder(layerId: string): number {
+    if (layerId === 'retail') return 0;
+    const layerOrder = Number(layerId.slice('mod-'.length));
+    if (!Number.isSafeInteger(layerOrder) || layerOrder < 1) {
+      throw new Error('GameFileSystem.readdirWithMetadata: invalid asset layer order');
+    }
+    return layerOrder;
   }
 
   private isDirectoryListing(value: unknown): value is DirectoryListing {

@@ -263,10 +263,8 @@ export async function fetchTextureBuffer(resref: string): Promise<{ filename: st
 
 export async function fetchModelBuffers(resref: string): Promise<{ mdl: Uint8Array; mdx: Uint8Array } | undefined> {
   try {
-    const [mdl, mdx] = await Promise.all([
-      KotOR.ResourceLoader.loadResource(KotOR.ResourceTypes['mdl'], resref),
-      KotOR.ResourceLoader.loadResource(KotOR.ResourceTypes['mdx'], resref),
-    ]);
+    // Both halves from one source — see ResourceLoader.loadModelPair.
+    const { mdl, mdx } = await KotOR.ResourceLoader.loadModelPair(resref);
     if (mdl?.length && mdx?.length) {
       return { mdl, mdx };
     }

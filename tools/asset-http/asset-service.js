@@ -47,6 +47,7 @@ class AssetService {
     this.userRoot = validateDirectoryRoot(options.userRoot, 'userRoot');
     this.distRoot = validateDirectoryRoot(options.distRoot, 'distRoot');
     validateDistinctRoots(this.assetRoot, this.userRoot, this.distRoot);
+    this.modRoots = validateModRoots(options.modRoots, this.assetRoot, this.userRoot, this.distRoot);
     this.token = validateToken(options.token);
     this.host = validateLoopbackHost(options.host || '127.0.0.1');
     this.port = validatePort(options.port === undefined ? 0 : options.port);
@@ -136,7 +137,7 @@ class AssetService {
     }
 
     if (requestUrl.pathname.startsWith('/assets/')) {
-      return this.handleReadOnlyFile(request, response, requestUrl.pathname.slice('/assets/'.length), this.assetRoot);
+      return this.handleAssetFile(request, response, requestUrl.pathname.slice('/assets/'.length));
     }
 
     if (requestUrl.pathname.startsWith('/user/')) {
@@ -177,6 +178,12 @@ class AssetService {
     if (!root) return sendError(response, 400, 'invalid directory root');
 
     const relative = parseRelativePath(requestUrl.searchParams.get('path') || '');
+    if (rootName === 'user' && this.isProtectedUserPath(relative)) {
+      return sendError(response, 404, 'not found');
+    }
+    if (rootName === 'assets' && this.isOverridePath(relative)) {
+      return this.handleOverlayDirectoryListing(response, relative);
+    }
     const resolved = resolveExistingPath(root, relative);
     if (!resolved) return sendError(response, 404, 'not found');
     if (!resolved.stats.isDirectory()) {
@@ -185,6 +192,7 @@ class AssetService {
 
     const entries = [];
     for (const entry of fs.readdirSync(resolved.path, { withFileTypes: true })) {
+      if (rootName === 'user' && entry.name.toLocaleLowerCase() === 'mods') continue;
       const entryPath = path.join(resolved.path, entry.name);
       try {
         const realEntryPath = fs.realpathSync(entryPath);
@@ -195,6 +203,66 @@ class AssetService {
       }
     }
     entries.sort((left, right) => left.name.localeCompare(right.name));
+    return sendJson(response, 200, { isDirectory: true, entries });
+  }
+
+  handleAssetFile(request, response, rawRelativePath) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return sendMethodNotAllowed(response, ['GET', 'HEAD']);
+    }
+    const relative = parseRelativePath(rawRelativePath);
+    if (relative.length === 0) return sendError(response, 404, 'not found');
+    const resolved = this.resolveAssetPath(relative);
+    if (!resolved || resolved.stats.isDirectory()) return sendError(response, 404, 'not found');
+    if (resolved.layerId) response.setHeader('X-Kotor2VR-Asset-Layer', resolved.layerId);
+    return sendFile(request, response, resolved.path, resolved.stats, this.onBeforeFileOpen);
+  }
+
+  isOverridePath(relative) {
+    return relative.length > 0 && relative[0].toLocaleLowerCase() === 'override';
+  }
+
+  resolveAssetPath(relative) {
+    if (!this.isOverridePath(relative)) {
+      return resolveExistingPath(this.assetRoot, relative);
+    }
+    for (let index = this.modRoots.length - 1; index >= 0; index -= 1) {
+      const resolved = resolveExistingPath(this.modRoots[index], relative);
+      if (resolved) return { ...resolved, layerId: `mod-${index + 1}` };
+    }
+    const retail = resolveExistingPath(this.assetRoot, relative);
+    return retail ? { ...retail, layerId: 'retail' } : undefined;
+  }
+
+  handleOverlayDirectoryListing(response, relative) {
+    const layers = [this.assetRoot, ...this.modRoots];
+    const merged = new Map();
+    let foundDirectory = false;
+    for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+      const layerRoot = layers[layerIndex];
+      const resolved = resolveExistingPath(layerRoot, relative);
+      if (!resolved) continue;
+      if (!resolved.stats.isDirectory()) {
+        return sendJson(response, 200, { isDirectory: false, entries: [] });
+      }
+      foundDirectory = true;
+      for (const entry of fs.readdirSync(resolved.path, { withFileTypes: true })) {
+        const entryPath = path.join(resolved.path, entry.name);
+        try {
+          const realEntryPath = fs.realpathSync(entryPath);
+          if (!isInsideRoot(layerRoot, realEntryPath)) continue;
+          merged.set(entry.name.toLocaleLowerCase(), {
+            name: entry.name,
+            directory: fs.statSync(entryPath).isDirectory(),
+            layer: layerIndex === 0 ? 'retail' : `mod-${layerIndex}`,
+          });
+        } catch (error) {
+          if (!isMissingPathError(error)) throw error;
+        }
+      }
+    }
+    if (!foundDirectory) return sendError(response, 404, 'not found');
+    const entries = [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
     return sendJson(response, 200, { isDirectory: true, entries });
   }
 
@@ -214,6 +282,7 @@ class AssetService {
   async handleUserFile(request, response, rawRelativePath) {
     const relative = parseRelativePath(rawRelativePath);
     if (relative.length === 0) return sendError(response, 404, 'not found');
+    if (this.isProtectedUserPath(relative)) return sendError(response, 404, 'not found');
 
     if (request.method === 'GET' || request.method === 'HEAD') {
       const resolved = resolveExistingPath(this.userRoot, relative);
@@ -241,6 +310,10 @@ class AssetService {
     }
 
     return sendMethodNotAllowed(response, ['GET', 'HEAD', 'PUT', 'DELETE']);
+  }
+
+  isProtectedUserPath(relative) {
+    return relative.length > 0 && relative[0].toLocaleLowerCase() === 'mods';
   }
 
   isAuthenticated(request) {
@@ -307,6 +380,41 @@ function validateDistinctRoots(assetRoot, userRoot, distRoot) {
       }
     }
   }
+}
+
+function validateModRoots(modRoots, assetRoot, userRoot, distRoot) {
+  if (modRoots === undefined) return [];
+  if (!Array.isArray(modRoots)) throw new TypeError('modRoots must be an array');
+  const validatedRoots = modRoots.map((root, index) => {
+    const optionName = `modRoots[${index}]`;
+    const validatedRoot = validateDirectoryRoot(root, optionName);
+    const override = resolveExistingPath(validatedRoot, ['Override']);
+    if (!override || !override.stats.isDirectory()) {
+      throw new Error(`${optionName} must contain an Override directory`);
+    }
+    return validatedRoot;
+  });
+  const protectedModArea = path.join(userRoot, 'mods');
+  for (const modRoot of validatedRoots) {
+    if (isInsideRoot(assetRoot, modRoot) || isInsideRoot(modRoot, assetRoot)
+      || isInsideRoot(distRoot, modRoot) || isInsideRoot(modRoot, distRoot)) {
+      throw new Error('mod roots must not overlap configured roots or each other');
+    }
+    if (isInsideRoot(userRoot, modRoot) || isInsideRoot(modRoot, userRoot)) {
+      if (!isInsideRoot(protectedModArea, modRoot)) {
+        throw new Error('mod roots nested under userRoot must be inside userRoot/mods');
+      }
+    }
+  }
+  for (let index = 0; index < validatedRoots.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < validatedRoots.length; otherIndex += 1) {
+      if (isInsideRoot(validatedRoots[index], validatedRoots[otherIndex])
+        || isInsideRoot(validatedRoots[otherIndex], validatedRoots[index])) {
+        throw new Error('mod roots must not overlap configured roots or each other');
+      }
+    }
+  }
+  return Object.freeze(validatedRoots.slice());
 }
 
 function validateToken(token) {

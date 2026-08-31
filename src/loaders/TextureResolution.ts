@@ -32,7 +32,15 @@ export interface TextureRequest {
   resref: string;
   semantic: TextureSemantic;
   activeModule?: string;
+  /** Optional runtime owner metadata used only for routing diagnostics. */
+  owner?: TextureRequestOwner;
   allowAlias: boolean;
+}
+
+export interface TextureRequestOwner {
+  readonly modelName?: string;
+  readonly objectTag?: string;
+  readonly objectType?: number;
 }
 
 export interface ExplicitTextureAlias {
@@ -62,6 +70,7 @@ export interface ResolvedTextureResolution<TTexture> extends TextureResolutionBa
   resolvedResref: string;
   source: ResolvedTextureSource;
   txiSource?: TextureTxiSource;
+  sourceLayerId?: string;
   aliasEvidence?: string;
   texture: TTexture;
   diagnostic?: never;
@@ -75,6 +84,7 @@ export interface MissingTextureResolution extends TextureResolutionBase {
   };
   resolvedResref?: never;
   txiSource?: never;
+  sourceLayerId?: never;
   aliasEvidence?: never;
   texture?: never;
 }
@@ -85,6 +95,7 @@ export interface InvalidTextureResolution extends TextureResolutionBase {
   diagnostic: TextureDiagnostic & { code: 'invalid-resref' };
   resolvedResref?: never;
   txiSource?: never;
+  sourceLayerId?: never;
   aliasEvidence?: never;
   texture?: never;
 }
@@ -94,6 +105,7 @@ export interface DecodeErrorTextureResolution extends TextureResolutionBase {
   resolvedResref: string;
   source: ResolvedTextureSource;
   txiSource?: TextureTxiSource;
+  sourceLayerId?: string;
   aliasEvidence?: string;
   diagnostic: TextureDiagnostic & { code: 'decode-error' };
   texture?: never;
@@ -108,6 +120,7 @@ export type TextureResolution<TTexture> =
 export interface TextureSourceArtifact<TTexture> {
   texture: TTexture;
   txiSource?: TextureTxiSource;
+  sourceLayerId?: string;
 }
 
 export interface TextureSourceProvider<TTexture> {
@@ -275,6 +288,7 @@ export class TextureResolver<TTexture> {
       cacheGeneration,
       searchedSources,
       ...(exact.artifact.txiSource ? { txiSource: exact.artifact.txiSource } : {}),
+      ...(exact.artifact.sourceLayerId ? { sourceLayerId: exact.artifact.sourceLayerId } : {}),
       ...(aliasEvidence ? { aliasEvidence } : {}),
       texture: exact.artifact.texture,
     };
@@ -285,7 +299,7 @@ export class TextureResolver<TTexture> {
     semantic: TextureSemantic,
     activeModule?: string,
   ): Promise<ExactResolutionAttempt<TTexture>> {
-    const sources: ResolvedTextureSource[] = ['override-tga', 'override-tpc'];
+    const sources: ResolvedTextureSource[] = ['override-tpc', 'override-tga'];
     if (activeModule) {
       sources.push('active-module');
     }
@@ -523,6 +537,9 @@ function validateTextureSourceArtifact<TTexture>(
   if (artifact.txiSource !== undefined && !TEXTURE_TXI_SOURCES.has(artifact.txiSource)) {
     throw new TypeError(`Texture provider returned an invalid TXI source for '${resref}' from ${source}`);
   }
+  if (artifact.sourceLayerId !== undefined && !isTextureSourceLayerId(artifact.sourceLayerId)) {
+    throw new TypeError(`Texture provider returned an invalid source layer for '${resref}' from ${source}`);
+  }
 }
 
 function validateConcreteResolutionIdentity(
@@ -543,6 +560,9 @@ function validateConcreteResolutionIdentity(
   if (resolution.txiSource !== undefined && !TEXTURE_TXI_SOURCES.has(resolution.txiSource)) {
     throw new TypeError(`${resolution.status} texture resolution has an invalid TXI source`);
   }
+  if (resolution.sourceLayerId !== undefined && !isTextureSourceLayerId(resolution.sourceLayerId)) {
+    throw new TypeError(`${resolution.status} texture resolution has an invalid source layer`);
+  }
 
   const isAlias = resolution.resolvedResref !== resolution.requestedResref;
   const hasAliasEvidence = typeof resolution.aliasEvidence === 'string' && !!resolution.aliasEvidence.trim();
@@ -560,11 +580,16 @@ function validateEmptyResolutionFields(
   if (
     resolution.resolvedResref !== undefined ||
     resolution.txiSource !== undefined ||
+    resolution.sourceLayerId !== undefined ||
     resolution.aliasEvidence !== undefined ||
     resolution.texture !== undefined
   ) {
     throw new TypeError(`${resolution.status} texture resolution contains incompatible fields`);
   }
+}
+
+function isTextureSourceLayerId(value: string): boolean {
+  return /^(?:retail|mod-[1-9]\d*)$/.test(value);
 }
 
 function validateDiagnostic(

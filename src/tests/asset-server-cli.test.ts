@@ -24,6 +24,22 @@ describe('asset-server CLI parsing', () => {
       userRoot: path.resolve('custom-user'),
       distRoot: path.resolve('custom-dist'),
       port: 9000,
+      modRoots: [],
+    });
+  });
+
+  test('preserves repeated mod layers in low-to-high precedence order', () => {
+    const result = parseAssetServerArguments([
+      '--mod', 'base-visuals',
+      '--mod', 'uco-redux',
+    ], defaults);
+
+    expect(result).toEqual({
+      gameRoot: path.resolve('C:\\game'),
+      userRoot: path.resolve('C:\\user'),
+      distRoot: path.resolve('C:\\dist'),
+      port: 8479,
+      modRoots: [path.resolve('base-visuals'), path.resolve('uco-redux')],
     });
   });
 

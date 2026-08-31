@@ -125,6 +125,63 @@ are read-only; saves, configuration, screenshots, caches, and logs are routed
 to the user-data root. Stop the service with `Ctrl+C` when the browser session
 ends.
 
+#### Renderer launch options
+
+Three settings are fixed when the renderer is built and so cannot be in-game
+options. Append them to the launch URL. The engine logs which values it started
+with — check those lines before trusting a measurement.
+
+| Option | Default | Effect |
+|---|---|---|
+| `gl=webgl2` | `webgl1` | Creates the context at WebGL 2. **Currently broken:** WebGL 2 renders the startup screens flat green (see `tools/vr-emulator/evidence/greenscreen-webgl{1,2}.png`). The loader is not at fault — textures still resolve and decode; they are not drawn. Kept so the fault can be investigated. |
+| `depth=linear` | `logarithmic` | Turns off `logarithmicDepthBuffer`. The logarithmic path writes `gl_FragDepthEXT` in every fragment shader, defeating early depth rejection — expensive, and worst on a tile-based headset GPU. Whether ordinary depth has enough precision across the camera's 0.05–15000 range is a question for the headset, not for reasoning: see H7/H8 in `HEADSET-TEST-PLAN.md`. |
+| `xrscale=<0.5–2.0>` | `1.0` | Scales the XR framebuffer. Fill rate goes roughly with the square, so `0.8` is about a third less work per eye. Clamped, not rejected, outside the range. |
+
+#### Optional user-supplied texture layers
+
+The asset service can merge one or more external, read-only mod layers into its virtual
+`Override` directory. Download and extract mods yourself; the project does not download,
+bundle, or redistribute them. Each `--mod` argument names the directory that directly
+contains an `Override` folder. Layers are supplied from lowest to highest priority, so the
+last layer wins; any external layer always wins over the retail `Override` directory.
+
+For [Ultimate Character Overhaul Redux by ShiningRedHD](https://www.nexusmods.com/kotor2/mods/1060),
+download the archive from its author and extract its compressed **TPC** variant to:
+
+```text
+%LOCALAPPDATA%\Kotor2VR\mods\01-uco-redux\Override
+```
+
+The optional [Vanilla Planets HD by Saul0097](https://www.nexusmods.com/kotor2/mods/1369)
+base archive belongs in:
+
+```text
+%LOCALAPPDATA%\Kotor2VR\mods\02-vanilla-planets-hd\Override
+```
+
+If the retail installation contains TSLRCM, add each author's TSLRCM compatibility
+patch to the corresponding layer after its base archive. Do not put a patch, archive,
+or any extracted mod files in the retail game directory.
+
+Then launch the browser service with that layer:
+
+```powershell
+npm run webpack:dev
+node tools/asset-http/asset-server.js `
+  --game "D:\SteamLibrary\steamapps\common\Knights of the Old Republic II" `
+  --user "$env:LOCALAPPDATA\Kotor2VR" `
+  --mod "$env:LOCALAPPDATA\Kotor2VR\mods\01-uco-redux" `
+  --mod "$env:LOCALAPPDATA\Kotor2VR\mods\02-vanilla-planets-hd"
+```
+
+Use additional `--mod` arguments only for user-supplied packs, in increasing priority order.
+The resolver chooses a higher layer before it chooses a format, then prefers `.tpc` over
+`.tga` within that same layer. UCO improves character, creature, droid, and equipment
+textures; it does not replace world geometry, environmental art, or unrelated GUI assets.
+Vanilla Planets HD is intentionally later in this baseline, so it wins for any shared
+resource; inspect the resolver's layer diagnostics before adding more packs. Keep every
+mod's original credit and permissions with your local install.
+
 ---
 
 #### Option C — VS Code launch configurations

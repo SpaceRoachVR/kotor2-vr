@@ -1609,6 +1609,7 @@ export class OdysseyModel3D extends OdysseyObject3D {
 
       if(!!tMap1 && tMap1 != 'toolcolors'){
         material.userData.map = tMap1;
+        material.userData.textureOwnerModel = odysseyModel;
         TextureLoader.enQueue(tMap1, material, TextureType.TEXTURE, undefined, fallbackTexture, 'diffuse');
       }else{
         if(material instanceof THREE.ShaderMaterial){

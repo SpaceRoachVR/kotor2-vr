@@ -342,17 +342,17 @@ export class GameInitializer {
     KotOR.PerformanceMonitor.start('GameInitializer.LoadOverride');
     try{
       await KotOR.ResourceLoader.InitOverrideCache();
-      const files = await KotOR.GameFileSystem.readdir('Override', {recursive: false});
+      const files = await KotOR.GameFileSystem.readdirWithMetadata('Override');
       const validOverrideFiles = files
-        .map(f => {
-          const _parsed = path.parse(f);
+        .map(({ path: filepath, layerId, layerOrder }) => {
+          const _parsed = path.parse(filepath);
           const ext = _parsed.ext.substr(1, _parsed.ext.length)?.toLocaleLowerCase();
-          return { f, _parsed, resId: KotOR.ResourceTypes[ext] };
+          return { filepath, _parsed, resId: KotOR.ResourceTypes[ext], layerId, layerOrder };
         })
         .filter(({ resId }) => typeof resId !== 'undefined');
 
-      validOverrideFiles.forEach(({ f, _parsed, resId }) => {
-        KotOR.ResourceLoader.setOverrideResource(resId, _parsed.name, f);
+      validOverrideFiles.forEach(({ filepath, _parsed, resId, layerId, layerOrder }) => {
+        KotOR.ResourceLoader.setOverrideResource(resId, _parsed.name, filepath, layerId, layerOrder);
       });
     }catch(e){
       console.warn('GameInitializer.LoadOverride: Failed to load override');

@@ -1,6 +1,5 @@
 import { OdysseyModel } from "@/odyssey";
 import { ResourceLoader } from "@/loaders/ResourceLoader";
-import { ResourceTypes } from "@/resource/ResourceTypes";
 
 /**
  * Interface defining the structure of the model cache.
@@ -28,19 +27,6 @@ const ModelCache: ModelCacheInterface = {
   models: new Map<string, OdysseyModel>()
 };
 
-/**
- * Resource type ID for MDL (Model) files.
- * 
- * @constant {number}
- */
-const resMDL: number = ResourceTypes['mdl'];
-
-/**
- * Resource type ID for MDX (Model Extension) files.
- * 
- * @constant {number}
- */
-const resMDX: number = ResourceTypes['mdx'];
 
 /**
  * MDLLoader class for loading and caching 3D models from MDL/MDX files.
@@ -93,7 +79,7 @@ export class MDLLoader {
    *   // Use the model in the game
    * }
    */
-	async load (resref: string = ''): Promise<OdysseyModel> {
+	async load (resref: string = ''): Promise<OdysseyModel | undefined> {
     resref = resref?.toLocaleLowerCase();
 
     //Validate the resource reference
@@ -108,11 +94,11 @@ export class MDLLoader {
         return ModelCache.models.get(resref);
       }
 
-      //Load the resources from disk
-      const mdlPromise = ResourceLoader.loadResource(resMDL, resref);
-      const mdxPromise = ResourceLoader.loadResource(resMDX, resref);
-
-      const [mdl_buffer, mdx_buffer] = await Promise.all([mdlPromise, mdxPromise]);
+      //Load the resources from disk. Both halves must come from the same
+      //Override layer or the same archive: the MDX is raw vertex data
+      //addressed by offsets the MDL declares, so a pair drawn from two
+      //different sources is not a degraded model, it is garbage geometry.
+      const { mdl: mdl_buffer, mdx: mdx_buffer } = await ResourceLoader.loadModelPair(resref);
       const model = OdysseyModel.FromBuffers(mdl_buffer, mdx_buffer);
       ModelCache.models.set(resref, model);
       return model;

@@ -3,7 +3,7 @@
  * Starts the loopback-only browser asset service for a locally installed game.
  *
  * Usage:
- *   node tools/asset-http/asset-server.js --game <retail-dir> --user <user-dir> [--dist <dist-dir>] [--port 8479]
+ *   node tools/asset-http/asset-server.js --game <retail-dir> --user <user-dir> [--mod <mod-dir> ...] [--dist <dist-dir>] [--port 8479]
  */
 const crypto = require('crypto');
 const fs = require('fs');
@@ -26,6 +26,7 @@ function parseAssetServerArguments(argumentsList, defaults = getDefaultOptions()
     userRoot: defaults.userRoot,
     distRoot: defaults.distRoot,
     port: defaults.port,
+    modRoots: [],
   };
   const optionToProperty = {
     '--game': 'gameRoot',
@@ -37,6 +38,13 @@ function parseAssetServerArguments(argumentsList, defaults = getDefaultOptions()
 
   for (let index = 0; index < argumentsList.length; index += 1) {
     const option = argumentsList[index];
+    if (option === '--mod') {
+      const value = argumentsList[index + 1];
+      if (!value || value.startsWith('--')) throw new Error('--mod requires a value');
+      values.modRoots.push(path.resolve(value));
+      index += 1;
+      continue;
+    }
     const property = optionToProperty[option];
     if (!property) throw new Error(`Unknown option: ${option}`);
     if (seenOptions.has(option)) throw new Error(`Duplicate option: ${option}`);
@@ -52,6 +60,7 @@ function parseAssetServerArguments(argumentsList, defaults = getDefaultOptions()
     userRoot: path.resolve(values.userRoot),
     distRoot: path.resolve(values.distRoot),
     port: parsePort(String(values.port)),
+    modRoots: values.modRoots,
   };
 }
 
@@ -74,12 +83,13 @@ function validateRetailInstallation(gameRoot) {
 }
 
 async function main() {
-  const { gameRoot, userRoot, distRoot, port } = parseAssetServerArguments(process.argv.slice(2));
+  const { gameRoot, userRoot, distRoot, port, modRoots } = parseAssetServerArguments(process.argv.slice(2));
   const token = crypto.randomBytes(32).toString('base64url');
   validateRetailInstallation(gameRoot);
   fs.mkdirSync(userRoot, { recursive: true });
   const service = createAssetService({
     assetRoot: gameRoot,
+    modRoots,
     userRoot,
     distRoot,
     token,

@@ -310,6 +310,22 @@ describe('HTTP game filesystem mount routing', () => {
     await expect(backend.readdir('Screenshots', { recursive: true })).resolves.toEqual([]);
   });
 
+  test('returns validated logical layer metadata for a merged Override listing', async () => {
+    const fetchImplementation = jest.fn<typeof fetch>().mockResolvedValue(response(200, JSON.stringify({
+      isDirectory: true,
+      entries: [
+        { name: 'P_HK47_01.tpc', directory: false, layer: 'mod-2' },
+        { name: 'P_T3M4_01.tpc', directory: false, layer: 'retail' },
+      ],
+    })));
+    const backend = createBackend(fetchImplementation);
+
+    await expect(backend.readdirWithMetadata('Override')).resolves.toEqual([
+      { path: 'Override/P_HK47_01.tpc', layerId: 'mod-2', layerOrder: 2 },
+      { path: 'Override/P_T3M4_01.tpc', layerId: 'retail', layerOrder: 0 },
+    ]);
+  });
+
   test('never exposes reserved user mounts from retail root listings, including recursive fresh-user enumeration', async () => {
     const fetchImplementation = jest.fn<typeof fetch>((url: string) => {
       const listings: Record<string, unknown> = {

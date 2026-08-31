@@ -4,7 +4,10 @@ import { ApplicationProfile } from "@/utility/ApplicationProfile";
 import { ApplicationEnvironment } from "@/enums/ApplicationEnvironment";
 import { IGameFileSystemReadDirOptions } from "@/interface/filesystem/IGameFileSystemReadDirOptions";
 import { GameFileSystemHttpHandle } from "@/utility/filesystem/GameFileSystemBackend";
-import { HttpGameFileSystemBackend } from "@/utility/filesystem/HttpGameFileSystemBackend";
+import {
+  HttpGameFileSystemBackend,
+  HttpGameFileSystemDirectoryEntryMetadata,
+} from "@/utility/filesystem/HttpGameFileSystemBackend";
 declare const dialog: any;
 
 const webHandleHasRemove = typeof FileSystemFileHandle !== 'undefined' && typeof (FileSystemFileHandle.prototype as any).remove === 'function'
@@ -257,6 +260,20 @@ export class GameFileSystem {
     }else{
       return await this.readdir_web(dirpath, options, files);
     }
+  }
+
+  static async readdirWithMetadata(
+    dirpath: string,
+  ): Promise<readonly HttpGameFileSystemDirectoryEntryMetadata[]> {
+    if (this.useHttp) {
+      return await this.getHttpBackend().readdirWithMetadata(dirpath);
+    }
+    const files = await this.readdir(dirpath, { recursive: false });
+    return Object.freeze(files.map((file) => Object.freeze({
+      path: file,
+      layerId: 'retail',
+      layerOrder: 0,
+    })));
   }
 
   private static async readdir_web(pathOrHandle: string|FileSystemDirectoryHandle = '', opts: any = {},  files: any[] = [], dirbase: string = ''){

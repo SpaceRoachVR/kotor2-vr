@@ -75,8 +75,8 @@ describe('TextureResolver', () => {
       texture: expected,
     });
     expect(provider.attempts).toEqual([
-      { source: 'override-tga', resref: 'panel', activeModule: '101per' },
       { source: 'override-tpc', resref: 'panel', activeModule: '101per' },
+      { source: 'override-tga', resref: 'panel', activeModule: '101per' },
       { source: 'active-module', resref: 'panel', activeModule: '101per' },
     ]);
   });
@@ -198,8 +198,8 @@ describe('TextureResolver', () => {
   test('returns an attributable decode-error instead of falling through precedence', async () => {
     const provider: TextureSourceProvider<FakeTexture> = {
       load: jest.fn(async (source) => {
-        if (source === 'override-tga') {
-          throw new Error('invalid TGA header');
+        if (source === 'override-tpc') {
+          throw new Error('invalid TPC header');
         }
         return { texture: { name: 'must-not-fall-through' } };
       }),
@@ -215,12 +215,12 @@ describe('TextureResolver', () => {
       status: 'decode-error',
       requestedResref: 'panel',
       resolvedResref: 'panel',
-      source: 'override-tga',
+      source: 'override-tpc',
       cacheGeneration: 1,
-      searchedSources: ['override-tga'],
+      searchedSources: ['override-tpc'],
       diagnostic: {
         code: 'decode-error',
-        message: "Failed to decode diffuse texture 'panel' from override-tga: invalid TGA header",
+        message: "Failed to decode diffuse texture 'panel' from override-tpc: invalid TPC header",
       },
     });
     expect(provider.load).toHaveBeenCalledTimes(1);
@@ -231,7 +231,7 @@ describe('TextureResolver', () => {
     const provider: TextureSourceProvider<FakeTexture> = {
       load: jest.fn(async (source) => source === 'override-tga'
         ? { texture: expected, txiSource: 'override-txi' as const }
-        : { texture: { name: 'lower-precedence-panel' } }),
+        : undefined),
     };
 
     const result = await new TextureResolver(provider).resolve({
@@ -246,7 +246,29 @@ describe('TextureResolver', () => {
       txiSource: 'override-txi',
       texture: expected,
     });
-    expect(provider.load).toHaveBeenCalledTimes(1);
+    expect(provider.load).toHaveBeenCalledTimes(2);
+  });
+
+  test('preserves the selected external Override layer in the resolved texture provenance', async () => {
+    const expected = { name: 'layered-panel' };
+    const provider: TextureSourceProvider<FakeTexture> = {
+      load: jest.fn(async (source) => source === 'override-tpc'
+        ? { texture: expected, txiSource: 'embedded-tpc' as const, sourceLayerId: 'mod-2' }
+        : undefined),
+    };
+
+    const result = await new TextureResolver(provider).resolve({
+      resref: 'panel',
+      semantic: 'diffuse',
+      allowAlias: false,
+    });
+
+    expect(result).toMatchObject({
+      status: 'resolved',
+      source: 'override-tpc',
+      sourceLayerId: 'mod-2',
+      texture: expected,
+    });
   });
 });
 
