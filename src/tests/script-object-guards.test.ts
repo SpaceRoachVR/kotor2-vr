@@ -90,4 +90,22 @@ describe('script-facing guards against unresolved objects', () => {
     }
   });
 
+  test('GiveItem removes the item from its owner before giving it away', () => {
+    const source = read('nwscript', 'NWScriptDefK1.ts');
+    const start = source.indexOf(`name: "GiveItem"`);
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, start + 2200);
+
+    // GiveItem transfers. Adding to the destination without removing from the
+    // source left the item in both, so my_clear_inv - which drains the TSF
+    // Detainee Locker from 202TEL's OnEnter by handing each item away - looped
+    // forever: 1.7M calls, ~111k/second, wedging the main thread during module
+    // load. A player entering 202TEL would hang, not just the sweep.
+    const removal = body.search(/removeItem\(/);
+    const addition = body.search(/addItem\(/);
+    expect(removal).toBeGreaterThan(-1);
+    expect(addition).toBeGreaterThan(-1);
+    expect(removal).toBeLessThan(addition);
+  });
+
 });

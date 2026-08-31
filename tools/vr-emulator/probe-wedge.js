@@ -71,6 +71,27 @@ async function main() {
       console.log('re-booted after soft reload');
     }
 
+    // The sweep always establishes a party from a save before loading any
+    // module. 202TEL loads fine from a cold main menu but blocks as the only
+    // module in a sweep, so the save-established state is the live variable.
+    if (argv.includes('--via-save')) {
+      console.log('establishing party from save, as the sweep does…');
+      await harness.evaluate(`(async () => {
+        await window.KotOR.SaveGame.GetSaveGames();
+        const gs = window.KotOR.GameState;
+        gs.MenuManager.ClearMenus();
+        if (gs.module) { try { gs.module.dispose(); } catch (e) {} gs.module = undefined; }
+        Promise.resolve(window.KotOR.SaveGame.saves[0].load()).catch(() => undefined);
+        return true;
+      })()`, { timeoutMs: 300000 });
+      await harness.waitFor(`(() => {
+        const gs = window.KotOR.GameState;
+        const p = window.KotOR.PartyManager && window.KotOR.PartyManager.Player;
+        return !!(gs && gs.module && p && p.position && Number.isFinite(p.position.x));
+      })()`, 300_000, 3000);
+      console.log('party established');
+    }
+
     // Capture the pause event before anything can fire it.
     let paused = null;
     harness.cdp.on('Debugger.paused', (params) => { if (!paused) paused = params; });
@@ -101,6 +122,46 @@ async function main() {
     } catch { /* timed out or errored: consistent with a wedge */ }
 
     console.log(`main thread responsive to a trivial evaluate: ${responsive}`);
+
+    // If the thread is responsive, the sweep's block is not a wedge: its probe
+    // polls for readyToProcessEvents and simply never gets it. Read the exact
+    // state the probe is waiting on.
+    if (responsive) {
+      const state = await harness.evaluate(`(() => {
+        const gs = window.KotOR.GameState;
+        const m = gs.module;
+        return {
+          filename: String((m || {}).filename || ''),
+          loadingModule: !!gs.loadingModule,
+          readyToProcessEvents: m ? m.readyToProcessEvents : null,
+          hasArea: !!(m && m.area),
+          engineMode: String(gs.Mode),
+          rooms: m && m.area && m.area.rooms ? m.area.rooms.length : null,
+          creatures: m && m.area && m.area.creatures ? m.area.creatures.length : null,
+        };
+      })()`);
+      console.log('STATE:', JSON.stringify(state, null, 1));
+
+      // The sweep's frames phase awaits requestAnimationFrame 30 times with no
+      // timeout. If rAF stops firing, that wait never returns - which looks
+      // exactly like a crash from outside. Is the engine still painting?
+      const raf = await harness.evaluate(`(async () => {
+        let ticks = 0;
+        const stop = Date.now() + 3000;
+        await new Promise((resolve) => {
+          const step = () => {
+            ticks += 1;
+            if (Date.now() >= stop) return resolve();
+            requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+          setTimeout(resolve, 3500);
+        });
+        return { ticksIn3s: ticks, hidden: document.hidden,
+                 visibility: document.visibilityState };
+      })()`, { timeoutMs: 20000 });
+      console.log('RAF:', JSON.stringify(raf));
+    }
 
     await harness.cdp.send('Debugger.pause').catch(() => undefined);
     await new Promise((r) => setTimeout(r, 4000));

@@ -3508,10 +3508,34 @@ NWScriptDefK1.Actions = {
         return;
       }
 
-      if(GameState.PartyManager.party.indexOf(args[1] as any) >= 0){
-        GameState.InventoryManager.addItem(args[0] as ModuleItem);
+      const item = args[0] as ModuleItem;
+      const giveTo = args[1];
+
+      // GiveItem transfers: the item must leave its current owner. Adding it to
+      // the destination without removing it from the source left the item in
+      // both, so a script that drains a container by handing its contents away
+      // never made progress.
+      //
+      // 202TEL's OnEnter (k_202tel_enter) runs my_clear_inv over the TSF
+      // Detainee Locker, which walks the inventory and gives each item away.
+      // With the item never leaving, that loop never terminates: measured at
+      // 1.7 million GiveItem calls and climbing by ~111k/second, inside
+      // initAreaObjects, with the main thread wedged hard enough that the page
+      // could not service CDP. That is a hang on entering the module, not just
+      // a sweep failure.
+      const possessor = item.possessor;
+      if(BitWise.InstanceOfObject(possessor, ModuleObjectType.ModuleObject)){
+        (possessor as ModuleObject).removeItem(item, 1);
       }else{
-        args[1].addItem(args[0] as ModuleItem);
+        // Not held by an object: the party pool is the only other owner. This
+        // no-ops silently when the item is in neither.
+        GameState.InventoryManager.removeItem(item, 1);
+      }
+
+      if(GameState.PartyManager.party.indexOf(giveTo as any) >= 0){
+        GameState.InventoryManager.addItem(item);
+      }else{
+        giveTo.addItem(item);
       }
     }
   },
