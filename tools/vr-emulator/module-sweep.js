@@ -142,6 +142,38 @@ async function clickButtonByText(harness, text) {
  * whole sweep unreadable. This mirrors what `CheatConsoleManager.warp` assumes
  * during ordinary play.
  */
+/**
+ * Return the page to a known, booted state.
+ *
+ * A reload is the cheap path, but it is not always available. Measured on run
+ * #6: 202TEL wedges the renderer main thread outright — `evaluate` itself timed
+ * out at 60s and the post-reload `__xrHarness.ready` never arrived, so the
+ * recovery threw and took the whole sweep with it. A spinning main thread
+ * cannot service CDP, so the only way out is to kill the browser and start a
+ * fresh one. Escalate rather than give up: a module that wedges the page is a
+ * finding about that module, not a reason to lose the other 60.
+ */
+async function recoverPage(harness, url, reason, onProgress) {
+  onProgress(`  · reloading page to shed accumulated state (${reason})`);
+  try {
+    await harness.cdp.send('Page.reload', { ignoreCache: false });
+    await harness.waitFor('window.__xrHarness && window.__xrHarness.ready === true', 30_000);
+    await bootEngine(harness, () => {}, false);
+    return 'reloaded';
+  } catch (error) {
+    onProgress(`  · reload failed (${String(error && error.message || error).slice(0, 120)});`
+      + ` relaunching the browser`);
+  }
+  try {
+    await harness.close();
+  } catch {
+    // A wedged browser may not close cleanly; the relaunch is what matters.
+  }
+  await harness.launch(url);
+  await bootEngine(harness, () => {}, true);
+  return 'relaunched';
+}
+
 async function bootEngine(harness, onProgress, expectEula = true) {
   // The EULA appears on a cold boot but NOT after the mid-sweep heap reload —
   // acceptance persists, so the button never returns. Waiting for it
@@ -298,6 +330,7 @@ async function sweep(args, onProgress) {
     await bootEngine(harness, onProgress);
 
     let sinceReload = 0;
+    let forceReload = false;
     for (let index = 0; index < modules.length; index += 1) {
       const name = modules[index];
       const label = `[${index + 1}/${modules.length}] ${name}`;
@@ -315,13 +348,18 @@ async function sweep(args, onProgress) {
       const heapMb = await readHeapMb(harness);
       const heapExceeded = args.reloadHeapMb > 0 && heapMb != null && heapMb > args.reloadHeapMb;
       const countExceeded = args.reloadEvery > 0 && sinceReload >= args.reloadEvery;
-      if (heapExceeded || countExceeded) {
-        onProgress(`  · reloading page to shed accumulated state ` +
-          `(${heapExceeded ? `heap ${Math.round(heapMb)} MB` : `${sinceReload} modules`})`);
-        await harness.cdp.send('Page.reload', { ignoreCache: false });
-        await harness.waitFor('window.__xrHarness && window.__xrHarness.ready === true', 30_000);
-        await bootEngine(harness, () => {}, false);
+      // A module whose probe never returned leaves the page in an unknown state:
+      // the engine may be mid-load, spinning, or holding an unresolved promise.
+      // Measured on run #5, where 202TEL blocked and 203TEL/204TEL then blocked
+      // identically at the same 425s ceiling — successors inherit the wedge and
+      // the sweep stops measuring modules and starts re-measuring one failure.
+      // So a block forces a reload, and every module is judged from a known state.
+      if (heapExceeded || countExceeded || forceReload) {
+        const reason = forceReload ? 'previous module blocked'
+          : heapExceeded ? `heap ${Math.round(heapMb)} MB` : `${sinceReload} modules`;
+        await recoverPage(harness, url, reason, onProgress);
         sinceReload = 0;
+        forceReload = false;
       }
 
       const consoleFrom = harness.consoleMessages.length;
@@ -355,6 +393,7 @@ async function sweep(args, onProgress) {
           skipped: [],
           truncated: {},
         };
+        forceReload = true;
       }
 
       report.console = harvestConsole(harness, consoleFrom);
@@ -463,6 +502,6 @@ async function main() {
 if (require.main === module) main();
 
 module.exports = {
-  parseArgs, sweep, harvestConsole, readHeapMb, bootEngine, isBenignConsoleError,
+  parseArgs, sweep, harvestConsole, readHeapMb, bootEngine, recoverPage, isBenignConsoleError,
   BENIGN_CONSOLE_PATTERNS, USAGE, DEFAULT_GAME_ROOT,
 };
