@@ -652,6 +652,16 @@ export class ModuleObject {
    * @param clearable 
    */
   actionDialogObject( target: ModuleObject, dialogResRef = '', ignoreStartRange = true, bPrivate = 0, nConvoType = 1, clearable = false ){
+    // ActionStartConversation is routinely handed an object that does not
+    // resolve in a given playthrough - a tag lookup that found nothing, or
+    // OBJECT_INVALID. Retail treats that as a no-op; dereferencing it threw a
+    // TypeError out of the script VM instead, which aborted the running script
+    // and every action queued behind it. Measured on 107PER, where it fired
+    // during load. Guarded here rather than at the two NWScript call sites
+    // (K1 204, K2 204) because `target.id` is this method's own precondition.
+    if(!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleObject)){
+      return;
+    }
     const action = new GameState.ActionFactory.ActionDialogObject();
     action.setParameter(0, ActionParameterType.DWORD, target.id);
     action.setParameter(1, ActionParameterType.STRING, dialogResRef);

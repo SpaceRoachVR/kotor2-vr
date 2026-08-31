@@ -3298,6 +3298,17 @@ export class ModuleCreature extends ModuleObject {
 
   async loadBody() {
     let appearance = this.creatureAppearance;
+    // An appearance id with no row in appearance.2da leaves this undefined -
+    // `isPartyMemberModelType` at the bottom of this class already guards for
+    // exactly that. Measured on 410DXN, where it threw out of loadModel and
+    // took the creature's whole load path with it. Degrade the way the
+    // no-body-model case below already does: an empty model, so the object
+    // exists and the area finishes building.
+    if(!appearance){
+      console.warn('ModuleCreature.loadBody: no appearance row', this.appearance);
+      this.model = new OdysseyModel3D();
+      return this.model;
+    }
     let bodyVariation: string = this.equipment.ARMOR?.getBodyVariation() || '';
     let textureVariation: number = this.equipment.ARMOR?.getTextureVariation() || 1;
     const { model: bodyModel, texture: bodyTexture } = appearance.getBodyModelInfo(bodyVariation, textureVariation);
@@ -3362,6 +3373,11 @@ export class ModuleCreature extends ModuleObject {
 
   async loadHead(): Promise<OdysseyModel3D> {
     let appearance = this.creatureAppearance;
+    // Same missing-row case as loadBody, which runs immediately before this.
+    // Guarding only loadBody would move the same crash down one line.
+    if(!appearance){
+      return;
+    }
     let headId = appearance.normalhead;//.replace(/\0[\s\S]*$/g,'').toLowerCase();
     this.headModel = undefined;
     if(!( headId >= 0 && appearance.modeltype == 'B' )){

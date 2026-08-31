@@ -3333,8 +3333,13 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.OBJECT,
     args: [],
     action: function(this: NWScriptInstance, args: []){
-      if(BitWise.InstanceOfObject(this.lastPerceived.object, ModuleObjectType.ModuleCreature)){
-        return this.lastPerceived.object;
+      // `lastPerceived` is declared on NWScriptInstance but never initialised,
+      // so it is undefined until a perception event assigns it. This family
+      // (256-261) already guarded `.object` and returned a proper fallback, but
+      // reached through `lastPerceived` itself to do so - an OnPerception script
+      // that ran before any perception threw out of the VM. Measured on 103PER.
+      if(BitWise.InstanceOfObject(this.lastPerceived?.object, ModuleObjectType.ModuleCreature)){
+        return this.lastPerceived?.object;
       }
       return undefined;
     }
@@ -3345,8 +3350,8 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [],
     action: function(this: NWScriptInstance, args: []){
-      if(BitWise.InstanceOfObject(this.lastPerceived.object, ModuleObjectType.ModuleObject)){
-        return !this.lastPerceived.object.isDead() || !!(this.lastPerceived.data & PerceptionMask.HEARD);
+      if(BitWise.InstanceOfObject(this.lastPerceived?.object, ModuleObjectType.ModuleObject)){
+        return !this.lastPerceived?.object.isDead() || !!(this.lastPerceived?.data & PerceptionMask.HEARD);
       }else{
         return 0;
       }
@@ -3358,8 +3363,8 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [],
     action: function(this: NWScriptInstance, args: []){
-      if(BitWise.InstanceOfObject(this.lastPerceived.object, ModuleObjectType.ModuleObject)){
-        return this.lastPerceived.object.isDead() || !!(this.lastPerceived.data & PerceptionMask.INAUDIBLE);
+      if(BitWise.InstanceOfObject(this.lastPerceived?.object, ModuleObjectType.ModuleObject)){
+        return this.lastPerceived?.object.isDead() || !!(this.lastPerceived?.data & PerceptionMask.INAUDIBLE);
       }else{
         return 0;
       }
@@ -3371,8 +3376,8 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [],
     action: function(this: NWScriptInstance, args: []){
-      if(BitWise.InstanceOfObject(this.lastPerceived.object, ModuleObjectType.ModuleCreature))
-        return !this.lastPerceived.object.isDead() || !!(this.lastPerceived.data & PerceptionMask.SEEN);
+      if(BitWise.InstanceOfObject(this.lastPerceived?.object, ModuleObjectType.ModuleCreature))
+        return !this.lastPerceived?.object.isDead() || !!(this.lastPerceived?.data & PerceptionMask.SEEN);
       else
         return 0;
     }
@@ -3389,8 +3394,8 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [],
     action: function(this: NWScriptInstance, args: []){
-      if(BitWise.InstanceOfObject(this.lastPerceived.object, ModuleObjectType.ModuleObject)){
-        return this.lastPerceived.object.isDead() || !!(this.lastPerceived.data & PerceptionMask.INVISIBLE);
+      if(BitWise.InstanceOfObject(this.lastPerceived?.object, ModuleObjectType.ModuleObject)){
+        return this.lastPerceived?.object.isDead() || !!(this.lastPerceived?.data & PerceptionMask.INVISIBLE);
       }else{
         return 0;
       }
@@ -7677,7 +7682,13 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.VOID,
     args: [NWScriptDataType.OBJECT, NWScriptDataType.INTEGER, NWScriptDataType.INTEGER],
     action: function(this: NWScriptInstance, args: [ModuleObject, number, number]){
-      args[0].setLocalBoolean( args[1], !!args[2] )
+      // The matching getter (679) guards its object and returns a default; this
+      // setter did not, so a script setting a flag on an object that did not
+      // resolve threw out of the VM and killed the rest of the script. Measured
+      // on 604DAN. Same guard, same idiom as the getter.
+      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleObject)){
+        args[0].setLocalBoolean( args[1], !!args[2] )
+      }
     }
   },
   681:{
@@ -7699,10 +7710,15 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.VOID,
     args: [NWScriptDataType.OBJECT, NWScriptDataType.INTEGER, NWScriptDataType.INTEGER],
     action: function(this: NWScriptInstance, args: [ModuleObject, number, number]){
-    args[0].setLocalNumber(
-      args[1],
-      args[2]
-      )
+      // Unguarded for the same reason SetLocalBoolean was, and crashes the same
+      // way; its getter (681) already guards. Not observed in the sweep, but it
+      // is the identical defect and left in place it is just an uncrashed bug.
+      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleObject)){
+        args[0].setLocalNumber(
+          args[1],
+          args[2]
+        )
+      }
     }
   },
   683:{
