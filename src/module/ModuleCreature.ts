@@ -3035,6 +3035,22 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
+  /**
+   * Removes a feat, the counterpart to {@link addFeat}.
+   *
+   * Added for character generation, where a pick made before Accept has to be
+   * takeable back. There was no way to undo an `addFeat`.
+   *
+   * @returns whether a feat was actually removed
+   */
+  removeFeat(feat: number|TalentFeat = 0): boolean {
+    const id = feat instanceof TalentFeat ? feat.id : feat;
+    const index = this.feats.findIndex((existing) => existing?.id == id);
+    if(index < 0) return false;
+    this.feats.splice(index, 1);
+    return true;
+  }
+
   getHasFeat(id: number = 0){
     let feats = this.getFeats();
     for(let i = 0, len = feats.length; i < len; i++){

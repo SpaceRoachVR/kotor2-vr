@@ -234,7 +234,17 @@ export class CharGenAbilities extends GameMenu {
   show(){
     super.show();
     this.updateButtonStates();
+    // Wired on show rather than in the initializer: TSL's subclass calls
+    // `super.menuControlInitializer(true)` and so skips this class's body,
+    // which is the same trap `CharGenFeats.wireStepNavigation` documents.
+    if(!this.attributeDescriptionsWired){
+      this.attributeDescriptionsWired = true;
+      this.wireAttributeDescriptions();
+    }
+    this.clearAttributeDescription();
   }
+
+  private attributeDescriptionsWired = false;
 
   setCreature(creature: ModuleCreature){
     this.creature = creature;
@@ -328,6 +338,94 @@ export class CharGenAbilities extends GameMenu {
       this.CHA_PLUS_BTN.hide();
 
     this.REMAINING_SELECTIONS_LBL.setText(GameState.CharGenManager.availPoints);
+  }
+
+  /**
+   * TLK string references for the attribute descriptions.
+   *
+   * There is no 2DA for these — unlike skills and feats, which carry a
+   * `description` strref column — so the engine has to know them. They were
+   * found by dumping the chargen block of the loaded `dialog.tlk` rather than
+   * guessed: 208 "CHARACTER GENERATION", 209 "Attributes", 211-216 the six
+   * attribute names in this order, 217 "Description", 218 "Point Cost", and
+   * 222-227 the descriptions in the same order.
+   *
+   * Verified against TSL's `dialog.tlk`. K1 ships a different table and has NOT
+   * been verified, which is why {@link describeAttribute} checks the resolved
+   * text names the attribute it is about and shows nothing rather than
+   * something wrong when it does not.
+   */
+  static readonly ATTRIBUTE_DESCRIPTION_STRREFS: Record<number, number> = {
+    [CharGenAttribute.STR]: 222,
+    [CharGenAttribute.DEX]: 223,
+    [CharGenAttribute.CON]: 224,
+    [CharGenAttribute.WIS]: 225,
+    [CharGenAttribute.INT]: 226,
+    [CharGenAttribute.CHA]: 227,
+  };
+
+  /** TLK references for the attribute names, used to validate the above. */
+  static readonly ATTRIBUTE_NAME_STRREFS: Record<number, number> = {
+    [CharGenAttribute.STR]: 211,
+    [CharGenAttribute.DEX]: 212,
+    [CharGenAttribute.CON]: 213,
+    [CharGenAttribute.WIS]: 214,
+    [CharGenAttribute.INT]: 215,
+    [CharGenAttribute.CHA]: 216,
+  };
+
+  /**
+   * Fills the Description and Point Cost panels for the attribute under the
+   * pointer. Both were declared on this menu and never written to.
+   *
+   * The description is only shown when the resolved string actually names the
+   * attribute. The strrefs are hard-coded because no data table carries them,
+   * and a hard-coded strref that is right for TSL may address unrelated text in
+   * K1 — better to show a cost and no prose than confident nonsense.
+   */
+  describeAttribute(attribute: number){
+    // Hover fires every frame; only rebuild when the attribute actually
+    // changes. See the same guard in CharGenSkills.describeSkill.
+    if(this.describedAttribute === attribute) return;
+    this.describedAttribute = attribute;
+    const cost = this.getAttributeCost(attribute);
+    this.COST_POINTS_LBL?.setText(String(cost));
+
+    const nameRef = CharGenAbilities.ATTRIBUTE_NAME_STRREFS[attribute];
+    const descRef = CharGenAbilities.ATTRIBUTE_DESCRIPTION_STRREFS[attribute];
+    const name = GameState.TLKManager.GetStringById(nameRef)?.Value ?? '';
+    const description = GameState.TLKManager.GetStringById(descRef)?.Value ?? '';
+    const describesThisAttribute = !!name && !!description
+      && description.toLowerCase().indexOf(name.toLowerCase()) >= 0;
+
+    this.LB_DESC?.setItem(describesThisAttribute ? description : '');
+  }
+
+  private describedAttribute: number = -1;
+
+  clearAttributeDescription(){
+    this.describedAttribute = -1;
+    this.LB_DESC?.setItem('');
+    this.COST_POINTS_LBL?.setText('');
+  }
+
+  /**
+   * Every control in an attribute row reports the same attribute on hover, so
+   * the description appears wherever the player's pointer naturally rests —
+   * the name, the value, or either adjust button.
+   */
+  protected wireAttributeDescriptions(){
+    const rows: [number, string][] = [
+      [CharGenAttribute.STR, 'STR'], [CharGenAttribute.DEX, 'DEX'],
+      [CharGenAttribute.CON, 'CON'], [CharGenAttribute.WIS, 'WIS'],
+      [CharGenAttribute.INT, 'INT'], [CharGenAttribute.CHA, 'CHA'],
+    ];
+    for(const [attribute, prefix] of rows){
+      for(const suffix of ['_LBL', '_POINTS_BTN', '_MINUS_BTN', '_PLUS_BTN']){
+        const control = (this as any)[`${prefix}${suffix}`];
+        control?.addEventListener?.('hover', () => this.describeAttribute(attribute));
+      }
+    }
   }
 
   getAttributeCost(index = 0){

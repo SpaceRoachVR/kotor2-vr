@@ -80,6 +80,183 @@ export class CharGenFeats extends GameMenu {
     this.addGrantedFeats();
     this.LB_FEATS.setProtoBuilder(GUIFeatItem);
     this.buildFeatList();
+    this.updateRemainingSelections();
+    this.clearFeatDescription();
+    if(!this.selectionWired){
+      this.selectionWired = true;
+      this.wireFeatSelection();
+    }
+    this.highlightedFeat = null;
+  }
+
+  /**
+   * How many feats this character may still choose by hand.
+   *
+   * `featgain.2da` states the picks a class receives at each level, already
+   * resolved onto `CreatureClass.featGainPoints`. Both authored labels were
+   * declared and never written to, so the screen always read a blank or stale
+   * count regardless of the character.
+   *
+   * Note this is the *choosable* allowance. `addGrantedFeats()` separately
+   * awards every feat the class is simply entitled to, and those are not picks.
+   */
+  getRemainingFeatSelections(): number {
+    if(!this.creature) return 0;
+    const mainClass = this.creature.getMainClass();
+    if(!mainClass) return 0;
+    const level = Math.max(1, this.creature.getTotalClassLevel());
+    const granted = mainClass.featGainPoints?.[level - 1] ?? 0;
+    if(!Number.isFinite(granted)) return 0;
+    return Math.max(0, granted - this.selectedFeatIds.size);
+  }
+
+  updateRemainingSelections(){
+    // The two authored names are near-identical but do different jobs, and
+    // getting them the wrong way round silently destroys the caption:
+    //
+    //   STD_SELECTIONS_REMAINING_LBL  left 410, width 300, "Remaining Feats"
+    //   STD_REMAINING_SELECTIONS_LBL  left 656, width  42, "0"
+    //
+    // Only the second is the counter. The first is the caption beside it and
+    // must be left exactly as the GUI file authored it.
+    this.STD_REMAINING_SELECTIONS_LBL?.setText(String(this.getRemainingFeatSelections()));
+  }
+
+  /** Feats chosen by hand this visit, as opposed to granted by class. */
+  protected selectedFeatIds: Set<number> = new Set();
+
+  /** The feat the player last clicked; what Select acts on. */
+  protected highlightedFeat: any = null;
+
+  private selectionWired = false;
+
+  /**
+   * Whether a feat may be picked by hand right now.
+   *
+   * Deliberately reuses the rules `buildFeatList` already applies — class
+   * availability and feat status — rather than re-deriving them, so the list
+   * and the Select button can never disagree about what is takeable.
+   */
+  canSelectFeat(feat: any): boolean {
+    if(!feat || !this.creature) return false;
+    if(this.creature.getHasFeat(feat.id)) return false;
+    const mainClass = this.creature.getMainClass();
+    if(!mainClass || !mainClass.isFeatAvailable(feat)) return false;
+    const status = mainClass.getFeatStatus(feat);
+    if(status !== 0 && status !== 1) return false;
+    return this.hasFeatPrerequisites(feat);
+  }
+
+  /** Both prerequisite slots, treating an absent one (-1) as satisfied. */
+  hasFeatPrerequisites(feat: any): boolean {
+    const satisfied = (prereq: unknown) => {
+      const id = Number(prereq);
+      return !Number.isInteger(id) || id < 0 || this.creature.getHasFeat(id);
+    };
+    return satisfied(feat?.prereqFeat1) && satisfied(feat?.prereqFeat2);
+  }
+
+  /** Called by `GUIFeatItem` when a feat row is clicked. */
+  highlightFeat(feat: any){
+    this.highlightedFeat = feat ?? null;
+    this.describeFeat(feat);
+  }
+
+  /**
+   * Adds the highlighted feat, or takes it back if it was picked this visit.
+   *
+   * Retail has no separate Remove control, so Select toggles: picks made here
+   * can be undone before Accept, while feats granted by class cannot be
+   * removed because they were never picks.
+   */
+  toggleHighlightedFeat(): boolean {
+    const feat = this.highlightedFeat;
+    if(!feat || !this.creature) return false;
+
+    if(this.selectedFeatIds.has(feat.id)){
+      this.selectedFeatIds.delete(feat.id);
+      this.creature.removeFeat(feat.id);
+      this.afterSelectionChanged();
+      return true;
+    }
+
+    if(this.getRemainingFeatSelections() <= 0) return false;
+    if(!this.canSelectFeat(feat)) return false;
+
+    this.creature.addFeat(feat.id);
+    this.selectedFeatIds.add(feat.id);
+    this.afterSelectionChanged();
+    return true;
+  }
+
+  /**
+   * Spends every remaining pick on the first eligible feats in list order.
+   *
+   * Mirrors the shape of `allocateRecommendedCharGenSkills` — take what the
+   * rules allow until the allowance is gone — rather than inventing a second
+   * notion of what a sensible choice is.
+   */
+  selectRecommendedFeats(): number {
+    if(!this.creature) return 0;
+    let taken = 0;
+    for(const feat of (GameState.SWRuleSet.feats || [])){
+      if(this.getRemainingFeatSelections() <= 0) break;
+      if(!feat || feat.constant == '****') continue;
+      if(!this.canSelectFeat(feat)) continue;
+      this.creature.addFeat(feat.id);
+      this.selectedFeatIds.add(feat.id);
+      taken++;
+    }
+    if(taken) this.afterSelectionChanged();
+    return taken;
+  }
+
+  /**
+   * Rebuilds what a pick changes: the remaining count, and the list itself so
+   * a newly-taken feat stops rendering as unavailable.
+   */
+  protected afterSelectionChanged(){
+    this.updateRemainingSelections();
+    this.buildFeatList();
+    this.LB_FEATS?.markListRttDirty?.();
+    if(this.highlightedFeat) this.describeFeat(this.highlightedFeat);
+  }
+
+  /**
+   * Wired from `show()` rather than the initializer: TSL's subclass drives its
+   * own `menuControlInitializer`, and wiring hover from the base initializer is
+   * exactly what left the skills screen with zero listeners.
+   */
+  protected wireFeatSelection(){
+    this.BTN_SELECT?.addEventListener('click', (e: any) => {
+      e?.stopPropagation?.();
+      this.toggleHighlightedFeat();
+    });
+    this.BTN_RECOMMENDED?.addEventListener('click', (e: any) => {
+      e?.stopPropagation?.();
+      this.selectRecommendedFeats();
+    });
+  }
+
+  clearFeatDescription(){
+    this.LBL_NAME?.setText('');
+    // An empty node clears the list; GUIListBox has no separate clear method.
+    this.LB_DESC?.setItem('');
+  }
+
+  /**
+   * Fills the name and description panels for the feat under the pointer.
+   *
+   * Called by `GUIFeatItem` on hover. `TalentFeat.name` and `.description` are
+   * TLK string references, so the text is the game's own rather than anything
+   * invented here.
+   */
+  describeFeat(feat: any){
+    if(!feat) return;
+    const nameText = GameState.TLKManager.GetStringById(Number(feat.name))?.Value;
+    const descriptionText = GameState.TLKManager.GetStringById(Number(feat.description))?.Value;
+    this.LBL_NAME?.setText(nameText || '');
+    this.LB_DESC?.setItem(descriptionText || '');
   }
 
   setCreature(creature: ModuleCreature){

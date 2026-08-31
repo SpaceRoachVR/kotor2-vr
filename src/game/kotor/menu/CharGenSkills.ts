@@ -209,6 +209,51 @@ export class CharGenSkills extends GameMenu {
    * Accept and Recommended were ever wired -- so skill points could not be
    * spent by hand at all. Reported from the headset.
    */
+  /**
+   * Fills the Description panel for the skill under the pointer.
+   *
+   * `skills.2da` carries a `description` column of TLK references — resolving
+   * row 0 gives "Related Attribute: Intelligence ... Computer Use allows a
+   * character to slice computer programs" — so unlike the attributes this needs
+   * no hard-coded string ids.
+   *
+   * Setting `activeSkillRow` as well means the authored Cost labels, which
+   * `updateButtonStates` already drives from that row, follow the pointer too.
+   */
+  describeSkill(row: number){
+    // Hover fires every frame while the pointer rests on a control. Rebuilding
+    // the list box that often keeps it in the mutate/commit window where its
+    // render-to-texture publish is suppressed, so the panel never appears —
+    // it is only ever mid-rebuild. Rebuild on an actual change of row.
+    if(this.activeSkillRow === row && this.describedSkillRow === row) return;
+    this.describedSkillRow = row;
+    this.activeSkillRow = row;
+    const skillRow: any = this.getSkillRows()[row];
+    const descriptionRef = skillRow ? Number(skillRow.description) : Number.NaN;
+    const description = Number.isFinite(descriptionRef)
+      ? GameState.TLKManager.GetStringById(descriptionRef)?.Value ?? ''
+      : '';
+    // Cost labels first, description second. `updateButtonStates` refreshes the
+    // authored cost/class labels from `activeSkillRow`, and running it after
+    // the description had already been placed left the panel blank.
+    this.updateButtonStates();
+    this.LB_DESC?.setItem(description);
+  }
+
+  /**
+   * Both adjust buttons of a row report that row on hover, so the description
+   * and cost appear wherever the pointer rests within it.
+   */
+  private describedSkillRow: number = -1;
+
+  protected wireSkillDescriptions(){
+    for(const skill of CharGenSkills.SKILL_ROWS){
+      for(const control of [(this as any)[skill.plus], (this as any)[skill.minus]]){
+        control?.addEventListener?.('hover', () => this.describeSkill(skill.row));
+      }
+    }
+  }
+
   protected wireSkillAdjustControls(){
     const manager: any = GameState.CharGenManager;
     for(const skill of CharGenSkills.SKILL_ROWS){
@@ -264,7 +309,19 @@ export class CharGenSkills extends GameMenu {
   show() {
     super.show();
     this.updateButtonStates();
+    // Wired here, not in `menuControlInitializer`: TSL's subclass calls
+    // `super.menuControlInitializer(true)` and so never runs this class's
+    // initializer body. Wiring there left the buttons with zero 'hover'
+    // listeners in TSL while K1 was fine — measured as `hoverListeners: 0`
+    // against 1 on the abilities screen, which wires from `show()`.
+    if(!this.skillDescriptionsWired){
+      this.skillDescriptionsWired = true;
+      this.wireSkillDescriptions();
+    }
+    this.describedSkillRow = -1;
   }
+
+  private skillDescriptionsWired = false;
 
   updateButtonStates() {
     this.COMPUTER_USE_POINTS_BTN.setText(GameState.CharGenManager.computerUse);
