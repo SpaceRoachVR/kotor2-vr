@@ -142,13 +142,25 @@ async function clickButtonByText(harness, text) {
  * whole sweep unreadable. This mirrors what `CheatConsoleManager.warp` assumes
  * during ordinary play.
  */
-async function bootEngine(harness, onProgress) {
-  await harness.waitFor(
-    `Array.from(document.querySelectorAll('button')).some(b => (b.textContent||'').trim() === 'OK')`,
-    PHASE_TIMEOUTS.eula
-  );
-  await clickButtonByText(harness, 'OK');
-  onProgress('EULA accepted');
+async function bootEngine(harness, onProgress, expectEula = true) {
+  // The EULA appears on a cold boot but NOT after the mid-sweep heap reload —
+  // acceptance persists, so the button never returns. Waiting for it
+  // unconditionally aborted a whole 82-module run at module 20, immediately
+  // after a "reloading page to shed accumulated state (heap 3100 MB)". Treat
+  // its absence as already-accepted and press on; a genuinely dead page still
+  // fails, just at the engine-boot wait below, which is the honest place.
+  try {
+    await harness.waitFor(
+      `Array.from(document.querySelectorAll('button')).some(b => (b.textContent||'').trim() === 'OK')`,
+      // A reload is not expected to show it, so do not spend the cold-boot
+      // budget proving that on every reload.
+      expectEula ? PHASE_TIMEOUTS.eula : 5_000
+    );
+    await clickButtonByText(harness, 'OK');
+    onProgress('EULA accepted');
+  } catch (error) {
+    onProgress('EULA already accepted');
+  }
 
   await harness.waitFor(
     `document.querySelector('#vr-spike-button') !== null`,
@@ -308,7 +320,7 @@ async function sweep(args, onProgress) {
           `(${heapExceeded ? `heap ${Math.round(heapMb)} MB` : `${sinceReload} modules`})`);
         await harness.cdp.send('Page.reload', { ignoreCache: false });
         await harness.waitFor('window.__xrHarness && window.__xrHarness.ready === true', 30_000);
-        await bootEngine(harness, () => {});
+        await bootEngine(harness, () => {}, false);
         sinceReload = 0;
       }
 
