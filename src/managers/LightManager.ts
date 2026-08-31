@@ -31,14 +31,23 @@ export class LightManager {
   modelLightCounter: any = {};
   shadowLightCounter: any = {};
   lights: OdysseyLight3D[] = [];
-  tmpLights: OdysseyLight3D[];
-  lightsShown: Set<string>;
-  new_lights: OdysseyLight3D[];
-  new_lights_uuids: string[];
-  new_lights_spawned: number;
+  /** Visible lights for the current frame, reused rather than reallocated. */
+  private readonly fadingLights: OdysseyLight3D[] = [];
+  lightsShown: Set<string> = new Set<string>();
+  new_lights: OdysseyLight3D[] = [];
+  new_lights_uuids: Set<string> = new Set<string>();
+  new_lights_spawned: number = 0;
 
   animatedLights: IOdysseyAnimatedLightUniformStruct[] = [];
+  /**
+   * Which light owns each `animatedLights` slot. The slot comparison is
+   * positional, so without this a reordered pool could match a light against
+   * the previous occupant of its index.
+   */
+  private readonly animatedLightUUIDs: string[] = [];
   animatedLightsCacheID: number = 0;
+  /** Reused so the per-frame comparison does not allocate a Color per light. */
+  private static readonly scratchColor = new THREE.Color();
 
   context: any;
 
@@ -57,6 +66,12 @@ export class LightManager {
     this.modelLightCounter = {};
     this.shadowLightCounter = {};
     this.lights = [];
+    // The animated-light array now persists across frames, so an area change
+    // has to drop it explicitly; the cache ID moves so any material still
+    // holding the old one re-uploads rather than trusting a stale match.
+    this.animatedLights.length = 0;
+    this.animatedLightUUIDs.length = 0;
+    this.animatedLightsCacheID++;
     this.spawned = 0;
     this.spawned_shadow = 0;
     this.light_pool = [];
@@ -190,25 +205,22 @@ export class LightManager {
   }
 
   updateDynamicLights(delta = 0){
-    this.animatedLights = [];
-    this.tmpLights = [];//this.lights.slice();
-    //let ambientLights = this.lights.filter(light => light.odysseyModel.visible && (light.isAmbient || (light.odysseyModelNode.radius*light.odysseyModelNode.multiplier) > 50));
-    //let shadowLights = this.lights.filter(light => light.odysseyModel.visible && light.castShadow);
-    let fadingLights = this.lights.filter(light => light.odysseyModel.visible);
-    
-    //ambientLights.sort(this.sortLights).reverse();
-    //shadowLights.sort(this.sortLights);
+    // Every collection below is rebuilt from scratch each frame and never
+    // outlives it, so they are reused in place rather than reallocated. This
+    // runs once per frame per area, and areas carry a lot of lights.
+    const fadingLights = this.fadingLights;
+    fadingLights.length = 0;
+    for(let i = 0, il = this.lights.length; i < il; i++){
+      const light = this.lights[i];
+      if(light.odysseyModel.visible) fadingLights.push(light);
+    }
     fadingLights.sort(this.sortLights);
 
-    //this.tmpLights = this.tmpLights.concat(ambientLights, fadingLights);
-    //this.tmpLights = this.tmpLights.concat(fadingLights);
-    
     //Attempt to reclaim lights that are no longer used
-    this.lightsShown = new Set<string>();
+    this.lightsShown.clear();
     this.reclaimLights(delta);
-    //console.log(this.lightsShown);
-    this.new_lights = [];
-    this.new_lights_uuids = [];
+    this.new_lights.length = 0;
+    this.new_lights_uuids.clear();
     this.new_lights_spawned = 0;
 
     //Get the lights that are trying to spawn this frame
@@ -221,14 +233,14 @@ export class LightManager {
 
       if(this.new_lights_spawned >= LightManager.MAXLIGHTS)
         break;
-      
 
-      if(this.new_lights_uuids.indexOf(light.uuid) == -1){
+
+      if(!this.new_lights_uuids.has(light.uuid)){
         this.new_lights.push(light);
-        this.new_lights_uuids.push(light.uuid);
+        this.new_lights_uuids.add(light.uuid);
         this.new_lights_spawned++;
       }
-      
+
     }
 
     //Last ditch effort to make sure lights don't get duplicated
@@ -335,38 +347,87 @@ export class LightManager {
       }
       
     }
-		// artist-friendly light intensity scaling factor
-		const scaleFactor = ( this.context?.renderer?.physicallyCorrectLights !== true ) ? Math.PI : 1;
+    this.syncAnimatedLights();
+  }
+
+  /**
+   * Rebuilds the animated-light uniform structs, bumping
+   * {@link animatedLightsCacheID} only when one actually changed.
+   *
+   * `ModuleArea.updateRoomAnimatedLights` skips any material whose recorded
+   * cache ID still matches, so a stable ID means no uniform upload and — more
+   * expensively — no `material.needsUpdate`, which makes three re-resolve that
+   * material's shader program.
+   *
+   * That cache was written but inert. `updateDynamicLights` began by
+   * reallocating `animatedLights`, so every entry read back `undefined`, every
+   * light counted as changed, and the ID incremented on every frame: every
+   * non-lightmapped material in every visible room re-uploaded and
+   * re-resolved, always. Two further faults were hidden behind that and had to
+   * be fixed with it, or persisting the array would have exposed them:
+   *
+   * - The unchanged branch did not advance the write index, so a changed light
+   *   following an unchanged one overwrote its slot and the trailing
+   *   truncation dropped lights.
+   * - `position` was stored by reference to the light node's own vector, so
+   *   the cached entry and the candidate were the same object and `.equals()`
+   *   compared it with itself. A light that *moved* compared equal forever.
+   *
+   * Identity is tracked alongside, because the comparison is positional: if
+   * the pool reorders, slot `n` can hold a different light whose four values
+   * happen to match the previous occupant's.
+   */
+  syncAnimatedLights(){
+    // artist-friendly light intensity scaling factor
+    const scaleFactor = ( this.context?.renderer?.physicallyCorrectLights !== true ) ? Math.PI : 1;
 
     let animatedLightsNeedUpdate = false;
     let animatedLightIndex = 0;
     for( let i = 0, il = this.light_pool.length; i < il; i++ ){
-      let lightNode = this.light_pool[i];
-      let light = this.light_pool[i].userData.odysseyLight;
+      const lightNode = this.light_pool[i];
+      const light = lightNode.userData.odysseyLight;
       if(!light || !light.isAnimated){ continue; }
 
       lightNode.decay = LightManager.DECAY;
       lightNode.distance = Math.abs(light.getRadius());
-      //lightNode.intensity = 1;//light.getIntensity();// * ((lightNode.color.r + lightNode.color.g + lightNode.color.b) / 3);
-      //console.log(lightNode.distance);
-      
-      const animatedLight: IOdysseyAnimatedLightUniformStruct = {
-        position: lightNode.position,
-        color: lightNode.color.clone().copy(lightNode.color).multiplyScalar( lightNode.intensity * scaleFactor ),
-        distance: lightNode.distance,
-        decay: lightNode.decay
-      };
 
-      const currentAnimatedLight = this.animatedLights[animatedLightIndex];
-      if(currentAnimatedLight && currentAnimatedLight.position.equals(animatedLight.position) && currentAnimatedLight.color.equals(animatedLight.color) && currentAnimatedLight.distance === animatedLight.distance && currentAnimatedLight.decay === animatedLight.decay){
-        continue;
+      const color = LightManager.scratchColor
+        .copy(lightNode.color)
+        .multiplyScalar( lightNode.intensity * scaleFactor );
+
+      const current = this.animatedLights[animatedLightIndex];
+      const unchanged = !!current
+        && this.animatedLightUUIDs[animatedLightIndex] === light.uuid
+        && current.position.equals(lightNode.position)
+        && current.color.equals(color)
+        && current.distance === lightNode.distance
+        && current.decay === lightNode.decay;
+
+      if(!unchanged){
+        if(current){
+          // Mutated in place: the array identity is what materials hold as
+          // their uniform value, and every material that skipped an upload did
+          // so only because nothing in here had changed.
+          current.position.copy(lightNode.position);
+          current.color.copy(color);
+          current.distance = lightNode.distance;
+          current.decay = lightNode.decay;
+        }else{
+          this.animatedLights[animatedLightIndex] = {
+            position: lightNode.position.clone(),
+            color: color.clone(),
+            distance: lightNode.distance,
+            decay: lightNode.decay,
+          };
+        }
+        this.animatedLightUUIDs[animatedLightIndex] = light.uuid;
+        animatedLightsNeedUpdate = true;
       }
-      this.animatedLights[animatedLightIndex] = animatedLight;
-      animatedLightsNeedUpdate = true;
       animatedLightIndex++;
     }
     const diffLightCount = !!(this.animatedLights.length - animatedLightIndex);
     this.animatedLights.length = animatedLightIndex;
+    this.animatedLightUUIDs.length = animatedLightIndex;
     if(animatedLightsNeedUpdate || diffLightCount){
       this.animatedLightsCacheID++;
     }
@@ -510,12 +571,11 @@ export class LightManager {
   }
 
   updateShadowLights(delta = 0){
-    this.tmpLights = [];//this.lights.slice();
     let shadowLights = this.lights.filter(light => light.odysseyModel.visible && light.castShadow);
     shadowLights.sort(this.sortLights);
 
-    this.new_lights = [];
-    this.new_lights_uuids = [];
+    this.new_lights.length = 0;
+    this.new_lights_uuids.clear();
     this.new_lights_spawned = 0;
 
     //Get the lights that are trying to spawn this frame
@@ -529,16 +589,16 @@ export class LightManager {
       if(this.new_lights_spawned >= LightManager.MAXSHADOWLIGHTS)
         break;
 
-      if(this.new_lights_uuids.indexOf(odysseyLight.uuid) == -1){
+      if(!this.new_lights_uuids.has(odysseyLight.uuid)){
         this.new_lights.push(odysseyLight);
-        this.new_lights_uuids.push(odysseyLight.uuid);
+        this.new_lights_uuids.add(odysseyLight.uuid);
         this.new_lights_spawned++;
       }
       
     }
     
     //Attempt to reclaim lights that are no longer used
-    this.lightsShown = new Set<string>();
+    this.lightsShown.clear();
     this.reclaimShadowLights(delta);
     
     //Try to update lights with the pool of reclaimed lights
@@ -630,7 +690,7 @@ export class LightManager {
 
       if(odysseyLight && odysseyLight.isFading){
         //FADINGLIGHT
-        if(this.new_lights_uuids.indexOf(odysseyLight.uuid) >= 0 && odysseyLight.isOnScreen(this.context.viewportFrustum)){
+        if(this.new_lights_uuids.has(odysseyLight.uuid) && odysseyLight.isOnScreen(this.context.viewportFrustum)){
           //The light is still active so update as needed
           if(lightNode.intensity < odysseyLight.maxIntensity){
             lightNode.intensity += 2*delta;

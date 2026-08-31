@@ -18,21 +18,46 @@ import * as THREE from 'three';
  * 001EBO (0/11 and 0/3 visible) while placeables, which do not run the same
  * per-frame visibility path, kept rendering — and made hidden objects reappear
  * only when the world origin swung through view.
+ *
+ * The first fix added the post-render rebuild but LEFT the simulation-phase
+ * rebuild in all four `Update*` modes, on the reasoning that flatscreen needs
+ * it and the new call is merely additive. That reasoning was wrong in one
+ * specific way: the simulation-phase call runs four lines before
+ * `lightManager.update`, whose `canShowLight` culls every dynamic light
+ * against `viewportFrustum`. So while presenting, lights went on being culled
+ * against exactly the origin-anchored frustum the fix was written to
+ * eliminate — the same defect, a second instance, surviving its own fix.
+ *
+ * The rebuild is now the only one in the frame. Flatscreen pays one frame of
+ * latency on light and reticle culling for it, which is invisible; a frustum
+ * in the wrong place is not. Room and selectable-object culling are unchanged
+ * either way — both run inside `module.tick()`, ahead of where the
+ * simulation-phase rebuild used to sit, so they always read the previous
+ * frame's frustum.
  */
 describe('the culling frustum is rebuilt after the render', () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'src/GameState.ts'), 'utf8');
+  const callSites = source.match(/GameState\.updateViewportFrustum\(\);/g) ?? [];
 
   test('updateViewportFrustum is called after GameState.Render', () => {
     const renderAt = source.indexOf('GameState.Render(delta, timestamp);');
     expect(renderAt).toBeGreaterThan(-1);
-    const after = source.slice(renderAt, renderAt + 900);
-    expect(after).toContain('GameState.updateViewportFrustum();');
+    expect(source.indexOf('GameState.updateViewportFrustum();')).toBeGreaterThan(renderAt);
   });
 
-  test('the simulation-phase update is still present for the flatscreen path', () => {
-    // Flatscreen has no XR camera and its follower camera is world-posed during
-    // simulation, so that call must stay; the post-render call is additive.
-    expect(source.match(/GameState\.updateViewportFrustum\(\);/g)!.length).toBeGreaterThan(1);
+  test('nothing rebuilds the frustum during the simulation phase', () => {
+    // Any second call site is a simulation-phase rebuild, and a simulation-phase
+    // rebuild is origin-anchored while presenting. See the note above.
+    expect(callSites.length).toBe(1);
+  });
+
+  test('the four playable modes drive the shared world-systems helper', () => {
+    // The rebuild was duplicated across four modes, which is how one instance
+    // outlived its own fix. One helper, one call site each.
+    for (const mode of ['UpdateIngame', 'UpdateDialog', 'UpdateMinigame', 'UpdateFreeLook']) {
+      const body = source.slice(source.indexOf(`static ${mode}(`));
+      expect(body.slice(0, body.indexOf('\n  static '))).toContain('GameState.updateWorldSystems(');
+    }
   });
 });
 

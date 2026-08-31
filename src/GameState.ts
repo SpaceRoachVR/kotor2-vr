@@ -123,6 +123,12 @@ import type { IPCMessage } from "@/server/ipc/IPCMessage";
 import { IPCMessageType } from "@/enums/server/ipc/IPCMessageType";
 import { IPCMessageTypeDebug } from "@/enums/server/ipc/IPCMessageTypeDebug";
 import { PerformanceMonitor } from "@/utility/PerformanceMonitor";
+import {
+  parseRendererContextMode,
+  parseRendererDepthMode,
+  RendererContextMode,
+  RendererDepthMode,
+} from "@/utility/RendererOptions";
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 import { shouldAutoCancelNonCreatureCombat } from "@/engine/interaction/CombatCancellationRules";
 
@@ -1306,8 +1312,12 @@ export class GameState implements EngineContext {
   static deltaTimeFixed: number = 0;
 
   static canvas: HTMLCanvasElement;
-  static context: WebGLRenderingContext;
+  static context: WebGLRenderingContext | WebGL2RenderingContext;
+  /** Which WebGL version the context was actually created at. */
+  static rendererContextMode: RendererContextMode;
   static rendererUpscaleFactor: number;
+  /** Which depth path the renderer was built with; startup-only. */
+  static rendererDepthMode: RendererDepthMode;
   static renderer: THREE.WebGLRenderer;
   static depthTarget: THREE.WebGLRenderTarget;
   static clock: THREE.Clock;
@@ -1393,6 +1403,7 @@ export class GameState implements EngineContext {
   static OnReadyCalled: boolean;
   
   static loadingTextures: boolean;
+  private static textureDrainErrorReported = false;
 
   static preloadTextures: string[] = ['fx_tex_01', 'fx_tex_02', 'fx_tex_03', 'fx_tex_04', 'fx_tex_05', 'fx_tex_06', 'fx_tex_07', 'fx_tex_08',
     'fx_tex_09', 'fx_tex_10', 'fx_tex_11', 'fx_tex_12', 'fx_tex_13', 'fx_tex_14', 'fx_tex_15', 'fx_tex_16',
@@ -1622,14 +1633,35 @@ export class GameState implements EngineContext {
 
     GameState.canvas.style.setProperty('width', '0');
     GameState.canvas.style.setProperty('height', '0');
-    GameState.context = GameState.canvas.getContext( 'webgl' );
+    // WebGLRenderer uses whatever context it is handed, so creating this as
+    // `webgl` pinned the whole engine to WebGL 1 no matter what the browser
+    // supported. WebGL 2 accepts the engine's GLSL ES 1.00 shaders unchanged.
+    const requestedContextMode = parseRendererContextMode(
+      typeof window !== 'undefined' ? window.location.search : ''
+    );
+    let context: WebGLRenderingContext | WebGL2RenderingContext | null = null;
+    if(requestedContextMode === 'webgl2'){
+      context = GameState.canvas.getContext('webgl2');
+      if(!context){
+        console.warn('[GameState] webgl2 unavailable, falling back to webgl1');
+      }
+    }
+    GameState.rendererContextMode = context ? 'webgl2' : 'webgl1';
+    GameState.context = context ?? GameState.canvas.getContext('webgl');
+    console.log(`[GameState] renderer context: ${GameState.rendererContextMode}`);
 
     GameState.rendererUpscaleFactor = 1;
+    // Startup-only: this compiles a #define into every shader, so it cannot be
+    // toggled later. `?depth=linear` runs the other half of the A/B.
+    GameState.rendererDepthMode = parseRendererDepthMode(
+      typeof window !== 'undefined' ? window.location.search : ''
+    );
+    console.log(`[GameState] depth buffer mode: ${GameState.rendererDepthMode}`);
     GameState.renderer = new THREE.WebGLRenderer({
       antialias: false,
       canvas: GameState.canvas,
       context: GameState.context,
-      logarithmicDepthBuffer: true,
+      logarithmicDepthBuffer: GameState.rendererDepthMode === 'logarithmic',
       alpha: true,
       preserveDrawingBuffer: false
     }) as THREE.WebGLRenderer;
@@ -2312,11 +2344,18 @@ export class GameState implements EngineContext {
         const area = GameState.module?.area;
         const player = GameState.getCurrentPlayer();
         const rooms = area?.rooms ?? [];
+        // Counted rather than filtered: this runs every frame purely so the
+        // room trace can build a string it usually discards, and `filter`
+        // allocated an array of visible rooms each time to then read `.length`.
+        let roomsVisible = 0;
+        for(let i = 0, il = rooms.length; i < il; i++){
+          if(rooms[i].model?.visible) roomsVisible++;
+        }
         return {
           module: GameState.module?.filename ?? area?.name ?? null,
           position: player?.position ?? null,
           room: player?.room?.roomName ?? null,
-          roomsVisible: rooms.filter((room) => !!room.model?.visible).length,
+          roomsVisible,
           roomsTotal: rooms.length,
         };
       },
@@ -2626,6 +2665,43 @@ export class GameState implements EngineContext {
     }
     GameState.frustumMat4.multiplyMatrices( cullCamera.projectionMatrix, cullCamera.matrixWorldInverse );
     GameState.viewportFrustum.setFromProjectionMatrix(GameState.frustumMat4);
+  }
+
+  static updateCurrentCameraPosition(){
+    GameState.currentCameraPosition.set(0, 0, 0);
+    GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
+  }
+
+  /**
+   * The per-frame world systems every playable engine mode drives identically.
+   *
+   * `lightTarget` is what light distance is measured from — the player while
+   * ingame, the camera during dialogue, where the authored shot rather than the
+   * party decides what is near.
+   *
+   * Deliberately does not rebuild the culling frustum. `Update` rebuilds it
+   * once per frame after `Render`, which is the only point where the XR camera
+   * carries a world pose; rebuilding it here instead gave every caller below a
+   * frustum sitting at the world origin while presenting, and lights were
+   * culled against it. See the note in `Update`.
+   */
+  static updateWorldSystems(delta: number, lightTarget: THREE.Camera|ModuleObject){
+    GameState.lightManager.update(delta, lightTarget);
+    GameState.windManager.update(delta);
+    GameState.module.area.updateRoomAnimatedLights(delta);
+    GameState.module.area.updateRoomWindUniforms();
+    GameState.CameraShakeManager.update(delta, GameState.currentCamera);
+  }
+
+  /** Shows the PAUSE overlay only while paused with the in-game overlay up. */
+  static syncPauseOverlay(){
+    if(GameState.State == EngineState.PAUSED && GameState.MenuManager.InGameOverlay.isVisible()){
+      if(!GameState.MenuManager.InGamePause.isVisible())
+        GameState.MenuManager.InGamePause.show();
+    }else{
+      if(GameState.MenuManager.InGamePause.isVisible())
+        GameState.MenuManager.InGamePause.hide();
+    }
   }
 
   public static getCurrentPlayer(): ModuleCreature {
@@ -2959,10 +3035,21 @@ export class GameState implements EngineContext {
 
     if(!GameState.loadingTextures && TextureLoader.queue.length){
       GameState.loadingTextures = true;
-      TextureLoader.LoadQueue().then( () => {
-        GameState.loadingTextures = false;
-      });
-    } 
+      // The latch must clear on failure too. `.then` alone leaves it stuck on
+      // true after a single rejection, and nothing ever resolves another
+      // texture for the rest of the session — which presents as a permanently
+      // untextured world rather than as an error.
+      TextureLoader.LoadQueue()
+        .catch((error) => {
+          if(!GameState.textureDrainErrorReported){
+            GameState.textureDrainErrorReported = true;
+            console.error('[GameState] texture drain rejected; further drains continue', error);
+          }
+        })
+        .then( () => {
+          GameState.loadingTextures = false;
+        });
+    }
 
     if(GameState.MenuManager.InGamePause)
       GameState.MenuManager.InGamePause.hide();
@@ -3006,6 +3093,14 @@ export class GameState implements EngineContext {
     // in-headset at (-0.62, 0.69, -0.31) while the player stood at
     // (44.37, 44.64, 2.50). Culling against that hid every door and creature
     // and let them reappear only when the origin swung through view.
+    //
+    // This is the ONLY rebuild in the frame, deliberately. The four Update*
+    // modes each used to rebuild it again mid-simulation, which reintroduced
+    // exactly that origin-anchored frustum — and `lightManager.update` ran
+    // four lines later and culled every dynamic light against it. Consumers
+    // read the frustum built here at the end of the previous frame; a frame of
+    // latency on culling bounds is invisible, a frustum in the wrong place is
+    // not. Do not add a rebuild back into the simulation phase.
     GameState.updateViewportFrustum();
     const renderCpuEnd = performance.now();
     VRSpike.perf.recordCpuFrame(
@@ -3084,23 +3179,11 @@ export class GameState implements EngineContext {
     }
 
     GameState.FadeOverlayManager.Update(delta);
-    GameState.updateViewportFrustum();
-    GameState.currentCameraPosition.set(0, 0, 0);
-    GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
-    GameState.lightManager.update(delta, GameState.getCurrentPlayer());
-    GameState.windManager.update(delta);
-    GameState.module.area.updateRoomAnimatedLights(delta);
-    GameState.module.area.updateRoomWindUniforms();
-    GameState.CameraShakeManager.update(delta, GameState.currentCamera);
-    
+    GameState.updateCurrentCameraPosition();
+    GameState.updateWorldSystems(delta, GameState.getCurrentPlayer());
+
     //Handle the visibility of the PAUSE overlay
-    if(GameState.State == EngineState.PAUSED && GameState.MenuManager.InGameOverlay.isVisible()){
-      if(!GameState.MenuManager.InGamePause.isVisible())
-        GameState.MenuManager.InGamePause.show();
-    }else{
-      if(GameState.MenuManager.InGamePause.isVisible())
-        GameState.MenuManager.InGamePause.hide();
-    }
+    GameState.syncPauseOverlay();
     if(GameState.MenuManager.InGameAreaTransition.transitionObject){
       GameState.MenuManager.InGameAreaTransition.show();
     }
@@ -3120,46 +3203,23 @@ export class GameState implements EngineContext {
       GameState.MenuManager.InGameBark.update(delta);
     }
     GameState.FadeOverlayManager.Update(delta);
-    GameState.updateViewportFrustum();
-    GameState.currentCameraPosition.set(0, 0, 0);
-    GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
-    GameState.lightManager.update(delta, GameState.currentCamera);
-    GameState.windManager.update(delta);
-    GameState.module.area.updateRoomAnimatedLights(delta);
-    GameState.module.area.updateRoomWindUniforms();
-    GameState.CameraShakeManager.update(delta, GameState.currentCamera);
-    
+    GameState.updateCurrentCameraPosition();
+    //During dialogue the authored shot, not the party, decides what is near.
+    GameState.updateWorldSystems(delta, GameState.currentCamera);
+
     //Handle the visibility of the PAUSE overlay
-    if(GameState.State == EngineState.PAUSED && GameState.MenuManager.InGameOverlay.isVisible()){
-      if(!GameState.MenuManager.InGamePause.isVisible())
-        GameState.MenuManager.InGamePause.show();
-    }else{
-      if(GameState.MenuManager.InGamePause.isVisible())
-        GameState.MenuManager.InGamePause.hide();
-    }
+    GameState.syncPauseOverlay();
   }
 
   static UpdateMinigame(delta: number = 0){
-    GameState.updateViewportFrustum();
-    GameState.currentCameraPosition.set(0, 0, 0);
-    GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
+    GameState.updateCurrentCameraPosition();
 
     GameState.updateTime(delta);
     GameState.FadeOverlayManager.Update(delta);
-    GameState.lightManager.update(delta, GameState.getCurrentPlayer());
-    GameState.windManager.update(delta);
-    GameState.module.area.updateRoomAnimatedLights(delta);
-    GameState.module.area.updateRoomWindUniforms();
-    GameState.CameraShakeManager.update(delta, GameState.currentCamera);
+    GameState.updateWorldSystems(delta, GameState.getCurrentPlayer());
 
     //Handle the visibility of the PAUSE overlay
-    if(GameState.State == EngineState.PAUSED && GameState.MenuManager.InGameOverlay.isVisible()){
-      if(!GameState.MenuManager.InGamePause.isVisible())
-        GameState.MenuManager.InGamePause.show();
-    }else{
-      if(GameState.MenuManager.InGamePause.isVisible())
-        GameState.MenuManager.InGamePause.hide();
-    }
+    GameState.syncPauseOverlay();
   }
 
   static UpdateFreeLook(delta: number = 0){
@@ -3176,17 +3236,11 @@ export class GameState implements EngineContext {
       }
     }
 
-    GameState.updateViewportFrustum();
-    GameState.currentCameraPosition.set(0, 0, 0);
-    GameState.currentCameraPosition.applyMatrix4(FollowerCamera.camera.matrix);
+    GameState.updateCurrentCameraPosition();
 
     GameState.updateTime(delta);
     GameState.FadeOverlayManager.Update(delta);
-    GameState.lightManager.update(delta, GameState.getCurrentPlayer());
-    GameState.windManager.update(delta);
-    GameState.module.area.updateRoomAnimatedLights(delta);
-    GameState.module.area.updateRoomWindUniforms();
-    GameState.CameraShakeManager.update(delta, GameState.currentCamera);
+    GameState.updateWorldSystems(delta, GameState.getCurrentPlayer());
   }
 
   static UpdateLegal(delta: number = 0){
