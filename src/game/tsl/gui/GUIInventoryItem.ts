@@ -99,6 +99,12 @@ export class GUIInventoryItem extends GUIProtoItem {
           this.widget.userData.iconMaterial.needsUpdate = true;
           this.widget.userData.iconMaterial.visible = true;
         }
+          // A late texture must invalidate the list's render target. The list
+          // draws its rows into an RTT that is published once; a load that
+          // completes after that leaves the row showing its pre-load frame
+          // forever. This is the same fault that rendered every chargen feat
+          // icon as a white square.
+          this.list?.markListRttDirty?.();
       });
       
       this.widget.userData.spriteGroup = new THREE.Group();

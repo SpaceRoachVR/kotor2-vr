@@ -11,6 +11,7 @@ import { OdysseyMaterialBuilder } from "@/three/odyssey/OdysseyMaterialBuilder";
 import { GameFileSystem } from "@/utility/GameFileSystem";
 import { GameEngineType } from "@/enums/engine";
 import { ResourceLoader } from "@/loaders/ResourceLoader";
+import { readLaunchOption } from "@/utility/RendererOptions";
 import { ResourceTypes } from "@/resource/ResourceTypes";
 import { TXI } from "@/resource/TXI";
 import {
@@ -20,6 +21,7 @@ import {
   TextureOwnership,
   TextureRequest,
   TextureResolution,
+  TextureRequestOwner,
   TextureResolver,
   TextureSemantic,
   TextureSourceArtifact,
@@ -50,10 +52,14 @@ export interface TextureRoutingDiagnostic {
   readonly resolvedResref?: string;
   readonly semantic: TextureSemantic;
   readonly activeModule?: string;
+  readonly ownerModelName?: string;
+  readonly ownerObjectTag?: string;
+  readonly ownerObjectType?: number;
   readonly status: TextureResolution<OdysseyTexture>['status'];
   readonly searchedSources: readonly ResolvedTextureSource[];
   readonly selectedSource: TextureResolution<OdysseyTexture>['source'];
   readonly txiSource?: TextureResolution<OdysseyTexture>['txiSource'];
+  readonly sourceLayerId?: TextureResolution<OdysseyTexture>['sourceLayerId'];
   readonly fallback?: string;
   readonly diagnosticCode?: string;
   readonly cacheGeneration: number;
@@ -73,23 +79,38 @@ export class OdysseyTextureSourceProvider implements TextureSourceProvider<Odyss
     switch (source) {
       case 'override-tga':
         {
-          const tgaBuffer = await ResourceLoader.searchOverride(ResourceTypes.tga, resref);
+          // The selection names the winning layer; a `.tga` that lost to a
+          // `.tpc` in that layer, or to a higher layer, is not this source.
+          const selection = ResourceLoader.selectOverrideTexture(resref);
+          if (!selection || selection.primary.resourceType !== ResourceTypes.tga) {
+            return undefined;
+          }
+          const tgaBuffer = await ResourceLoader.searchOverrideEntry(selection.primary);
           if (!tgaBuffer?.length) {
             return undefined;
           }
           return this.loadTga(
             tgaBuffer,
             resref,
-            await ResourceLoader.searchOverride(ResourceTypes.txi, resref),
+            // Only the same layer's TXI: a lower layer's TXI describes a
+            // texture this one has replaced.
+            await ResourceLoader.searchOverrideEntry(selection.companions.get(ResourceTypes.txi)),
             'override-txi',
+            selection.primary.layerId,
           );
         }
-      case 'override-tpc':
+      case 'override-tpc': {
+        const selection = ResourceLoader.selectOverrideTexture(resref);
+        if (!selection || selection.primary.resourceType !== ResourceTypes.tpc) {
+          return undefined;
+        }
         return this.loadTpc(
-          await ResourceLoader.searchOverride(ResourceTypes.tpc, resref),
+          await ResourceLoader.searchOverrideEntry(selection.primary),
           resref,
           undefined,
+          selection.primary.layerId,
         );
+      }
       case 'active-module': {
         if (!activeModule) {
           return undefined;
@@ -129,6 +150,7 @@ export class OdysseyTextureSourceProvider implements TextureSourceProvider<Odyss
     resref: string,
     txiBuffer: Uint8Array | undefined,
     txiSource: 'override-txi' | 'active-module-txi',
+    sourceLayerId?: string,
   ): TextureSourceArtifact<OdysseyTexture> | undefined {
     if (!buffer?.length) {
       return undefined;
@@ -136,6 +158,7 @@ export class OdysseyTextureSourceProvider implements TextureSourceProvider<Odyss
     return {
       texture: this.tgaLoader.decode(buffer, resref, txiBuffer),
       ...(txiBuffer?.length ? { txiSource } : {}),
+      ...(sourceLayerId ? { sourceLayerId } : {}),
     };
   }
 
@@ -143,6 +166,7 @@ export class OdysseyTextureSourceProvider implements TextureSourceProvider<Odyss
     buffer: Uint8Array | undefined,
     resref: string,
     pack: number | undefined,
+    sourceLayerId?: string,
   ): TextureSourceArtifact<OdysseyTexture> | undefined {
     if (!buffer?.length) {
       return undefined;
@@ -150,6 +174,7 @@ export class OdysseyTextureSourceProvider implements TextureSourceProvider<Odyss
     return {
       texture: this.tpcLoader.decode(buffer, resref, pack),
       txiSource: 'embedded-tpc',
+      ...(sourceLayerId ? { sourceLayerId } : {}),
     };
   }
 }
@@ -209,7 +234,7 @@ export class TextureLoader {
   static CACHE = false; //Should be false but it's causing isses if textures are cached
   static NOCACHE = true;
 
-  static async Load(resRef: string, noCache: boolean = false): Promise<OdysseyTexture> {
+  static async Load(resRef: string, noCache: boolean = false): Promise<OdysseyTexture | undefined> {
     return TextureLoader.unwrap(await TextureLoader.Resolve({
       resref: resRef,
       semantic: 'diffuse',
@@ -217,7 +242,7 @@ export class TextureLoader {
     }, noCache));
   }
 
-  static async LoadGUI(resRef: string, noCache: boolean = false): Promise<OdysseyTexture> {
+  static async LoadGUI(resRef: string, noCache: boolean = false): Promise<OdysseyTexture | undefined> {
     return TextureLoader.unwrap(await TextureLoader.Resolve({
       resref: resRef,
       semantic: 'gui',
@@ -326,6 +351,45 @@ export class TextureLoader {
     return TextureLoader.routingDiagnostics.slice();
   }
 
+  /**
+   * Whether an unresolvable required texture is drawn as the magenta checker.
+   *
+   * Off by default, because some textures are simply not in the install and no
+   * code change can conjure them. The chargen feats screen asked for
+   * `lbl_indent` (68 times) and `lbl_skarr` (40) — K1 resrefs hard-coded in
+   * `GUIFeatItem`, absent from every source in a TSL install — and every feat
+   * row therefore rendered as a magenta/dark checker. Retail simply draws
+   * nothing for a fill it cannot find, and with this off the material is left
+   * unmapped, which is the same result.
+   *
+   * The checker is genuinely useful while hunting a routing bug, so it stays
+   * available: `?texdiag=1` on the launch URL, or
+   * `localStorage.setItem('kotor2vr.texdiag', '1')` for Electron.
+   *
+   * This changes only what is *drawn*. The routing diagnostics still record the
+   * miss, so `vr:check`'s `texture-resolution-baseline` — which counts distinct
+   * failures from the router rather than from pixels — is unaffected.
+   */
+  static DIAGNOSTIC_FALLBACK_ENABLED = readLaunchOption(
+    typeof window !== 'undefined' ? window.location.search : '', 'texdiag',
+  ) === '1';
+
+  /**
+   * Makes a material that has no texture stop drawing.
+   *
+   * Handles both material families the GUI uses: the Odyssey shader materials
+   * carry an `opacity` uniform, while plain three materials use the property.
+   */
+  static hideUnresolvedFill(material: THREE.Material): void {
+    const shader = material as THREE.ShaderMaterial;
+    if (shader.uniforms?.opacity) {
+      shader.uniforms.opacity.value = 0;
+    }
+    (material as any).opacity = 0;
+    material.transparent = true;
+    material.needsUpdate = true;
+  }
+
   static getDiagnosticFallbackTexture(): OdysseyTexture {
     if (!TextureLoader.diagnosticFallbackTexture) {
       const pixels = new Uint8Array([
@@ -386,7 +450,7 @@ export class TextureLoader {
     TextureLoader.clearRoutingCaches();
   }
 
-  static async LoadLocal(resRef: string, noCache: boolean = false): Promise<OdysseyTexture> {
+  static async LoadLocal(resRef: string, noCache: boolean = false): Promise<OdysseyTexture | undefined> {
 
     if (!isTextureResrefUsable(normalizeTextureResref(resRef))) {
       return undefined;
@@ -466,11 +530,13 @@ export class TextureLoader {
     switch(tex.type){
       case TextureType.TEXTURE: {
         const semantic = tex.semantic ?? 'gui';
+        const owner = TextureLoader.getMaterialOwner(tex.material);
         const request: TextureRequest = {
           resref: tex.name,
           semantic,
           allowAlias: semantic === 'gui' || semantic === 'font',
           ...(tex.activeModule ? { activeModule: tex.activeModule } : {}),
+          ...(owner ? { owner } : {}),
         };
         const primaryResolution = await TextureLoader.Resolve(request, TextureLoader.CACHE);
         let appliedTexture = TextureLoader.unwrap(primaryResolution);
@@ -486,7 +552,8 @@ export class TextureLoader {
             ? fallbackResolution.resolvedResref
             : undefined;
         }
-        if (!appliedTexture && !isOptionalTextureSemantic(semantic)) {
+        if (!appliedTexture && !isOptionalTextureSemantic(semantic)
+            && TextureLoader.DIAGNOSTIC_FALLBACK_ENABLED) {
           appliedTexture = TextureLoader.getDiagnosticFallbackTexture();
           fallbackName = appliedTexture.name;
         }
@@ -501,6 +568,11 @@ export class TextureLoader {
             }
           } else {
             TextureLoader.assignMaterialTexture(tex.material, null, 'map');
+            // A material with no map still draws — as opaque white — so simply
+            // clearing the map turned the magenta checkers into white blocks.
+            // A fill whose texture cannot be found is not meant to be drawn at
+            // all; retail renders nothing.
+            TextureLoader.hideUnresolvedFill(tex.material);
           }
         }
         if (fallbackName) {
@@ -522,39 +594,43 @@ export class TextureLoader {
           allowAlias: false,
           ...(tex.activeModule ? { activeModule: tex.activeModule } : {}),
         }, TextureLoader.CACHE));
+        // Bound once: `tex.material` is optional, and re-reading it after
+        // the await above defeats narrowing on every line below.
+        const lightmapMaterial = tex.material;
+        if(!lightmapMaterial) break;
         if(!!lightmap){
-          if(tex.material instanceof THREE.RawShaderMaterial || tex.material instanceof THREE.ShaderMaterial){
-            tex.material.uniforms.lightMap.value = lightmap;
-            (tex.material as any).lightMap = lightmap;
+          if(lightmapMaterial instanceof THREE.RawShaderMaterial || lightmapMaterial instanceof THREE.ShaderMaterial){
+            lightmapMaterial.uniforms.lightMap.value = lightmap;
+            (lightmapMaterial as any).lightMap = lightmap;
             lightmap.updateMatrix();
-            if(tex.material.uniforms.map.value){
-              tex.material.uniforms.map.value.updateMatrix();
+            if(lightmapMaterial.uniforms.map.value){
+              lightmapMaterial.uniforms.map.value.updateMatrix();
             }
-            tex.material.defines.USE_LIGHTMAP = '';
-            tex.material.defines.USE_ENVMAP = '';
-            tex.material.defines.ENVMAP_TYPE_CUBE = '';
-            delete tex.material.defines.IGNORE_LIGHTING;
-            tex.material.defines.AURORA = "";
-            tex.material.uniformsNeedUpdate = true;
+            lightmapMaterial.defines.USE_LIGHTMAP = '';
+            lightmapMaterial.defines.USE_ENVMAP = '';
+            lightmapMaterial.defines.ENVMAP_TYPE_CUBE = '';
+            delete lightmapMaterial.defines.IGNORE_LIGHTING;
+            lightmapMaterial.defines.AURORA = "";
+            lightmapMaterial.uniformsNeedUpdate = true;
           }else{
-            (tex.material as any).lightMap = lightmap;
-            (tex.material as any).defines = (tex.material as any).defines || {};
-            if((tex.material as any).defines.hasOwnProperty('IGNORE_LIGHTING')){
-              delete (tex.material as any).defines.IGNORE_LIGHTING;
+            (lightmapMaterial as any).lightMap = lightmap;
+            (lightmapMaterial as any).defines = (lightmapMaterial as any).defines || {};
+            if((lightmapMaterial as any).defines.hasOwnProperty('IGNORE_LIGHTING')){
+              delete (lightmapMaterial as any).defines.IGNORE_LIGHTING;
             }
           }
-          
-          tex.material.needsUpdate = true;
+
+          lightmapMaterial.needsUpdate = true;
         }else{
-          if(tex.material instanceof THREE.RawShaderMaterial || tex.material instanceof THREE.ShaderMaterial){
-            if (tex.material.uniforms.lightMap) {
-              tex.material.uniforms.lightMap.value = null;
+          if(lightmapMaterial instanceof THREE.RawShaderMaterial || lightmapMaterial instanceof THREE.ShaderMaterial){
+            if (lightmapMaterial.uniforms.lightMap) {
+              lightmapMaterial.uniforms.lightMap.value = null;
             }
-            delete tex.material.defines.USE_LIGHTMAP;
-            delete tex.material.defines.IGNORE_LIGHTING;
-            tex.material.uniformsNeedUpdate = true;
-          } else if (tex.material) {
-            (tex.material as any).lightMap = null;
+            delete lightmapMaterial.defines.USE_LIGHTMAP;
+            delete lightmapMaterial.defines.IGNORE_LIGHTING;
+            lightmapMaterial.uniformsNeedUpdate = true;
+          } else {
+            (lightmapMaterial as any).lightMap = null;
           }
         }
 
@@ -828,10 +904,16 @@ export class TextureLoader {
       ...(normalizeTextureResref(request.activeModule)
         ? { activeModule: normalizeTextureResref(request.activeModule) }
         : {}),
+      ...(request.owner?.modelName ? { ownerModelName: request.owner.modelName } : {}),
+      ...(request.owner?.objectTag ? { ownerObjectTag: request.owner.objectTag } : {}),
+      ...(Number.isSafeInteger(request.owner?.objectType)
+        ? { ownerObjectType: request.owner?.objectType }
+        : {}),
       status: resolution.status,
       searchedSources: Object.freeze([...(resolution.searchedSources ?? [])]),
       selectedSource: resolution.source,
       ...(resolution.txiSource ? { txiSource: resolution.txiSource } : {}),
+      ...(resolution.sourceLayerId ? { sourceLayerId: resolution.sourceLayerId } : {}),
       ...(fallback ? { fallback } : {}),
       ...(resolution.diagnostic?.code ? { diagnosticCode: resolution.diagnostic.code } : {}),
       cacheGeneration: resolution.cacheGeneration,
@@ -857,6 +939,38 @@ export class TextureLoader {
       (material as any)[slot] = texture;
     }
     material.needsUpdate = true;
+  }
+
+  private static getMaterialOwner(material: THREE.Material | undefined): TextureRequestOwner | undefined {
+    const ownerModel = material?.userData?.textureOwnerModel as {
+      name?: unknown;
+      userData?: { moduleObject?: unknown };
+    } | undefined;
+    if (!ownerModel) {
+      return undefined;
+    }
+
+    const modelName = normalizeTextureResref(ownerModel.name);
+    const moduleObject = ownerModel.userData?.moduleObject as {
+      getTag?: () => unknown;
+      objectType?: unknown;
+    } | undefined;
+    let tagValue: unknown;
+    try {
+      tagValue = moduleObject?.getTag?.();
+    } catch {
+      tagValue = undefined;
+    }
+    const objectTag = typeof tagValue === 'string' ? tagValue.trim() : '';
+    const objectType = moduleObject?.objectType;
+    const owner: TextureRequestOwner = {
+      ...(modelName ? { modelName } : {}),
+      ...(objectTag ? { objectTag } : {}),
+      ...(typeof objectType === 'number' && Number.isSafeInteger(objectType)
+        ? { objectType }
+        : {}),
+    };
+    return Object.keys(owner).length ? owner : undefined;
   }
 
   private static applyHeaderMaterialProfile(texture: OdysseyTexture, material: THREE.Material): void {

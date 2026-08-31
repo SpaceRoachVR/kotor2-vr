@@ -101,6 +101,9 @@ export class GUISpellItem extends GUIProtoItem {
           if(locked){
             (buttonIcon.getFill().material as THREE.ShaderMaterial).uniforms.opacity.value = 0.25;
           }
+          // Late texture: invalidate the list RTT or the row keeps its
+          // pre-load frame. Same fault as the chargen feat icons.
+          this.list?.markListRttDirty?.();
         });
 
         buttonIcon.addEventListener('click', (e) => {
@@ -118,13 +121,18 @@ export class GUISpellItem extends GUIProtoItem {
         this.widget.userData.iconSprite.position.z = 5;
         this.widget.userData.iconSprite.renderOrder = 5;
         TextureLoader.enQueue((isUnknown && !hasSpell) ? 'ip_secret' : spell.iconresref, this.widget.userData.iconMaterial, TextureType.TEXTURE, (texture: OdysseyTexture) => {
-          this.widget.userData.iconSprite.scale.x = texture.image.width;
-          this.widget.userData.iconSprite.scale.y = texture.image.height;
+          // Size from the slot, not the texture — a replacement pack ships
+          // the same icon at a higher resolution and this drew it at that size.
+          this.widget.userData.iconSprite.scale.x = buttonIcon.extent.width || 32;
+          this.widget.userData.iconSprite.scale.y = buttonIcon.extent.height || 32;
           if(locked && !isUnknown){
             this.widget.userData.iconMaterial.opacity = 0.25;
           }
           this.widget.userData.iconMaterial.transparent = true;
           this.widget.userData.iconMaterial.needsUpdate = true;
+          // Late texture: invalidate the list RTT or the row keeps its
+          // pre-load frame. Same fault as the chargen feat icons.
+          this.list?.markListRttDirty?.();
         });
 
         _buttonIconWidget.add(this.widget.userData.iconSprite);
@@ -173,6 +181,9 @@ export class GUISpellItem extends GUIProtoItem {
               arrowIcon.border.fill.material.uniforms.opacity.value = 0.25;
               arrowIcon.highlight.fill.material.uniforms.opacity.value = 0.25;
             }
+            // Late texture: invalidate the list RTT or the row keeps its
+            // pre-load frame. Same fault as the chargen feat icons.
+            this.list?.markListRttDirty?.();
           });
         }
 

@@ -28,6 +28,7 @@ import { KeyMapAction } from "@/enums/controls/KeyMapAction";
 import { GFFField } from "@/resource/GFFField";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
 import { hitsPaddedBox, getPointerHitPadding } from "@/gui/PointerHitPadding";
+import { shouldDescendIntoChildren } from "@/gui/ActiveControlDescent";
 
 const itemSize = 2
 const box = { min: [0, 0], max: [0, 0] }
@@ -1693,12 +1694,29 @@ export class GUIControl {
       // controls they caption.
       const padding = control.isClickable && control.isClickable()
         ? getPointerHitPadding() : 0;
-      if(control.box && hitsPaddedBox(control.box, Mouse.positionUI, padding) && (control.allowClick || control.editable)){
+      const hit = !!control.box && hitsPaddedBox(control.box, Mouse.positionUI, padding);
+      if(hit && (control.allowClick || control.editable)){
         controls.push(control);
       }else{
         this.menu.setWidgetHoverActive(control, false);
       }
-      if(control.box && hitsPaddedBox(control.box, Mouse.positionUI, padding)){
+      // Children are parented by the GUI file's `Obj_Parent`, but their widgets
+      // are added to `tGuiPanel` and positioned in panel space — so a child is
+      // NOT laid out inside its logical parent and can sit wholly outside its
+      // parent's box. Gating this recursion on the parent being hit therefore
+      // reduced a child's live area to its intersection with the parent's.
+      //
+      // On the chargen attribute rows that was severe and exactly matched the
+      // report from manual testing: `STR_MINUS_BTN` and `STR_PLUS_BTN` are
+      // children of `STR_POINTS_BTN`, so of each button's 32 units only the 8
+      // overlapping the readout responded — the minus only on its right edge,
+      // the plus only on its left.
+      //
+      // A list box is the one control that really does clip its children, so it
+      // keeps the old behaviour.
+      if(shouldDescendIntoChildren(
+        hit, BitWise.InstanceOfObject(control, GUIControlTypeMask.GUIListBox),
+      )){
         controls = controls.concat( control.getActiveControls() );
       }
     }

@@ -65,11 +65,11 @@ describe('production texture resolver routing', () => {
       source: 'active-module',
       txiSource: 'active-module-txi',
       texture: moduleTexture,
-      searchedSources: ['override-tga', 'override-tpc', 'active-module'],
+      searchedSources: ['override-tpc', 'override-tga', 'active-module'],
     });
     expect(provider.attempts).toEqual([
-      { source: 'override-tga', resref: 'wall', activeModule: '101per' },
       { source: 'override-tpc', resref: 'wall', activeModule: '101per' },
+      { source: 'override-tga', resref: 'wall', activeModule: '101per' },
       { source: 'active-module', resref: 'wall', activeModule: '101per' },
     ]);
   });
@@ -116,7 +116,44 @@ describe('production texture resolver routing', () => {
     });
   });
 
-  test('uses the diagnostic GUI fallback without inventing an alias', async () => {
+  test('uses the highest Override layer before TPC-versus-TGA format preference', async () => {
+    await ResourceLoader.InitOverrideCache();
+    ResourceLoader.setOverrideResource(ResourceTypes.tpc, 'character_skin', 'Override/character_skin.tpc', 'mod-1', 1);
+    ResourceLoader.setOverrideResource(ResourceTypes.tga, 'character_skin', 'Override/character_skin.tga', 'mod-2', 2);
+    const tgaTexture = texture('high-layer-tga');
+    const tgaDecode = jest.fn(() => tgaTexture);
+    const tpcDecode = jest.fn(() => texture('lower-layer-tpc'));
+    const provider = new OdysseyTextureSourceProvider(
+      { decode: tgaDecode } as any,
+      { decode: tpcDecode } as any,
+    );
+    jest.spyOn(ResourceLoader, 'searchOverrideEntry').mockResolvedValue(new Uint8Array([1]));
+
+    const tpc = await provider.load('override-tpc', 'character_skin');
+    const tga = await provider.load('override-tga', 'character_skin');
+
+    expect(tpc).toBeUndefined();
+    expect(tga).toMatchObject({
+      texture: tgaTexture,
+      sourceLayerId: 'mod-2',
+    });
+    expect(tgaDecode).toHaveBeenCalledTimes(1);
+    expect(tpcDecode).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Some GUI textures are simply absent from a given install — the chargen
+   * feats screen asks for `lbl_indent` and `lbl_skarr`, which are K1 resrefs
+   * that TSL does not ship. Retail draws nothing for a fill it cannot find, so
+   * the magenta checker is now opt-in. What must NOT change either way is the
+   * routing diagnostic: `vr:check` counts distinct failures from the router,
+   * not from pixels.
+   */
+  const searchedAllGuiSources = [
+    'override-tpc', 'override-tga', 'gui-pack', 'texture-pack', 'key-bif',
+  ];
+
+  test('leaves an unresolvable GUI texture undrawn by default', async () => {
     const provider = new SyntheticTextureProvider(new Map());
     TextureLoader.setSourceProvider(provider);
     const material = new THREE.MeshBasicMaterial();
@@ -128,16 +165,80 @@ describe('production texture resolver routing', () => {
       semantic: 'gui',
     } as ITextureLoaderQueuedRef);
 
-    expect(material.map).toBe(TextureLoader.getDiagnosticFallbackTexture());
+    expect(TextureLoader.DIAGNOSTIC_FALLBACK_ENABLED).toBe(false);
+    expect(material.map).toBeNull();
     expect(provider.attempts.map(({ resref }) => resref)).toEqual([
       'missing_icon', 'missing_icon', 'missing_icon', 'missing_icon', 'missing_icon',
     ]);
+    // The miss is still reported, so the gate's baseline is unaffected.
     expect(TextureLoader.getDiagnostics().at(-1)).toMatchObject({
       requestedResref: 'missing_icon',
       semantic: 'gui',
-      searchedSources: ['override-tga', 'override-tpc', 'gui-pack', 'texture-pack', 'key-bif'],
+      searchedSources: searchedAllGuiSources,
       selectedSource: 'none',
-      fallback: 'diagnostic-checker',
+      status: 'missing',
+    });
+  });
+
+  test('uses the diagnostic GUI fallback when explicitly enabled', async () => {
+    const previous = TextureLoader.DIAGNOSTIC_FALLBACK_ENABLED;
+    TextureLoader.DIAGNOSTIC_FALLBACK_ENABLED = true;
+    try {
+      const provider = new SyntheticTextureProvider(new Map());
+      TextureLoader.setSourceProvider(provider);
+      const material = new THREE.MeshBasicMaterial();
+
+      await TextureLoader.UpdateMaterial({
+        name: 'missing_icon',
+        material,
+        type: TextureType.TEXTURE,
+        semantic: 'gui',
+      } as ITextureLoaderQueuedRef);
+
+      expect(material.map).toBe(TextureLoader.getDiagnosticFallbackTexture());
+      expect(TextureLoader.getDiagnostics().at(-1)).toMatchObject({
+        requestedResref: 'missing_icon',
+        semantic: 'gui',
+        searchedSources: searchedAllGuiSources,
+        selectedSource: 'none',
+        fallback: 'diagnostic-checker',
+      });
+    } finally {
+      TextureLoader.DIAGNOSTIC_FALLBACK_ENABLED = previous;
+    }
+  });
+
+  test('records the owning placeable with a texture resolution diagnostic', async () => {
+    const provider = new SyntheticTextureProvider(new Map([
+      ['texture-pack:plc_box01', { texture: texture('plc-box01') }],
+    ]));
+    TextureLoader.setSourceProvider(provider);
+    TextureLoader.beginModule('101PER');
+    const material = new THREE.MeshBasicMaterial();
+    material.userData.textureOwnerModel = {
+      name: 'plc_box01',
+      userData: {
+        moduleObject: {
+          getTag: () => 'peragus_supply_box',
+          objectType: 8192,
+        },
+      },
+    };
+
+    await TextureLoader.UpdateMaterial({
+      name: 'plc_box01',
+      material,
+      type: TextureType.TEXTURE,
+      semantic: 'diffuse',
+      activeModule: '101per',
+    } as ITextureLoaderQueuedRef);
+
+    expect(TextureLoader.getDiagnostics().at(-1)).toMatchObject({
+      requestedResref: 'plc_box01',
+      activeModule: '101per',
+      ownerModelName: 'plc_box01',
+      ownerObjectTag: 'peragus_supply_box',
+      ownerObjectType: 8192,
     });
   });
 
@@ -225,8 +326,8 @@ describe('production texture resolver routing', () => {
     await expect(TextureLoader.LoadGUI('effect_icon')).resolves.toBe(guiTexture);
 
     expect(provider.attempts).toEqual([
-      { source: 'override-tga', resref: 'effect_icon', activeModule: '101per' },
       { source: 'override-tpc', resref: 'effect_icon', activeModule: '101per' },
+      { source: 'override-tga', resref: 'effect_icon', activeModule: '101per' },
       { source: 'active-module', resref: 'effect_icon', activeModule: '101per' },
       { source: 'gui-pack', resref: 'effect_icon', activeModule: '101per' },
     ]);
@@ -480,16 +581,15 @@ describe('production texture resolver routing', () => {
 describe('Odyssey texture source provider', () => {
   afterEach(() => jest.restoreAllMocks());
 
-  test('reads and attributes an Override TXI only when its TGA exists', async () => {
+  test('reads and attributes an Override TXI only from the selected TGA layer', async () => {
     const tgaBuffer = new Uint8Array([1]);
     const txiBuffer = new Uint8Array([2]);
     const decoded = texture('override-panel');
-    const searchOverride = jest.spyOn(ResourceLoader, 'searchOverride')
-      .mockImplementation(async (resourceType) => {
-        if (resourceType === ResourceTypes.tga) return tgaBuffer;
-        if (resourceType === ResourceTypes.txi) return txiBuffer;
-        return undefined;
-      });
+    await ResourceLoader.InitOverrideCache();
+    ResourceLoader.setOverrideResource(ResourceTypes.tga, 'panel', 'Override/panel.tga', 'mod-2', 2);
+    ResourceLoader.setOverrideResource(ResourceTypes.txi, 'panel', 'Override/panel.txi', 'mod-2', 2);
+    const searchOverrideEntry = jest.spyOn(ResourceLoader, 'searchOverrideEntry')
+      .mockImplementation(async (entry) => entry.resourceType === ResourceTypes.tga ? tgaBuffer : txiBuffer);
     const decode = jest.fn((_buffer: Uint8Array, _resref: string, _txi?: Uint8Array) => decoded);
     const provider = new OdysseyTextureSourceProvider(
       { decode } as never,
@@ -499,13 +599,12 @@ describe('Odyssey texture source provider', () => {
     await expect(provider.load('override-tga', 'panel')).resolves.toEqual({
       texture: decoded,
       txiSource: 'override-txi',
+      sourceLayerId: 'mod-2',
     });
     expect(decode).toHaveBeenCalledWith(tgaBuffer, 'panel', txiBuffer);
 
-    searchOverride.mockClear();
-    searchOverride.mockResolvedValue(undefined);
+    searchOverrideEntry.mockClear();
     await expect(provider.load('override-tga', 'missing')).resolves.toBeUndefined();
-    expect(searchOverride).toHaveBeenCalledTimes(1);
-    expect(searchOverride).toHaveBeenCalledWith(ResourceTypes.tga, 'missing');
+    expect(searchOverrideEntry).not.toHaveBeenCalled();
   });
 });
