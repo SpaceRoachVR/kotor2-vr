@@ -69,10 +69,15 @@ export function snapshotVRActionMenuPanelEntries<TActor extends object, TTarget 
         reportMalformedSourceOnce(dependencies.logger, sourceIdentity, error);
         return;
       }
+      // describeSource returns null for an entry it cannot describe — a
+      // separate outcome from the throw above, and one the closures below
+      // would have dereferenced.
+      if (!source) return;
+      const describedSource = source;
       actions.push({
-        id: source.sourceKey,
-        label: source.label,
-        icon: source.icon,
+        id: describedSource.sourceKey,
+        label: describedSource.label,
+        icon: describedSource.icon,
         // ROADMAP 4.8: the panel is the categorisation. Carried through so the
         // wheel can route Attack and attack-mode feats (panel 0) apart from
         // Force powers (panel 1) instead of flattening both into one list.
@@ -82,7 +87,7 @@ export function snapshotVRActionMenuPanelEntries<TActor extends object, TTarget 
           target,
           snapshot.kind,
           panelIndex,
-          source.sourceKey,
+          describedSource.sourceKey,
           dependencies,
         ) !== null,
         activate: () => {
@@ -91,7 +96,7 @@ export function snapshotVRActionMenuPanelEntries<TActor extends object, TTarget 
             target,
             snapshot.kind,
             panelIndex,
-            source.sourceKey,
+            describedSource.sourceKey,
             dependencies,
           );
           if (!refreshed) return;

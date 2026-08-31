@@ -3,7 +3,9 @@ import { TXIBlending } from "@/enums/graphics/txi/TXIBlending";
 import { TXIPROCEDURETYPE } from "@/enums/graphics/txi/TXIPROCEDURETYPE";
 import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 
-export type OdysseyTextureResolver = (resRef: string, noCache?: boolean) => Promise<OdysseyTexture>;
+/** Resolves a companion texture, or nothing when the resref cannot be found.
+ * Both call sites already guard on the result; the type simply did not say so. */
+export type OdysseyTextureResolver = (resRef: string, noCache?: boolean) => Promise<OdysseyTexture | undefined>;
 
 export interface ApplyTXIOptions {
   resolveTexture: OdysseyTextureResolver;
@@ -105,7 +107,7 @@ export class OdysseyMaterialBuilder {
     let hasAnimatedBumpCycle = false;
 
     if(!!texture.txi.envMapTexture){
-      const envmap: OdysseyTexture = await options.resolveTexture(texture.txi.envMapTexture, options.noCache ?? true);
+      const envmap = await options.resolveTexture(texture.txi.envMapTexture, options.noCache ?? true);
       if(!!envmap){
         registerManagedTexture(envmap);
         envmap.wrapS = envmap.wrapT = THREE.RepeatWrapping;
@@ -145,7 +147,7 @@ export class OdysseyMaterialBuilder {
     }
 
     if(!!texture.txi.bumpMapTexture){
-      const bumpMap: OdysseyTexture = await options.resolveTexture(texture.txi.bumpMapTexture, options.noCache ?? false);
+      const bumpMap = await options.resolveTexture(texture.txi.bumpMapTexture, options.noCache ?? false);
       if(!!bumpMap){
         registerManagedTexture(bumpMap);
         bumpMap.wrapS = bumpMap.wrapT = THREE.RepeatWrapping;

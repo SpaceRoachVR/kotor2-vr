@@ -80,7 +80,9 @@ export class XRInputFrameBuilder {
   }
 
   private static toWorldVelocity(
-    velocity: DOMPointReadOnly | null,
+    // A WebXR pose reports these as absent, not null, when the runtime does
+    // not supply them — accept both rather than assuming which.
+    velocity: DOMPointReadOnly | null | undefined,
     rigWorldOrientation: THREE.Quaternion
   ): THREE.Vector3 | null {
     if (!velocity) return null;

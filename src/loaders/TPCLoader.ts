@@ -92,7 +92,11 @@ export class TPCLoader {
       throw new TypeError(`Invalid texture resref '${resRef || '<empty>'}'`);
     }
   
+    // A texture pack is absent on a broken or partial install. Reaching this
+    // with an undefined pack used to be a throw on `.getResourceInfo`, which
+    // reads as a texture bug rather than a missing file.
     const guiPack = ERFManager.ERFs.get('swpc_tex_gui');
+    if(!guiPack) throw new Error('TPCLoader: the swpc_tex_gui texture pack is not loaded');
     let erfResource = guiPack.getResourceInfo(resRef, ResourceTypes['tpc']);
     if(erfResource){
       const buffer = await guiPack.getResourceBuffer(erfResource);
@@ -126,6 +130,7 @@ export class TPCLoader {
       break;
     }
   
+    if(!activeTexturePack) throw new Error('TPCLoader: no texture pack is loaded for the active quality');
     erfResource = activeTexturePack.getResourceInfo(resRef, ResourceTypes['tpc']);
     if(erfResource){
       const buffer = await activeTexturePack.getResourceBuffer(erfResource);
@@ -142,7 +147,7 @@ export class TPCLoader {
     throw new Error('TPC not found in game resources!');
   }
   
-  async fetch(resRef: string = ''): Promise<OdysseyCompressedTexture>{
+  async fetch(resRef: string = ''): Promise<OdysseyCompressedTexture | undefined>{
     try{
       const result = await this.findTPC(resRef);
       const texture = this.decode(result.buffer, resRef, result.pack);
@@ -155,7 +160,7 @@ export class TPCLoader {
     }
   }
   
-  async fetchOverride(resRef: string = ''): Promise<OdysseyCompressedTexture> {
+  async fetchOverride(resRef: string = ''): Promise<OdysseyCompressedTexture | undefined> {
     resRef = normalizeTextureResref(resRef);
     if (!isTextureResrefUsable(resRef)) {
       return undefined;

@@ -44,7 +44,7 @@ export class TGALoader {
 		return texture;
 	}
 
-	async fetch( resRef: string ): Promise<OdysseyTexture> {
+	async fetch( resRef: string ): Promise<OdysseyTexture | undefined> {
 		resRef = normalizeTextureResref(resRef);
 		if (!isTextureResrefUsable(resRef)) {
 			return undefined;
@@ -66,7 +66,7 @@ export class TGALoader {
 		}
 	}
 
-	async fetchOverride ( name: string ): Promise<OdysseyTexture> {
+	async fetchOverride ( name: string ): Promise<OdysseyTexture | undefined> {
 		name = normalizeTextureResref(name);
 		if (!isTextureResrefUsable(name)) {
 			return undefined;
@@ -571,7 +571,8 @@ export class TGALoader {
 			canvas.width = header.width;
 			canvas.height = header.height;
 
-			let context = canvas.getContext( '2d' );
+			const context = canvas.getContext( '2d' );
+			if(!context) throw new Error('TGALoader: 2d canvas context unavailable');
 			let imageData = context.createImageData( header.width, header.height );
 
 			let result = tgaParse( use_rle, use_pal, header, offset, content, 0 );
@@ -588,7 +589,8 @@ export class TGALoader {
 			canvas.height = header.width;
 			header.height = header.width;
 
-			let context = canvas.getContext( '2d' );
+			const context = canvas.getContext( '2d' );
+			if(!context) throw new Error('TGALoader: 2d canvas context unavailable');
 			let imageData = context.createImageData( header.width, header.width );
 			let result = tgaParse( use_rle, use_pal, header, offset, content, i );
 			let rgbaData = getTgaRGBA( imageData.data, header.width, header.width, result.pixel_data, result.palettes );
