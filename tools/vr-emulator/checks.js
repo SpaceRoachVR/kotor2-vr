@@ -17,6 +17,21 @@ const number = (value) => (typeof value === 'number' && Number.isFinite(value) ?
 /** @type {VrCheck[]} */
 const CHECKS = [
   {
+    id: 'renderer-context-matches-request',
+    describe: 'the renderer got the context version it asked for',
+    // Was `renderer-context-is-webgl2` until WebGL 2 was found to render the
+    // startup screens flat green (evidence/greenscreen-webgl{1,2}.png). The
+    // default is WebGL 1 again, so asserting WebGL 2 would now fail on a
+    // correct build. What still matters is that the request and the result
+    // agree: the context choice has a silent fallback, and this is what stops
+    // that fallback being invisible.
+    run: (m) => ({
+      ok: (m.renderer?.contextMode === 'webgl2') === (m.renderer?.isWebGL2 === true),
+      detail: `contextMode=${m.renderer?.contextMode} isWebGL2=${m.renderer?.isWebGL2}`
+        + ` depth=${m.renderer?.depthMode} logDepth=${m.renderer?.logarithmicDepthBuffer}`,
+    }),
+  },
+  {
     id: 'device-installed',
     describe: 'IWER runtime installs before page scripts',
     run: (m) => ({

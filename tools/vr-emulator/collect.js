@@ -131,8 +131,32 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
         byStatus[d.status] = (byStatus[d.status] || 0) + 1;
         if (d.status === 'resolved') continue;
         const key = d.requestedResref + '|' + d.status;
-        if (!failing.has(key)) failing.set(key, { resref: d.requestedResref, status: d.status, semantic: d.semantic, count: 0 });
-        failing.get(key).count++;
+        if (!failing.has(key)) {
+          failing.set(key, {
+            resref: d.requestedResref,
+            status: d.status,
+            semantic: d.semantic,
+            count: 0,
+            owners: [],
+          });
+        }
+        const record = failing.get(key);
+        record.count++;
+        // A resref can be requested by many materials.  Preserve the concrete
+        // owning placeable/model without changing the resref-based baseline
+        // count used by the existing missing-texture gate.
+        const owner = {
+          module: d.activeModule || null,
+          model: d.ownerModelName || null,
+          tag: d.ownerObjectTag || null,
+          objectType: Number.isSafeInteger(d.ownerObjectType) ? d.ownerObjectType : null,
+        };
+        if (owner.model || owner.tag || owner.objectType !== null) {
+          const ownerKey = JSON.stringify(owner);
+          if (!record.owners.some((candidate) => JSON.stringify(candidate) === ownerKey)) {
+            record.owners.push(owner);
+          }
+        }
       }
       return {
         total: all.length,
@@ -660,6 +684,24 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       return out;
     })()`, { timeoutMs: 60000 });
     onProgress('menu content');
+
+    // --- renderer configuration ---------------------------------------------
+    // Read from the live renderer, not from the log: the context version is a
+    // startup choice with a silent fallback, so a run that quietly dropped to
+    // WebGL 1 would otherwise look identical to one that did not.
+    metrics.renderer = await harness.evaluate(`(() => {
+      const gs = window.KotOR && window.KotOR.GameState;
+      const renderer = gs && gs.renderer;
+      const capabilities = renderer && renderer.capabilities;
+      return {
+        contextMode: gs ? gs.rendererContextMode : null,
+        depthMode: gs ? gs.rendererDepthMode : null,
+        isWebGL2: capabilities ? capabilities.isWebGL2 === true : null,
+        logarithmicDepthBuffer: capabilities ? capabilities.logarithmicDepthBuffer === true : null,
+        maxTextures: capabilities ? capabilities.maxTextures : null,
+      };
+    })()`);
+    onProgress('renderer configuration');
 
     // --- console health -----------------------------------------------------
     metrics.console = await harness.evaluate(`(() => {
