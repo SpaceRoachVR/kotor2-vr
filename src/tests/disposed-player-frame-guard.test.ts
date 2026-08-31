@@ -24,8 +24,23 @@ describe('the frame loop tolerates a disposed player', () => {
     // instance. Nulling these left it a corpse — `onSpawn` calls
     // `computeBoundingBox`, which does `this.box.setFromObject(...)`, so the
     // module never finished loading and the sweep timed it out at 300s.
-    for (const field of ['forceVector', 'box', 'sphere', 'v20', 'v21']) {
+    for (const field of ['forceVector', 'box', 'sphere', 'v20', 'v21', 'actionQueue']) {
       expect(moduleObject).not.toMatch(new RegExp(`^\s*this\.${field} = undefined;`, 'm'));
+    }
+  });
+
+  test('the action queue is emptied even though the queue survives', () => {
+    // `clear()` is what releases the actions; nulling the queue on top froze
+    // `actionQueueToActionList` on a respawned party member.
+    expect(moduleObject).toMatch(/this\.actionQueue\.clear\(\);/);
+  });
+
+  test('references to other objects are still dropped', () => {
+    // The distinction that matters: a reference to ANOTHER object must be
+    // cleared or the outgoing module's graph is retained. Only the instance's
+    // own small components survive.
+    for (const field of ['area', 'room', 'lookAtObject', 'conversation', 'linkedToObject']) {
+      expect(moduleObject).toMatch(new RegExp(`this\.${field} = undefined;`));
     }
   });
 

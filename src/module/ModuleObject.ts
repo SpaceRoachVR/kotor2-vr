@@ -3811,10 +3811,16 @@ export class ModuleObject {
         this.scripts = {};
       });
 
-      //Clear action queue
+      // Clear the action queue, but keep the queue itself.
+      //
+      // `clear()` is what releases the actions; nulling the queue on top of it
+      // frees a single empty object and breaks respawn. A party member is
+      // disposed on module unload and respawned into the next module on the
+      // same instance, and `actionQueueToActionList` then read
+      // `this.actionQueue.length` off undefined — the same fault as `box` and
+      // `forceVector`, and the third from this one habit.
       if(this.actionQueue){
         this.actionQueue.clear();
-        this.actionQueue = undefined;
       }
 
       //Clear computed path
