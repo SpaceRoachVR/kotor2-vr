@@ -3155,8 +3155,16 @@ export class GameState implements EngineContext {
     //Make sure we are using the follower camera while ingame
     GameState.currentCamera = GameState.camera;
     GameState.VideoEffectManager.SetVideoEffect(-1);
-    if(GameState.getCurrentPlayer()){
-      GameState.forwardVector.copy(GameState.getCurrentPlayer().forceVector).multiplyScalar(100);
+    // `forceVector` is cleared when a ModuleObject is disposed, and
+    // `PartyManager.party` still points at the outgoing module's party for a
+    // frame after a transition — so a live player reference is not proof of a
+    // live vector. Reading it threw every frame, which stops the world
+    // advancing and reads as a freeze rather than a crash. Ordinary play hides
+    // this behind a loading screen; the module sweep warps straight between
+    // areas and hit it on 5 of its first 17 modules.
+    const currentPlayer = GameState.getCurrentPlayer();
+    if(currentPlayer?.forceVector){
+      GameState.forwardVector.copy(currentPlayer.forceVector).multiplyScalar(100);
       GameState.forwardVector.z = -1;
     }
 
