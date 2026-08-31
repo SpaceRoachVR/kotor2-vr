@@ -116,9 +116,40 @@ texture *requests* fell from 92 to 41 (distinct failures unchanged at 14).
    remaining known-absent 14 from the player's view without hiding them from
    the gate, which asserts on the router's own count rather than on pixels.
 
-A sweep for other hard-coded resrefs in `src/game/kotor/**` should follow: the
-same K1-name-in-shared-code mistake will exist elsewhere, and it is invisible
-until someone opens the right TSL screen.
+### Hard-coded resref sweep, done 2026-08-31
+
+Every texture literal in `src/` was collected (32 distinct, 35 call sites) and
+resolved through the engine's own router against a real TSL install with both
+mod layers — `tools/vr-emulator/probe-resrefs.js`. **29 of 32 resolve.**
+
+The engine is in better shape here than expected: the cursor set
+(`gui_mp_*`, `friendly*`/`hostile*`), the map overlays (`blackdot`,
+`mm_barrow`, `whitetarget`, `lbl_mapcircle`), the TSL ability art
+(`uibit_abi_*`), the equipment slots (`uibit_eqp_itm1..3`), `Legal` and
+`fnt_console` are all present.
+
+Three are absent, and only one was new:
+
+| resref | site | status |
+|---|---|---|
+| `lbl_indent` | `kotor/gui/GUIFeatItem` | already fixed — fill hidden until it loads |
+| `lbl_skarr` | `kotor/gui/GUIFeatItem` | already fixed — same |
+| **`whitefill`** | `engine/SaveGame` | **new**, fixed below |
+
+`SaveGame.getThumbnail` fell back to `whitefill` — a K1 resref TSL does not
+ship — for a save with no screenshot. It had a second, independent fault: the
+nested `try/catch` chain relied on a failed load *throwing*, but `LoadGUI`
+resolves to `undefined`, so the chain stopped at the first miss and the
+fallbacks below it were unreachable regardless. Rewritten to test the value
+rather than the exception, and to try `blackfill` — TSL's placeholder, verified
+present — after `whitefill`.
+
+**Limits of the sweep, stated plainly.** It finds string *literals* only.
+Resrefs built by concatenation (`'load_' + module`) or passed as variables are
+invisible to it, as are model, 2DA and sound resrefs — this covered textures.
+`src/tests/hardcoded-resrefs.test.ts` pins the outcome so a new literal has to
+be swept deliberately rather than added by habit; it cannot re-run the
+resolution itself without an install.
 
 ## Feat selection
 

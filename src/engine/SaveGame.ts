@@ -742,18 +742,30 @@ export class SaveGame {
   async getThumbnail(){
     if(this.thumbnail){ return this.thumbnail; }
     
-    try{
-      this.thumbnail = await TextureLoader.tgaLoader.fetchLocal(path.join(this.directory, 'Screen.tga'));
-    }catch(e){
-      console.error(e);
+    // Nested try/catch relied on a failed load THROWING. `LoadGUI` resolves to
+    // undefined instead, so the chain stopped at the first miss and the later
+    // fallbacks were unreachable. Test the value, not the exception.
+    //
+    // `whitefill` is also a K1 resref that TSL does not ship — the same
+    // hard-coded-K1-name-in-shared-code mistake as `lbl_indent`, and the last
+    // one left after sweeping every literal in the engine. TSL's equivalent
+    // placeholder is `blackfill`, so try both and let the install decide.
+    const candidates: Array<() => Promise<OdysseyTexture | undefined>> = [
+      () => TextureLoader.tgaLoader.fetchLocal(path.join(this.directory, 'Screen.tga')),
+      () => TextureLoader.LoadGUI('load_' + this.getLastModule()),
+      () => TextureLoader.LoadGUI('whitefill'),
+      () => TextureLoader.LoadGUI('blackfill'),
+    ];
+
+    for(const load of candidates){
       try{
-        this.thumbnail = await TextureLoader.LoadGUI('load_'+this.getLastModule());
-      }catch(e){
-        try{
-          this.thumbnail = await TextureLoader.LoadGUI('whitefill');
-        }catch(e){
-          console.error(e);
+        const texture = await load();
+        if(texture){
+          this.thumbnail = texture;
+          return this.thumbnail;
         }
+      }catch(e){
+        // A save with no screenshot is ordinary; keep trying the fallbacks.
       }
     }
 
