@@ -4,12 +4,13 @@ import { XRControllerAnchorHost } from "./runtime/XRControllerAnchorHost";
 import type { HeldItemVisualDescriptor } from "./runtime/XRControllerAnchorHost";
 import { XRGamepadReader } from "./runtime/XRGamepadReader";
 import { XRInputFrameBuilder } from "./runtime/XRInputFrameBuilder";
-import { RoutedXRAction, XRInputRouter } from "./runtime/XRInputRouter";
+import { RoutedXRAction, XRActionContext, XRInputRouter } from "./runtime/XRInputRouter";
 import { InteractionSystem } from "./runtime/InteractionSystem";
 import { InteractionTargetRegistry } from "./runtime/InteractionTargetRegistry";
 import { LocomotionController, ResolvedLocomotion } from "./runtime/LocomotionController";
 import { VRPanelHost } from "./runtime/VRPanelHost";
 import type { LegacyPanelRenderLayer } from "./runtime/VRPanelHost";
+import { DEFAULT_XR_FRAMEBUFFER_SCALE, parseXRFramebufferScale } from "@/utility/RendererOptions";
 import { VRPanelPointerHost } from "./runtime/VRPanelPointerHost";
 import { VRPointerHandResolver } from "./runtime/VRPointerHandResolver";
 import { VRKeyboardHost } from "./runtime/VRKeyboardHost";
@@ -493,6 +494,18 @@ export class VRSpike {
 
     renderer.xr.enabled = true;
     renderer.xr.setReferenceSpaceType('local-floor');
+
+    // Render resolution is the bluntest performance lever a VR title has, and
+    // this build had no way to move it — Phase 0 measured a 4224x2304 target
+    // and lived with it. Scaling is roughly quadratic in fill rate, so 0.8 is
+    // about a third less work per eye. Must be set before the session starts.
+    const framebufferScale = parseXRFramebufferScale(
+      typeof window !== 'undefined' ? window.location.search : ''
+    );
+    if (framebufferScale !== DEFAULT_XR_FRAMEBUFFER_SCALE) {
+      renderer.xr.setFramebufferScaleFactor(framebufferScale);
+      console.log(`[VRSpike] XR framebuffer scale: ${framebufferScale}`);
+    }
 
     VRSpike.rig = new THREE.Group();
     VRSpike.rig.name = 'VRSpike.rig';
@@ -1003,7 +1016,9 @@ export class VRSpike {
   private static processPanelInput(): boolean {
     const context = VRSpike.hooks?.getPanelContext?.();
     const menu = context?.menu ?? null;
-    if (!menu) {
+    // Guard the context itself, not only the menu it carried: a menu implies a
+    // context, but only to a reader.
+    if (!context || !menu) {
       VRSpike.panelPointerHost?.clear();
       VRSpike.latestPanelPointerPosition = null;
       VRSpike.panelInputController.process(null, [], null, context?.pointerSink ?? null);
@@ -2138,13 +2153,16 @@ export class VRSpike {
     console.info(`[VR prompt stage] ${message}`);
   }
 
+  /** Hoisted: this is read on the frame path and was rebuilt every frame. */
+  private static readonly COMBAT_CONTEXT_ONLY: ReadonlySet<XRActionContext> = new Set<XRActionContext>(['combat']);
+
   private static captureWeaponActionLatch(): void {
     const session = VRSpike.session;
     if (!session) return;
     try {
       const actions = VRSpike.inputRouter.route(
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
-        new Set(['combat']),
+        VRSpike.COMBAT_CONTEXT_ONLY,
       );
       const pressed = actions.some((action) =>
         action.action === SemanticXRAction.WeaponAction && action.hand === 'right' && action.pressed
@@ -2964,11 +2982,17 @@ export class VRSpike {
       // XR play. Reapply the panel hit after simulation so the original cursor
       // is included only in this GUI-to-texture pass.
       context.pointerSink.setPointerPosition(VRSpike.latestPanelPointerPosition);
-      VRSpike.panelHost.renderGui(
+      // The composite is the expensive part of the panel, not its placement:
+      // it draws the whole legacy GUI scene into a target up to 1536x1536, and
+      // did so on every XR frame for as long as any menu stayed open. Placement
+      // and the pointer sink above still run every frame — only the redraw is
+      // gated. See VRPanelRepaintPolicy for what the gate can and cannot see.
+      VRSpike.panelHost.renderGuiIfChanged(
         renderer,
         context.guiScene,
         context.guiCamera,
-        context.menu.getLegacyPanelRenderPass?.() ?? null
+        context.menu.getLegacyPanelRenderPass?.() ?? null,
+        VRSpike.latestPanelPointerPosition,
       );
     } catch (error) {
       VRSpike.panelHost?.clear();

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { XRWorldPose } from './XRTypes';
+import { captureVRPanelRepaintSignals, VRPanelRepaintPolicy } from './VRPanelRepaintPolicy';
 
 export interface VRPanelHostOptions {
   readonly distanceMetres: number;
@@ -55,6 +56,16 @@ export class VRPanelHost {
   private textureHeight = 1;
   private readonly options: VRPanelHostOptions;
   private readonly lastHorizontalForward = new THREE.Vector3(0, 1, 0);
+  /**
+   * Owned here rather than by the caller so it cannot outlive the pixels it
+   * describes: every `clear()` resets it, and the render target keeps its
+   * contents while hidden. A caller-held policy would have to remember to
+   * reset at each of the five places this host is cleared, and the one it
+   * forgot would show a reopened panel the previous session's last frame.
+   */
+  private readonly repaintPolicy = new VRPanelRepaintPolicy();
+  private viewportWidth = 0;
+  private viewportHeight = 0;
 
   constructor(worldScene: THREE.Scene, options: Partial<VRPanelHostOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -99,6 +110,8 @@ export class VRPanelHost {
     if (!owner) throw new TypeError('VR panel owner is required');
     VRPanelHost.validateViewport(viewportWidth, viewportHeight);
     this.resizeTexture(viewportWidth, viewportHeight);
+    this.viewportWidth = viewportWidth;
+    this.viewportHeight = viewportHeight;
 
     // A legacy menu owns one world-space surface for its entire visible
     // lifetime. Recomputing this pose every XR frame turns it into a
@@ -166,6 +179,39 @@ export class VRPanelHost {
   }
 
   private static placementLogged = false;
+
+  /**
+   * Composites the GUI only when something observable has changed since the
+   * last composite.
+   *
+   * This pass draws the entire legacy GUI scene into a target up to
+   * 1536x1536, and it used to run on every XR frame for as long as any menu
+   * was open — 72 times a second to redraw an inventory list nobody touched.
+   * `VRPanelRepaintPolicy` documents precisely what the gate can and cannot
+   * observe, and why it still repaints on a short floor regardless.
+   *
+   * @returns whether the composite actually ran
+   */
+  renderGuiIfChanged(
+    renderer: THREE.WebGLRenderer,
+    guiScene: THREE.Scene,
+    guiCamera: THREE.Camera,
+    legacyPanelRenderPass: LegacyPanelRenderPass | null = null,
+    pointer: { x: number, y: number } | null = null,
+  ): boolean {
+    const shouldRepaint = this.repaintPolicy.shouldRepaint(
+      captureVRPanelRepaintSignals(
+        this.activeOwner,
+        pointer,
+        this.viewportWidth,
+        this.viewportHeight,
+      )
+    );
+    if (shouldRepaint) {
+      this.renderGui(renderer, guiScene, guiCamera, legacyPanelRenderPass);
+    }
+    return shouldRepaint;
+  }
 
   renderGui(
     renderer: THREE.WebGLRenderer,
@@ -236,6 +282,9 @@ export class VRPanelHost {
   clear(): void {
     this.activeOwner = null;
     this.object.visible = false;
+    // The render target keeps its pixels while hidden, so a panel reopened on
+    // the same menu would otherwise show the last frame of the old one.
+    this.repaintPolicy.reset();
   }
 
   dispose(): void {

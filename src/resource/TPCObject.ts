@@ -8,6 +8,12 @@ import { ENCODING } from "@/enums/graphics/tpc/Encoding";
 import { OdysseyCompressedTexture } from "@/three/odyssey/OdysseyCompressedTexture";
 import { ITPCHeader } from "@/interface/resource/ITPCHeader";
 import { ITPCObjectOptions } from "@/interface/resource/ITPCObjectOptions";
+import {
+  DXT1_BLOCK_BYTES,
+  DXT5_BLOCK_BYTES,
+  isBlockStitchable,
+  stitchCompressedFrames,
+} from "@/resource/dxtBlockStitch";
 
 const TPCHeaderLength = 128;
 
@@ -219,46 +225,77 @@ export class TPCObject {
         let frameHeight = (imageHeight / this.txi.numy);
         let frameCount = (this.txi.numx * this.txi.numy);
 
+        const blockBytes = (this.header.encoding == ENCODING.RGB)
+          ? DXT1_BLOCK_BYTES
+          : DXT5_BLOCK_BYTES;
+
         for(let m = 0; m < dds.mipmapCount; m++){
-          let frames = [];
-
-          //Create an OffsreenCanvas so we can stitch the frames back together
-          this.canvas[m] = new OffscreenCanvas(imageWidth, imageHeight);
-          let ctx = this.canvas[m].getContext('2d');
-
-          //Get the proper frames from the old mipmaps list
+          const levelFrames: any[] = [];
           for(let i = 0; i < frameCount; i++){
-            let mipmap = dds.mipmaps[m + (i * dds.mipmapCount)];
-            //console.log(m + (i * dds.mipmapCount), mipmap);
-            let uint8 = Uint8ClampedArray.from( 
-              compressMipMaps ? dxtJs.decompress(mipmap.data, frameWidth, frameHeight, encoding) : mipmap.data
-              // (window as any).dxt.decompress(mipmap.data, frameWidth, frameHeight, encoding) 
-            );
-            //console.log(uint8, frameWidth, frameHeight);
-            frames.push(
-              new ImageData(uint8, frameWidth, frameHeight)
-            );
+            levelFrames.push(dds.mipmaps[m + (i * dds.mipmapCount)]);
           }
 
-          //Merge the frames onto the canvas
-          for(let y = 0; y < this.txi.numy; y++){
-            let frameY = (y * this.txi.numx);
-            for(let x = 0; x < this.txi.numx; x++){
-              //console.log(frameY + x, x * frameWidth2, y * frameHeight2);
-              ctx.putImageData(frames[frameY + x], x * frameWidth, y * frameHeight);
+          // DXT stores independent 4x4 blocks in row-major order, so an atlas
+          // of compressed frames is a block-grid copy — no decode, no canvas,
+          // no re-encode. The old route ran a JavaScript DXT decoder over
+          // every frame and a JavaScript DXT *encoder* over the merged image,
+          // per mipmap level, synchronously. It was also lossy: re-encoding
+          // re-quantised every animated texture a second time.
+          //
+          // Only the tail levels, where a frame shrinks below one 4x4 block,
+          // still need the pixel-space route.
+          const canStitchBlocks = compressMipMaps
+            && this.header.compressed
+            && isBlockStitchable(frameWidth, frameHeight);
+
+          let mipmap_data: any;
+          if(canStitchBlocks){
+            mipmap_data = stitchCompressedFrames(
+              levelFrames.map((mipmap) => mipmap.data as Uint8Array),
+              {
+                frameWidth,
+                frameHeight,
+                columns: this.txi.numx,
+                rows: this.txi.numy,
+                blockBytes,
+              },
+            );
+          }else{
+            let frames = [];
+
+            //Create an OffsreenCanvas so we can stitch the frames back together
+            this.canvas[m] = new OffscreenCanvas(imageWidth, imageHeight);
+            let ctx = this.canvas[m].getContext('2d');
+
+            //Get the proper frames from the old mipmaps list
+            for(let i = 0; i < frameCount; i++){
+              let mipmap = levelFrames[i];
+              let uint8 = Uint8ClampedArray.from(
+                compressMipMaps ? dxtJs.decompress(mipmap.data, frameWidth, frameHeight, encoding) : mipmap.data
+              );
+              frames.push(
+                new ImageData(uint8, frameWidth, frameHeight)
+              );
             }
-          }
-          //console.log(imageWidth, imageHeight, frameWidth, frameHeight);
-          //Extract the merged image
-          let mergedImageData = ctx.getImageData(0, 0, imageWidth, imageHeight);
 
-          //Compress it with the proper DXT encoding
-          let mipmap_data = compressMipMaps ? dxtJs.compress(mergedImageData.data, imageWidth, imageHeight, encoding) : mergedImageData.data;
+            //Merge the frames onto the canvas
+            for(let y = 0; y < this.txi.numy; y++){
+              let frameY = (y * this.txi.numx);
+              for(let x = 0; x < this.txi.numx; x++){
+                ctx.putImageData(frames[frameY + x], x * frameWidth, y * frameHeight);
+              }
+            }
+            //Extract the merged image
+            let mergedImageData = ctx.getImageData(0, 0, imageWidth, imageHeight);
+
+            //Compress it with the proper DXT encoding
+            mipmap_data = compressMipMaps ? dxtJs.compress(mergedImageData.data, imageWidth, imageHeight, encoding) : mergedImageData.data;
+          }
 
           //Add it the the new mipmaps list
           mipmaps.push({
-            data: mipmap_data, 
-            width: imageWidth, 
+            data: mipmap_data,
+            width: imageWidth,
             height: imageHeight
           });
 
