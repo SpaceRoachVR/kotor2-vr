@@ -289,6 +289,36 @@ physically unpleasant rather than merely wrong.
 | H3 | Run the perf window in `101PER` | Sustained ≥ 50 FPS, p90 ≤ 33.33 ms, p99 < 50 ms |
 | H4 | Play ten minutes without reloading | Memory stable; no climbing load times |
 | H5 | Load three modules in succession | No `Array buffer allocation failed` from the Bink decoder |
+| H7 | **Depth-buffer A/B.** Run H3's perf window twice: once as normal, once with `&depth=linear` appended to the launch URL | A frame-time delta, plus a verdict on whether linear depth z-fights. See below |
+| H8 | With `&depth=linear`, look hard at large flat surfaces at range — long corridors, hangar floors, the Ebon Hawk hull | No shimmering or flickering seams. If it z-fights, linear depth is not usable and H7's number is moot |
+| H9 | Open **Inventory**, then **Journal**, and hover the ray over the lists | Hover highlight tracks the ray with no perceptible lag. The panel composite is now gated (B4) — hover is driven by pointer movement, so any stutter here means the gate is wrong |
+| H10 | Sit on the **main menu** and on **character creation** without touching anything | The rotating model animates as smoothly as before. If it stutters or freezes, the `GuiSurfaceRevision` signal is not reaching the gate |
+| H11 | Open the **equipment** screen and watch any value that changes on its own | Updates appear within ~100 ms. The gate cannot see a control mutating with no offscreen repaint, no pointer movement and no input; the staleness floor is the only thing catching it |
+| H12 | Look at **animated textures** — water, flame, computer and console screens, the Peragus force fields | They cycle correctly, with frames in the right order and no seams or misplaced tiles. B3 now assembles these in DXT block space rather than decoding and re-encoding them; a block-arithmetic error would show as frames in the wrong positions, not as a crash |
+| H13 | **Resolution scale sweep.** Run H3's window at `&xrscale=0.8` and `&xrscale=0.7` | A frame-time curve against sharpness. Fill rate scales roughly with the square, so 0.8 is about a third less work per eye — read the startup line `[VRSpike] XR framebuffer scale: …` to confirm it took. If H3 cannot reach sustained 50 any other way, this is the lever that gets it there |
+| H14 | Stand where **animated lights** play across a surface — Peragus emergency lighting, flickering panels, torchlight | They pulse and move as before. B7 stopped re-uploading these uniforms every frame; a fault here shows as lights that freeze at one value or stop tracking a moving source, not as a crash |
+
+### H7/H8 — why the depth A/B exists
+
+`logarithmicDepthBuffer: true` has been on since the engine was inherited and
+has never been justified by measurement. It is not free: three's logarithmic
+path writes `gl_FragDepthEXT` in every fragment shader, which defeats early
+depth rejection — worst on the tile-based GPU in a standalone headset. Where
+`EXT_frag_depth` is missing it does not cost, it *degrades*: three falls back to
+interpolating depth across the triangle, which is visibly wrong on exactly the
+large wall and floor triangles Odyssey rooms are built from. Either branch
+argues for trying without it.
+
+What it buys is depth precision across the camera's 0.05–15000 range, and
+whether a 24-bit buffer covers that adequately for these areas is a question
+only the headset answers — hence H8 alongside H7. **H7 without H8 is not a
+result.** A faster frame that z-fights is not a win.
+
+The flag compiles a `#define` into every shader, so it is fixed at renderer
+construction and cannot be an in-game setting; `?depth=linear` on the launch URL
+is the only way to flip it. The engine logs which mode it built with at startup
+(`[GameState] depth buffer mode: …`) — check that line before trusting a run.
+Default is unchanged, so a normal launch is the control arm.
 
 ## I. Known-unfinished — confirm the gap, do not treat as a bug
 
