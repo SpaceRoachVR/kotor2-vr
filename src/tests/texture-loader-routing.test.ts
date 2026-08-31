@@ -180,6 +180,41 @@ describe('production texture resolver routing', () => {
     });
   });
 
+  test('an unresolvable WORLD texture leaves the model visible', async () => {
+    // Hiding the fill is right for a GUI element and wrong for geometry:
+    // applying it to a world material made a cutscene ship vanish entirely
+    // rather than render as an untextured hull. Visibly wrong beats absent.
+    const provider = new SyntheticTextureProvider(new Map());
+    TextureLoader.setSourceProvider(provider);
+    const material = new THREE.MeshBasicMaterial();
+
+    await TextureLoader.UpdateMaterial({
+      name: 'missing_hull',
+      material,
+      type: TextureType.TEXTURE,
+      semantic: 'diffuse',
+    } as ITextureLoaderQueuedRef);
+
+    expect(material.map).toBeNull();
+    expect(material.opacity).toBe(1);
+    expect(material.visible).toBe(true);
+  });
+
+  test('an unresolvable GUI fill is not drawn', async () => {
+    const provider = new SyntheticTextureProvider(new Map());
+    TextureLoader.setSourceProvider(provider);
+    const material = new THREE.MeshBasicMaterial();
+
+    await TextureLoader.UpdateMaterial({
+      name: 'missing_icon_fill',
+      material,
+      type: TextureType.TEXTURE,
+      semantic: 'gui',
+    } as ITextureLoaderQueuedRef);
+
+    expect(material.opacity).toBe(0);
+  });
+
   test('uses the diagnostic GUI fallback when explicitly enabled', async () => {
     const previous = TextureLoader.DIAGNOSTIC_FALLBACK_ENABLED;
     TextureLoader.DIAGNOSTIC_FALLBACK_ENABLED = true;

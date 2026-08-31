@@ -570,9 +570,18 @@ export class TextureLoader {
             TextureLoader.assignMaterialTexture(tex.material, null, 'map');
             // A material with no map still draws — as opaque white — so simply
             // clearing the map turned the magenta checkers into white blocks.
-            // A fill whose texture cannot be found is not meant to be drawn at
-            // all; retail renders nothing.
-            TextureLoader.hideUnresolvedFill(tex.material);
+            // A GUI fill whose texture cannot be found is not meant to be drawn
+            // at all; retail renders nothing there.
+            //
+            // ONLY a GUI fill. Applying this to world geometry made a model
+            // whose diffuse texture failed to resolve vanish completely — a
+            // cutscene ship rendered as nothing at all rather than as an
+            // untextured hull. For anything in the world an untextured model is
+            // far better than an absent one: it is visibly wrong, which is the
+            // point, and it does not silently delete the scene.
+            if (semantic === 'gui' || semantic === 'font') {
+              TextureLoader.hideUnresolvedFill(tex.material);
+            }
           }
         }
         if (fallbackName) {
