@@ -89,6 +89,33 @@ describe('ResourceLoader lazy override index', () => {
   });
 });
 
+describe('an absent resref is a miss, not a crash', () => {
+  beforeEach(async () => {
+    jest.restoreAllMocks();
+    ResourceLoader.InitCache();
+    await ResourceLoader.InitOverrideCache();
+    ResourceLoader.clearCache();
+  });
+
+  // Most callers pass `getTemplateResRef()` or a 2DA cell, and an object with
+  // no template legitimately has none. `loadCachedResource` threw
+  // "Cannot read properties of null (reading 'toLowerCase')" during module
+  // load, which the sweep caught on 202TEL.
+  test.each([null, undefined, ''])('getCache tolerates %p', (resRef) => {
+    expect(ResourceLoader.getCache(TEST_RESOURCE_TYPE, resRef as any)).toBeNull();
+  });
+
+  test.each([null, undefined, ''])('loadCachedResource tolerates %p', (resRef) => {
+    expect(ResourceLoader.loadCachedResource(TEST_RESOURCE_TYPE, resRef as any)).toBeNull();
+  });
+
+  test('a present resref still resolves through the cache', () => {
+    const bytes = new Uint8Array([7, 7]);
+    ResourceLoader.setCache(CacheScope.OVERRIDE, TEST_RESOURCE_TYPE, 'Present_Ref', bytes);
+    expect(ResourceLoader.loadCachedResource(TEST_RESOURCE_TYPE, 'PRESENT_REF')).toBe(bytes);
+  });
+});
+
 describe('ResourceLoader model pair resolution', () => {
   const resMDL = ResourceTypes['mdl'];
   const resMDX = ResourceTypes['mdx'];

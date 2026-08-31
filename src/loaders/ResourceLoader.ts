@@ -457,7 +457,9 @@ export class ResourceLoader {
   }
 
   static loadCachedResource(resId: number, resRef: string): Uint8Array | null {
-    return ResourceLoader.getCache(resId, resRef.toLowerCase());
+    // `getCache` lowercases too, so this delegates rather than repeating it —
+    // and, importantly, inherits its tolerance of an absent resref.
+    return ResourceLoader.getCache(resId, resRef);
   }
 
   static setResource(resId: number, resRef: string, opts = {}){
@@ -483,6 +485,15 @@ export class ResourceLoader {
   }
 
   static getCache(resId: number, resRef: string): Uint8Array | null {
+    // An absent resref is an ordinary "nothing to load", not an error: most
+    // callers pass `getTemplateResRef()` or a 2DA cell, and an object with no
+    // template legitimately has none. This threw
+    // `Cannot read properties of null (reading 'toLowerCase')` out of
+    // `loadCachedResource` during module load instead, which the sweep caught
+    // on 202TEL. A miss already returns null; so does this.
+    if (typeof resRef !== 'string' || !resRef) {
+      return null;
+    }
     const normalizedRef = resRef.toLowerCase();
     // Looked up once per scope rather than twice: the second `.get(resId)` was
     // a separate lookup that the `.has()` above did not actually prove.
