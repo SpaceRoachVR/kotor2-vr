@@ -18,8 +18,21 @@ describe('the frame loop tolerates a disposed player', () => {
   const gameState = read('src/GameState.ts');
   const moduleObject = read('src/module/ModuleObject.ts');
 
-  test('dispose really does clear the vector the frame loop reads', () => {
-    expect(moduleObject).toMatch(/this\.forceVector = undefined;/);
+  test('dispose keeps the small value objects a respawn needs', () => {
+    // A disposed object is not always a discarded one: party members are
+    // disposed on module unload and respawned into the next module on the SAME
+    // instance. Nulling these left it a corpse — `onSpawn` calls
+    // `computeBoundingBox`, which does `this.box.setFromObject(...)`, so the
+    // module never finished loading and the sweep timed it out at 300s.
+    for (const field of ['forceVector', 'box', 'sphere', 'v20', 'v21']) {
+      expect(moduleObject).not.toMatch(new RegExp(`^\s*this\.${field} = undefined;`, 'm'));
+    }
+  });
+
+  test('the heavy resources are still released', () => {
+    expect(moduleObject).toMatch(/this\.inventory\.length = 0;/);
+    expect(moduleObject).toMatch(/this\.rooms\.length = 0;/);
+    expect(moduleObject).toMatch(/this\.objectsInside\.length = 0;/);
   });
 
   test('UpdateIngame guards the vector, not merely the player', () => {

@@ -3848,31 +3848,23 @@ export class ModuleObject {
         this.objectsInside.length = 0;
       }
 
-      //Dispose Three.js utility objects
-      if(this.forceVector){
-        this.forceVector = undefined;
-      }
-      // if(this.position){
-      //   this.position = undefined;
-      // }
-      // if(this.rotation){
-      //   this.rotation = undefined;
-      // }
-      // if(this.quaternion){
-      //   this.quaternion = undefined;
-      // }
-      if(this.box){
-        this.box = undefined;
-      }
-      if(this.sphere){
-        this.sphere = undefined;
-      }
-      if(this.v20){
-        this.v20 = undefined;
-      }
-      if(this.v21){
-        this.v21 = undefined;
-      }
+      // The small THREE value objects below are deliberately NOT cleared.
+      //
+      // A disposed object is not always a discarded one: party members survive
+      // a module transition, so they are disposed on unload and then respawned
+      // into the next module on the same instance. Nulling these left that
+      // instance a corpse — `onSpawn` calls `computeBoundingBox`, which does
+      // `this.box.setFromObject(...)`, so the module never finished loading and
+      // the sweep timed it out at 300s. `forceVector` produced the sibling
+      // fault in `GameState.UpdateIngame`.
+      //
+      // `position`, `rotation` and `quaternion` were already commented out for
+      // the same reason; `box`, `sphere`, `forceVector`, `v20` and `v21` are
+      // the rest of that set. They hold only numbers, so keeping them retains
+      // nothing of consequence — the object itself is released either way when
+      // it really is discarded, and the heavy resources (models, geometry,
+      // materials, inventory, room and containment lists) are still freed
+      // above.
 
       if(this.area){
         this.area.detachObject(this);
