@@ -1,4 +1,5 @@
 import * as path from "path";
+import { isFileNotFoundError } from "@/utility/filesystem/FileNotFound";
 import { BinaryReader } from "@/utility/binary/BinaryReader";
 import { BinaryWriter } from "@/utility/binary/BinaryWriter";
 import { GameFileSystem } from "@/utility/GameFileSystem";
@@ -33,6 +34,10 @@ export class ERFObject {
   pathInfo: path.ParsedPath;
   reader: BinaryReader;
   erfDataOffset: number;
+  /** Set when load() could not read the archive; see loadFromDisk. */
+  loadFailed: boolean = false;
+  /** Set when the archive is simply absent, as optional archives may be. */
+  notFound: boolean = false;
   group: string = 'erf';
   type: string = 'erf';
 
@@ -144,7 +149,21 @@ export class ERFObject {
 
       await GameFileSystem.close(fd);
     }catch(e){
-      console.error(e);
+      // The failure is swallowed so a bad archive does not take the caller down
+      // with it, but that also means load() resolves and hands back an ERF with
+      // no entries. Record it, so a caller loading an optional archive can tell
+      // "empty because absent" from "empty because that is what it holds".
+      this.loadFailed = true;
+      // A missing optional archive is not a fault. The retail install ships 77
+      // lip-sync archives for 82 modules, so six modules have none and never
+      // did; reporting that through console.error presents a shipping install's
+      // normal state as broken. Genuine failures stay loud.
+      if(isFileNotFoundError(e)){
+        this.notFound = true;
+        console.log('ERFObject: not present, continuing without it -', this.resource_path);
+      }else{
+        console.error(e);
+      }
     }
   }
 

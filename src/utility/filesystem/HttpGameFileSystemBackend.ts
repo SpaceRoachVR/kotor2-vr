@@ -150,7 +150,7 @@ export class HttpGameFileSystemBackend implements GameFileSystemBackend {
         headers: { Range: `bytes=${position}-${end}` },
       }, async (response) => {
         if (response.status !== 206) {
-          throw this.readError(handle.path, position, length, `expected HTTP 206, received ${response.status}`);
+          throw this.readError(handle.path, position, length, `expected HTTP 206, received ${response.status}`, response.status);
         }
         this.validateContentRange(response.headers.get('Content-Range'), handle.path, position, length);
         return new Uint8Array(await response.arrayBuffer());
@@ -355,8 +355,13 @@ export class HttpGameFileSystemBackend implements GameFileSystemBackend {
     if (!Number.isSafeInteger(position) || position < 0) throw new RangeError('Invalid read position');
   }
 
-  private readError(filepath: string, position: number, length: number, reason: string): Error {
-    return new Error(`GameFileSystem.read: failed reading '${filepath}' at offset ${position} for ${length} bytes: ${reason}`);
+  private readError(filepath: string, position: number, length: number, reason: string, status?: number): Error {
+    const error = new Error(`GameFileSystem.read: failed reading '${filepath}' at offset ${position} for ${length} bytes: ${reason}`);
+    // Carry the cause, not just the wording: callers loading an optional
+    // resource need to tell "absent" from "broken", and matching on the message
+    // would break the moment this text changed. See FileNotFound.ts.
+    if (typeof status === 'number') (error as Error & { status?: number }).status = status;
+    return error;
   }
 
   private validateContentRange(contentRange: string | null, filepath: string, position: number, length: number): void {

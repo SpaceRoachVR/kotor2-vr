@@ -737,6 +737,15 @@ export class Module {
     try{
       const mod = new ERFObject(resource_path);
       await mod.load();
+      // load() does not throw: ERFObject.loadFromDisk catches its own failures,
+      // so an absent archive came back as a successfully-loaded ERF holding
+      // nothing, and the caller believed it had lip-sync. Per-module lip-sync is
+      // optional - the retail install ships 77 archives for 82 modules, so
+      // 154HAR, 211TEL, 371NAR, 421DXN, 505OND and 510OND have none and never
+      // did - so report the absence as a fact and hand back nothing.
+      if(mod.loadFailed){
+        return undefined;
+      }
       return mod;
     }catch(e){
       console.log('Module.GetModuleLips failed', resource_path);
