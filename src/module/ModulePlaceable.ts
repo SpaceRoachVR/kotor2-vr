@@ -1,4 +1,5 @@
 import type { ModuleRoom } from "@/module/ModuleRoom";
+import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
 import { AudioEmitter } from "@/audio/AudioEmitter";
 import { BinaryReader } from "@/utility/binary/BinaryReader";
 import { ModulePlaceableAnimState } from "@/enums/module/ModulePlaceableAnimState";
@@ -101,6 +102,9 @@ export class ModulePlaceable extends ModuleObject {
 
   lastObjectOpened: ModuleObject;
   lastObjectClosed: ModuleObject;
+
+  /** States already reported as having no animation; see MissingAnimationLog. */
+  private reportedMissingAnimations: Set<number> = new Set();
 
   animStateInfo: AnimStateInfo = {
     lastAnimState: ModulePlaceableAnimState.DEFAULT,
@@ -270,7 +274,9 @@ export class ModulePlaceable extends ModuleObject {
           }
         }
       }else{
-        console.error('Animation Missing', this.getTag(), this.getName(), this.animState);
+        if(shouldReportMissingAnimation(this.reportedMissingAnimations, this.animState)){
+          console.error('Animation Missing', this.getTag(), this.getName(), this.animState);
+        }
         this.setAnimationState(ModulePlaceableAnimState.DEFAULT);
       }
     }

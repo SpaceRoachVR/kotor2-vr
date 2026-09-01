@@ -1423,7 +1423,16 @@ export class ModuleArea extends ModuleObject {
 
       GameState.MenuManager.LoadScreen.setProgress(100);
 
-      FollowerCamera.facing = Utility.NormalizeRadian(GameState.PartyManager.party[0].getFacing() - Math.PI/2);
+      // A module can reach here with no party member - cutscene and transition
+      // modules do. Every other call in this stretch is wrapped; this one was not,
+      // so an empty party threw and abandoned the rest of loadScene: weather, the
+      // transition waypoint and cleanupUninitializedObjects all follow it. Seen in
+      // 11 modules in the 82-module sweep. The camera facing is a nicety; the rest
+      // is not.
+      const partyLeader = GameState.PartyManager.party[0];
+      if(partyLeader){
+        FollowerCamera.facing = Utility.NormalizeRadian(partyLeader.getFacing() - Math.PI/2);
+      }
 
       try { await this.weather.load(); } catch(e){ console.error(e); }
 
@@ -1777,32 +1786,39 @@ export class ModuleArea extends ModuleObject {
         door.rotation.set(0, 0, door.getBearing());
         const model = await door.loadModel();
         door.computeBoundingBox();
-        const dwk = await door.loadWalkmesh(model.name);
+        // loadModel resolves undefined when a door's model cannot be built - a
+        // missing resref such as t_door01, seen in several modules in the sweep.
+        // Reaching through it for model.name threw before the door was added to
+        // the scene below, so a door with no art also became a door with no
+        // collision and no presence at all. Skip the walkmesh; keep the door.
+        const dwk = model ? await door.loadWalkmesh(model.name) : undefined;
 
-        try{
-          model.userData.walkmesh = dwk;
-          door.collisionManager.setWalkmesh(dwk);
-          GameState.walkmeshList.push( dwk.mesh );
+        if(model && dwk){
+          try{
+            model.userData.walkmesh = dwk;
+            door.collisionManager.setWalkmesh(dwk);
+            GameState.walkmeshList.push( dwk.mesh );
 
-          if(dwk.mesh instanceof THREE.Object3D){
-            dwk.mat4.makeRotationFromEuler(door.rotation);
-            dwk.mat4.setPosition( door.position.x, door.position.y, door.position.z);
-            dwk.mesh.geometry.applyMatrix4(dwk.mat4);
-            dwk.updateMatrix();
-            //dwk.mesh.position.copy(door.position);
-            // if(!door.isOpen()){
-            //   GameState.group.room_walkmeshes.add( dwk.mesh );
-            // }
+            if(dwk.mesh instanceof THREE.Object3D){
+              dwk.mat4.makeRotationFromEuler(door.rotation);
+              dwk.mat4.setPosition( door.position.x, door.position.y, door.position.z);
+              dwk.mesh.geometry.applyMatrix4(dwk.mat4);
+              dwk.updateMatrix();
+              //dwk.mesh.position.copy(door.position);
+              // if(!door.isOpen()){
+              //   GameState.group.room_walkmeshes.add( dwk.mesh );
+              // }
+            }
+          }catch(e){
+            console.error('Failed to add dwk', model.name, dwk, e);
           }
-        }catch(e){
-          console.error('Failed to add dwk', model.name, dwk, e);
         }
 
         if(door.model instanceof OdysseyModel3D){
           door.box.setFromObject(door.model);
         }
 
-        if(door.openState){
+        if(door.openState && door.model){
           door.model.playAnimation('opened1', true);
         }
         door.getCurrentRoom();
@@ -1825,7 +1841,10 @@ export class ModuleArea extends ModuleObject {
       plc.rotation.set(0, 0, plc.getBearing());
       const model = await plc.loadModel();
       GameState.group.placeables.add( plc.container );
-      const pwk = await plc.loadWalkmesh(model.name);
+      // Same undefined-model case as loadDoors, and worse here: this loop has no
+      // try/catch, so one placeable that could not build its model threw out of
+      // loadPlaceables and every placeable after it was silently never loaded.
+      const pwk = model ? await plc.loadWalkmesh(model.name) : undefined;
       plc.computeBoundingBox();
 
       if(pwk?.mesh instanceof THREE.Object3D){

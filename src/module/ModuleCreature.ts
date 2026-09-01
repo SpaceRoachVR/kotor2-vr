@@ -1,4 +1,5 @@
 import { GFFObject } from "@/resource/GFFObject";
+import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
 import * as THREE from "three";
 import { ModuleObject } from "@/module/ModuleObject";
 import type { ModuleItem } from "@/module/ModuleItem";
@@ -150,6 +151,8 @@ export class ModuleCreature extends ModuleObject {
   // appearance: any;
 
   animationState: ICreatureAnimationState;
+  /** States already reported as having no animation; see MissingAnimationLog. */
+  private reportedMissingAnimations: Set<number> = new Set();
   overlayAnimationState: IOverlayAnimationState;
   
   equipment: { 
@@ -1133,7 +1136,9 @@ export class ModuleCreature extends ModuleObject {
         }
       }
     }else{
-      console.error('Animation Missing', this.getTag(), this.getName(), this.animationState);
+      if(shouldReportMissingAnimation(this.reportedMissingAnimations, this.animationState?.index)){
+          console.error('Animation Missing', this.getTag(), this.getName(), this.animationState?.index);
+        }
       this.setAnimationState(ModuleCreatureAnimState.PAUSE);
     }
 

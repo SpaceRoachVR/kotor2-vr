@@ -1,4 +1,5 @@
 import { ModuleObject } from "@/module/ModuleObject";
+import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
 import type { ModuleRoom } from "@/module/ModuleRoom";
 import { AudioEmitter } from "@/audio/AudioEmitter";
 import { GameState } from "@/GameState";
@@ -67,6 +68,8 @@ export class ModuleDoor extends ModuleObject {
   lastUsedBy: ModuleObject;
 
   animationState: number;
+  /** States already reported as having no animation; see MissingAnimationLog. */
+  private reportedMissingAnimations: Set<number> = new Set();
   closeLockDC: number;
   disarmDC: number;
   fort: number;
@@ -760,7 +763,9 @@ export class ModuleDoor extends ModuleObject {
           }
         }
       }else{
-        console.error('Animation Missing', this.getTag(), this.getName(), this.animState);
+        if(shouldReportMissingAnimation(this.reportedMissingAnimations, this.animState)){
+          console.error('Animation Missing', this.getTag(), this.getName(), this.animState);
+        }
         this.setAnimationState(ModuleDoorAnimState.DEFAULT);
       }
     }
