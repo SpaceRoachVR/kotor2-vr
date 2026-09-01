@@ -75,6 +75,57 @@ async function main() {
             && first.template.RootNode.hasField('TemplateResRef')),
         } : null,
         gameInProgress: dir,
+        // Decisive split: if the area's own GIT carries the label but the
+        // objects do not, the loss is in turning structs into objects. If the
+        // GIT itself lacks it, the engine loaded a GIT that is not the pristine
+        // one - which the archive on disk provably contains.
+        areaGit: (() => {
+          try {
+            const text = new TextDecoder('latin1').decode(area.git.getExportBuffer());
+            const list = area.git.RootNode.getFieldByLabel('Placeable List');
+            const structs = list ? list.getChildStructs() : [];
+            const first = structs[0];
+            return {
+              templateLabelCount: text.split('TemplateResRef').length - 1,
+              placeableStructs: structs.length,
+              firstStructFieldCount: first ? first.getFields().length : null,
+              firstStructHasTemplateResRef: first ? first.hasField('TemplateResRef') : null,
+            };
+          } catch (e) { return 'threw: ' + String(e && e.message || e); }
+        })(),
+        // Which archives are in the module cache, and what does each hold for
+        // the GIT? InitModuleCache writes them all into one Map under
+        // Promise.all, so a later archive silently overwrites an earlier one.
+        moduleArchives: await (async () => {
+          try {
+            const list = K.ResourceLoader.ModuleArchives || [];
+            const out = [];
+            for (const a of list) {
+              const entry = { path: String(a.resource_path || ''), kind: a.constructor && a.constructor.name };
+              try {
+                const rec = (a.resources || a.keyList || []).find((r) => r.resType === 2023);
+                if (rec) {
+                  const buf = a.getResourceBuffer
+                    ? await a.getResourceBuffer(rec)
+                    : await a.getResourceBufferByResRef(String(rec.resRef), 2023);
+                  const text = new TextDecoder('latin1').decode(buf);
+                  entry.git = { resRef: String(rec.resRef), bytes: buf.length,
+                                templateLabels: text.split('TemplateResRef').length - 1 };
+                } else { entry.git = 'none'; }
+              } catch (e) { entry.git = 'threw'; }
+              out.push(entry);
+            }
+            return out;
+          } catch (e) { return 'threw: ' + String(e && e.message || e); }
+        })(),
+        routedGit: await (async () => {
+          try {
+            const buf = await K.ResourceLoader.loadResource(2023, String(area.name || ''));
+            if (!buf) return 'no buffer';
+            const text = new TextDecoder('latin1').decode(buf);
+            return { bytes: buf.length, templateLabelCount: text.split('TemplateResRef').length - 1 };
+          } catch (e) { return 'threw: ' + String(e && e.message || e); }
+        })(),
       };
     })()`, { timeoutMs: 120000 });
     console.log('AFTER SAVE LOAD:', JSON.stringify(report, null, 1));
