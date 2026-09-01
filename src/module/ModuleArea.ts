@@ -1690,6 +1690,25 @@ export class ModuleArea extends ModuleObject {
     for(let i = 0; i < GameState.PartyManager.CurrentMembers.length; i++){
       await GameState.PartyManager.LoadPartyMember(i);
     }
+
+    // Module.Load calls ModuleObjectManager.Reset(), which clears ObjectList.
+    // Area objects re-register as they load, but party members survive a module
+    // transition rather than being rebuilt, and ModuleCreature only registers
+    // itself inside `if(!this.initialized)` - so an already-initialised party
+    // member is never put back. GetObjectById(player.id) then returns undefined
+    // for the rest of that module, and every action that targets the player by
+    // id fails.
+    //
+    // Measured: ActionDialogObject dropped its action in 8 modules - Hanharr,
+    // Visquis, T3M4, G0T0, Tobin, th_lead, npc_dillan, dan_ctz_f1 - because
+    // `this.target.position` was undefined. The id it could not resolve was
+    // 0x7ffffffe, which is exactly PartyManager.Player.id, not OBJECT_INVALID.
+    // Those NPCs never started their conversations.
+    for(const member of [GameState.PartyManager.Player, ...GameState.PartyManager.party]){
+      if(member instanceof ModuleObject && typeof member.id === 'number' && member.id > 0){
+        GameState.ModuleObjectManager.AddObjectById(member);
+      }
+    }
   }
 
   /**
