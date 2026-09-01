@@ -71,6 +71,45 @@ async function main() {
       const p = window.KotOR.PartyManager && window.KotOR.PartyManager.Player;
       return !!(gs && gs.module && p && p.position && Number.isFinite(p.position.x));
     })()`, 300_000, 3000);
+    // Which module does the save sit in, and does the engine consider the
+    // target module "saved"? LoadModule writes the OUTGOING module's .sav before
+    // disposing it, so entering the module the save was already in reads a .sav
+    // written seconds earlier - a completely different path from a pristine load.
+    const saveContext = await harness.evaluate(`(async () => {
+      const K = window.KotOR;
+      const save = K.SaveGame.saves[0];
+      const CG = K.GameState.CurrentGame || K.CurrentGame;
+      const isSaved = async (n) => {
+        try { return await CG.IsModuleSaved(n); } catch (e) { return 'threw:' + String(e && e.message || e); }
+      };
+      return {
+        saveName: String(save && save.getName ? save.getName() : ''),
+        saveLastModule: String(save && save.getLastModule ? save.getLastModule() : ''),
+        currentModule: String((K.GameState.module || {}).filename || ''),
+        isModuleSavedTarget: await isSaved('${MODULE}'),
+        isLoadingSave: !!K.GameState.isLoadingSave,
+        // IsModuleSaved matches any file named <module>.* in gameinprogress, so
+        // list what is actually there rather than infer from the boolean.
+        gameInProgress: await (async () => {
+          try {
+            return await K.GameFileSystem.readdir('gameinprogress');
+          } catch (e) { return 'threw:' + String(e && e.message || e); }
+        })(),
+        // Does the .sav we wrote actually contain the field? This separates
+        // "written without it" from "read without it" - opposite fixes.
+        savHasTemplateResRef: await (async () => {
+          try {
+            const bytes = await K.GameFileSystem.readFile('gameinprogress/001ebo.sav');
+            const text = new TextDecoder('latin1').decode(bytes);
+            return { bytes: bytes.length,
+                     hasLabel: text.indexOf('TemplateResRef') >= 0,
+                     labelCount: text.split('TemplateResRef').length - 1 };
+          } catch (e) { return 'threw:' + String(e && e.message || e); }
+        })(),
+      };
+    })()`, { timeoutMs: 60000 });
+    console.log('SAVE CONTEXT (before load):', JSON.stringify(saveContext));
+
     console.log('party established; dispatching the real sweep probe (not awaited)…');
 
     await harness.evaluate(`(() => { window.__sweepPhase = '(not started)';
@@ -194,6 +233,48 @@ async function main() {
       }
       if (snap.done) {
         console.log('probe returned. error:', snap.error || '(none)');
+        // The point of this run: compare what the sweep probe concluded against
+        // a live re-read of the same objects, in the same page, moments later.
+        // Two contradictory readings of templateResRef on one build is either a
+        // timing effect or a difference in what is being counted.
+        const compare = await harness.evaluate(`(() => {
+          const r = window.__sweepResult || {};
+          const codes = {};
+          for (const f of (r.findings || [])) codes[f.code] = (codes[f.code] || 0) + 1;
+          const area = window.KotOR.GameState.module.area;
+          const all = [].concat(area.placeables || [], area.doors || [], area.creatures || []);
+          const missingNow = all.filter((o) => !o.templateResRef);
+          return {
+            probeFindings: codes,
+            probeCounts: r.counts,
+            liveTotal: all.length,
+            liveMissing: missingNow.length,
+            liveSample: all.slice(0, 3).map((o) => ({
+              name: (() => { try { return o.getName(); } catch (e) { return '?'; } })(),
+              templateResRef: o.templateResRef || null,
+              hasField: !!(o.template && o.template.RootNode
+                && o.template.RootNode.hasField('TemplateResRef')),
+            })),
+            missingSample: missingNow.slice(0, 3).map((o) => ({
+              name: (() => { try { return o.getName(); } catch (e) { return '?'; } })(),
+              templateResRef: o.templateResRef || null,
+              hasField: !!(o.template && o.template.RootNode
+                && o.template.RootNode.hasField('TemplateResRef')),
+            })),
+          };
+        })()`, { timeoutMs: 60000 });
+        const after = await harness.evaluate(`(async () => {
+          const K = window.KotOR;
+          const CG = K.GameState.CurrentGame || K.CurrentGame;
+          let saved = null;
+          try { saved = await CG.IsModuleSaved('${MODULE}'); } catch (e) { saved = 'threw'; }
+          let dir = null;
+          try { dir = await K.GameFileSystem.readdir('gameinprogress'); } catch (e) { dir = 'threw'; }
+          return { isModuleSavedTarget: saved, isLoadingSave: !!K.GameState.isLoadingSave,
+                   gameInProgress: dir };
+        })()`, { timeoutMs: 60000 });
+        console.log('SAVE CONTEXT (after load):', JSON.stringify(after));
+        console.log('COMPARE:', JSON.stringify(compare, null, 1));
         return;
       }
     }

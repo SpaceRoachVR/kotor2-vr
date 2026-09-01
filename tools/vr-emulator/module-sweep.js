@@ -229,6 +229,27 @@ async function bootEngine(harness, onProgress, expectEula = true) {
     PHASE_TIMEOUTS.saves, 3000
   );
   onProgress(`party established from save (${saveCount} available)`);
+
+  // Runs were not comparable and it was not obvious why. A module the engine has
+  // already saved is loaded from gameinprogress rather than its pristine RIM
+  // (Module.GetModuleArchives via CurrentGame.IsModuleSaved, which matches any
+  // file named <module>.*), so whether a stale .sav is sitting there changes
+  // what a module even loads. 001EBO reported 39 template-missing findings in
+  // one run and none in another for exactly that reason. Report the starting
+  // state so a run's provenance is on the record.
+  const inProgress = await harness.evaluate(`(async () => {
+    try { return await window.KotOR.GameFileSystem.readdir('gameinprogress'); }
+    catch (e) { return []; }
+  })()`).catch(() => []);
+  const saved = (inProgress || [])
+    .map((f) => String(f).split(/[\/]/).pop())
+    .filter((f) => /\.sav$/i.test(f));
+  if (saved.length) {
+    onProgress(`  · gameinprogress holds ${saved.length} saved module(s): ${saved.join(', ')}`);
+    onProgress('    those modules load from the saved copy, not their pristine archive');
+  } else {
+    onProgress('  · gameinprogress holds no saved modules; all modules load pristine');
+  }
   return { saveCount };
 }
 
