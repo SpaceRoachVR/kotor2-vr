@@ -146,18 +146,30 @@ export class ModuleMGPlayer extends ModuleObject {
 
     this.container.removeFromParent();
 
-    try{
-      this.track.getObjectByName('modelhook').add(this.container);
-    }catch(e){
-      console.error(e);
+    // The constructor calls this with a bare placeholder: `track` is undefined
+    // there, so the default parameter supplies an empty object with no
+    // 'modelhook' child and no parent. The real track only arrives later, from
+    // ModuleMiniGame.loadMGPlayer. Both attachments therefore threw and were
+    // logged as errors for every minigame object across seven modules, which is
+    // the normal early state rather than a fault. Guard first, and keep the
+    // try/catch so a genuine attachment failure is still reported.
+    const modelHook = this.track?.getObjectByName?.('modelhook');
+    if(modelHook){
+      try{
+        modelHook.add(this.container);
+      }catch(e){
+        console.error(e);
+      }
     }
 
-    try{
-      this.track.parent.add(this.no_rotate);
-      this.no_rotate.position.copy(this.track.position);
-      this.no_rotate.quaternion.copy(this.track.quaternion);
-    }catch(e){
-      console.error(e);
+    if(this.track?.parent){
+      try{
+        this.track.parent.add(this.no_rotate);
+        this.no_rotate.position.copy(this.track.position);
+        this.no_rotate.quaternion.copy(this.track.quaternion);
+      }catch(e){
+        console.error(e);
+      }
     }
 
     this.onCreateRun = false;

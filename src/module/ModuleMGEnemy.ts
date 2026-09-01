@@ -92,10 +92,16 @@ export class ModuleMGEnemy extends ModuleObject {
     this.track = model;
     this.container.removeFromParent();
 
-    try{
-      this.track.getObjectByName('modelhook').add(this.container);
-    }catch(e){
-
+    // Same constructor-placeholder case as ModuleMGPlayer.setTrack. This one
+    // swallowed the throw silently rather than logging it, which hid the same
+    // condition instead of reporting it; guarding says what is actually true.
+    const modelHook = this.track?.getObjectByName?.('modelhook');
+    if(modelHook){
+      try{
+        modelHook.add(this.container);
+      }catch(e){
+        console.error('ModuleMGEnemy.setTrack: failed to attach to modelhook', e);
+      }
     }
 
   }

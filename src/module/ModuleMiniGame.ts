@@ -121,8 +121,15 @@ export class ModuleMiniGame {
       await player.loadCamera();
       await player.loadModel();
       await player.loadGunBanks();
+      // find() yields undefined when no track matches the declared trackName.
+      // Reaching through it threw out of the minigame load entirely.
       const track = this.tracks.find(o => o.track === player.trackName);
-      player.setTrack(track.model);
+      if(track){
+        player.setTrack(track.model);
+      }else{
+        console.warn('ModuleMiniGame: no track named', player.trackName, 'for the player;',
+          'available:', this.tracks.map(t => t.track));
+      }
       player.getCurrentRoom();
   }
 
@@ -149,8 +156,15 @@ export class ModuleMiniGame {
       await enemy.load();
       await enemy.loadModel();
       await enemy.loadGunBanks();
+      // Same unmatched-trackName case as the player, and worse: this loop is not
+      // wrapped, so one enemy with no matching track threw out of loadMGEnemies
+      // and every enemy after it was silently never loaded. Measured on 371NAR.
       const track = this.tracks.find(o => o.track === enemy.trackName);
-      enemy.setTrack(track.model);
+      if(track){
+        enemy.setTrack(track.model);
+      }else{
+        console.warn('ModuleMiniGame: no track named', enemy.trackName, 'for enemy', i);
+      }
       enemy.computeBoundingBox();
       enemy.getCurrentRoom();
     }
