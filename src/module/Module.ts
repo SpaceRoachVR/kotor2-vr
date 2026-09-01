@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { buildRecoveryIndex, recoverTemplateResRef, type GitInstance, type PristineInstance } from "@/module/TemplateResRefRecovery";
 import * as path from "path";
 import { AudioEmitter } from "@/audio/AudioEmitter";
 import { GameEffect } from "@/effects";
@@ -788,6 +789,114 @@ export class Module {
     }
   }
 
+
+  /**
+   * Object lists in a GIT, and where each keeps its position.
+   *
+   * Creatures store XPosition/YPosition/ZPosition; placeables, doors and
+   * waypoints use X/Y/Z. Read whichever is present rather than assuming.
+   */
+  static readonly GIT_OBJECT_LISTS = [
+    'Creature List', 'Door List', 'Placeable List',
+    'TriggerList', 'WaypointList', 'SoundList', 'StoreList', 'Encounter List',
+  ];
+
+  private static readInstanceKey(strt: any): GitInstance {
+    const num = (labels: string[]): number => {
+      for(const label of labels){
+        if(strt.hasField(label)){
+          const value = Number(strt.getFieldByLabel(label).getValue());
+          if(Number.isFinite(value)) return value;
+        }
+      }
+      return 0;
+    };
+    return {
+      tag: strt.hasField('Tag') ? String(strt.getFieldByLabel('Tag').getValue() || '') : '',
+      x: num(['X', 'XPosition']),
+      y: num(['Y', 'YPosition']),
+      z: num(['Z', 'ZPosition']),
+    };
+  }
+
+  private static structTemplateResRef(strt: any): string {
+    if(!strt.hasField('TemplateResRef')) return '';
+    return String(strt.getFieldByLabel('TemplateResRef').getValue() || '');
+  }
+
+  /**
+   * Restore blueprint references a saved module dropped.
+   *
+   * Saves written by earlier builds embed GITs whose object structs carry no
+   * TemplateResRef at all, and the saved branch of GetModuleArchives never
+   * consults the pristine archive - so ModulePlaceable.load() finds no resref
+   * and skips merging the .utp entirely, leaving 68 fields where a cold load
+   * reaches 130. The pristine archive still holds the answer.
+   *
+   * Patch the GIT before the area is built, so everything downstream - the
+   * blueprint merge included - simply works, rather than special-casing objects
+   * after the fact.
+   *
+   * Only unambiguous matches are restored; see TemplateResRefRecovery. A wrong
+   * blueprint would silently give an object another object's behaviour, which is
+   * worse than the gap this repairs.
+   *
+   * @returns how many references were restored
+   */
+  static async recoverSavedTemplateResRefs(git: GFFObject, modName = '', areaName = ''): Promise<number> {
+    const gaps: any[] = [];
+    for(const label of Module.GIT_OBJECT_LISTS){
+      const field = git.RootNode.hasField(label) ? git.RootNode.getFieldByLabel(label) : undefined;
+      if(!field) continue;
+      for(const strt of field.getChildStructs()){
+        if(!Module.structTemplateResRef(strt)) gaps.push(strt);
+      }
+    }
+    if(!gaps.length) return 0;
+
+    const rim = await Module.GetModuleRimA(modName);
+    if(!rim){
+      console.warn('Module.recoverSavedTemplateResRefs: no pristine archive for', modName);
+      return 0;
+    }
+    const info = rim.getResourceInfo(areaName, ResourceTypes['git']);
+    if(!info) return 0;
+    const buffer = await rim.getResourceBuffer(info);
+    if(!buffer || !buffer.length) return 0;
+
+    const pristineGit = new GFFObject(buffer);
+    const pristine: PristineInstance[] = [];
+    for(const label of Module.GIT_OBJECT_LISTS){
+      const field = pristineGit.RootNode.hasField(label) ? pristineGit.RootNode.getFieldByLabel(label) : undefined;
+      if(!field) continue;
+      for(const strt of field.getChildStructs()){
+        const templateResRef = Module.structTemplateResRef(strt);
+        if(!templateResRef) continue;
+        pristine.push({ ...Module.readInstanceKey(strt), templateResRef });
+      }
+    }
+    if(!pristine.length) return 0;
+
+    const index = buildRecoveryIndex(pristine);
+    let restored = 0;
+    for(const strt of gaps){
+      const resref = recoverTemplateResRef(index, Module.readInstanceKey(strt));
+      if(!resref) continue;
+      if(strt.hasField('TemplateResRef')){
+        strt.getFieldByLabel('TemplateResRef').setValue(resref);
+      }else{
+        strt.addField( new GFFField(GFFDataType.RESREF, 'TemplateResRef') ).setValue(resref);
+      }
+      restored += 1;
+    }
+    if(restored){
+      console.log(`Module.recoverSavedTemplateResRefs: restored ${restored} of ${gaps.length} blueprint reference(s) for ${modName}`);
+    }else{
+      console.warn(`Module.recoverSavedTemplateResRefs: ${gaps.length} object(s) in ${modName} have no blueprint reference and none could be matched unambiguously`);
+    }
+    return restored;
+  }
+
   static async GetModuleArchives(modName = ''): Promise<(RIMObject|ERFObject)[]> {
     const archives: any[] = [];
     let archive = undefined;
@@ -910,6 +1019,15 @@ export class Module {
 
       const gitBuffer = await ResourceLoader.loadResource(ResourceTypes['git'], module.entryArea);
       const git = new GFFObject(gitBuffer);
+
+      // A module entered through a saved copy can arrive with its blueprint
+      // references stripped; restore them from the pristine archive before the
+      // area is built from this GIT.
+      try{
+        await Module.recoverSavedTemplateResRefs(git, modName, module.entryArea);
+      }catch(e){
+        console.error('Module.recoverSavedTemplateResRefs failed', e);
+      }
 
       const areBuffer = await ResourceLoader.loadResource(ResourceTypes['are'], module.entryArea);
       const are = new GFFObject(areBuffer)
