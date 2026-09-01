@@ -1538,7 +1538,7 @@ export class ModuleCreature extends ModuleObject {
     
     let attackAnimIndex = -1;
 
-    let modeltype = this.creatureAppearance.modeltype;
+    let modeltype = this.creatureAppearance?.modeltype;
     let attackKey = this.getCombatAnimationAttackType();
     let weaponWield = this.getCombatAnimationWeaponType();
     
@@ -1589,7 +1589,7 @@ export class ModuleCreature extends ModuleObject {
 
     let attackAnimIndex = -1;
 
-    let modeltype = this.creatureAppearance.modeltype;
+    let modeltype = this.creatureAppearance?.modeltype;
     let attackKey = this.getCombatAnimationAttackType();
     let weaponWield = this.getCombatAnimationWeaponType();
     
@@ -1650,7 +1650,7 @@ export class ModuleCreature extends ModuleObject {
 
     let attackAnimIndex = -1;
 
-    let modeltype = this.creatureAppearance.modeltype;
+    let modeltype = this.creatureAppearance?.modeltype;
     let attackKey = this.getCombatAnimationAttackType();
     let weaponWield = this.getCombatAnimationWeaponType();
     
@@ -1973,7 +1973,7 @@ export class ModuleCreature extends ModuleObject {
 
   getClosesetOpenSpot(oObject: ModuleObject){
     let maxDistance = Infinity;
-    let radius = this.creatureAppearance.hitdist;
+    let radius = this.creatureAppearance?.hitdist ?? 0;
     let closest = undefined;
     let distance = 0;
     let origin = this.position;
@@ -2877,7 +2877,7 @@ export class ModuleCreature extends ModuleObject {
 
   getRunSpeed(){
     if(this.getWalkRateId() == 7){
-      return this.creatureAppearance.rundist
+      return this.creatureAppearance?.rundist ?? 0
     }
     const creaturespeed2DA = GameState.TwoDAManager.datatables.get('creaturespeed');
     if(creaturespeed2DA){
@@ -2887,7 +2887,7 @@ export class ModuleCreature extends ModuleObject {
 
   getWalkSpeed(){
     if(this.getWalkRateId() == 7){
-      return this.creatureAppearance.walkdist
+      return this.creatureAppearance?.walkdist ?? 0
     }
     const creaturespeed2DA = GameState.TwoDAManager.datatables.get('creaturespeed');
     if(creaturespeed2DA){
@@ -2900,7 +2900,13 @@ export class ModuleCreature extends ModuleObject {
   }
 
   getHitDistance(){
-    return this.creatureAppearance.hitdist;
+    // An appearance id with no row in appearance.2da leaves creatureAppearance
+    // undefined. Guarding loadBody and loadHead let such a creature finish
+    // loading, which moved the same fault here - this is called from update(),
+    // so it threw every frame instead of once at load. Measured on 410DXN, the
+    // only critical left after that fix. The whole accessor family is guarded
+    // now rather than one site at a time.
+    return this.creatureAppearance?.hitdist ?? 0;
   }
 
   getMainClass(){
@@ -3204,7 +3210,7 @@ export class ModuleCreature extends ModuleObject {
   }
 
   getPersonalSpace(){
-    return this.creatureAppearance.perspace;
+    return this.creatureAppearance?.perspace ?? 0;
   }
 
   initEffects(): void {
