@@ -683,6 +683,15 @@ export class Module {
     try{
       const mod = new ERFObject(resource_path);
       await mod.load();
+      // load() does not throw - ERFObject.loadFromDisk catches its own failures
+      // - so this used to log "success" and return an empty archive for a file
+      // that is not there. This install ships no .mod files at all, so that was
+      // every module: 82 bogus empty ERFs pushed into GetModuleArchives and
+      // searched on every resource lookup. A module packaged as .rim rather than
+      // .mod is normal, not a fault.
+      if(mod.loadFailed){
+        return undefined;
+      }
       console.log('Module.GetModuleMod success', resource_path);
       return mod;
     }catch(e){
@@ -697,6 +706,9 @@ export class Module {
     try{
       const rim = new RIMObject(resourcePath);
       await rim.load();
+      if(rim.loadFailed){
+        return undefined;
+      }
       return rim;
     }catch(e){
       console.error('Module.GetModuleRimA failed', resourcePath);
@@ -710,6 +722,9 @@ export class Module {
     try{
       const rim = new RIMObject(resourcePath);
       await rim.load();
+      if(rim.loadFailed){
+        return undefined;
+      }
       return rim;
     }catch(e){
       console.log('Module.GetModuleRimB failed', resourcePath);
@@ -723,6 +738,9 @@ export class Module {
     try{
       const mod = new ERFObject(resourcePath);
       await mod.load();
+      if(mod.loadFailed){
+        return undefined;
+      }
       console.log('Module.GetModuleLipsLoc success', resourcePath);
       return mod;
     }catch(e){
@@ -759,6 +777,9 @@ export class Module {
     try{
       const erf = new ERFObject(resourcePath);
       await erf.load();
+      if(erf.loadFailed){
+        return undefined;
+      }
       return erf;
     }catch(e){
       console.log('Module.GetModuleDLG failed', resourcePath);

@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { isFileNotFoundError } from "@/utility/filesystem/FileNotFound";
 import { BinaryReader } from "@/utility/binary/BinaryReader";
 import { BinaryWriter } from "@/utility/binary/BinaryWriter";
 import { Endians } from "@/enums/resource/Endians";
@@ -31,6 +32,10 @@ export class RIMObject {
   reader: BinaryReader;
   header: IRIMHeader;
   rimDataOffset: number;
+  /** Set when load() could not read the archive; see loadFromDisk. */
+  loadFailed: boolean = false;
+  /** Set when the archive is simply absent, as optional archives may be. */
+  notFound: boolean = false;
 
   resourceMap: Map<number, Map<string, IRIMResource>> = new Map();
 
@@ -157,7 +162,17 @@ export class RIMObject {
     try{
       await this.readHeaderFromFileDecriptor(fd);
     }catch(e){
-      console.error('RIM Header Read', e);
+      // Same swallow as ERFObject.loadFromDisk: the failure is contained so a
+      // bad archive does not take the caller down, but load() then resolves and
+      // hands back a RIM with no resources. Record why, so a caller can tell
+      // "empty because absent" from "empty because that is what it holds".
+      this.loadFailed = true;
+      if(isFileNotFoundError(e)){
+        this.notFound = true;
+        console.log('RIMObject: not present, continuing without it -', resource_path);
+      }else{
+        console.error('RIM Header Read', e);
+      }
     }
     await GameFileSystem.close(fd);
   }

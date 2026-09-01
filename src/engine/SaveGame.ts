@@ -397,7 +397,7 @@ export class SaveGame {
    * @async
    * @returns {Promise<void>} Resolves when the save game resource loader has been initialized.
    * 
-   * @throws {Error} Throws an error if the SAVEGAME.sav file cannot be loaded.
+   * Does not throw: a failure is reported and leaves `isLoaded` false.
    * 
    * @example
    * const saveGame = new SaveGame('000001 - AUTOSAVE');
@@ -407,7 +407,16 @@ export class SaveGame {
   async initSaveGameResourceLoader(){
     this.SAVEGAME = new ERFObject(path.join(this.directory, 'SAVEGAME.sav'));
     await this.SAVEGAME.load();
-    this.isLoaded = true;
+    // ERFObject.loadFromDisk catches its own failures, so load() resolves even
+    // when the archive could not be read and this reported isLoaded for a save
+    // holding nothing. Unlike the module archives, SAVEGAME.sav is required:
+    // report the failure rather than presenting an unreadable save as an empty
+    // one. Not thrown, because the flag is not consulted anywhere and the save
+    // path should not gain a new exception on this evidence alone.
+    this.isLoaded = !this.SAVEGAME.loadFailed;
+    if(this.SAVEGAME.loadFailed){
+      console.error('SaveGame: could not read SAVEGAME.sav for', this.directory);
+    }
   }
 
   /**

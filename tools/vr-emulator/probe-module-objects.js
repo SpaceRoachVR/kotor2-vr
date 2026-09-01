@@ -210,6 +210,20 @@ async function main() {
           sounds: (area.sounds || []).length,
         },
         areaName: (() => { try { return String(area.name || area._name || ''); } catch { return '?'; } })(),
+        // How many archives this module actually searches, and whether any of
+        // them are empty shells from a failed load.
+        archives: (() => {
+          try {
+            const mod = window.KotOR.GameState.module;
+            const list = (mod && mod.archives) || [];
+            return list.map((a) => ({
+              path: String(a.resource_path || ''),
+              type: String(a.type || ''),
+              entries: (a.resources || a.keyList || []).length,
+              loadFailed: !!a.loadFailed,
+            }));
+          } catch (e) { return 'threw:' + String(e && e.message || e); }
+        })(),
         // When the collections come back empty, the question is whether the
         // area parsed its GFFs at all or parsed them and built nothing.
         diagnostics: (() => {
