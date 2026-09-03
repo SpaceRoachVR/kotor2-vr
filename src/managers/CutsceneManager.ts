@@ -375,9 +375,13 @@ export class CutsceneManager {
     this.state = ConversationState.WAITING_FOR_PC_CHOICE;
     this.currentEntry = undefined;
     this.isListening = false;
+    // Note: this abandons the entry without running the pending reply's
+    // scripts, so an action-only terminal reply is dropped. It was investigated
+    // as the cause of the Peragus lift and cleared — the lift was the VR abort
+    // guard in GameState's cutscene context, not this path.
     if (GameState.Mode != EngineMode.DIALOG)
       return;
-    
+
     //Get First Reply
     const reply = this.dialog.getReplyByIndex(entry.replies[0]?.index);
     if(!reply){
@@ -450,6 +454,17 @@ export class CutsceneManager {
    * @param aborted - Whether the conversation was aborted
    */
   static endConversation(aborted = false) {
+    // An aborted teardown is worth a line: it means something ended the
+    // conversation out from under the player rather than the dialogue running
+    // its course. That is how the Peragus lift was found — the abort fired
+    // while the reply list was up. A normal end stays silent.
+    if (aborted) {
+      console.warn(
+        `[dialog] endConversation(aborted) dlg='${this.dialog?.resref ?? 'none'}'` +
+        ` state=${this.state} mode=${GameState.Mode}` +
+        ` replies=${(this.currentReplies || []).length}`
+      );
+    }
     const wasBark = this.cutsceneMode == CutsceneMode.BARK;
     this.active = false;
     if (this.paused) {
@@ -483,7 +498,26 @@ export class CutsceneManager {
         }
       }
       this.dialog.releaseStuntActors();
-      if(this.cutsceneMode == CutsceneMode.ANIMATED){
+      // A conversation that faded out must not leave the screen black behind
+      // it. This restore used to run only for ANIMATED cutscenes, so any other
+      // conversation carrying an authored fade-out node ended with the overlay
+      // parked fully opaque and nothing to lift it. The Peragus intro is one:
+      // its last node is `{Placed Camera 6, fade out}`, and the fade sat at
+      // opacity 1 in FADED_OUT indefinitely.
+      //
+      // Because the fade quad lives in `scene_gui`, every VR GUI panel
+      // composites it — so a stuck fade renders the container and computer
+      // menus as solid black boxes, which is how this was reported from the
+      // headset. Skipping the intro movie made it easy to hit.
+      //
+      // `holdForScript` is the engine's existing "a script owns this fade"
+      // signal: SetFadeUntilScript sets it, SetGlobalFadeIn/Out clear it.
+      // Honour it, so a fade deliberately held across a module transition is
+      // still respected — those fade in on the far side, and forcing one here
+      // would flash the outgoing area. FadeInFromCutscene is itself a no-op
+      // unless the overlay is actually faded (or fading) out.
+      if(this.cutsceneMode == CutsceneMode.ANIMATED ||
+        !GameState.FadeOverlayManager.holdForScript){
         GameState.FadeOverlayManager.FadeInFromCutscene();
       }
     }

@@ -9,6 +9,8 @@ import { AudioEmitter } from "@/audio/AudioEmitter";
 import { CreatureClass } from "@/combat/CreatureClass";
 import { EffectRacialType } from "@/effects";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
+import { resolveEffectiveSkillRank } from "@/engine/interaction/SkillEffectRules";
+import { resolveSavedCreatureName } from "@/module/CreatureNamePersistence";
 import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
 import { GameState } from "@/GameState";
@@ -3076,8 +3078,32 @@ export class ModuleCreature extends ModuleObject {
     return this.skills[value].rank > 0;
   }
 
+  /**
+   * The **effective** skill rank: base rank plus any skill-modifying effects.
+   *
+   * This used to return `this.skills[value].rank` alone, and nothing in the
+   * engine ever read `EffectSkillIncrease` / `EffectSkillDecrease` — the
+   * factory built them, `addEffect` stored them, and no consumer existed. So
+   * every skill effect in the game was inert.
+   *
+   * The visible casualty was the security tunneler. `ActionUnlockObject`
+   * applies the tunneler's ThievesTools bonus as a temporary
+   * `EffectSkillIncrease` on SECURITY and then calls `attemptUnlock`, which
+   * resolves the check through `getSkillLevel` — so the bonus was computed,
+   * attached, and discarded, and using a tunneler produced exactly the same
+   * roll as not using one. Reported from a headset session against the
+   * combat-training Metal Box (DC 33) and the High Security Cylinder (DC 36),
+   * both of which are authored to be unreachable without a tunneler.
+   *
+   * Effective rank is also what retail `GetSkillRank` returns, which is the
+   * other caller of this method.
+   *
+   * `intList[0]` is the skill id and `intList[1]` the amount, matching how
+   * `ActionUnlockObject` and the effect factory populate them. Clamped at zero:
+   * a decrease may cancel a skill but never invert it.
+   */
   getSkillLevel(value: number){
-    return this.skills[value].rank;
+    return resolveEffectiveSkillRank(this.skills[value].rank, this.effects, value);
   }
 
   getHasSpell(id = 0){
@@ -4352,7 +4378,10 @@ export class ModuleCreature extends ModuleObject {
       featList.addChildStruct( this.feats[i].save() );
     }
 
-    gff.RootNode.addField( new GFFField(GFFDataType.CEXOLOCSTRING, 'FirstName') ).setValue( this.template.RootNode.getFieldByLabel('FirstName')?.getCExoLocString() );
+    // Live name first, template CExoLocString otherwise — see
+    // resolveSavedCreatureName. Reading straight from the template discarded
+    // the name chosen in character generation on the first save.
+    gff.RootNode.addField( new GFFField(GFFDataType.CEXOLOCSTRING, 'FirstName') ).setValue( resolveSavedCreatureName( this.firstName, this.template.RootNode.getFieldByLabel('FirstName') ) );
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'ForcePoints') ).setValue(this.forcePoints);
     gff.RootNode.addField( new GFFField(GFFDataType.CHAR, 'FortSaveThrow') ).setValue(this.fortitudeSaveThrow);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Gender') ).setValue(this.gender);
@@ -4376,7 +4405,7 @@ export class ModuleCreature extends ModuleObject {
     }
 
     gff.RootNode.addField( new GFFField(GFFDataType.INT, 'JoiningXP') ).setValue( this.joiningXP ? this.joiningXP : 0 );
-    gff.RootNode.addField( new GFFField(GFFDataType.CEXOLOCSTRING, 'LastName') ).setValue( this.template.RootNode.getFieldByLabel('LastName')?.getCExoLocString() );
+    gff.RootNode.addField( new GFFField(GFFDataType.CEXOLOCSTRING, 'LastName') ).setValue( resolveSavedCreatureName( this.lastName, this.template.RootNode.getFieldByLabel('LastName') ) );
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Listening') ).setValue( this.isListening );
 
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'MaxForcePoints') ).setValue(this.maxForcePoints);

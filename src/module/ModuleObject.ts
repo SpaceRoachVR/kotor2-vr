@@ -189,6 +189,16 @@ export class ModuleObject {
   willSaveThrow: number;
   min1HP: boolean;
 
+  /**
+   * Script-controlled render gate, driven by the `EnableRendering` action
+   * (K2 871). Separate from `model.visible`, which `updateModelVisibility`
+   * recomputes from room and frustum every frame — a one-shot assignment there
+   * would be overwritten on the next tick, so the flag has to persist.
+   *
+   * Defaults to true: an object nothing has spoken about renders normally.
+   */
+  renderingEnabled: boolean = true;
+
   //attributes
   placedInWorld: boolean = false;
   linkedToModule: string = '';
@@ -549,6 +559,13 @@ export class ModuleObject {
   updateModelVisibility(){
     if(!this.model){ return; }
     this.model.wasOffscreen = !this.model.visible;
+
+    // A script-disabled object stays hidden in every mode. Checked before the
+    // room/frustum logic below, which would otherwise re-show it next frame.
+    if(!this.renderingEnabled){
+      this.model.visible = false;
+      return;
+    }
 
     if(GameState.Mode == EngineMode.INGAME){
       if(!this.room){

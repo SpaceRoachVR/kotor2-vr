@@ -5070,6 +5070,8 @@ NWScriptDefK2.Actions = {
     name: 'SetMinOneHP',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.INTEGER ],
+    // Inherited from K1 716 by the id-based fallback at the bottom of this
+    // file, which is why the tutorial droids really are set min-one-HP.
     action: undefined
   },
   717: {
@@ -6280,7 +6282,13 @@ NWScriptDefK2.Actions = {
     name: 'EnableRendering',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.INTEGER ],
-    action: undefined
+    // The sensor droids' spawn script (`k_fab_fade_sp`) calls this once per
+    // droid — eight times in the observed session, one per droid. Unimplemented,
+    // it left their render state entirely to the per-frame room/frustum logic.
+    action: function(this: NWScriptInstance, args: [ModuleObject, number]){
+      if(!args[0]) return;
+      args[0].renderingEnabled = !!args[1];
+    }
   },
   872: {
     comment: '872\nRWT-OEI 10/19/04\nThis function returns TRUE if the creature has actions in its\nCombat Action queue.',

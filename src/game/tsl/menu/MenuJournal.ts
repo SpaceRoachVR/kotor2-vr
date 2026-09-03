@@ -1,4 +1,5 @@
 import type { GUIListBox, GUILabel, GUIButton } from "@/gui";
+import type { JournalEntry } from "@/engine/JournalEntry";
 import { MenuJournal as K1_MenuJournal } from "@/game/kotor/KOTOR";
 import { GUIJournalItem } from "@/game/tsl/gui/GUIJournalItem";
 
@@ -57,8 +58,16 @@ export class MenuJournal extends K1_MenuJournal {
       });
       
       this.LB_ITEMS.setProtoBuilder(GUIJournalItem);
-      this.LB_ITEMS.onSelect = (node: any) => {
-        console.log(node);
+      // `onSelected` is the listbox-level callback; `onSelect` is a per-child
+      // control hook, so assigning it here bound nothing and the handler only
+      // logged besides. TSL also calls `super.menuControlInitializer(true)`,
+      // which makes the K1 parent return before registering its own
+      // `onSelected` — so the quest list had no selection handler at all and
+      // the description pane stayed empty however many quests were clicked.
+      // Reported from a headset session. Mirrors the K1 parent.
+      this.LB_ITEMS.onSelected = (item: JournalEntry) => {
+        this.selected = item;
+        this.UpdateSelected();
       };
 
       this.BTN_FILTER_TIME.addEventListener('click', (e) => {

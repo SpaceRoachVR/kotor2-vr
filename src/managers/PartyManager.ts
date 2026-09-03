@@ -820,9 +820,26 @@ export class PartyManager {
       partyMember.position.copy(spawn);
       partyMember.quaternion.copy(quaternion);
       partyMember.loadScripts();
+
+      // The party swap must be visible to script BEFORE the model finishes
+      // loading. This assignment used to live inside the loadModel() promise
+      // below, while the function returned `partyMember` synchronously — so
+      // when the NWScript `SwitchPlayerCharacter` action returned, party[0] was
+      // still the outgoing character and the new one was findable by nothing.
+      //
+      // `GetObjectByTag` searches PartyManager.party, so every lookup the
+      // calling script made next resolved to nothing. In `a_bet3m4` — the
+      // Peragus "become T3-M4" script — that is every remaining call:
+      // SetMinOneHP got no target, two ApplyEffectToObject calls were handed a
+      // non-ModuleObject, and DestroyObject received undefined. Reported from a
+      // headset session as T3-M4 arriving late and behaving oddly.
+      //
+      // Only genuinely model-dependent work stays in the promise. The object
+      // exists logically the moment the swap happens; its 3D model is what is
+      // asynchronous, not its identity.
+      PartyManager.party[0] = partyMember;
+
       partyMember.loadModel().then( (model: OdysseyModel3D) => {
-        PartyManager.party[0] = partyMember;
-        
         model.userData.moduleObject = partyMember;
         partyMember.position.copy(spawn);
         partyMember.quaternion.copy(quaternion);

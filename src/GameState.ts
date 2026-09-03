@@ -68,6 +68,11 @@ import {
 } from "@/vr/runtime/VRWorldActionPromptModel";
 import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
 import {
+  describeVRCreaturePromptAction,
+  hasCreatureWorldPromptAction,
+  readVRCreaturePromptState,
+} from "@/vr/runtime/VRCreaturePromptRules";
+import {
   formatVRAttackStanceReadout,
   VRAttackStanceController,
   type VRAttackStanceSelection,
@@ -515,6 +520,34 @@ function buildVRWorldActionPromptFor(
   }));
 
   const actions = [...authoredActions];
+  // Creatures route through onClick rather than the container direct-use path.
+  // ActionMenuManager only builds entries for *hostile* creatures, so without
+  // this a friendly NPC produced zero actions and the prompt was suppressed for
+  // having no pages — which is what made 3C-FD and the medbay dummy inert.
+  if ((target.objectType & ModuleObjectType.ModuleCreature) !== 0) {
+    const creatureDescriptor = describeVRCreaturePromptAction(
+      readVRCreaturePromptState(actor, target),
+      target.id,
+      candidate.name,
+    );
+    if (creatureDescriptor) {
+      actions.push({
+        kind: 'action',
+        id: creatureDescriptor.id,
+        label: creatureDescriptor.label,
+        revalidate: () => isLiveVRWorldPromptCandidate(actor, target, candidate),
+        activate: () => {
+          if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return;
+          try {
+            (target as ModuleObject & { onClick?: (actor: ModuleCreature) => void })
+              .onClick?.(actor);
+          } catch (error) {
+            console.error(`[VR interaction] creature onClick failed target=${target.id}`, error);
+          }
+        },
+      });
+    }
+  }
   if (isDirectVRWorldUseTarget(target)) {
     const descriptor = describeDirectVRWorldUse(actor, target, console, {
       authoredActionCount,
@@ -582,7 +615,7 @@ function describeVRWorldPromptCandidate(
     );
     if (![position.x, position.y, position.z].every(Number.isFinite)) return null;
     const inRange = actorDistanceMetres <= getVRInteractionRange(target.objectType);
-    const hasActions = hasPotentialVRWorldPromptActions(actorActionState, target);
+    const hasActions = hasPotentialVRWorldPromptActions(actor, actorActionState, target);
     const name = resolveVRWorldPromptName(target);
     reportVRWorldPromptCandidacyOnce(target, name, actorDistanceMetres, inRange, hasActions);
     return {
@@ -761,10 +794,15 @@ function isVRAttackActionEntry(entry: VRActionMenuEntry | undefined): boolean {
 
 function isStructurallyValidVRWorldPromptTarget(actor: ModuleCreature, target: ModuleObject): boolean {
   try {
+    // Creatures belong here too. Without them no creature could ever become a
+    // prompt candidate, so 3C-FD and the medbay dummy showed a reticle and a
+    // name label but never a prompt. Which creatures actually offer one is
+    // decided by hasCreatureWorldPromptAction, not by this mask.
     const supportedType = (target.objectType & (
       ModuleObjectType.ModuleDoor |
       ModuleObjectType.ModulePlaceable |
-      ModuleObjectType.ModuleTrigger
+      ModuleObjectType.ModuleTrigger |
+      ModuleObjectType.ModuleCreature
     )) !== 0;
     return !!target && target !== actor && supportedType &&
       Number.isInteger(target.id) && target.id >= 0 &&
@@ -797,9 +835,13 @@ interface VRWorldPromptActorActionState {
 }
 
 function hasPotentialVRWorldPromptActions(
+  actor: ModuleCreature,
   actorState: VRWorldPromptActorActionState,
   target: ModuleObject,
 ): boolean {
+  if ((target.objectType & ModuleObjectType.ModuleCreature) !== 0) {
+    return hasCreatureWorldPromptAction(readVRCreaturePromptState(actor, target));
+  }
   if ((target.objectType & (ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable)) !== 0) {
     const lockTarget = target as ModuleObject & {
       isLocked?: () => boolean;
@@ -2259,7 +2301,23 @@ export class GameState implements EngineContext {
         : null,
       getCutsceneContext: () => {
         const currentEntry = GameState.CutsceneManager.currentEntry;
-        return GameState.CutsceneManager.active && !GameState.MenuManager.InGameComputer?.isVisible()
+        // The computer panel withholds skip because it owns input while it is
+        // showing numbered options — but only then. `setReplies` filters
+        // continue-dialog nodes out of the displayed list, so an entry whose
+        // only reply is a blank continue node shows NO options at all: nothing
+        // is clickable, the VR pointer reports "no clickable control among
+        // [LB_MESSAGE, LBL_BAR1]", and the console is a dead end. That is the
+        // Ebon Hawk communications console, whose first entry is skippable and
+        // whose single reply is a continue node — the player could click, hear
+        // the click, and never advance.
+        //
+        // Flatscreen advances it by skipping the entry, which runs
+        // showReplies() and auto-advances the continue node. Grant the same
+        // route whenever the panel has nothing to choose from.
+        const computerOwnsInput = GameState.MenuManager.InGameComputer?.isVisible() &&
+          (GameState.CutsceneManager.currentReplies || [])
+            .some((reply) => !reply.isContinueDialog());
+        return GameState.CutsceneManager.active && !computerOwnsInput
           ? {
             canSkip: currentEntry?.skippable === true,
             skip: () => {
@@ -2270,10 +2328,26 @@ export class GameState implements EngineContext {
               // (IngameControls.ts, KeyMapAction.DialogAbort) — the escape
               // hatch VR had none of for an authored `NodeUnskippable` entry,
               // which otherwise had no skip button and no way out. Only
-              // while there is no reply choice on screen: once
-              // repliesShown is true the panel owns input and the player
-              // should pick a reply, not have the whole conversation end
-              // under them.
+              // while there is no reply choice on screen: once the replies are
+              // up the panel owns input and the player should pick one, not
+              // have the whole conversation end under them.
+              //
+              // `repliesShown` alone could never enforce that. `showReplies()`
+              // sets `this.currentEntry = undefined` at the very moment the
+              // reply list goes up, so the captured `currentEntry` is null
+              // exactly when the guard is meant to bite — and `canSkip` above
+              // reads the same field, so it is false then too. Pressing the
+              // trigger to choose a reply therefore fell through to abort.
+              //
+              // That is how the Peragus utility lift failed: choosing
+              // "[Go outside.]" aborted the conversation instead of selecting
+              // it — logged as endConversation(aborted=true) with
+              // state=WAITING_FOR_PC_CHOICE and both replies live — so the
+              // terminal reply carrying `a_to_002ebo` never ran and the player
+              // was left standing at the controls.
+              //
+              // The conversation state is authoritative while the entry is not.
+              if (GameState.CutsceneManager.isWaitingForPCChoice()) return;
               if (currentEntry?.repliesShown) return;
               GameState.CutsceneManager.endConversation(true);
             },
@@ -2656,7 +2730,21 @@ export class GameState implements EngineContext {
     let cullCamera: THREE.Camera = GameState.currentCamera;
     try {
       const xr = GameState.renderer?.xr;
-      if(xr?.isPresenting && typeof xr.getCamera === 'function'){
+      // In VR the headset camera is what renders the world — except while an
+      // authored camera owns the shot. In DIALOG the engine points
+      // `currentCamera` at the placeable/dialogue camera and VR reprojects
+      // THAT camera onto the theater surface, so culling from the headset
+      // hides precisely the rooms the shot is aimed at.
+      //
+      // `updateRoomVisibility`'s DIALOG branch already tests room boxes
+      // against `GameState.currentCamera.position`; taking the frustum from a
+      // different camera left those two halves disagreeing. The Ebon Hawk
+      // security console showed it plainly — every camera feed rendered the
+      // skybox, space with an asteroid drifting past, because each room failed
+      // both the containsPoint test and a frustum belonging to the player's
+      // head back at the console. Reported from a headset session.
+      const authoredCameraOwnsShot = GameState.Mode == EngineMode.DIALOG;
+      if(xr?.isPresenting && !authoredCameraOwnsShot && typeof xr.getCamera === 'function'){
         const xrCamera = (xr.getCamera as unknown as () => THREE.Camera)();
         if(xrCamera?.projectionMatrix) cullCamera = xrCamera;
       }

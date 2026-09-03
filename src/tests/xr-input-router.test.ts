@@ -98,7 +98,10 @@ describe('XRInputRouter', () => {
   });
 
   test.each(BUILT_IN_TRIGGER_PROFILES)(
-    'routes only the left trigger as radial-wheel Select for $id',
+    // Was left-only. The wheel's ray is resolved by hit, so it usually sits on
+    // the right hand while confirm listened only to the left — a live pointer
+    // with a dead trigger. Reported from a headset session.
+    'routes either trigger as radial-wheel Select for $id',
     ({ interactionProfile, triggerButtonIndex }) => {
       const controllers = (['left', 'right'] as const).map((hand) =>
         profileController(hand, interactionProfile, triggerButtonIndex)
@@ -108,6 +111,31 @@ describe('XRInputRouter', () => {
 
       expect(actions.filter((action) => action.action === SemanticXRAction.Select)).toEqual([
         expect.objectContaining({ hand: 'left', pressed: true }),
+        expect.objectContaining({ hand: 'right', pressed: true }),
+      ]);
+    },
+  );
+
+  test.each(BUILT_IN_TRIGGER_PROFILES)(
+    'routes a right-hand-only trigger as radial-wheel Select for $id',
+    ({ interactionProfile, triggerButtonIndex }) => {
+      // The exact headset case: left trigger untouched, right trigger pulled.
+      // Under the old left-only binding this produced no Select at all.
+      const left = profileController('left', interactionProfile, triggerButtonIndex);
+      const buttons = [...left.buttons];
+      buttons[triggerButtonIndex] = { pressed: false, touched: false, value: 0 };
+
+      const actions = new XRInputRouter().route(
+        [{ ...left, buttons }, profileController('right', interactionProfile, triggerButtonIndex)],
+        new Set(['radial-wheel'])
+      );
+
+      // The router emits an entry per bound hand and carries the pressed state;
+      // consumers filter on `pressed`. Only the right one is actually down.
+      expect(
+        actions.filter((action) => action.action === SemanticXRAction.Select && action.pressed)
+      ).toEqual([
+        expect.objectContaining({ hand: 'right', pressed: true }),
       ]);
     },
   );

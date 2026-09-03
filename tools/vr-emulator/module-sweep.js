@@ -68,6 +68,7 @@ function parseArgs(argv) {
     timeout: 300_000,
     reloadEvery: 25,
     reloadHeapMb: 3000,
+    vr: false,
     out: EVIDENCE_DIR,
   };
   const list = (value) => value.split(',').map((s) => s.trim()).filter(Boolean);
@@ -87,6 +88,7 @@ function parseArgs(argv) {
     else if (flag === '--timeout') args.timeout = Number(next());
     else if (flag === '--reload-every') args.reloadEvery = Number(next());
     else if (flag === '--reload-heap-mb') args.reloadHeapMb = Number(next());
+    else if (flag === '--vr') args.vr = true;
     else if (flag === '--out') args.out = next();
     else if (flag === '--help' || flag === '-h') args.help = true;
     else throw new Error(`Unknown flag: ${flag}`);
@@ -110,6 +112,9 @@ Breadth-first module sweep — loads every campaign module and reports what is b
   --url URL          reuse a running asset service instead of starting one
   --asset-port N     start the asset service on a non-default port
   --port N           CDP port (default 9440)
+  --vr               enter an immersive session before sweeping, so every module
+                     is loaded and rendered through the VR frame path. Emulated
+                     (IWER), so it settles VR logic — not comfort or cadence.
   --out DIR          where to write evidence
 `;
 
@@ -158,7 +163,7 @@ async function recoverPage(harness, url, reason, onProgress) {
   try {
     await harness.cdp.send('Page.reload', { ignoreCache: false });
     await harness.waitFor('window.__xrHarness && window.__xrHarness.ready === true', 30_000);
-    await bootEngine(harness, () => {}, false);
+    await bootEngine(harness, onProgress, false);
     return 'reloaded';
   } catch (error) {
     onProgress(`  · reload failed (${String(error && error.message || error).slice(0, 120)});`
@@ -170,8 +175,55 @@ async function recoverPage(harness, url, reason, onProgress) {
     // A wedged browser may not close cleanly; the relaunch is what matters.
   }
   await harness.launch(url);
-  await bootEngine(harness, () => {}, true);
+  await bootEngine(harness, onProgress, true);
   return 'relaunched';
+}
+
+/**
+ * Whether this run sweeps while presenting. Module-scoped because `bootEngine`
+ * is also called from the reload and relaunch recovery paths, which have no
+ * access to the parsed arguments — and those are exactly the paths that must
+ * re-enter, since a page reload destroys the XR session along with everything
+ * else.
+ */
+let sweepInVr = false;
+
+/**
+ * Enters an immersive session so each module is loaded and rendered through
+ * VRSpike's frame path rather than the flatscreen one.
+ *
+ * Without this the sweep installs the IWER runtime — the harness always does —
+ * but never calls requestSession, so `navigator.xr` is emulated while nothing
+ * ever presents. Whole classes of defect are invisible that way: the frustum
+ * culling that renders an authored camera's shot, the theater and panel hosts,
+ * and anything downstream of the XR frame callback.
+ *
+ * Clicked through CDP input, not `element.click()`, because
+ * `requestSession('immersive-vr')` is gated on a user activation.
+ *
+ * This is emulated XR. It settles VR *logic*; it is not device evidence, and
+ * says nothing about comfort or compositor cadence.
+ */
+async function enterImmersiveSession(harness, onProgress) {
+  if (!sweepInVr) return;
+  try {
+    await harness.waitFor(
+      `(() => { const b = document.querySelector('#vr-spike-button');
+        return !!b && !b.disabled; })()`,
+      30_000, 1000
+    );
+    await clickButtonByText(harness, 'Enter VR (spike)');
+    await harness.waitFor(
+      `!!(window.KotOR && window.KotOR.VRSpike && window.KotOR.VRSpike.isPresenting)`,
+      30_000, 1000
+    );
+    onProgress('  · presenting: sweeping through the VR frame path');
+  } catch (error) {
+    // Do not fail the run over it. A sweep that silently degraded to flatscreen
+    // would be reported as VR evidence it is not, so say so loudly instead.
+    onProgress(`  · WARNING: could not enter VR (${String(error && error.message || error).slice(0, 120)})`);
+    onProgress('  · continuing FLATSCREEN — results are not VR evidence');
+  }
 }
 
 async function bootEngine(harness, onProgress, expectEula = true) {
@@ -229,6 +281,8 @@ async function bootEngine(harness, onProgress, expectEula = true) {
     PHASE_TIMEOUTS.saves, 3000
   );
   onProgress(`party established from save (${saveCount} available)`);
+
+  await enterImmersiveSession(harness, onProgress);
 
   // Runs were not comparable and it was not obvious why. A module the engine has
   // already saved is loaded from gameinprogress rather than its pristine RIM
@@ -418,6 +472,28 @@ async function sweep(args, onProgress) {
       }
 
       report.console = harvestConsole(harness, consoleFrom);
+
+      // Record whether this module was actually rendered while presenting,
+      // per module rather than once per run. A page reload destroys the XR
+      // session, and the reload path calls bootEngine with a no-op progress
+      // sink, so a failed re-entry was invisible in the transcript — the run
+      // would silently finish in flatscreen and be reported as VR evidence it
+      // was not. Now every record carries the answer and the summary can refuse
+      // to call a run a VR run unless every module agrees.
+      if (sweepInVr) {
+        report.presenting = await harness.evaluate(
+          `!!(window.KotOR && window.KotOR.VRSpike && window.KotOR.VRSpike.isPresenting)`
+        ).catch(() => null);
+        if (report.presenting !== true) {
+          report.findings.push({
+            code: 'not-presenting',
+            severity: 'major',
+            detail: 'module was swept with --vr but the XR session was not presenting; ' +
+              'its result is flatscreen evidence, not VR evidence',
+            subject: name,
+          });
+        }
+      }
       const pageErrors = harness.pageErrors.slice(errorsFrom);
       for (const pageError of pageErrors.slice(0, 10)) {
         report.findings.push({
@@ -469,6 +545,12 @@ async function main() {
   if (args.help) {
     console.log(USAGE);
     return;
+  }
+
+  // Read by bootEngine's recovery paths, which have no access to args.
+  sweepInVr = args.vr === true;
+  if (sweepInVr) {
+    console.log('sweeping in VR (emulated IWER runtime) — settles VR logic, not comfort or cadence');
   }
 
   const started = Date.now();

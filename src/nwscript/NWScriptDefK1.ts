@@ -116,17 +116,36 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.VOID,
     args: [NWScriptDataType.OBJECT, NWScriptDataType.ACTION],
     action: function(this: NWScriptInstance, args: [ModuleObject, any]){
-      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleObject)){
-        if(typeof args[1] === 'object'){
-          args[1].script.caller = args[0];
-          args[1].script.seekTo(args[1].offset);
-          args[1].script.runScript();
-        }else{
-          console.error('AssignCommand', args);
-        }
-      }else{
-        console.error('AssignCommand', args);
+      // Two very different conditions used to share one `console.error(args)`,
+      // which printed as a bare "AssignCommand Array(2)" and named neither the
+      // cause nor the script. The module sweep reported it across 9 modules
+      // with no way to tell them apart.
+      //
+      // A subject that does not resolve is NOT an error. This action's own
+      // contract says so: "(If the object doesn't exist, nothing happens.)"
+      // Scripts pass OBJECT_INVALID freely — a GetObjectByTag that found
+      // nothing resolves to undefined here — and retail simply does nothing.
+      // Reporting it as an error made ordinary authored control flow look like
+      // engine breakage.
+      if(!BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleObject)){
+        return;
       }
+
+      // A malformed action IS a real defect: the script asked for work to be
+      // assigned and the work is unusable. Name the subject and the calling
+      // script so it can be located, rather than dumping the argument array.
+      if(typeof args[1] !== 'object' || !args[1] || !args[1].script){
+        console.error(
+          `AssignCommand: unusable action for subject ` +
+          `'${(args[0] as any)?.getTag?.() ?? 'unknown'}' ` +
+          `in script '${(this as any)?.name ?? '?'}' (got ${typeof args[1]})`
+        );
+        return;
+      }
+
+      args[1].script.caller = args[0];
+      args[1].script.seekTo(args[1].offset);
+      args[1].script.runScript();
     }
   },
   7:{

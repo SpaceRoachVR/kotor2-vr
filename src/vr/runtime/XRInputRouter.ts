@@ -77,7 +77,12 @@ function standardBindings(
     { action: SemanticXRAction.Turn, context: 'locomotion', hand: 'dominant', input: { kind: 'axis2d', xIndex: stickAxes[0], yIndex: stickAxes[1] } },
     { action: SemanticXRAction.Select, context: 'ui', hand: 'dominant', input: { kind: 'button', index: 0 } },
     { action: SemanticXRAction.Select, context: 'gameplay', hand: 'dominant', input: { kind: 'button', index: 0 } },
-    { action: SemanticXRAction.Select, context: 'radial-wheel', hand: 'left', input: { kind: 'button', index: 0 } },
+    // Either hand, matching world-prompt below. The wheel's ray is resolved by
+    // hit rather than by role (see VRPointerHandResolver), so it follows
+    // whichever hand aims — usually the right. Binding confirm to one physical
+    // hand left the ray live on the other hand with a dead trigger, which reads
+    // as a broken menu. Reported from a headset session.
+    { action: SemanticXRAction.Select, context: 'radial-wheel', hand: 'either', input: { kind: 'button', index: 0 } },
     { action: SemanticXRAction.Select, context: 'world-prompt', hand: 'either', input: { kind: 'button', index: 0 } },
     { action: SemanticXRAction.Cancel, context: 'ui', hand: 'dominant', input: { kind: 'button', index: 5 } },
     { action: SemanticXRAction.Use, context: 'gameplay', hand: 'dominant', input: { kind: 'button', index: 4 } },

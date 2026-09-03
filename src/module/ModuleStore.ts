@@ -35,7 +35,23 @@ export class ModuleStore extends ModuleObject {
     this.objectType |= ModuleObjectType.ModuleStore;
     
     this.template = gff;
-    this.buySellFlag = -1;
+    // `BuySellFlag` is a BYTE, and -1 is not a value a BYTE can hold. It was
+    // being used as an "unset" sentinel, but nothing ever read it as one — the
+    // field is write-only outside the Forge editor — so the sentinel bought
+    // nothing and cost correctness.
+    //
+    // It escapes whenever the store's UTM cannot be resolved: `load()` logs
+    // "Failed to load ModuleStore template", `initProperties()` then finds no
+    // BuySellFlag field, the -1 survives, and `save()` writes it straight into
+    // a BYTE. `GFFField.setValue` reports "BYTE OutOfBounds" and stores it
+    // anyway, so serialization wraps it to 255 — the same -1/255 confusion that
+    // silently disabled every item property after a save/load.
+    //
+    // The module sweep found this in 13 of 82 modules, alongside 12 reporting
+    // the template failure that produces it. Zero is the correct BYTE default:
+    // no buy/sell bits set, which is what "we never loaded a store template"
+    // should mean.
+    this.buySellFlag = 0;
     this.markDown = 0;
     this.markUp = 0;
     this.onOpenStore = null;

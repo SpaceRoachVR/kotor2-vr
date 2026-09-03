@@ -31,6 +31,7 @@ import { VRTeleportMarkerHost } from "./runtime/VRTeleportMarkerHost";
 import { resolveVRTeleportAim } from "./runtime/VRTeleportAimResolver";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
+import { hideWorldForTheater } from "./runtime/VRTheaterWorldVisibility";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
 import { VRRecenterHoldGate } from "./runtime/VRRecenterHoldGate";
 import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
@@ -363,6 +364,7 @@ export class VRSpike {
   private static panelInputErrorReported = false;
   private static movieInputErrorReported = false;
   private static worldInteractionInputErrorReported = false;
+  private static engineUpdateErrorReported = false;
   private static combatInputErrorReported = false;
   private static forceGestureErrorReported = false;
   private static panelPresentationErrorReported = false;
@@ -678,6 +680,7 @@ export class VRSpike {
     VRSpike.panelInputErrorReported = false;
     VRSpike.movieInputErrorReported = false;
     VRSpike.worldInteractionInputErrorReported = false;
+    VRSpike.engineUpdateErrorReported = false;
     VRSpike.combatInputErrorReported = false;
     VRSpike.forceGestureErrorReported = false;
     VRSpike.panelPresentationErrorReported = false;
@@ -926,7 +929,27 @@ export class VRSpike {
         else VRSpike.processCombatInput(timestamp);
       }
     }
-    VRSpike.hooks?.update(timestamp, 'xr');
+    // The engine tick is the last thing the XR callback does, and an exception
+    // escaping here does not just skip a frame — it propagates out of the
+    // requestAnimationFrame callback and the session stops presenting, so the
+    // headset goes to a black screen with nothing on screen to explain it.
+    // Observed in a headset session: a still-loading room sound threw out of
+    // ModuleRoom.show during a save-load and took the whole view down.
+    //
+    // One engine defect should cost a frame, not the session. Reported once so
+    // a per-frame throw cannot itself flood the console it is diagnosed from.
+    try {
+      VRSpike.hooks?.update(timestamp, 'xr');
+    } catch (error) {
+      if (!VRSpike.engineUpdateErrorReported) {
+        VRSpike.engineUpdateErrorReported = true;
+        console.error(
+          '[VRSpike] engine update threw inside the XR frame callback; the frame loop ' +
+          'has been kept alive and further occurrences are suppressed',
+          error
+        );
+      }
+    }
   };
 
   private static updateTrackedInput(timestamp: number, frame: XRFrame): void {
@@ -1961,8 +1984,11 @@ export class VRSpike {
       const menuPressed = actions.some((action) =>
         action.action === SemanticXRAction.Menu && action.hand === 'left' && action.pressed
       );
+      // No hand filter: the binding table already scopes radial-wheel Select to
+      // 'either', and the wheel's ray follows whichever hand aims at it. Testing
+      // for 'left' here re-imposed the very restriction the binding drops.
       const selectPressed = actions.some((action) =>
-        action.action === SemanticXRAction.Select && action.hand === 'left' && action.pressed
+        action.action === SemanticXRAction.Select && action.pressed
       );
       let openingMenu: VRRadialMenuDefinition | null = null;
       if (menuPressed && !VRSpike.radialMenuPressedLastFrame && !wasOpen) {
@@ -2725,7 +2751,23 @@ export class VRSpike {
       }
       const previousAutoClear = renderer.autoClear;
       renderer.autoClear = true;
-      renderer.render(worldScene, VRSpike.camera);
+      // A prerendered movie is not something the player is standing inside, so
+      // the world must not draw behind the theater. Rendering it did two
+      // visible wrongs: the Peragus intro played on a screen floating in the
+      // middle of the cargo bay, and the module is already loaded by then, so
+      // the placeholder body was on show until T3-M4 spawned over it. Both
+      // reported from a headset session.
+      //
+      // Flatscreen shows a movie fullscreen over black; hiding the world for
+      // this one render is the VR equivalent and needs no change to when the
+      // module loads. Authored cutscenes deliberately keep their surroundings
+      // — there the player IS in the room the scene is reprojected from.
+      const restoreWorld = hideWorldForTheater(worldScene, VRSpike.movieHost.object);
+      try {
+        renderer.render(worldScene, VRSpike.camera);
+      } finally {
+        restoreWorld();
+      }
       VRSpike.perf.recordXRRender(frameTimestamp);
       renderer.autoClear = previousAutoClear;
     } catch (error) {

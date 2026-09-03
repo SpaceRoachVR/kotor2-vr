@@ -458,7 +458,7 @@ export class GFFField {
         if(val >= 0 && val <= 255){
           this.value = val;
         }else{
-          console.error('Field.setValue BYTE OutOfBounds', val, this);
+          console.error(`Field.setValue BYTE OutOfBounds label='${this.label}' value=${val}`, this);
           this.value = val;
         }
       break;
@@ -470,7 +470,7 @@ export class GFFField {
         if(val >= -32768 && val <= 32767){
           this.value = val;
         }else{
-          console.error('Field.setValue SHORT OutOfBounds', val, this);
+          console.error(`Field.setValue SHORT OutOfBounds label='${this.label}' value=${val}`, this);
           this.value = val;
         }
       break;
@@ -482,7 +482,7 @@ export class GFFField {
         if(val >= -2147483648 && val <= 21474836487){
           this.value = val;
         }else{
-          console.error('Field.setValue INT OutOfBounds', val, this);
+          console.error(`Field.setValue INT OutOfBounds label='${this.label}' value=${val}`, this);
           this.value = val;
         }
       break;
@@ -494,7 +494,7 @@ export class GFFField {
         if(val >= 0 && val <= 65535){
           this.value = val;
         }else{
-          console.error('Field.setValue WORD OutOfBounds', val, this);
+          console.error(`Field.setValue WORD OutOfBounds label='${this.label}' value=${val}`, this);
           this.value = val;
         }
       break;
@@ -506,7 +506,7 @@ export class GFFField {
         if(val >= 0 && val <= 4294967296){
           this.value = val;
         }else{
-          console.error('Field.setValue DWORD OutOfBounds', val, this);
+          console.error(`Field.setValue DWORD OutOfBounds label='${this.label}' value=${val}`, this);
           this.value = val;
         }
       break;

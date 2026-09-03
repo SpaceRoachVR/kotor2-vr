@@ -281,7 +281,32 @@ export class ItemProperty {
       this.useable = this.template.RootNode.getFieldByLabel('Usable').getValue();
 
     if(this.template.RootNode.hasField('UpgradeType'))
-      this.upgradeType = this.template.RootNode.getFieldByLabel('UpgradeType').getValue();
+      this.upgradeType = ItemProperty.decodeSentinelByte(
+        this.template.RootNode.getFieldByLabel('UpgradeType').getValue()
+      );
+  }
+
+  /**
+   * Undoes the `-1 -> 255` encoding that `save()` applies to these BYTE fields.
+   *
+   * `save()` writes `this.upgradeType == -1 ? 255 : this.upgradeType`, but the
+   * load path took the value raw, so the round trip was asymmetric: a property
+   * saved as "no upgrade required" came back as upgrade type 255. `isUseable()`
+   * then computed `1 << 255`, which JavaScript masks to `1 << 31`, and that
+   * never matches `upgrades` — so the property answered **unusable**.
+   *
+   * The effect is that every item property becomes inert once it has been
+   * through a savegame: armour, attack, damage, the ability bonuses, and the
+   * security tunneler's ThievesTools bonus. It hides in a fresh game, where the
+   * retail templates simply omit `UpgradeType` and the class default of -1
+   * applies — which is why the tunneler worked on a new game and stopped
+   * working after a save/load. Reported from a headset session: the tunneler
+   * read `upgradeType=255, useable=false` and the combat-training Metal Box
+   * (DC 33) failed at the unaided 29.
+   */
+  static decodeSentinelByte(value: unknown): number {
+    if(!Number.isInteger(value as number)) return -1;
+    return (value as number) === 255 ? -1 : (value as number);
   }
 
   save(){

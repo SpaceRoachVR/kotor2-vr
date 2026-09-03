@@ -98,17 +98,31 @@ export class ActionMenuManager {
             return item.baseItemId == 59
           });
 
-          if(securityUnlockAllowed && securityTunnelers.length){
-            const item = securityTunnelers[0];
-            
-            const action = new GameState.ActionFactory.ActionUnlockObject();
-            action.setOwner(ActionMenuManager.oPC as ModuleObject);
-            action.setParameter(0, ActionParameterType.DWORD, this.oTarget);
-            action.setParameter(1, ActionParameterType.DWORD, securityTunnelers[0]);
-            ActionMenuManager.ActionPanels.targetPanels[1].addAction(new GameState.ActionMenuManager.ActionMenuItem({
-              action: action,
-              icon: item.getIcon()
-            }));
+          // Every tunneler, not just the first. The module's own OnFailToOpen
+          // bark tells the player to "select the Security Tunneler by clicking
+          // on the arrows above or below the Security icon" — that only works
+          // if each one is its own entry. Offering `securityTunnelers[0]` alone
+          // made the stronger tunneler unreachable, which is what gates the
+          // High Security Cylinder (DC 36).
+          //
+          // `item` is carried on the entry so two tunnelers of the same type
+          // stay distinguishable: the VR action source key identifies an entry
+          // by action type, item id and icon, and same-type tunnelers share
+          // both an icon and an action type.
+          if(securityUnlockAllowed){
+            for(let i = 0, len = securityTunnelers.length; i < len; i++){
+              const item = securityTunnelers[i];
+
+              const action = new GameState.ActionFactory.ActionUnlockObject();
+              action.setOwner(ActionMenuManager.oPC as ModuleObject);
+              action.setParameter(0, ActionParameterType.DWORD, this.oTarget);
+              action.setParameter(1, ActionParameterType.DWORD, item);
+              ActionMenuManager.ActionPanels.targetPanels[1].addAction(new GameState.ActionMenuManager.ActionMenuItem({
+                action: action,
+                icon: item.getIcon(),
+                item: item
+              }));
+            }
           }
           
           if(canBashObject(ActionMenuManager.oTarget)){
@@ -166,17 +180,21 @@ export class ActionMenuManager {
             return item.baseItemId == 59
           });
 
-          if(securityUnlockAllowed && securityTunnelers.length){
-            const item = securityTunnelers[0];
-            
-            const action = new GameState.ActionFactory.ActionUnlockObject();
-            action.setOwner(ActionMenuManager.oPC as ModuleObject);
-            action.setParameter(0, ActionParameterType.DWORD, this.oTarget);
-            action.setParameter(1, ActionParameterType.DWORD, securityTunnelers[0]);
-            ActionMenuManager.ActionPanels.targetPanels[1].addAction(new GameState.ActionMenuManager.ActionMenuItem({
-              action: action,
-              icon: item.getIcon()
-            }));
+          // Every tunneler, not just the first — see the placeable branch above.
+          if(securityUnlockAllowed){
+            for(let i = 0, len = securityTunnelers.length; i < len; i++){
+              const item = securityTunnelers[i];
+
+              const action = new GameState.ActionFactory.ActionUnlockObject();
+              action.setOwner(ActionMenuManager.oPC as ModuleObject);
+              action.setParameter(0, ActionParameterType.DWORD, this.oTarget);
+              action.setParameter(1, ActionParameterType.DWORD, item);
+              ActionMenuManager.ActionPanels.targetPanels[1].addAction(new GameState.ActionMenuManager.ActionMenuItem({
+                action: action,
+                icon: item.getIcon(),
+                item: item
+              }));
+            }
           }
           
           if(canBashObject(ActionMenuManager.oTarget)){

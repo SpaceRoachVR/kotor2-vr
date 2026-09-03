@@ -240,8 +240,13 @@ export class ModuleRoom extends ModuleObject {
       this.collisionManager.walkmesh.buildEdgeNormalHelpers();
     }
 
+    // A room sound that has not finished loading has no audioEmitter yet.
+    // Room visibility is driven from the frame loop, which keeps running while
+    // a save-load swaps the module in, so this dereferenced undefined and threw
+    // out of ModuleArea.update -> Module.tick -> the XR frame callback. Caught
+    // by the console watcher during a headset session, loading into 001EBO.
     for(let i = 0, sLen = this.sounds.length; i < sLen; i++){
-      this.sounds[i].audioEmitter.setDisabled(false);
+      this.sounds[i]?.audioEmitter?.setDisabled(false);
     }
   }
 
@@ -269,8 +274,9 @@ export class ModuleRoom extends ModuleObject {
       this.collisionManager.walkmesh.mesh.removeFromParent();
     }
 
+    // See show(): a still-loading room sound has no audioEmitter yet.
     for(let i = 0, sLen = this.sounds.length; i < sLen; i++){
-      this.sounds[i].audioEmitter.setDisabled(true);
+      this.sounds[i]?.audioEmitter?.setDisabled(true);
     }
   }
 
