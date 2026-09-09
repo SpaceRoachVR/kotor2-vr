@@ -270,7 +270,7 @@ async function main() {
     // 005EBO died to guesswork before this was added; the errors were the
     // evidence all along.
     const said = harness.consoleMessages.slice(consoleFrom)
-      .filter((m) => m.type === 'error' || m.type === 'warning')
+      .filter((m) => m.level === 'error' || m.level === 'warning')
       .map((m) => String(m.text || '').slice(0, 220));
     report.pageErrors = harness.pageErrors.slice(errorsFrom).map((e) => String(e).slice(0, 400));
     report.consoleErrors = said.slice(0, 25);
