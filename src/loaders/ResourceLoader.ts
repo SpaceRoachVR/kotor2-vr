@@ -10,6 +10,28 @@ import { IERFResource } from "@/interface/resource/IERFResource";
 import { GameFileSystem } from "@/utility/GameFileSystem";
 import { isTextureResrefUsable, normalizeTextureResref } from "@/loaders/TextureResolution";
 
+/**
+ * Thrown when a resource is not present in any override layer or archive.
+ *
+ * A miss and a read failure arrive at the same `catch` but are not the same
+ * event. Some resources are genuinely optional in retail data - lip-sync is the
+ * clearest case, since the install ships 77 lip archives for 82 modules and many
+ * voiced lines carry no `.lip` at all - and a caller that degrades correctly on
+ * absence should not be made to report it as an error. A caller that cannot
+ * degrade still sees a thrown Error with the same message as before.
+ */
+export class ResourceNotFoundError extends Error {
+  readonly resRef: string;
+  readonly resId: number;
+
+  constructor(resRef: string, resId: number){
+    super(`Resource not found: ResRef: ${resRef} ResId: ${resId}`);
+    this.name = 'ResourceNotFoundError';
+    this.resRef = resRef;
+    this.resId = resId;
+  }
+}
+
 export interface OverrideResourceEntry {
   readonly resourceType: number;
   readonly filepath: string;
@@ -310,7 +332,7 @@ export class ResourceLoader {
       ResourceLoader.loadArchivedResource(resMDX, normalizedRef),
     ]);
     if (!mdl || !mdx) {
-      throw new Error(`Resource not found: ResRef: ${normalizedRef} ResId: ${mdl ? resMDX : resMDL}`);
+      throw new ResourceNotFoundError(normalizedRef, mdl ? resMDX : resMDL);
     }
     return { mdl, mdx };
   }
@@ -413,7 +435,7 @@ export class ResourceLoader {
     }
 
     //Resource Not Found
-    throw new Error(`Resource not found: ResRef: ${resRef} ResId: ${resId}`);
+    throw new ResourceNotFoundError(resRef, resId);
   }
 
   /**

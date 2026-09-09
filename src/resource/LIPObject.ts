@@ -2,7 +2,7 @@ import { ILIPHeader } from "@/interface/resource/ILIPHeader";
 import { ILIPKeyFrame } from "@/interface/resource/ILIPKeyFrame";
 import { BinaryReader } from "@/utility/binary/BinaryReader";
 import { BinaryWriter } from "@/utility/binary/BinaryWriter";
-import { ResourceLoader } from "@/loaders";
+import { ResourceLoader, ResourceNotFoundError } from "@/loaders";
 import { ResourceTypes } from "@/resource/ResourceTypes";
 import { OdysseyModelControllerType } from "@/enums/odyssey/OdysseyModelControllerType";
 import { GameFileSystem } from "@/utility/GameFileSystem";
@@ -339,12 +339,36 @@ export class LIPObject {
 
   }
 
+  /** Resrefs already reported absent, so a looping line reports once. */
+  static #absentLips: Set<string> = new Set();
+
+  /**
+   * Load a lip-sync file, or nothing if the line has none.
+   *
+   * Absence is ordinary retail data, not a fault: the install ships 77 lip
+   * archives for 82 modules, and plenty of voiced lines carry no `.lip` even
+   * inside a module that has one. The engine already degrades correctly -
+   * `setLIP(undefined)` is a valid state and every consumer guards on
+   * `instanceof LIPObject` - so the only cost was the report itself, which
+   * `console.error`ed once per line and accounted for the single largest
+   * console-error signature in the 82-module sweep (15-25 modules per run).
+   * That volume buries the errors that do mean something.
+   *
+   * A file that exists and will not read is a different event and still errors.
+   */
   static async Load(resref: string = ''): Promise<LIPObject>{
     return new Promise<LIPObject|any>( (resolve, reject) => {
       ResourceLoader.loadResource(ResourceTypes['lip'], resref).then((buffer: Uint8Array) => {
         resolve(new LIPObject(buffer));
       }).catch( (e) => {
-        console.error(e);
+        if(e instanceof ResourceNotFoundError){
+          if(!LIPObject.#absentLips.has(resref)){
+            LIPObject.#absentLips.add(resref);
+            console.debug('LIPObject.Load: no lip-sync for', resref, '- the line plays unlipped');
+          }
+        }else{
+          console.error(e);
+        }
         resolve(undefined);
       });
     });
