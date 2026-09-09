@@ -73,9 +73,24 @@ export class ModuleStore extends ModuleObject {
   }
 
   load(){
-    if(this.getResRef()){
+    // The GIT's StoreList struct names the blueprint `ResRef`. Every other object
+    // type names it `TemplateResRef`, and this method mixed the two: it guarded on
+    // the field a GIT store actually carries, then looked the UTM up by the field it
+    // never carries, so loadCachedResource was always handed null. No store in the
+    // game ever loaded its blueprint - inventory, markUp/markDown, onOpenStore and
+    // locName all silently kept their constructor defaults.
+    //
+    // The sweep reported "Failed to load ModuleStore template" in exactly the 12 of
+    // 82 modules that contain a store, and in no module that does not. ForgeStore
+    // reads and writes this same struct through `ResRef`, which is what settled
+    // which of the two names is the authored one.
+    const blueprint = this.getResRef();
+    if(blueprint){
+      // Hold on to it, or save() writes an empty TemplateResRef from the untouched
+      // `templateResRef` and the savegame loses the blueprint as well.
+      this.templateResRef = blueprint;
       //Load template and merge fields
-      const buffer = ResourceLoader.loadCachedResource(ResourceTypes['utm'], this.getTemplateResRef());
+      const buffer = ResourceLoader.loadCachedResource(ResourceTypes['utm'], blueprint);
       if(buffer){
         const gff = new GFFObject(buffer);
         this.template.merge(gff);
