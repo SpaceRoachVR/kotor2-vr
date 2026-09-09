@@ -96,6 +96,20 @@ export class OdysseyMaterialBuilder {
     material.needsUpdate = true;
   }
 
+  /**
+   * Clear every define in the normal-map group together.
+   *
+   * USE_NORMALMAP declares the sampler; TANGENTSPACE_NORMALMAP and
+   * OBJECTSPACE_NORMALMAP sample it. Any subset of these three is a fragment
+   * shader that will not compile, so they are only ever set or cleared as a unit.
+   */
+  static clearNormalMapDefines(material: any): void {
+    if(!material?.defines){ return; }
+    delete material.defines.USE_NORMALMAP;
+    delete material.defines.TANGENTSPACE_NORMALMAP;
+    delete material.defines.OBJECTSPACE_NORMALMAP;
+  }
+
   static async applyTXIToMaterial(texture: OdysseyTexture, material: THREE.Material, options: ApplyTXIOptions): Promise<void> {
     if(!texture?.txi) return;
     const registerManagedTexture = (tex?: OdysseyTexture) => {
@@ -225,7 +239,19 @@ export class OdysseyMaterialBuilder {
           material.defines.WATER = "";
           material.defines.USE_DISPLACEMENTMAP = "";
           material.defines.ENVMAP_BLENDING_MIX = "";
-          delete material.defines.USE_NORMALMAP;
+          // Water replaces normal mapping with a displaced bump path, so the
+          // normal-map defines have to come off as a group. Dropping only
+          // USE_NORMALMAP left TANGENTSPACE_NORMALMAP (set above for a NORMAL-type
+          // bumpmap) still defined, and those two defines guard opposite halves of
+          // the same code in three's chunks: USE_NORMALMAP declares
+          // `uniform sampler2D normalMap` in normalmap_pars_fragment, while
+          // TANGENTSPACE_NORMALMAP/OBJECTSPACE_NORMALMAP sample it in
+          // normal_fragment_maps. Half-clearing left the sampler referenced but
+          // undeclared, so the whole fragment shader failed to compile:
+          // "'normalMap' : undeclared identifier" in every module holding a
+          // texture that is both a NORMAL bumpmap and waterAlpha - 6 of 82,
+          // Telos-heavy, and stable across all five noise-floor runs.
+          OdysseyMaterialBuilder.clearNormalMapDefines(material);
           delete material.defines.ENVMAP_BLENDING_ADD;
           (material as any).combine = THREE.MixOperation;
 
