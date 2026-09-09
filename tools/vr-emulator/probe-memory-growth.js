@@ -31,13 +31,14 @@ const { startAssetService } = require('./asset-service');
 const EVIDENCE_DIR = path.join(__dirname, 'evidence');
 
 function parseArgs(argv) {
-  const args = { url: null, cycles: 3, modules: ['101PER', '102PER'], out: EVIDENCE_DIR, census: false };
+  const args = { url: null, cycles: 3, modules: ['101PER', '102PER'], out: EVIDENCE_DIR, census: false, hold: 0 };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--url') args.url = argv[++i];
     else if (argv[i] === '--cycles') args.cycles = Number(argv[++i]);
     else if (argv[i] === '--modules') args.modules = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
     else if (argv[i] === '--out') args.out = argv[++i];
     else if (argv[i] === '--census') args.census = true;
+    else if (argv[i] === '--hold') args.hold = Number(argv[++i]);
   }
   return args;
 }
@@ -284,6 +285,14 @@ async function main() {
       if (last.census && last.census.total != null) console.log("  live BufferGeometry total:", last.census.total);
     }
     console.log('\nreport -> ' + path.relative(process.cwd(), outFile));
+    if (args.hold) {
+      // Experiments that attach from outside need a heap that is not moving under
+      // them: a sweep still loading modules adds orphans between the before and
+      // after readings, which is larger than the effect being measured.
+      console.log(`
+holding the page open for ${args.hold}s on CDP port 9447 — attach experiments now`);
+      await new Promise((r) => setTimeout(r, args.hold * 1000));
+    }
   } finally {
     await harness.close();
     if (service) service.stop();
