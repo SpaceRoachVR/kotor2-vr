@@ -42,7 +42,9 @@ const { VrHarness } = require('./harness');
 const { startAssetService } = require('./asset-service');
 const { listGameModules, selectModules } = require('./module-list');
 const { buildModuleProbeSource } = require('./module-probe');
-const { rankRootCauses, summarize, toDefectRecords, renderRanking } = require('./sweep-report');
+const {
+  rankRootCauses, summarize, toDefectRecords, renderRanking, consoleErrorCode,
+} = require('./sweep-report');
 
 const EVIDENCE_DIR = path.join(__dirname, 'evidence');
 const DEFAULT_GAME_ROOT = 'D:\\SteamLibrary\\steamapps\\common\\Knights of the Old Republic II';
@@ -361,11 +363,27 @@ function harvestConsole(harness, fromIndex) {
   const benign = allErrors.filter((m) => isBenignConsoleError(m.text));
   const errors = allErrors.filter((m) => !isBenignConsoleError(m.text));
   const warnings = messages.filter((m) => m.level === 'warning' || m.level === 'warn');
+  // Grouped by fault, not by module. `console-error` as a single code produced
+  // one bucket spanning 42 of 82 modules that aggregated at least four
+  // unrelated faults — top of the blast-radius ranking, and useless to act on.
+  const bySignature = new Map();
+  for (const message of errors) {
+    const code = consoleErrorCode(message.text);
+    let entry = bySignature.get(code);
+    if (!entry) {
+      entry = { code, count: 0, sample: message.text.slice(0, 300) };
+      bySignature.set(code, entry);
+    }
+    entry.count += 1;
+  }
+
   return {
     total: messages.length,
     errors: errors.length,
     benignErrors: benign.length,
     warnings: warnings.length,
+    signatures: Array.from(bySignature.values()).sort((a, b) =>
+      b.count - a.count || a.code.localeCompare(b.code)),
     // A handful of examples, deduplicated — one broken asset can log thousands
     // of identical lines and they add nothing after the first.
     samples: Array.from(new Set(errors.map((m) => m.text.slice(0, 300)))).slice(0, 10),
@@ -503,12 +521,15 @@ async function sweep(args, onProgress) {
           subject: name,
         });
       }
-      if (report.console.errors > 0) {
+      // One finding per distinct fault. A module hitting three unrelated errors
+      // used to raise a single finding naming only the first, which both hid
+      // the other two and let one code dominate the ranking.
+      for (const signature of report.console.signatures || []) {
         report.findings.push({
-          code: 'console-error',
+          code: signature.code,
           severity: 'major',
-          detail: `${report.console.errors} console error(s) during load and render. ` +
-            `First: ${report.console.samples[0] || '(none captured)'}`,
+          detail: `${signature.count} console error(s) during load and render. ` +
+            `First: ${signature.sample || '(none captured)'}`,
           subject: name,
         });
       }

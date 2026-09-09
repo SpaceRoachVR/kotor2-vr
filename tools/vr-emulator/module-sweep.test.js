@@ -16,6 +16,7 @@ const { listGameModules, selectModules } = require('./module-list');
 const { buildModuleProbeSource } = require('./module-probe');
 const {
   rankRootCauses, summarize, toDefectRecords, renderRanking, severityRank,
+  consoleErrorSignature, consoleErrorCode,
 } = require('./sweep-report');
 const { parseArgs, harvestConsole } = require('./module-sweep');
 
@@ -379,4 +380,99 @@ test('benign errors are counted separately rather than discarded', () => {
   assert.equal(harvested.errors, 1);
   assert.equal(harvested.benignErrors, 1);
   assert.deepEqual(harvested.samples, ['Resource not found: ResRef: t_door01']);
+});
+
+// --- console-error signatures -------------------------------------------------
+//
+// Every string below is a real first line taken from the 82-module sweep of
+// 2026-09-09. The point of these is not that the slugs look tidy; it is which
+// messages must group together and which must stay apart.
+
+test('two "Failed to load X template" faults stay apart', () => {
+  // The distinction the whole split exists to preserve: these are different
+  // faults and collapsing them puts an unactionable bucket at the top.
+  assert.notEqual(
+    consoleErrorSignature('Failed to load ModuleStore template'),
+    consoleErrorSignature('Failed to load character template'),
+  );
+});
+
+test('shader errors differing only by GL error code and GLSL line collapse', () => {
+  const a = 'THREE.WebGLProgram: Shader Error 0 - VALIDATE_STATUS false\n\nERROR: 0:1029:';
+  const b = 'THREE.WebGLProgram: Shader Error 1282 - VALIDATE_STATUS false\n\nERROR: 0:1032:';
+  assert.equal(consoleErrorSignature(a), consoleErrorSignature(b));
+  assert.equal(consoleErrorSignature(a), 'three-webglprogram-shader-error');
+});
+
+test('resource-not-found collapses across every resref and stack trace', () => {
+  const a = 'Error: Resource not found: ResRef: fx_lightning ResId: 2002\n    at ResourceLoader.loadModelPair';
+  const b = 'Error: Resource not found: ResRef: 221carthend057 ResId: 3004\n    at ResourceLoader.loadResource';
+  assert.equal(consoleErrorSignature(a), consoleErrorSignature(b));
+  assert.equal(consoleErrorSignature(a), 'error-resource-not-found-resref');
+});
+
+test('only the first line is read, so stack traces cannot fragment a signature', () => {
+  assert.equal(
+    consoleErrorSignature('model is not of type OdysseyModel\n    at MDLLoader.load'),
+    consoleErrorSignature('model is not of type OdysseyModel'),
+  );
+});
+
+test('quoted names and key=value pairs end the signature', () => {
+  assert.equal(
+    consoleErrorSignature("ModuleCreature.save: 'HK50' has 8 of 8 skills missing"),
+    consoleErrorSignature("ModuleCreature.save: '3CFD' has 8 of 8 skills missing"),
+  );
+  assert.equal(
+    consoleErrorSignature("Field.setValue BYTE OutOfBounds label='Height' value=-1.5 GFFField"),
+    'field-setvalue-byte-outofbounds',
+  );
+});
+
+test('an empty or whitespace-only message is classified, not dropped', () => {
+  assert.equal(consoleErrorSignature(''), 'unclassified');
+  assert.equal(consoleErrorSignature('   \n  '), 'unclassified');
+  assert.equal(consoleErrorSignature(undefined), 'unclassified');
+});
+
+test('a signature never runs away with a long message', () => {
+  const long = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda';
+  assert.equal(consoleErrorSignature(long).split('-').length, 6);
+});
+
+test('the code keeps the console-error prefix so the family stays greppable', () => {
+  assert.equal(
+    consoleErrorCode('Failed to load ModuleStore template'),
+    'console-error:failed-to-load-modulestore-template',
+  );
+});
+
+test('harvestConsole groups errors by signature with counts, most frequent first', () => {
+  const harness = {
+    consoleMessages: [
+      { level: 'error', text: 'Error: Resource not found: ResRef: aaa_1 ResId: 3004' },
+      { level: 'error', text: 'Error: Resource not found: ResRef: bbb_2 ResId: 3004' },
+      { level: 'error', text: 'Failed to load ModuleStore template' },
+      { level: 'warning', text: 'not an error' },
+    ],
+  };
+  const out = harvestConsole(harness, 0);
+  assert.equal(out.errors, 3);
+  assert.equal(out.signatures.length, 2);
+  assert.equal(out.signatures[0].code, 'console-error:error-resource-not-found-resref');
+  assert.equal(out.signatures[0].count, 2);
+  assert.equal(out.signatures[1].code, 'console-error:failed-to-load-modulestore-template');
+  assert.equal(out.signatures[1].count, 1);
+});
+
+test('a split code still yields a ledger id of one character class', () => {
+  const [record] = toDefectRecords([{
+    module: '202TEL',
+    findings: [{
+      code: 'console-error:failed-to-load-modulestore-template',
+      severity: 'major', subject: '202TEL', detail: 'x',
+    }],
+  }], 'evidence.jsonl');
+  assert.match(record.id, /^[a-z0-9-]+$/);
+  assert.equal(record.id, 'sweep-202tel-console-error-failed-to-load-modulestore-template');
 });

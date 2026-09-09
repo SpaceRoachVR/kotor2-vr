@@ -163,6 +163,38 @@ like everything here it says nothing about comfort or cadence.
   and counted separately — never silently dropped, or the filter becomes a place
   real regressions go to hide.
 
+### Console errors are split by signature, not lumped under one code
+
+Until 2026-09-09 every console error raised the single code `console-error`.
+On the first full 82-module run that produced one bucket spanning 42 modules,
+top of the blast-radius ranking and impossible to act on, because it aggregated
+at least four unrelated faults. A module hitting three different errors also
+raised only one finding, naming the first and hiding the rest.
+
+Errors are now grouped by a signature derived from the message's first line, so
+the code reads `console-error:failed-to-load-modulestore-template`. Replaying
+the same run's evidence through it turns one 35-module bucket into three real
+leads plus a tail:
+
+    console-error:error-resource-not-found-resref        16 modules
+    console-error:failed-to-load-modulestore-template    12 modules
+    console-error:three-webglprogram-shader-error         6 modules
+
+The signature takes the first line only (engine errors carry stack traces, and
+GLSL logs carry line numbers that vary per occurrence), then stops at the first
+data-looking token — one containing a digit, an underscore, a quote, a path
+separator or an `=`. That rule is what keeps `Failed to load ModuleStore
+template` and `Failed to load character template` apart while collapsing
+`Resource not found: ResRef: <anything>` together, and it makes the shader
+variants that differ only by GL error code and GLSL line number group as one.
+
+**It is a heuristic label, not a proven root cause.** Messages that put a name
+*before* their variable part — `Animation Missing <creature> <id>` — still split
+per creature, because nothing in the text marks the creature as data. That
+over-reports rather than hiding anything, and the untouched first line always
+stays in the finding's `detail`. Treat a signature as a bucket worth opening,
+not as a diagnosis.
+
 **A skipped probe is not a passed probe.** The battery reaches into engine
 internals that move; when an API is missing it records a `skipped` entry rather
 than inventing findings, and the run summary prints the skip count loudly. A

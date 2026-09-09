@@ -16,6 +16,63 @@
  * running; this decides what the run means, so it can be tested without either.
  */
 
+/** Prefix for every console-error code. Signatures are appended after a colon. */
+const CONSOLE_ERROR_CODE = 'console-error';
+
+/**
+ * A token is *data* when it identifies one occurrence rather than describing the
+ * fault: a resref, an id, a line number, a quoted name, a path.
+ */
+function looksLikeData(token) {
+  return /\d/.test(token)
+    || token.includes('_')
+    || /['"]/.test(token)
+    || /[\\/]/.test(token)
+    || token.includes('=')
+    || token.length > 24;
+}
+
+/**
+ * Reduces a console error to a signature naming the *fault*, so the ranking can
+ * group by cause instead of by the catch-all `console-error` code.
+ *
+ * Without this the top of the blast-radius ranking was one 42-module bucket
+ * aggregating at least four unrelated faults, which is not something anyone can
+ * act on. Splitting the same run yields `Failed to load ModuleStore template`
+ * across the Telos cluster, one shader-compile fault whose variants differ only
+ * by GLSL line number, and one resource-not-found family — three real leads.
+ *
+ * Only the first line is considered: engine errors carry stack traces and
+ * multi-line GLSL logs whose line numbers vary per occurrence. The signature
+ * then stops at the first data-looking token, which is what keeps
+ * `Failed to load ModuleStore template` and `Failed to load character template`
+ * apart while collapsing `Resource not found: ResRef: <anything>` together.
+ *
+ * It is a heuristic label, not a proven root cause. Messages that put a name
+ * before their variable part (`Animation Missing <creature> <id>`) still split
+ * per creature; that over-reports rather than hiding anything, and the full
+ * text stays in the finding's detail either way.
+ */
+function consoleErrorSignature(text) {
+  const firstLine = String(text || '').split('\n')[0].replace(/\r$/, '').trim();
+  if (!firstLine) return 'unclassified';
+
+  const words = [];
+  for (const token of firstLine.split(/\s+/)) {
+    if (looksLikeData(token)) break;
+    words.push(token);
+    if (words.length >= 6) break;
+  }
+
+  const slug = words.join(' ').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'unclassified';
+}
+
+/** The full code raised for a console error with the given first-line text. */
+function consoleErrorCode(text) {
+  return `${CONSOLE_ERROR_CODE}:${consoleErrorSignature(text)}`;
+}
+
 /** Severity order, most severe first. Matches src/qa/DefectLedger.ts. */
 const SEVERITY_ORDER = ['blocker', 'critical', 'major', 'minor', 'cosmetic'];
 
@@ -147,7 +204,9 @@ function toDefectRecords(reports, evidencePath) {
         .filter(Boolean)
         .slice(0, 10);
       records.push({
-        id: `sweep-${report.module.toLowerCase()}-${code}`,
+        // Codes carry a `:` separator since console errors were split by
+        // signature; ids stay to one character class so they read as ids.
+        id: `sweep-${report.module.toLowerCase()}-${code.replace(/[^a-z0-9]+/gi, '-')}`,
         title: `${code} in ${report.module} (${findings.length}×)`,
         module: report.module,
         room: '(module-wide)',
@@ -190,6 +249,9 @@ function renderRanking(ranked, limit = 20) {
 
 module.exports = {
   SEVERITY_ORDER,
+  CONSOLE_ERROR_CODE,
+  consoleErrorSignature,
+  consoleErrorCode,
   severityRank,
   rankRootCauses,
   summarize,
