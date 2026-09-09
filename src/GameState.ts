@@ -2902,7 +2902,20 @@ export class GameState implements EngineContext {
       GameState.scene.visible = true;
       
       AudioEngine.Unmute();
-      VideoManager.playMovieQueue( async () => {
+      // playMovieQueue rejects when a queue is already active, and this call was
+      // neither awaited nor caught, so the rejection escaped as an unhandled page
+      // exception and the completion below never ran.
+      //
+      // That completion is the whole post-load setup: spawn scripts, the in-game
+      // overlay, the scene compile - and `loadingModule = false` on its last
+      // line. Leaving that flag latched makes LoadModule return immediately from
+      // then on, so every later transition is a silent no-op. The failure is a
+      // hard stop at the next door, not a dropped movie.
+      //
+      // The boot-path call to playMovieQueue already recovers exactly this way;
+      // this one did not. Seen once in an 82-module sweep and not reproducible in
+      // isolation, which is what a timing-dependent race looks like.
+      const completeModuleLoad = async () => {
         const runSpawnScripts = !GameState.isLoadingSave;
         GameState.isLoadingSave = false;
 
@@ -2935,6 +2948,14 @@ export class GameState implements EngineContext {
         }
         GameState.module.area.musicBackgroundPlay();
         GameState.loadingModule = false;
+      };
+      VideoManager.playMovieQueue(completeModuleLoad).catch(async (e) => {
+        console.error('GameState.LoadModule: the movie queue did not start; completing the load without it', e);
+        try {
+          await completeModuleLoad();
+        } catch (completionError) {
+          console.error(completionError);
+        }
       });
     }catch(e){
       console.error(e);
