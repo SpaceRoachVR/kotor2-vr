@@ -3053,6 +3053,14 @@ export class GameState implements EngineContext {
     GameState.disableTransit = false;
     const audioEngine = AudioEngine.GetAudioEngine();
     audioEngine.reset();
+    // Same reason as the audio reset directly above: a module transition
+    // abandons whatever the outgoing module still had in flight. This was the
+    // one manager left out, and movie mode is owned by a flag that only ever
+    // cleared itself when a queue drained - so a transition during a movie
+    // leaked the ownership, and the next LoadModule threw on it. LoadModule
+    // also queues the incoming module movies onto the same static queue a few
+    // lines after calling this, which an outgoing queue would have swallowed.
+    GameState.VideoManager.reset();
 
     GameState.lightManager.clearLights();
     GameState.windManager.clear();

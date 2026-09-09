@@ -286,6 +286,34 @@ export class VideoManager {
   }
 
   /**
+   * Abandon any in-flight movie queue and release movie-mode ownership.
+   *
+   * Ownership is taken in playMovieQueue and released in exactly one place -
+   * playNextMovie, when the queue drains. Nothing released it when a queue was
+   * abandoned instead, and a module transition abandons one every time it
+   * happens while a movie is still playing.
+   *
+   * The leaked flag was only the visible half. LoadModule pushes the incoming
+   * module movies onto this same static queue before it calls playMovieQueue,
+   * so an outgoing queue still draining would have swallowed them and played
+   * them as part of the outgoing module - and the outgoing onQueueComplete, the
+   * previous load completion, was still armed to fire against the new module.
+   *
+   * Engine mode is deliberately not restored here: the caller is a module
+   * teardown that sets LOADING immediately afterwards, and restoring play mode
+   * in between only fights it.
+   */
+  static reset(): void {
+    if (this.bikObject) {
+      this.bikObject.stop();
+    }
+    this.movieQueue.length = 0;
+    this.onQueueComplete = undefined;
+    this.cleanup(false);
+    this.modeOwnership.endQueue();
+  }
+
+  /**
    * Queue a movie to be played
    */
   static queueMovie(movieName: string, skippable: boolean = false): void {
