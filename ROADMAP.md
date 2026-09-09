@@ -961,6 +961,61 @@ unit/integration-tested only.
   already, or (c) reconcile the avatar to the player's own head position before
   activating. Needs a decision before implementing.
 
+- **3.11** ☐ **Visible hands, and what they hold.** Nothing renders the
+  player's hands. `XRControllerAnchorHost` tracks both controllers and both
+  ray origins, but the anchors themselves are bare `THREE.Group`s: 3.2's "hand
+  presence" is tracking presence, not visible hands.
+
+  What already works, and should not be rebuilt: the **equipped weapon is
+  already presented in the hand**. `setHeldVisual` mounts a presentation clone
+  of the engine's held model on the grip anchor, honouring an authored grip
+  node where the model has one and a per-class fallback transform where it does
+  not. It shares geometry and materials rather than copying them, and is
+  deliberately not an `Object3D.clone()` — three deep-copies `userData` through
+  JSON, and every Odyssey node's `userData` refers back to its own meshes, so
+  cloning an equipped weapon threw on the first XR frame with anything in hand.
+  The diegetic hilt timer (3.5) and stance readout (4.8) mount on that same
+  anchor.
+
+  So the gap is the hands themselves, and it got more visible with `028410d1`:
+  the avatar is now hidden for the first-person submission, because it was
+  being drawn into the player's face. Correct, and it leaves a floating weapon
+  with no hands and no body behind it.
+
+  **Decisions this needs before implementation, not during:**
+
+  1. **Where the geometry comes from.** No first-person hand assets ship with
+     TSL, and none may be added to the repo — players bring their own retail
+     install. The option that keeps that property is the one the held-item path
+     already proves: build a presentation clone from the *avatar's own* hand
+     and forearm nodes, generated at runtime from the player's install. It also
+     gets equipment for free, since gloves and armour are already on those
+     nodes. The alternative is authored generic hands, which would be original
+     content and would ignore what the character is wearing.
+  2. **How much arm.** Hands only, or hands plus forearms. Full arms cannot be
+     right: the engine animates the avatar's arms from the d20 layer, so they
+     will not match the player's real pose, and an arm that disagrees with your
+     shoulder reads worse than no arm at all. Forearms need a decision on
+     whether to bend them toward the body or leave them floating.
+  3. **Whether the off hand shows the grip.** 3.3 already requires the off hand
+     tracked and within 0.35 m of the dominant hand for a two-handed swing, and
+     a visible second hand on the hilt is what would make that rule legible
+     rather than invisible.
+
+  **Constraint worth writing down.** A presentation clone is built with
+  `traverseVisible`, so it must never be built while the avatar is hidden or it
+  captures nothing — and caches that emptiness under its descriptor key. This is
+  safe today only because the first-person hide and its restore are a
+  synchronous pair around one `renderer.render` call, so no other code can
+  observe the hidden state. Anything that widens that window breaks hand and
+  weapon visuals together.
+
+  - **Done when:** both hands are visible in the headset, track the controllers,
+    carry the equipped weapon and its diegetic readouts, and reflect the
+    controlled character rather than a fixed one after a party swap.
+  - **Files:** `src/vr/runtime/XRControllerAnchorHost.ts`,
+    `src/vr/runtime/VRFirstPersonBody.ts`, `src/vr/VRSpike.ts`.
+
 **Exit:** a Peragus combat encounter completable in VR with the d20 layer intact.
 **Not yet verified on-device** — implemented and unit/integration-tested only.
 
