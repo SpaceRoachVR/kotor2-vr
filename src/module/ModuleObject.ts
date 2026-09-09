@@ -1533,6 +1533,42 @@ export class ModuleObject {
         break;
         //END TSL ANIMATIONS
 
+        // MEDITATE had no case at all, so a creature told to meditate resolved
+        // to nothing and froze to PAUSE - which is what the sweep saw as
+        // "Animation Missing DarthSion Darth Sion 10032" in 154HAR. Row 24 is
+        // the looping `meditate`; rows 457/458 are the sit and stand variants.
+        case ModuleCreatureAnimState.MEDITATE:
+          return animations2DA.rows[24];
+        break;
+
+      }
+
+      // Two different numbering schemes reach this method, and only one of them
+      // is a ModuleCreatureAnimState.
+      //
+      // The named constants above are the engine's own animation constants:
+      // PAUSE is 10000 and resolves to row 6 (`pause1`), SCANNING is 10412 and
+      // resolves to row 471 (`scanning`). Dialogue and script data also carry a
+      // second form - the animations.2da row index plus 10000 - and those fell
+      // through every case to undefined, so the creature reported "Animation
+      // Missing" and froze to PAUSE while the authored animation never played.
+      //
+      // Three sightings in one sweep, each of which reads correctly only under
+      // the row reading: 10074 on beasts hit by Force Horror (row 74 `horror`),
+      // 10459 on a Sith Drexl trainer (row 459 `forcecrush`), and 10471 on a
+      // droid NPC (row 471 `scanning`). That last one is the cross-check: the
+      // switch above independently maps SCANNING to the same row 471.
+      //
+      // Restricted to constants that are NOT ModuleCreatureAnimState members,
+      // because for a named constant the row reading is actively wrong - PARRY
+      // is 10012 and row 12 is `pausesh`. A named constant with no case is a
+      // mapping gap to be filled deliberately, not guessed at here.
+      if(animation_constant >= 10000 &&
+         typeof (ModuleCreatureAnimState as any)[animation_constant] !== 'string'){
+        const row = animations2DA.rows[animation_constant - 10000];
+        if(row && typeof row.name === 'string' && row.name.trim() && row.name !== '****'){
+          return row;
+        }
       }
 
     }
