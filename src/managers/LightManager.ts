@@ -72,6 +72,14 @@ export class LightManager {
     this.animatedLights.length = 0;
     this.animatedLightUUIDs.length = 0;
     this.animatedLightsCacheID++;
+    // Same reason, same fix, one array over. `fadingLights` is rebuilt each
+    // update, so between an area change and the next update it still holds the
+    // outgoing area's lights - and an OdysseyLight3D carries `odysseyModel`, a
+    // reference to the whole model it came from. A heap snapshot taken after six
+    // module loads found a live retaining path
+    // GameState -> lightManager -> fadingLights -> OdysseyLight3D -> odysseyModel
+    // reaching orphaned models that destroy() had already released.
+    this.fadingLights.length = 0;
     this.spawned = 0;
     this.spawned_shadow = 0;
     this.light_pool = [];

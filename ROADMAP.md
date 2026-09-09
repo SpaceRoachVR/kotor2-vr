@@ -343,11 +343,49 @@ accounts for the ~300 geometries. `ModuleObject.destroy()` does call
 `model.dispose()` and then sets `this.model = undefined`, so the owner has let
 go — something else still holds each model.
 
-**Still open: which edge retains them.** That needs retainer paths from a real
-heap snapshot; `Runtime.queryObjects` can count instances but cannot say who
-points at them. Candidates worth checking first are the material and texture
-back-references (`(bumpMap as any).material = material`), `userData.moduleObject`
-cycles, and animation state.
+**Retainer paths, from a real snapshot (2026-09-09).**
+`tools/vr-emulator/probe-heap-retainers.js` tags every parentless model in the
+page, takes a heap snapshot and walks it. The snapshot is 2.3 GB — past both
+`JSON.parse` and Node's maximum string length — so `heapsnapshot-stream.js`
+scans the members rather than loading the file.
+
+Against a session six module loads in: 36.7M nodes, 98.5M edges, 194 orphaned
+models tagged. **All 194 are retained from outside the orphan set; none are
+collectable.** Their immediate retainers:
+
+| edges | holder and field |
+|---:|---|
+| 1144 | `Object --textureOwnerModel-->` (a material back at its model) |
+| 985 | `Object --odysseyModel-->` |
+| 289 | `OdysseyLight3D --odysseyModel-->` |
+| 194 | `OdysseyModelAnimationManager --model-->` (exactly one per orphan) |
+| 83 | `native_bind --bound_this-->` |
+| 12 | `ModuleTrigger --trapModel-->` |
+
+These are back-references, and V8 collects cycles, so the immediate holder is not
+the answer on its own — what matters is which holder is reachable from a GC root.
+Climbing the graph found one real path, at depth 10:
+
+```
+GameState -> lightManager -> LightManager.fadingLights -> OdysseyLight3D
+          -> odysseyModel -> ORPHANED MODEL
+```
+
+`clearLights()` resets every other light collection and missed that one, so it is
+now cleared there too. **It is not the dominant retainer**: measured before and
+after, +304/+293 either way.
+
+Note for anyone re-running this: a snapshot taken over CDP always shows a
+"DevTools console" global handle onto whatever the probe just inspected. That
+root is the tool's own footprint, and the climb skips it — counting it reports
+the measurement as the defect.
+
+**Still open: which retainer dominates.** The climb stops at the first root it
+reaches, so it names *a* holder rather than ranking holders by how many models
+each explains. The next step is to attribute every orphan to a root and rank
+them — and on the histogram above the question worth asking first is what keeps
+the *materials* alive, since `textureOwnerModel` is the largest class of holder
+by a wide margin.
 
 **Fixed along the way, but not the cause.** Every creature builds a
 `TextSprite3D` debug label in `load()` and nothing ever disposed it, for an
