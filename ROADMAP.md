@@ -308,7 +308,61 @@ per-frame, stereo submits the whole level twice and 0.1's numbers are meaningles
 - **Done when:** verified culling is active in stereo, with before/after draw counts.
 - **Files:** `src/module/ModuleArea.ts`.
 
-### 0.3 — Characterise the memory growth
+### 0.3 — Characterise the memory growth ◑ characterised and reproducible; the retaining edge is still open (2026-09-09)
+
+Measured with `tools/vr-emulator/probe-memory-growth.js`, which loads the same
+two modules in a cycle and reads every candidate retainer after a forced
+`HeapProfiler.collectGarbage` — so what it reports is retained, not merely
+uncollected.
+
+**The cost of revisiting one module, reproduced across four runs:**
+
+| | per load |
+|---|---|
+| retained geometries | +304 (101PER), +293 (102PER) |
+| retained textures | +46 to +80 |
+| JS heap | +50 to +68 MB |
+
+Those numbers repeat to the object between runs, so this is deterministic, not
+drift. It matches what the sweep sees from the outside: the heap crosses 3 GB
+in roughly 20-25 module loads and every full sweep today reloaded the page
+three or four times, all heap-triggered rather than the module-count backstop.
+A headset session has no reload.
+
+**What it is not.** The engine caches are bounded — `TextureLoader.textures`
+plateaus at 208 and the ResourceLoader scopes oscillate flat. The scene graph
+is torn down correctly: node counts hold to within ±2 across a revisit, and the
+Points count is identical (88 for 101PER, 231 for 102PER, unchanged). Shader
+programs do not grow.
+
+**What it is.** Whole `OdysseyModel3D` instances are retained after their owner
+is destroyed. Counted live over three samples spanning two loads: 211 -> 265 ->
+325 instances, of which **137 -> 259 -> 319 have no parent**. That is roughly 90
+orphaned models per module load, and at three to four geometries each it
+accounts for the ~300 geometries. `ModuleObject.destroy()` does call
+`model.dispose()` and then sets `this.model = undefined`, so the owner has let
+go — something else still holds each model.
+
+**Still open: which edge retains them.** That needs retainer paths from a real
+heap snapshot; `Runtime.queryObjects` can count instances but cannot say who
+points at them. Candidates worth checking first are the material and texture
+back-references (`(bumpMap as any).material = material`), `userData.moduleObject`
+cycles, and animation state.
+
+**Fixed along the way, but not the cause.** Every creature builds a
+`TextSprite3D` debug label in `load()` and nothing ever disposed it, for an
+overlay that is off by default. Now disposed in `ModuleCreature.destroy()`.
+Measured before and after: +304/+293 both times, unchanged — a real undisposed
+resource, and not this leak. Recorded so it is not re-investigated as one.
+
+Two further defects found by reading, neither measured as dominant:
+`OdysseyModel3D.dispose()` guards its geometry release behind
+`instanceof THREE.Mesh` while also matching `Points`, and `THREE.Points` extends
+Object3D — so emitter geometry is never released. And `loadModel()` disposes the
+outgoing model inside a silent `catch`, so a partial failure leaks the remainder
+and reports nothing.
+
+#### Original statement
 The renderer has been observed at ~8.9 GB with load times climbing 41s → 47s → 65s
 across successive loads, and the Bink decoder has already failed with
 `Array buffer allocation failed` during `permov01`. This corrupts content today and

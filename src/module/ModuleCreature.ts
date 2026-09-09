@@ -4182,6 +4182,26 @@ export class ModuleCreature extends ModuleObject {
 
   destroy(): void {
     super.destroy();
+
+    // Every creature builds one of these in load(), and nothing freed it.
+    // super.destroy() detaches the container, which takes the whole subtree out
+    // of the scene, and detaching frees nothing - so the renderer went on holding
+    // the label geometry and material for a debug overlay that is off by default.
+    // TextSprite3D.dispose() already existed and is idempotent; nothing called it.
+    //
+    // Honest scope: this is a real undisposed resource, but it is NOT the leak
+    // ROADMAP 0.3 is about. Measured before and after with
+    // tools/vr-emulator/probe-memory-growth.js, revisiting the same two modules:
+    // +304 and +293 retained geometries per load both times, unchanged to the
+    // object. The census that pointed here counted any geometry not currently
+    // reachable from a scene as orphaned, and it was sampled mid-transition when
+    // a great deal of live geometry is legitimately detached - so it overstated
+    // its case. The dominant retainer is still open.
+    if(this.debugLabel){
+      this.debugLabel.dispose();
+      this.debugLabel = undefined;
+    }
+
     if(this.head instanceof OdysseyModel3D){
       if(this.head.parent instanceof THREE.Object3D){
         this.head.removeFromParent();
