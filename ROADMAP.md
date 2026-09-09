@@ -13,6 +13,24 @@ target, p90 31.0 ms, p99 46.1 ms, and a PASS verdict. Runtime cadence is still
 reported separately and 72 Hz remains a stretch target. The older 31.96-34.96
 FPS VDXR evidence remains retained rather than rewritten.
 
+**2026-09-09 full audit inside a presenting VR session.** All 82 campaign
+modules swept with `npm run vr:sweep -- --vr` - the first sweep run through the
+VR frame path rather than flatscreen - then every major root cause fixed and the
+sweep repeated. Clean modules 39 -> 70 of 82, findings 74 -> 23, majors 66 -> 15,
+zero blocked and zero critical in either pass. Full write-up in
+[AUDIT-2026-09-09-VR.md](AUDIT-2026-09-09-VR.md).
+
+Two results are worth carrying forward. **The VR frame path introduced no defect
+class of its own** - all 82 records carry `presenting: true`, and every finding
+also occurs in flatscreen, with the pre-fix totals inside the flatscreen noise
+band. And the two largest root causes were both silent: every merchant in the
+game failed to load its blueprint (a GIT store names it `ResRef`, not
+`TemplateResRef`), and lip-sync absence - ordinary retail data - was the single
+largest console-error signature, burying the reports that meant something.
+
+Still emulator evidence, not device evidence: comfort, cadence and reprojection
+remain outside what any of this can see.
+
 **2026-08-17 reconciliation:** a five-agent audit (see
 [VR-AUDIT-AND-COMPLETION-PLAN.md](VR-AUDIT-AND-COMPLETION-PLAN.md)) found
 `src/vr/runtime/` and the VR hooks in `GameState.ts`/`VRSpike.ts` already
