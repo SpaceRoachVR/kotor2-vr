@@ -22,8 +22,15 @@ const ASSET_SERVER = path.join(__dirname, '..', 'asset-http', 'asset-server.js')
  */
 function startAssetService(options = {}) {
   const extraArgs = options.port ? ['--port', String(options.port)] : [];
-  return new Promise((resolve, reject) => {
+  return new Promise((rawResolve, rawReject) => {
     const child = spawn(process.execPath, [ASSET_SERVER, ...extraArgs], { stdio: ['ignore', 'pipe', 'pipe'] });
+    // Settling clears the no-URL timer. An uncleared timer stays a ref'd handle
+    // for its full duration and Node will not exit while one is pending, so a
+    // caller whose work is done would sit idle waiting on it.
+    let noUrlTimer = null;
+    const settle = (fn) => (value) => { if (noUrlTimer) clearTimeout(noUrlTimer); fn(value); };
+    const resolve = settle(rawResolve);
+    const reject = settle(rawReject);
     let buffered = '';
     const onData = (chunk) => {
       buffered += chunk.toString();
@@ -46,7 +53,8 @@ function startAssetService(options = {}) {
       }
       reject(new Error(`asset service exited with code ${code}: ${buffered.slice(-400)}`));
     });
-    setTimeout(() => reject(new Error('asset service printed no launch URL')), 20_000);
+    noUrlTimer = setTimeout(
+      () => reject(new Error('asset service printed no launch URL')), 20_000);
   });
 }
 

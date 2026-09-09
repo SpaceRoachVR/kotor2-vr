@@ -279,10 +279,16 @@ class VrHarness {
     } catch {
       return; /* already exited */
     }
-    await Promise.race([
-      exited,
-      new Promise((resolve) => setTimeout(resolve, 10_000)),
-    ]);
+    let closeTimer = null;
+    try {
+      await Promise.race([
+        exited,
+        new Promise((resolve) => { closeTimer = setTimeout(resolve, 10_000); }),
+      ]);
+    } finally {
+      // Same reason as CdpSession.evaluate: an uncleared timer keeps Node alive.
+      if (closeTimer) clearTimeout(closeTimer);
+    }
   }
 }
 

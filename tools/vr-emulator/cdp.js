@@ -107,17 +107,29 @@ class CdpSession {
    * so a failed step stops the scenario instead of silently continuing.
    */
   async evaluate(expression, { awaitPromise = true, timeoutMs = 60000 } = {}) {
-    const result = await Promise.race([
-      this.send('Runtime.evaluate', {
-        expression,
-        awaitPromise,
-        returnByValue: true,
-        userGesture: true,
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`evaluate timed out after ${timeoutMs}ms`)), timeoutMs)
-      ),
-    ]);
+    // The loser of this race must be cleared. An uncleared timer stays a ref'd
+    // handle for its full duration, and Node will not exit while one is
+    // pending — so a tool whose work is finished sits there doing nothing until
+    // the timer fires. The sweep's module probe passes timeouts in the hundreds
+    // of seconds, which is why it appeared to hang after printing its report.
+    let timer = null;
+    let result;
+    try {
+      result = await Promise.race([
+        this.send('Runtime.evaluate', {
+          expression,
+          awaitPromise,
+          returnByValue: true,
+          userGesture: true,
+        }),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`evaluate timed out after ${timeoutMs}ms`)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     if (result.exceptionDetails) {
       const desc =
         (result.exceptionDetails.exception && result.exceptionDetails.exception.description) ||
