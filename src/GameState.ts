@@ -3380,7 +3380,11 @@ export class GameState implements EngineContext {
      * framebuffer, which is not the one XR presents. Bypass it while presenting.
      */
     if(VRSpike.isPresenting){
-      VRSpike.render(GameState.currentCamera, frameTimestamp);
+      VRSpike.render(
+        GameState.currentCamera,
+        frameTimestamp,
+        GameState.PartyManager.Player?.model,
+      );
       return;
     }
 

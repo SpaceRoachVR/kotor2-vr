@@ -32,6 +32,7 @@ import { resolveVRTeleportAim } from "./runtime/VRTeleportAimResolver";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
 import { hideWorldForTheater } from "./runtime/VRTheaterWorldVisibility";
+import { hidePlayerBodyForFirstPerson } from "./runtime/VRFirstPersonBody";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
 import { VRRecenterHoldGate } from "./runtime/VRRecenterHoldGate";
 import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
@@ -2627,7 +2628,14 @@ export class VRSpike {
    * and submit the world. A visible legacy GUI is first rendered into the
    * world-space VR panel so original menu controls remain authoritative.
    */
-  static render(worldCamera: THREE.Camera, frameTimestamp: number): void {
+  static render(
+    worldCamera: THREE.Camera,
+    frameTimestamp: number,
+    // The player avatar, so the first-person submission can leave it out.
+    // Passed in rather than read from GameState: this class deliberately does
+    // not import the engine, and worldCamera already arrives the same way.
+    playerBody?: THREE.Object3D | null,
+  ): void {
     const renderer = VRSpike.renderer;
     const scene = VRSpike.scene;
     if (!renderer || !scene || !VRSpike.camera || !VRSpike.rig) return;
@@ -2686,7 +2694,17 @@ export class VRSpike {
 
     const prevAutoClear = renderer.autoClear;
     renderer.autoClear = true;
-    renderer.render(scene, VRSpike.camera);
+    // First person means the player does not see their own body. The rig is
+    // welded to the avatar at eye height, so the model sits exactly where the
+    // player is standing and was drawn straight into the face. Restored
+    // immediately, so nothing else - cutscenes, the theater path, the
+    // flatscreen camera, portraits - observes it hidden.
+    const restoreBody = hidePlayerBodyForFirstPerson(playerBody);
+    try {
+      renderer.render(scene, VRSpike.camera);
+    } finally {
+      restoreBody();
+    }
     VRSpike.perf.recordXRRender(frameTimestamp);
     renderer.autoClear = prevAutoClear;
   }
