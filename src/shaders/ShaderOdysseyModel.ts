@@ -424,9 +424,15 @@ export class ShaderOdysseyModel extends Shader {
           outgoingLight += (envColor.xyz * specularStrength * reflectivity) * (1.0 - diffuseColor.a);
         #endif
       #endif
-      #ifdef SABER
-        sampledDiffuseColor = texture2D( map, vUv );
-        gl_FragColor = sampledDiffuseColor;
+      // SABER is set from the model node type alone, with no reference to whether
+      // a diffuse map resolved - but sampledDiffuseColor and map are both declared
+      // only inside the USE_MAP block further up, and USE_MAP is set only when the
+      // map uniform actually has a value. A saber node whose texture is absent, or
+      // has not resolved yet, therefore compiled a fragment shader referencing two
+      // undeclared identifiers, and the entire material failed to build rather than
+      // merely losing its blade texture. Seen in 504OND, 506OND and 907MAL.
+      #if defined( SABER ) && defined( USE_MAP )
+        gl_FragColor = texture2D( map, vUv );
       #else
         gl_FragColor = vec4( outgoingLight, diffuseColor.a );
       #endif
