@@ -196,7 +196,10 @@ export class AudioEmitter {
         console.error('AudioEmitter', 'Sound not added to emitter', resRef);
       }
     }catch(e){
-      console.error('AudioEmitter', 'Sound not found', resRef);
+      // An ambient emitter names sounds from a 2DA row, and retail does not
+      // ship every one of them - 106PER asks for amb_compb_06 where the install
+      // has 01 to 05. The emitter carries on without it.
+      console.warn('AudioEmitter: sound not found', resRef, '- not shipped in this install');
     }
   }
 

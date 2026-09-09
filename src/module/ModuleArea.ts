@@ -761,7 +761,11 @@ export class ModuleArea extends ModuleObject {
         audioEngine.setAudioBuffer('AMBIENT_DAY', data.buffer as ArrayBuffer, ambientDay.resource);
         audioEngine.ambientAudioDayEmitter.play(true);
       }catch(e){
-        console.error('Ambient Audio not found', ambientDay);
+        // Named, and at warn level. It logged the whole 2DA row, so the report
+        // read "Ambient Audio not found Object" and identified nothing. The
+        // absence itself is retail data - 905MAL asks for a track this install
+        // does not ship - and the area plays without it, so it is not a fault.
+        console.warn('Ambient audio not found:', ambientDay.resource, '- the area plays without it');
       } 
     }
   }
@@ -783,7 +787,7 @@ export class ModuleArea extends ModuleObject {
         audioEngine.setAudioBuffer('AMBIENT_NIGHT', data.buffer as ArrayBuffer, ambientDay.resource);
         audioEngine.ambientAudioNightEmitter.play(true);
       }catch(e){
-        console.error('Ambient Audio not found', ambientDay);
+        console.warn('Ambient audio not found:', ambientDay.resource, '- the area plays without it');
       } 
     }
   }
