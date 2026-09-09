@@ -169,6 +169,87 @@ function renderDelta(delta) {
   }).join('\n');
 }
 
+/**
+ * Reads the measured run-to-run noise floor, when one has been taken.
+ *
+ * Five identical sweeps on an unchanged tree varied by 8 clean modules and 18
+ * findings, but almost all of that sat in three codes while fifteen others
+ * reproduced exactly. So a single-number delta is not readable and a per-code
+ * delta is — provided the two are kept apart, which is what this enables.
+ */
+function readNoiseFloor(file = path.join(EVIDENCE_DIR, 'noise-floor', 'noise-floor.json')) {
+  const data = readJson(file);
+  if (!data || !Array.isArray(data.codes)) return null;
+  return {
+    runs: data.runCount,
+    measuredCodes: new Set(data.codes.map((c) => c.code)),
+    flakyCodes: new Map(data.codes.filter((c) => !c.stable).map((c) => [c.code, c.spread])),
+    modulesCleanSpread: data.modulesClean && data.modulesClean.spread,
+    findingsSpread: data.findings && data.findings.spread,
+  };
+}
+
+/** Module counts per code, keyed by code — the shape a per-code delta needs. */
+function codeCounts(ranking) {
+  const counts = {};
+  for (const entry of ranking || []) counts[entry.code] = entry.moduleCount;
+  return counts;
+}
+
+/**
+ * Splits the per-code movement into what is worth acting on and what is not.
+ *
+ * A code the noise floor measured as unstable can move several modules between
+ * identical runs, so its delta is not evidence of anything. A code it measured
+ * as stable reproduced exactly every time, so any movement in it is real. A code
+ * the floor never saw is reported as unmeasured rather than quietly assumed
+ * stable — most often it is genuinely new, which is itself worth seeing.
+ */
+function diffCodes(previous, current, noise) {
+  const codes = Array.from(new Set([...Object.keys(previous || {}), ...Object.keys(current || {})]));
+  const rows = codes.map((code) => {
+    const was = (previous && previous[code]) || 0;
+    const now = (current && current[code]) || 0;
+    return {
+      code,
+      was,
+      now,
+      delta: now - was,
+      flaky: Boolean(noise && noise.flakyCodes.has(code)),
+      spread: noise && noise.flakyCodes.get(code),
+      unmeasured: Boolean(noise && !noise.measuredCodes.has(code)),
+    };
+  }).filter((row) => row.delta !== 0);
+
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || a.code.localeCompare(b.code));
+  return { stable: rows.filter((r) => !r.flaky), flaky: rows.filter((r) => r.flaky) };
+}
+
+function renderCodeDelta(split, noise) {
+  if (!split) return '  (no previous run to compare against)';
+  const lines = [];
+  const width = Math.max(
+    4, ...[...split.stable, ...split.flaky].map((r) => r.code.length), 0);
+  const row = (r) => {
+    const sign = r.delta > 0 ? `+${r.delta}` : `${r.delta}`;
+    const note = r.unmeasured ? '  (unmeasured by the noise floor)'
+      : r.spread ? `  (measured spread ${r.spread})` : '';
+    return `  ${r.code.padEnd(width)}  ${r.was} -> ${r.now} (${sign})${note}`;
+  };
+
+  lines.push('  REAL — codes that reproduced exactly across the noise-floor runs');
+  lines.push(split.stable.length ? split.stable.map(row).join('\n') : '    (no movement)');
+  lines.push('');
+  lines.push('  NOISE — codes measured as varying between identical runs');
+  lines.push(split.flaky.length ? split.flaky.map(row).join('\n') : '    (no movement)');
+
+  if (!noise) {
+    lines.unshift('  !! no noise floor measured — run tools/qa/noise-floor.js; ' +
+      'every code below is being treated as real', '');
+  }
+  return lines.join('\n');
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -254,19 +335,39 @@ async function main() {
     if (summaryFile && summaryIsFresh) {
       report.sweepSummary = summaryFile.summary;
       report.topRootCauses = (summaryFile.ranking || []).slice(0, 5);
+      // Stored in full, not just the top five: tomorrow's per-code delta can
+      // only see a code that yesterday recorded a count for.
+      report.codeCounts = codeCounts(summaryFile.ranking);
     } else if (summaryFile) {
       report.staleSummary = true;
     }
   }
 
   const previous = readJson(LATEST);
+  const noise = readNoiseFloor();
   report.delta = diffSummaries(previous && previous.sweepSummary, report.sweepSummary);
+  report.noiseFloor = noise && {
+    runs: noise.runs,
+    modulesCleanSpread: noise.modulesCleanSpread,
+    findingsSpread: noise.findingsSpread,
+    flakyCodes: Object.fromEntries(noise.flakyCodes),
+  };
+  report.codeDelta = previous && previous.codeCounts && report.codeCounts
+    ? diffCodes(previous.codeCounts, report.codeCounts, noise)
+    : null;
 
   finish(report, stamp);
 
   const failed = Object.values(report.stages).some((stage) => stage.exitCode !== 0);
   console.log('\n=== DELTA SINCE LAST NIGHT ===');
   console.log(renderDelta(report.delta));
+  if (noise) {
+    console.log(`\n  measured noise floor over ${noise.runs} identical runs: ` +
+      `${noise.modulesCleanSpread} clean modules, ${noise.findingsSpread} findings — ` +
+      `treat the totals above as unchanged unless they exceed that`);
+  }
+  console.log('\n=== PER-CODE DELTA ===\n');
+  console.log(renderCodeDelta(report.codeDelta, noise));
   console.log(`\nreport -> ${path.relative(REPO_ROOT, path.join(NIGHTLY_DIR, `${stamp}.json`))}`);
   console.log('\nEmulated-runtime evidence only — says nothing about comfort or cadence.');
   process.exitCode = failed ? 1 : 0;
@@ -286,4 +387,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, diffSummaries, renderDelta, portInUse };
+module.exports = {
+  parseArgs, diffSummaries, renderDelta, portInUse,
+  readNoiseFloor, codeCounts, diffCodes, renderCodeDelta,
+};

@@ -237,6 +237,53 @@ delta. Scheduled tasks only fire while the desktop app is open — if it was
 closed at the scheduled time the run happens at next launch, which is precisely
 why the port guard exists.
 
+## The sweep's noise floor, and why the delta is split in two
+
+Measured 2026-09-09 with `node tools/qa/noise-floor.js --runs 5`: five identical
+full sweeps on an unchanged tree.
+
+    modulesClean   39 / 39 / 44 / 36 / 38   spread 8
+    findings       70 / 73 / 58 / 76 / 67   spread 18
+    identical every run: 49 of 82 modules
+
+31 modules were clean in all five runs, 33 were dirty in all five with the same
+codes, and **18 flipped between clean and dirty**. So a single-number delta is
+not readable: an eight-module swing means nothing on its own.
+
+**But the noise is concentrated.** Six codes moved; fifteen reproduced exactly:
+
+    error-resource-not-found-resref             23/25/15/25/19   spread 10
+    modulecreature-save                          1/ 0/ 1/ 5/ 5   spread 5
+    moduledoor-loadmodel-failed-to-build-model   2/ 4/ 0/ 2/ 1   spread 4
+    three-webglprogram-shader-error              7/ 7/ 6/ 7/ 6   spread 1
+    animation-missing-visasmarr-visas            1/ 1/ 0/ 0/ 0   spread 1
+    module-transitions-on-enter                  0/ 0/ 0/ 1/ 0   spread 1
+
+Everything else — including `failed-to-load-modulestore-template` across exactly
+12 modules and `dialogue-unresolved` across exactly 2 — was identical five times
+out of five. Those are real findings, not weather.
+
+So the nightly reports the delta in two parts. Movement in a code the floor
+measured as stable is real; movement in one it measured as flaky is not
+evidence of anything and is quarantined with its measured spread beside it. A
+code the floor never saw is marked *unmeasured* rather than quietly assumed
+stable. With no `noise-floor.json` present the nightly says so and treats
+everything as real, which is the safe direction to fail.
+
+The test of whether this works: feeding it the two most divergent runs of the
+five — which as totals read `-8 clean, +18 findings`, exactly like a bad
+regression — produces **no real movement at all** and files every point of it
+under noise.
+
+**`error-resource-not-found-resref` being the noisiest code is itself a lead.**
+The same modules with the same assets sometimes resolve a resource and sometimes
+do not, swinging 15 to 25 modules. That is an async load race, not missing
+files, and it is simultaneously the largest bucket in the ranking. It is not
+save-state accumulation: no saves were written during the measurement window.
+
+Re-measure with `--runs 5` after any change that could affect load timing, and
+`--analyze <dir>` re-reads a finished set without re-running anything.
+
 ## Testing in the Quest's own browser (`npm run quest:perf`)
 
 Added 2026-09-08. This is the answer to "what emulation cannot settle": it runs
