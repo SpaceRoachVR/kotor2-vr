@@ -168,3 +168,146 @@ internals that move; when an API is missing it records a `skipped` entry rather
 than inventing findings, and the run summary prints the skip count loudly. A
 sweep reporting zero findings *and* nonzero skips has not told you the game is
 healthy.
+
+## The unattended nightly (`npm run qa:nightly`)
+
+Added 2026-09-08. One command that builds, runs `vr:check`, runs the full sweep,
+and writes a report saying **what changed since the previous run** — the delta is
+the point, not the absolute number. A sweep that has blocked the same 12 modules
+for a week is not news; 12 to 19 is.
+
+    npm run qa:nightly                       # the full pass, 60-120 minutes
+    node tools/qa/nightly.js --skip-build    # tree already built
+    node tools/qa/nightly.js --sweep-limit 2 # wiring smoke test
+
+Report and per-stage logs land in `tools/vr-emulator/evidence/nightly/`;
+`latest.json` is always the most recent run.
+
+**The stage-idle guard is a safety net, not the fix.** The runner kills a stage
+that has been silent for `--idle-minutes` (default 15) and takes the sweep's
+verdict from `module-sweep-summary.json` — but only if that file was written by
+*this* run. Keep it: a stage that genuinely wedges must not stall the job
+forever. It should no longer trigger, because the hang it was written for is
+fixed (below).
+
+**Exit 2 means it refused to start.** Both stages want asset-service port 8479,
+and two concurrent runs do not queue — the second dies with EADDRINUSE partway
+through and its evidence is indistinguishable from a real failure. So the runner
+checks the port first and aborts rather than corrupting both runs. A scheduled
+run landing while someone is driving the engine by hand is the expected case for
+this, not an edge case. Exit 2 is "skipped, machine was busy", never a defect.
+
+It also never resumes a checkpoint: a bad unattended run must not be able to
+poison a save that a later run would pick up.
+
+A scheduled task (`kotor2-vr-nightly-regression`) runs this and reports the
+delta. Scheduled tasks only fire while the desktop app is open — if it was
+closed at the scheduled time the run happens at next launch, which is precisely
+why the port guard exists.
+
+## Testing in the Quest's own browser (`npm run quest:perf`)
+
+Added 2026-09-08. This is the answer to "what emulation cannot settle": it runs
+the browser build **on the headset**, against the real compositor, with CDP still
+reachable from the PC.
+
+    npm run quest:perf:check    # verify adb, device and browser, launch nothing
+    npm run quest:perf          # start the loop
+    npm run quest:perf:test     # device-selection unit tests, no hardware needed
+
+**Why a reverse tunnel and not the LAN address.** WebXR is gated on a secure
+context. `http://127.0.0.1` qualifies — Chromium treats loopback as potentially
+trustworthy — and `http://192.168.x.x` does not, so serving the build to the
+headset over the LAN leaves `navigator.xr` undefined. That presents exactly like
+a missing XR runtime, which is the same confound that produced two wrong
+readings in Phase 0. `adb reverse tcp:8479 tcp:8479` makes the headset's own
+127.0.0.1:8479 tunnel back to this machine, so the launch URL works verbatim
+with its token, the page is a secure context, and the asset service keeps its
+deliberate loopback-only binding — retail game data is never exposed to the LAN.
+
+`adb forward tcp:9423 localabstract:chrome_devtools_remote` then puts CDP on
+`127.0.0.1:9423`, so every tool built on `tools/vr-emulator/cdp.js` points at the
+headset browser unchanged. Do not reload the page when attaching.
+
+**Launch the URL with no package argument.** Naming `com.oculus.browser` on the
+`am start` VIEW intent starts the browser *process* but opens no window: the
+Store stays in front, no tab exists, and because the devtools socket is only
+published once there is a tab, CDP then refuses the connection — which reads
+exactly like remote debugging being switched off. Confirmed 2026-09-08: process
+alive at pid 4902, `/proc/net/unix` readable with 581 entries and zero devtools
+sockets, `curl` to the forwarded port returning empty. Letting the system
+resolve the intent opens the browser properly, which is also what metavr's own
+`metavr_device open_url` does.
+
+**Device selection refuses to guess.** This machine has a second Android device
+attached (a Pixel), and `adb` with two devices and no `-s` errors rather than
+picking one — which then fails three steps downstream for a reason unrelated to
+the actual cause. `tools/quest/adb.js` matches headsets on codename as well as
+model and errors naming what it saw.
+
+Compositor-side capture is metavr's job, through its MCP:
+
+    perf capture --mode vr --app com.oculus.browser --duration 60000
+    perf analyze-trace --focus frames
+    perf compare <baseline_id> <comparison_id>
+
+and the runtime knobs worth sweeping between captures are
+`metavr_device vrruntime_set` (cpu_level, gpu_level, foveation_level, asw_mode),
+reset with `vrruntime_reset`.
+
+### Verified on hardware 2026-09-08
+
+Quest 3 over wireless ADB (`192.168.1.77:5555`), Quest Browser 150 /
+Chrome 150. One command brought up the asset service, both tunnels and the
+browser; the page reported:
+
+    href           http://127.0.0.1:8479/game/index.html?key=tsl&assets=/assets
+    secureContext  true
+    navigator.xr   present
+    immersive-vr   true
+
+so the reverse-tunnel reasoning above holds in practice, and `cdp.js` drove the
+headset browser unmodified. `perf capture --mode vr` returned a 41.8 MB trace
+(282,848 slices) and `analyze-trace` parsed it. `frame_timing` came back null,
+correctly — nothing had entered an immersive session, so there were no XR frames
+to time. Real cadence numbers still need someone wearing the headset to press
+Enter VR.
+
+**This is a different measurement from PCVR-over-Virtual-Desktop, not a
+replacement for it.** The Quest browser renders locally; VDXR streams a desktop
+Chrome session. Numbers from the two are not comparable, and Phase 0's evidence
+is the VDXR path.
+
+## Why the tools used to linger after finishing (fixed 2026-09-09)
+
+`vr:sweep` would print its whole report, write every artifact, release port
+8479 — and then sit there. It looked like an unkillable hang and cost a
+scheduled job its completion signal.
+
+**Root cause: `CdpSession.evaluate` raced the CDP call against a timeout it
+never cleared.** When the evaluation won the race the rejection timer stayed
+armed, and a pending ref'd timer keeps Node alive until it fires. The sweep's
+module probe passes `--timeout` through to that evaluate, so the last probe of a
+run left a **425-second** timer holding the process open. Same bug, smaller
+blast radius, in `VrHarness.close()` (10s) and `startAssetService()` (20s).
+
+All three now clear the loser of the race in a `finally`. `vr:sweep --limit 1`
+exits 0.0s after its last line; `vr:check` is 25/25 and exits in 0.1s.
+
+**Two instrument traps met while finding it, both worth knowing:**
+
+- **`process._getActiveHandles()` does not report timers on Node 24.** A control
+  with a listening server and a live 60s timeout reports only the server. So a
+  handle dump showing `handles=0 requests=0` on a process that is plainly still
+  running is not a contradiction — it means "no non-timer handles," and a
+  pending timer is exactly what is invisible. `process.getActiveResourcesInfo()`
+  *does* list `Timeout`, and said so on the first attempt; the dump that
+  contradicted it was the one to distrust.
+- **Piping a diagnostic through `grep` adds two `PipeWrap` handles of your own.**
+  They are stdout and stderr, they are not the leak, and they crowd out the
+  signal. Redirect to a file instead.
+
+The technique that actually named it: monkey-patch `setTimeout`/`clearTimeout` in
+a `-r` preload, record every timer with a stack, and print the ones still pending
+once the work is done. That produced the file, line and duration in one run,
+after two rounds of inference had produced only plausible wrong answers.

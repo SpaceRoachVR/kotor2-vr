@@ -26,7 +26,11 @@
     "vr:sweep": "node tools/vr-emulator/module-sweep.js",
     "vr:sweep:test": "node --test tools/vr-emulator/module-sweep.test.js",
     "scan:secrets": "node tools/qa/scan-secrets.js",
-    "check:strict-null": "node tools/qa/strict-null-gate.js"
+    "check:strict-null": "node tools/qa/strict-null-gate.js",
+    "quest:perf": "node tools/quest/quest-perf.js",
+    "quest:perf:check": "node tools/quest/quest-perf.js --check",
+    "quest:perf:test": "node --test tools/quest/adb.test.js",
+    "qa:nightly": "node tools/qa/nightly.js"
   },
   "author": "KobaltBlu",
   "license": "GPL-3.0",
