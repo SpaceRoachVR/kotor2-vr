@@ -256,13 +256,20 @@ async function climbToRoot(file, ctx) {
     nodeName, nodeType, nodeEdges, nodeCount, strings, tagged,
   } = ctx;
   const describe = (ord) => `${nodeTypes[nodeType[ord]]} ${strings[nodeName[ord]] || '?'}`;
-  const isRoot = (ord) => ord === 0 || nodeTypes[nodeType[ord]] === 'synthetic';
+  // A synthetic node is a GC root proper. NativeContext is the page global's
+  // context: anything it holds is retained for the life of the page, which is
+  // what this is trying to find, so treat it as a root too rather than walking
+  // past it into V8 internals.
+  const isRoot = (ord) => ord === 0
+    || nodeTypes[nodeType[ord]] === 'synthetic'
+    || /NativeContext/.test(strings[nodeName[ord]] || '');
 
+  const allShapes = new Map();
   const seen = new Set(tagged);
   const parent = new Map();
   let frontier = new Set(tagged);
 
-  for (let depth = 1; depth <= 10 && frontier.size; depth += 1) {
+  for (let depth = 1; depth <= 16 && frontier.size; depth += 1) {
     const found = [];
     const next = new Set();
     let ord = 0;
@@ -284,6 +291,14 @@ async function climbToRoot(file, ctx) {
         if (!frontier.has(to)) return;
         if (seen.has(owner) && !isRoot(owner)) return;
         const et = edgeTypes[type];
+        // A weak edge does not retain, so a path through one is not a retaining
+        // path. Without this the climb happily routes through V8's own
+        // bookkeeping - `dependent_code` inside a WeakArrayList, then a
+        // CodeWrapper and an InstructionStream - and reports whatever JS object
+        // that code happens to mention as the retainer. That is how the first
+        // run produced the LightManager.fadingLights path, which then freed
+        // nothing when it was fixed: the path was an artifact of this walk.
+        if (et === 'weak') return;
         const label = (et === 'element' || et === 'hidden') ? `[${name}]` : (strings[name] || '?');
         // The debugger retains everything it has ever returned, so a snapshot
         // taken over CDP always shows a "DevTools console" global handle onto the
@@ -298,9 +313,14 @@ async function climbToRoot(file, ctx) {
     });
 
     if (found.length) {
-      console.log(`\n=== retaining path to a GC root (reached at depth ${depth}) ===`);
-      const shapes = new Map();
-      for (const rootOrd of found.slice(0, 300)) {
+      // Do not stop at the first root. The first one reached is simply the
+      // shortest path, not the one holding the most models, and reporting it
+      // alone reads as an answer when it is a sample - the fadingLights path was
+      // exactly that, and fixing it changed nothing. Collect every root shape at
+      // this depth, keep climbing, and rank them at the end.
+      console.log(`\n  depth ${depth}: reached ${found.length} GC root edge(s)`);
+      const shapes = allShapes;
+      for (const rootOrd of found.slice(0, 2000)) {
         const chain = [];
         let cur = rootOrd;
         let guard = 0;
@@ -314,9 +334,6 @@ async function climbToRoot(file, ctx) {
         const shape = chain.join('\n      ');
         shapes.set(shape, (shapes.get(shape) || 0) + 1);
       }
-      const ranked = [...shapes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
-      for (const [shape, n] of ranked) console.log(`\n  x${n}\n      ${shape}`);
-      return;
     }
 
     for (const k of next) seen.add(k);
@@ -324,7 +341,13 @@ async function climbToRoot(file, ctx) {
     const sample = [...frontier].slice(0, 6).map(describe).join(' | ');
     console.log(`  depth ${depth}: ${frontier.size} holders — ${sample}`);
   }
-  console.log('  no GC root reached within the depth limit');
+  if (!allShapes.size) { console.log('  no GC root reached within the depth limit'); return; }
+  const ranked = [...allShapes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+  console.log(`
+=== retaining paths to a GC root, ranked ===`);
+  for (const [shape, n] of ranked) console.log(`
+  x${n}
+      ${shape}`);
 }
 
 async function main() {
