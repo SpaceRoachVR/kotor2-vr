@@ -393,14 +393,24 @@ move the count mid-measurement), 334 orphaned models:
 |---|---:|---:|
 | *(control)* | 0 | 0 |
 | `userData.textureOwnerModel` | 158 | **0** |
-| `odysseyModel` | 0 | **0** |
+| `odysseyModel` | **0 — test was vacuous** | — |
 | `animationManager.model` | 668 | **0** |
 
-**None of the three dominant back-references retains anything.** That is
-consistent with what they are: `OdysseyModel3D` constructs its own
-`animationManager` and the manager points back, which is a self-cycle and
-collectable on its own. Between them these account for roughly 2,300 of the
-~2,700 incoming edges, so the histogram's top three are eliminated as suspects.
+**Two of the three are eliminated; the third was never actually tested.** The
+`odysseyModel` cut cleared **zero** edges, so it proved nothing — the experiment
+reaches edges by traversing each model, and an `OdysseyLight3D` is not a child of
+the model it points at; the lights live in `LightManager`'s own arrays. That is
+also precisely the edge the snapshot fingers, so it is the live hypothesis rather
+than a ruled-out one. Cutting it needs the lights enumerated from `LightManager`
+(`lights`, `animatedLights`, `light_pool`, `shadow_pool`, `group.lights`
+children) instead of from the models.
+
+The two real results are consistent with what those edges are:
+`OdysseyModel3D` constructs its own `animationManager` and the manager points
+back, which is a self-cycle and collectable on its own, and the material
+back-reference is the same shape. Between them they account for roughly 2,000 of
+the ~2,700 incoming edges, so the two largest classes are ruled out — leaving the
+lights, which the snapshot independently points at.
 
 **What that leaves.** The retainer is in the small classes:
 `native_bind --bound_this-->` (83) is the leading candidate — a bound callback
