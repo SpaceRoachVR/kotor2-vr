@@ -85,6 +85,32 @@ const makeFn = (edge) => `function () {
   return { orphans: orphans, touched: touched };
 }`;
 
+/**
+ * Cut `odysseyModel` on the lights, reached through LightManager.
+ *
+ * The model-traversal cuts cannot touch this edge: an OdysseyLight3D is not a
+ * child of the model it points at, so traversing each model never sees one. That
+ * is why the first attempt at this cleared zero edges and proved nothing. The
+ * lights live in LightManager's own collections, so enumerate them from there.
+ */
+const CUT_LIGHTS = `(() => {
+  const gs = window.KotOR.GameState;
+  const lm = gs.lightManager;
+  let seen = 0, touched = 0;
+  const cut = (light) => {
+    if (!light) return;
+    seen++;
+    if (light.odysseyModel) { light.odysseyModel = undefined; touched++; }
+  };
+  for (const key of ['lights', 'animatedLights', 'fadingLights', 'light_pool', 'shadow_pool']) {
+    const arr = lm && lm[key];
+    if (Array.isArray(arr)) { for (const l of arr) cut(l); }
+  }
+  const group = gs.group && gs.group.lights;
+  if (group && group.children) { for (const c of group.children) cut(c); }
+  return { seen: seen, touched: touched };
+})()`;
+
 async function countOrphans(cdp, edge) {
   const proto = await cdp.evaluate(RESOLVE_PROTO, { timeoutMs: 30000 });
   if (!proto || !proto.ok) throw new Error((proto && proto.error) || 'no prototype');
@@ -116,8 +142,17 @@ async function main() {
     const before = await countOrphans(cdp, 'none');
     console.log(`baseline parentless models: ${before.orphans}`);
 
-    const cut = await countOrphans(cdp, args.edge);
-    console.log(`cut '${args.edge}': ${cut.touched} edge(s) cleared across ${cut.orphans} models`);
+    let cut;
+    if (args.edge === 'lights') {
+      cut = await cdp.evaluate(CUT_LIGHTS, { timeoutMs: 60000 });
+      console.log(`cut 'lights': ${cut.touched} odysseyModel reference(s) cleared across ${cut.seen} light(s) in LightManager`);
+    } else {
+      cut = await countOrphans(cdp, args.edge);
+      console.log(`cut '${args.edge}': ${cut.touched} edge(s) cleared across ${cut.orphans} models`);
+    }
+    if (args.edge !== 'none' && !cut.touched) {
+      console.log('  WARNING: nothing was cleared — this run tests nothing, whatever the count does.');
+    }
 
     // Two collections: the first drops the probe's own handles, the second the
     // objects those were keeping alive.

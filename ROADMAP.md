@@ -380,50 +380,55 @@ Note for anyone re-running this: a snapshot taken over CDP always shows a
 root is the tool's own footprint, and the climb skips it — counting it reports
 the measurement as the defect.
 
-**Causal elimination (2026-09-09).** A retainer histogram cannot rank its own
-entries: these objects point at each other, and V8 collects cycles, so an
-immediate retainer is not evidence. `probe-retainer-experiment.js` settles it the
-other way round — break one edge class in the live page, force a GC, and count
-the parentless models again. If they fall, that edge was holding them.
-
-Run against a static heap (`probe-memory-growth.js --hold`, so no module loads
-move the count mid-measurement), 334 orphaned models:
+**Causal cuts (2026-09-09).** A retainer histogram cannot rank its own entries:
+these objects point at each other, and V8 collects cycles, so an immediate
+retainer is not evidence. `probe-retainer-experiment.js` tests it the other way
+round — break an edge class in the live page, force a GC, count the parentless
+models again. Run against a static heap (`probe-memory-growth.js --hold`, so no
+module load moves the count between readings), 334 orphaned models, cuts applied
+cumulatively in one session:
 
 | cut | edges cleared | models freed |
 |---|---:|---:|
 | *(control)* | 0 | 0 |
+| `odysseyModel` on lights, via LightManager | 233 across 291 lights | **0** |
 | `userData.textureOwnerModel` | 158 | **0** |
-| `odysseyModel` | **0 — test was vacuous** | — |
 | `animationManager.model` | 668 | **0** |
+| *(control, after all three)* | 0 | **0** |
 
-**Two of the three are eliminated; the third was never actually tested.** The
-`odysseyModel` cut cleared **zero** edges, so it proved nothing — the experiment
-reaches edges by traversing each model, and an `OdysseyLight3D` is not a child of
-the model it points at; the lights live in `LightManager`'s own arrays. That is
-also precisely the edge the snapshot fingers, so it is the live hypothesis rather
-than a ruled-out one. Cutting it needs the lights enumerated from `LightManager`
-(`lights`, `animatedLights`, `light_pool`, `shadow_pool`, `group.lights`
-children) instead of from the models.
+**1,059 edges cut and not one model freed.** Two things follow, and the second is
+the more useful.
 
-The two real results are consistent with what those edges are:
-`OdysseyModel3D` constructs its own `animationManager` and the manager points
-back, which is a self-cycle and collectable on its own, and the material
-back-reference is the same shape. Between them they account for roughly 2,000 of
-the ~2,700 incoming edges, so the two largest classes are ruled out — leaving the
-lights, which the snapshot independently points at.
+First: the path the heap snapshot reported — `GameState -> lightManager ->
+fadingLights -> OdysseyLight3D -> odysseyModel` — is **not load-bearing**. Cutting
+that exact edge on every light in every LightManager collection frees nothing,
+which agrees with the earlier result that clearing `fadingLights` on unload left
+growth at +304/+293 unchanged.
 
-**What that leaves.** The retainer is in the small classes:
-`native_bind --bound_this-->` (83) is the leading candidate — a bound callback
-holding a model as its `this`, which would be retained by whatever the callback
-was registered on — followed by `ModuleTrigger --trapModel-->` (12),
-`ModuleItem --model-->` (3) and `ModuleCreature --head-->` (1), which leak only
-if the owning ModuleObject is itself retained.
+Second, and the reason to stop reaching for these two tools: **both of them
+answer a question that is not quite the one being asked.** A backward BFS finds
+*a* path to a root, but an object retained by several independent paths is not
+freed by cutting one — so "found a path" does not mean "found the retainer", and
+"cutting it changed nothing" does not mean the edge is innocent. The cut
+experiment has the mirror flaw: it reaches edges by traversing each model, so it
+systematically under-reaches any holder that is not a descendant — which is
+exactly how the first `odysseyModel` attempt cleared zero edges and looked like a
+clean elimination.
 
-**How to finish it.** `climbToRoot` in `probe-heap-retainers.js` stops at the
-first GC root it reaches, so it names *a* holder rather than ranking holders by
-how many models each explains. Making it attribute every orphan to a root and
-rank by count is the remaining work, and the `native_bind` closures are where to
-point it first.
+**The technique this actually needs is a dominator tree.** Computing dominators
+over the snapshot answers "what keeps this alive" directly and correctly in the
+presence of multiple paths, which is precisely where the BFS fails. That is a
+standard algorithm over the node/edge arrays `heapsnapshot-stream.js` already
+exposes, and it is where the next attempt should start rather than adding another
+path heuristic.
+
+**Practical note on the instrument.** Snapshots of this page run to 2.3 GB and
+stall the renderer's main thread for minutes while V8 builds them. One capture in
+three succeeded; another hung at zero bytes for thirteen minutes and had to be
+killed. Never capture against a running sweep — the stall trips the sweep's 425 s
+module ceiling, the sweep declares the module BLOCKED and reloads the page out
+from under the capture. Use `probe-memory-growth.js --hold`, which parks an idle
+page with nothing to time out.
 
 **Fixed along the way, but not the cause.** Every creature builds a
 `TextSprite3D` debug label in `load()` and nothing ever disposed it, for an
