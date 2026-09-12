@@ -72,6 +72,8 @@ function context(overrides: Partial<VRActionWheelBuildContext> = {}): VRActionWh
     openMenu: jest.fn(),
     canClearActions: false,
     clearQueuedActions: jest.fn(),
+    canClearUpcomingActions: false,
+    clearUpcomingActions: jest.fn(),
     ...overrides,
   };
 }
@@ -421,9 +423,36 @@ test('offers Clear Actions only when something is queued', () => {
   expect(clearQueuedActions).toHaveBeenCalledTimes(1);
 });
 
+test('clears only upcoming VR intents without cancelling authored combat actions', () => {
+  const clearQueuedActions = jest.fn();
+  const clearUpcomingActions = jest.fn();
+  const menu = buildVRActionWheel(context({
+    canClearActions: true,
+    clearQueuedActions,
+    canClearUpcomingActions: true,
+    clearUpcomingActions,
+  }));
+
+  expect(contentIds(menu)).toContain('action:clear-upcoming');
+  // The limited radial layout deliberately offers one clear route at a time.
+  // When upcoming intents exist, it must be the non-destructive VR-only one.
+  expect(contentIds(menu)).not.toContain('action:clear-queue');
+
+  findAction(menu, 'action:clear-upcoming').activate();
+  expect(clearUpcomingActions).toHaveBeenCalledTimes(1);
+  expect(clearQueuedActions).not.toHaveBeenCalled();
+});
+
 test('rejects a build context without a clear-queue route', () => {
   const broken = context();
   delete (broken as unknown as Record<string, unknown>).clearQueuedActions;
 
   expect(() => buildVRActionWheel(broken)).toThrow('clearQueuedActions must be callable');
+});
+
+test('rejects a build context without an upcoming-intent clear route', () => {
+  const broken = context();
+  delete (broken as unknown as Record<string, unknown>).clearUpcomingActions;
+
+  expect(() => buildVRActionWheel(broken)).toThrow('clearUpcomingActions must be callable');
 });

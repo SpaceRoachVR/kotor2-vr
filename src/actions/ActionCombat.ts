@@ -7,6 +7,7 @@ import { ModuleObjectConstant, ModuleObjectType } from "@/enums";
 import { BitWise } from "@/utility/BitWise";
 import { GameState } from "@/GameState";
 import { writeItemCastSpellParameters } from "@/actions/ItemCastSpellParameters";
+import { releaseUnstartedItemCastCombatAction } from "@/actions/ItemCastSpellRoundCleanup";
 // import { ActionQueue } from "@/actions/ActionQueue";
 
 /**
@@ -96,6 +97,7 @@ export class ActionCombat extends Action {
       break;
       case CombatActionType.ITEM_CAST_SPELL:
         if(!combatAction.item || !combatAction.spell || !combatAction.target){
+          releaseUnstartedItemCastCombatAction(combatRound);
           return ActionStatus.FAILED;
         }
 

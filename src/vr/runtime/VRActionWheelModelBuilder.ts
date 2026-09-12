@@ -85,6 +85,10 @@ export interface VRActionWheelBuildContext {
   readonly canClearActions: boolean;
   /** Clears the action queue and cancels combat, as BTN_CLEARALL does. */
   readonly clearQueuedActions: () => void;
+  /** True when the VR-owned three-slot upcoming-action queue has entries. */
+  readonly canClearUpcomingActions: boolean;
+  /** Clears only the VR-owned upcoming-action queue. */
+  readonly clearUpcomingActions: () => void;
 }
 
 export interface VRActionMenuEntry {
@@ -198,7 +202,18 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
   // up/down controls have no VR counterpart by design: they exist because the
   // flat panel shows one action at a time, and the wheel already enumerates
   // every panel action at once.
-  if (context.canClearActions === true) {
+  // The upcoming-action queue is presentation/input state, not the engine
+  // action queue. Its clear route must therefore never call BTN_CLEARALL or
+  // cancel a live authored combat action. One clear wedge is shown at a time
+  // so the combat root retains its six-item, no-pagination guarantee.
+  if (context.canClearUpcomingActions === true) {
+    items.push(createStaticAction(
+      'action:clear-upcoming',
+      'Clear Upcoming',
+      'i_noaction',
+      context.clearUpcomingActions,
+    ));
+  } else if (context.canClearActions === true) {
     items.push(createStaticAction(
       'action:clear-queue',
       'Clear Actions',
@@ -446,6 +461,12 @@ function validateBuildContext(context: VRActionWheelBuildContext): void {
   }
   if (typeof context.clearQueuedActions !== 'function') {
     throw new TypeError('clearQueuedActions must be callable');
+  }
+  if (typeof context.canClearUpcomingActions !== 'boolean') {
+    throw new TypeError('canClearUpcomingActions must be boolean');
+  }
+  if (typeof context.clearUpcomingActions !== 'function') {
+    throw new TypeError('clearUpcomingActions must be callable');
   }
 }
 

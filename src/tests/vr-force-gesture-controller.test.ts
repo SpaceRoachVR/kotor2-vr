@@ -25,9 +25,22 @@ describe('VRForceGestureController', () => {
 
     expect(controller.process(frame(new THREE.Vector3(0, 0, -2)), false, 1_000)).toBeNull();
   });
+
+  test('uses the selected left dominant controller for a directional Force gesture', () => {
+    const controller = new VRForceGestureController({ minimumFlickSpeedMetresPerSecond: 1 });
+
+    const gesture = controller.process(
+      frame(new THREE.Vector3(0, 0, -2), 'left'),
+      true,
+      1_000,
+      'left',
+    );
+
+    expect(gesture).toMatchObject({ kind: 'push', hand: 'left' });
+  });
 });
 
-function frame(velocity: THREE.Vector3): XRInputFrame {
+function frame(velocity: THREE.Vector3, hand: 'left' | 'right' = 'right'): XRInputFrame {
   const pose = (position: THREE.Vector3, linearVelocity: THREE.Vector3 | null = null): XRWorldPose => ({
     position, orientation: new THREE.Quaternion(), linearVelocity, angularVelocity: null, trackingState: 'tracked',
   });
@@ -35,8 +48,8 @@ function frame(velocity: THREE.Vector3): XRInputFrame {
     timestamp: 1_000,
     head: pose(new THREE.Vector3(0, 0, 1.7)),
     hands: {
-      right: {
-        hand: 'right', pose: pose(new THREE.Vector3(), velocity), targetRayPose: pose(new THREE.Vector3()),
+      [hand]: {
+        hand, pose: pose(new THREE.Vector3(), velocity), targetRayPose: pose(new THREE.Vector3()),
         buttons: {}, axes: [], interactionProfile: 'oculus-touch-v3',
       },
     },

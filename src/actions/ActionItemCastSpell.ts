@@ -3,6 +3,7 @@ import { ActionType } from "@/enums/actions/ActionType";
 import { Action } from "@/actions/Action";
 import { ItemCastSpellParameter } from "@/actions/ItemCastSpellParameters";
 import { isItemCastSpellSourceUsable } from "@/actions/ItemCastSpellValidation";
+import { releaseUnstartedItemCastCombatAction } from "@/actions/ItemCastSpellRoundCleanup";
 import { ActionParameterType } from "@/enums/actions/ActionParameterType";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
@@ -37,24 +38,22 @@ export class ActionItemCastSpell extends Action {
     const item = this.getParameter<ModuleItem>(ItemCastSpellParameter.Item);
     const spellId = this.getParameter<number>(ItemCastSpellParameter.SpellId);
 
-    if (!BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)) {
-      return ActionStatus.FAILED;
-    }
+    if (!BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)) return ActionStatus.FAILED;
+    const owner = this.owner as ModuleCreature;
     if (!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleObject) || target.isDead()) {
-      return ActionStatus.FAILED;
+      return this.rejectItemCast(owner);
     }
     if (!Number.isSafeInteger(spellId) || spellId < 0) {
-      return ActionStatus.FAILED;
+      return this.rejectItemCast(owner);
     }
 
-    const owner = this.owner as ModuleCreature;
     if (!isItemCastSpellSourceUsable({
       sourceItem: item,
       requestedSpellId: spellId,
       isOwnedByCaster: (candidate) => this.isSourceItemOwnedBy(owner, candidate),
       castSpellPropertyType: ModuleItemProperty.CastSpell,
     })) {
-      return ActionStatus.FAILED;
+      return this.rejectItemCast(owner);
     }
 
     const combatRound = owner.combatRound;
@@ -67,7 +66,8 @@ export class ActionItemCastSpell extends Action {
 
     this.spell = new GameState.TalentSpell(spellId);
     if (!this.spell || !this.spell.inRange(target, owner)) {
-      return this.moveIntoCastRange(owner, target);
+      const moveStatus = this.moveIntoCastRange(owner, target);
+      return moveStatus === ActionStatus.FAILED ? this.rejectItemCast(owner) : moveStatus;
     }
 
     owner.force = 0;
@@ -105,6 +105,11 @@ export class ActionItemCastSpell extends Action {
     actionMoveToTarget.setParameter(8, ActionParameterType.FLOAT, 30.0);
     owner.actionQueue.addFront(actionMoveToTarget);
     return ActionStatus.IN_PROGRESS;
+  }
+
+  private rejectItemCast(owner: ModuleCreature): ActionStatus {
+    releaseUnstartedItemCastCombatAction(owner.combatRound);
+    return ActionStatus.FAILED;
   }
 
   private isSourceItemOwnedBy(owner: ModuleCreature, candidate: unknown): boolean {

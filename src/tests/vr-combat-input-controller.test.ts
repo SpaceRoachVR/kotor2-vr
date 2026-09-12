@@ -106,10 +106,29 @@ describe('VRCombatInputController', () => {
     expect(controller.process(frame(20, 0), context('blaster', 20, false, true))).toEqual([]);
   });
 
+  test('uses the selected left dominant hand for a deliberate blaster shot', () => {
+    const controller = new VRCombatInputController();
+
+    const events = controller.process(
+      frame(0, 0, new THREE.Vector3(0, -0.15, -0.4)),
+      context('blaster', 0, false, true, 'left'),
+    );
+
+    expect(events).toEqual([expect.objectContaining({
+      weaponMode: 'blaster', input: 'dominant-trigger', hand: 'left',
+    })]);
+  });
+
+  test('does not convert a melee trigger into a basic attack without a queued aimed Force power', () => {
+    const controller = new VRCombatInputController();
+
+    expect(controller.process(frame(0, 0), context('melee-one-handed', 0, false, true))).toEqual([]);
+  });
+
   test('keeps an aimed dominant trigger available for a queued Force power while melee is equipped', () => {
     const controller = new VRCombatInputController();
 
-    const events = controller.process(frame(0, 0), context('melee-one-handed', 0, false, true));
+    const events = controller.process(frame(0, 0), context('melee-one-handed', 0, false, true, 'right', true));
 
     expect(events).toEqual([expect.objectContaining({
       weaponMode: 'melee-one-handed', input: 'dominant-trigger', hand: 'right',
@@ -144,7 +163,9 @@ function context(
   weaponMode: CombatWeaponMode,
   timestamp: number,
   offhandGrip = false,
-  weaponActionPressed = false
+  weaponActionPressed = false,
+  dominantHand: 'left' | 'right' = 'right',
+  allowDominantTrigger = false,
 ) {
   return {
     actorId: '7',
@@ -153,6 +174,9 @@ function context(
     timestamp,
     offhandGrip,
     weaponActionPressed,
+    dominantHand,
+    offhandHand: dominantHand === 'right' ? 'left' as const : 'right' as const,
+    allowDominantTrigger,
   } as const;
 }
 

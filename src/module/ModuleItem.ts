@@ -20,9 +20,8 @@ import { BitWise } from "@/utility/BitWise";
 import { Dice } from "@/utility/Dice";
 import { ItemProperty } from "@/engine/ItemProperty";
 import { GameState } from "@/GameState";
-import { ActionParameterType, ActionType, GameEffectDurationType, ModuleCreatureAnimState, SkillType } from "@/enums";
-import { CombatActionType } from "@/enums/combat/CombatActionType";
-import { CombatRoundAction } from "@/combat/CombatRoundAction";
+import { ActionParameterType, GameEffectDurationType, ModuleCreatureAnimState, SkillType } from "@/enums";
+import { writeItemCastSpellParameters } from "@/actions/ItemCastSpellParameters";
 import type { SWWeaponSound } from "@/engine/rules/SWWeaponSound";
 
 /**
@@ -471,19 +470,25 @@ export class ModuleItem extends ModuleObject {
       if(property.is(ModuleItemProperty.CastSpell)){
         const spellId = property.getValue();
         if(!Number.isSafeInteger(spellId) || spellId < 0){ continue; }
-        // Item spells enter through CombatRound just like Force powers and
-        // feats. ActionCombat then writes the canonical ItemCastSpell action
-        // parameters after it has made this action current.
-        const combatAction = new CombatRoundAction(oCaster);
-        combatAction.actionType = CombatActionType.ITEM_CAST_SPELL;
-        combatAction.target = oTarget;
-        combatAction.item = this;
-        combatAction.setSpell(new TalentSpell(spellId));
-        combatAction.isUserAction = true;
-        oCaster.combatRound.addAction(combatAction);
-        if(!oCaster.actionQueue.actionTypeExists(ActionType.ActionCombat)){
-          oCaster.actionQueue.add(new GameState.ActionFactory.ActionCombat(0xFFFF));
-        }
+        // Ordinary item use remains an authored direct item-cast action. The
+        // embodied grenade bridge is the sole caller that deliberately enters
+        // CombatRound, because only it needs an eligible d20 tempo window.
+        // Routing every item through CombatRound changes flat-game semantics
+        // and can strand non-combat consumables behind combat state.
+        const action = new GameState.ActionFactory.ActionItemCastSpell();
+        writeItemCastSpellParameters(action, {
+          target: oTarget,
+          area: oTarget.area,
+          targetPosition: oTarget.position,
+          spellId,
+          casterLevel: 1,
+          delay: 1.0,
+          projectilePath: 0,
+          projectileSpellId: -1,
+          item: this,
+          impactScript: '',
+        });
+        oCaster.actionQueue.add(action);
       }else if(property.is(ModuleItemProperty.ThievesTools)){
         const action = new GameState.ActionFactory.ActionUnlockObject();
         action.setParameter(0, ActionParameterType.DWORD, oTarget);

@@ -26,6 +26,12 @@ export interface VRCombatInputContext {
   readonly timestamp: number;
   readonly offhandGrip: boolean;
   readonly weaponActionPressed: boolean;
+  /** Physical controller used for the equipped weapon and aimed powers. */
+  readonly dominantHand: XRHandRole;
+  /** The other controller; grenade release and a two-handed hilt use it. */
+  readonly offhandHand: XRHandRole;
+  /** True only when the head queued intent consumes an aimed trigger. */
+  readonly allowDominantTrigger: boolean;
 }
 
 export interface VRCombatSwingEvent {
@@ -72,7 +78,11 @@ export class VRCombatInputController {
 
   process(inputFrame: XRInputFrame, context: VRCombatInputContext): readonly VRCombatSwingEvent[] {
     VRCombatInputController.validateContext(context);
-    const triggerEvents = this.processDominantTrigger(inputFrame, context);
+    const triggerEvents = this.processDominantTrigger(
+      inputFrame,
+      context,
+      context.weaponMode === 'blaster' || context.allowDominantTrigger,
+    );
     if (context.weaponMode === 'blaster') {
       this.resetMeleeSample();
       return triggerEvents;
@@ -82,14 +92,14 @@ export class VRCombatInputController {
       return triggerEvents;
     }
 
-    const dominantPose = inputFrame.hands.right?.pose;
+    const dominantPose = inputFrame.hands[context.dominantHand]?.pose;
     if (!dominantPose || dominantPose.trackingState === 'unavailable') {
       this.resetMeleeSample();
       return triggerEvents;
     }
     // ROADMAP 3.3. A two-handed grip is a physical claim, not just a held
     // button: both hands must be tracked and close enough to be on one hilt.
-    const offhandPose = inputFrame.hands.left?.pose ?? null;
+    const offhandPose = inputFrame.hands[context.offhandHand]?.pose ?? null;
     const grip = this.resolveTwoHandedGrip(context, dominantPose, offhandPose);
 
     // Measure the swing where the blade actually is. With both hands on the
@@ -116,7 +126,7 @@ export class VRCombatInputController {
     return [...triggerEvents, {
       actorId: context.actorId,
       nominatedTargetId: context.nominatedTargetId,
-      hand: 'right',
+      hand: context.dominantHand,
       weaponMode: grip ? 'melee-two-handed' : context.weaponMode,
       speedMetresPerSecond: speed,
       pose: VRCombatInputController.clonePose(dominantPose),
@@ -198,16 +208,17 @@ export class VRCombatInputController {
   private processDominantTrigger(
     inputFrame: XRInputFrame,
     context: VRCombatInputContext,
+    triggerAllowed: boolean,
   ): readonly VRCombatSwingEvent[] {
     const wasHeld = this.weaponActionHeld;
     this.weaponActionHeld = context.weaponActionPressed;
-    if (!context.weaponActionPressed || wasHeld) return [];
-    const pose = inputFrame.hands.right?.targetRayPose;
+    if (!triggerAllowed || !context.weaponActionPressed || wasHeld) return [];
+    const pose = inputFrame.hands[context.dominantHand]?.targetRayPose;
     if (!pose || pose.trackingState === 'unavailable') return [];
     return [{
       actorId: context.actorId,
       nominatedTargetId: context.nominatedTargetId,
-      hand: 'right',
+      hand: context.dominantHand,
       weaponMode: context.weaponMode,
       speedMetresPerSecond: 0,
       pose: VRCombatInputController.clonePose(pose),
@@ -252,6 +263,14 @@ export class VRCombatInputController {
     }
     if (!Number.isFinite(context.timestamp) || context.timestamp < 0) {
       throw new RangeError('combat context timestamp must be finite and non-negative');
+    }
+    if ((context.dominantHand !== 'left' && context.dominantHand !== 'right') ||
+      (context.offhandHand !== 'left' && context.offhandHand !== 'right') ||
+      context.dominantHand === context.offhandHand) {
+      throw new TypeError('combat context requires distinct dominant and offhand roles');
+    }
+    if (typeof context.allowDominantTrigger !== 'boolean') {
+      throw new TypeError('combat context allowDominantTrigger must be boolean');
     }
   }
 

@@ -230,9 +230,13 @@ export interface VRSpikeHooks {
     readonly stanceReadout: string;
     /** 0 while the engine owns the round, 1 for its next legal input window. */
     readonly tempoReadiness?: number;
+    /** True only while the queue head needs an aimed dominant-hand trigger. */
+    readonly allowDominantTrigger?: boolean;
     onCombatSwing(event: VRCombatSwingEvent): void;
     onDirectionalForceGesture?(gesture: VRForceGesture): void;
     onGrenadeTrigger?(): void;
+    /** Cancels transient target-dependent VR state after engine invalidation. */
+    onCombatTargetInvalidated?(): void;
     cancel?(): void;
   } | null;
   /** Engine-owned held-item descriptors; the anchor host creates presentation-only clones. */
@@ -323,6 +327,7 @@ export class VRSpike {
   private static traceXRStartupCallbacksSeen = 0;
   private static xrFrameRenderTarget: THREE.WebGLRenderTarget | null = null;
   private static readonly inputRouter = new XRInputRouter();
+  private static dominantHand: XRHandRole = 'right';
   private static inputCapabilityValidator = new XRInputCapabilityValidator();
   private static desktopLoopNeedsRestart = false;
   private static readonly sessionController = new XRSessionController({
@@ -673,9 +678,27 @@ export class VRSpike {
   };
 
   static setDominantHand(hand: XRHandRole): void {
+    if (hand !== 'left' && hand !== 'right') throw new TypeError('dominant hand must be left or right');
+    if (hand !== VRSpike.dominantHand) {
+      // These are mounted to a concrete controller anchor. Recreate them on
+      // the next combat frame so a preference change never leaves the timer,
+      // stance plaque, or aiming laser attached to the former weapon hand.
+      VRSpike.hiltTimerHost?.dispose();
+      VRSpike.hiltTimerHost = null;
+      VRSpike.weaponStanceHost?.dispose();
+      VRSpike.weaponStanceHost = null;
+      VRSpike.blasterLaserHost?.dispose();
+      VRSpike.blasterLaserHost = null;
+    }
+    VRSpike.dominantHand = hand;
     VRSpike.inputRouter.setDominantHand(hand);
     VRSpike.inputCapabilityValidator = new XRInputCapabilityValidator(undefined, hand);
     VRSpike.onInputSourcesChange();
+  }
+
+  /** Current weapon/aim hand, shared with held-item presentation. */
+  static getDominantHand(): XRHandRole {
+    return VRSpike.dominantHand;
   }
 
   private static prepareXRSession(session: XRSession): void {
@@ -1809,7 +1832,7 @@ export class VRSpike {
         new Set(['combat', 'interaction', 'ui'])
       );
       const cancelPressed = actions.some((action) =>
-        action.action === SemanticXRAction.Cancel && action.hand === 'right' && action.pressed
+        action.action === SemanticXRAction.Cancel && action.hand === VRSpike.dominantHand && action.pressed
       );
       if (cancelPressed && !VRSpike.combatCancelHeld) {
         // Resolve the context without a nominated target: a cancel must still
@@ -1881,9 +1904,17 @@ export class VRSpike {
       nowMilliseconds: timestamp,
     });
     const lockedTargetId = VRSpike.parseModuleObjectTargetId(lock.lockedTargetId);
-    const context = candidateContext
-      ? (VRSpike.hooks?.getCombatContext?.(lockedTargetId) ?? null)
-      : null;
+    // Re-resolve the soft lock even during aim-loss grace. The original
+    // candidate may be absent while a natural melee swing crosses the target,
+    // but the engine target remains authoritative for that grace window.
+    const context = VRSpike.hooks?.getCombatContext?.(lockedTargetId) ?? null;
+    if (lockedTargetId !== null && context?.nominatedTargetId === null) {
+      // A target that was once valid has died, transitioned, or otherwise been
+      // rejected by the engine. Do not retain an armed grenade aimed at an
+      // impossible target, and do not leave the highlight lying about it.
+      VRSpike.combatTargetLock.clear();
+      context.onCombatTargetInvalidated?.();
+    }
     if (!context) {
       VRSpike.combatCancelHeld = false;
       VRSpike.hiltTimerHost?.clear();
@@ -1905,14 +1936,16 @@ export class VRSpike {
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['combat', 'interaction', 'ui'])
       );
+      const dominantHand = VRSpike.dominantHand;
+      const offhandHand: XRHandRole = dominantHand === 'right' ? 'left' : 'right';
       const offhandGrip = actions.some((action) =>
-        action.action === SemanticXRAction.Grab && action.hand === 'left' && action.pressed
+        action.action === SemanticXRAction.Grab && action.hand === offhandHand && action.pressed
       );
       const weaponActionPressed = actions.some((action) =>
-        action.action === SemanticXRAction.WeaponAction && action.hand === 'right' && action.pressed
+        action.action === SemanticXRAction.WeaponAction && action.hand === dominantHand && action.pressed
       );
       const offhandGrenadePressed = actions.some((action) =>
-        action.action === SemanticXRAction.WeaponAction && action.hand === 'left' && action.pressed
+        action.action === SemanticXRAction.WeaponAction && action.hand === offhandHand && action.pressed
       );
       if (offhandGrenadePressed && !VRSpike.offhandGrenadeTriggerHeld) {
         context.onGrenadeTrigger?.();
@@ -1934,6 +1967,9 @@ export class VRSpike {
         timestamp,
         offhandGrip,
         weaponActionPressed,
+        dominantHand,
+        offhandHand,
+        allowDominantTrigger: context.allowDominantTrigger === true,
       });
       for (const event of events) context.onCombatSwing(event);
     } catch (error) {
@@ -1956,8 +1992,8 @@ export class VRSpike {
     // substantially (grip follows the handle, target ray follows where the
     // controller points), and putting the laser on the grip is what made it
     // visibly diverge from the correctly-aimed menu pointer.
-    const gripAnchor = VRSpike.controllerAnchorHost?.getAnchor('right') ?? null;
-    const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor('right') ?? null;
+    const gripAnchor = VRSpike.controllerAnchorHost?.getAnchor(VRSpike.dominantHand) ?? null;
+    const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor(VRSpike.dominantHand) ?? null;
     if (!gripAnchor || weaponMode === 'unarmed') {
       VRSpike.hiltTimerHost?.clear();
       VRSpike.weaponStanceHost?.clear();
@@ -2016,9 +2052,14 @@ export class VRSpike {
         new Set(['interaction'])
       );
       const gripModifierHeld = actions.some((action) =>
-        action.action === SemanticXRAction.Grab && action.hand === 'right' && action.pressed
+        action.action === SemanticXRAction.Grab && action.hand === VRSpike.dominantHand && action.pressed
       );
-      const gesture = VRSpike.forceGestureController.process(inputFrame, gripModifierHeld, timestamp);
+      const gesture = VRSpike.forceGestureController.process(
+        inputFrame,
+        gripModifierHeld,
+        timestamp,
+        VRSpike.dominantHand,
+      );
       if (!gesture) return false;
       if (combatContext?.onDirectionalForceGesture) combatContext.onDirectionalForceGesture(gesture);
       else legacyContext?.onForceGesture(gesture);
@@ -2256,10 +2297,11 @@ export class VRSpike {
         VRSpike.COMBAT_CONTEXT_ONLY,
       );
       const pressed = actions.some((action) =>
-        action.action === SemanticXRAction.WeaponAction && action.hand === 'right' && action.pressed
+        action.action === SemanticXRAction.WeaponAction && action.hand === VRSpike.dominantHand && action.pressed
       );
+      const offhandHand: XRHandRole = VRSpike.dominantHand === 'right' ? 'left' : 'right';
       const offhandPressed = actions.some((action) =>
-        action.action === SemanticXRAction.WeaponAction && action.hand === 'left' && action.pressed
+        action.action === SemanticXRAction.WeaponAction && action.hand === offhandHand && action.pressed
       );
       VRSpike.combatInputController.synchronizeWeaponActionHeld(pressed);
       VRSpike.offhandGrenadeTriggerHeld = offhandPressed;

@@ -80,6 +80,7 @@ import {
 import { VRCombatIntentDispatcher } from "@/vr/runtime/VRCombatIntentDispatcher";
 import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
+import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
 import type { HeldItemClassFallbackTransform, HeldItemVisualDescriptor } from "@/vr/runtime/XRControllerAnchorHost";
 import { BaseItemType } from "@/enums/combat/BaseItemType";
@@ -531,7 +532,16 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
   if (request.state !== 'armed') return false;
   const source = findVRArmedGrenade(actor, request.grenade.sourceKey);
   const target = resolveVRLiveCombatTarget(actor, targetId);
-  if (!source || !target || !getVREmbodiedTempoResult(actor, target).eligible) {
+  const eligibility = resolveVRArmedGrenadeCommitEligibility({
+    sourceAvailable: source !== undefined,
+    targetAvailable: target !== undefined,
+    tempoEligible: source !== undefined && target !== undefined && getVREmbodiedTempoResult(actor, target).eligible,
+  });
+  if (eligibility === 'cancel-invalid') {
+    vrArmedGrenadeState.cancel();
+    return false;
+  }
+  if (eligibility === 'defer-tempo') {
     vrArmedGrenadeState.completeCommit({ sourceKey: request.grenade.sourceKey, engineAccepted: false });
     return false;
   }
@@ -551,7 +561,10 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
     vrCombatIssuedTargetId = target.id;
     return true;
   } catch {
-    vrArmedGrenadeState.completeCommit({ sourceKey: request.grenade.sourceKey, engineAccepted: false });
+    // A construction failure is not a timing deferral. The still-visible item
+    // could never be thrown from this trigger, so remove the stale off-hand
+    // presentation rather than leaving a dead armed state behind.
+    vrArmedGrenadeState.cancel();
     return false;
   }
 }
@@ -2158,10 +2171,16 @@ export class GameState implements EngineContext {
         const grenade = armed ? findVRArmedGrenade(player, armed.sourceKey)?.item ?? null : null;
         // Arming never mutates equipment: the controller host renders a
         // presentation-only off-hand copy until the engine accepts the throw.
-        return describeVRHeldItemVisuals({
+        const equipmentVisuals = describeVRHeldItemVisuals({
           LEFTHAND: grenade ?? player.equipment?.LEFTHAND ?? null,
           RIGHTHAND: player.equipment?.RIGHTHAND ?? null,
         });
+        // Equipment slots are authored as left/right. Controller dominance is
+        // a presentation/input preference, so mirror the descriptors here
+        // without mutating the actor's inventory or engine equipment slots.
+        return VRSpike.getDominantHand() === 'right'
+          ? equipmentVisuals
+          : { left: equipmentVisuals.right, right: equipmentVisuals.left };
       },
       getAvatarPresentation: () => {
         const player = GameState.getCurrentPlayer();
@@ -2267,6 +2286,7 @@ export class GameState implements EngineContext {
           // attack mode. An empty queue deliberately returns to basic attacks.
           stanceReadout: queuedIntent?.label ?? '',
           tempoReadiness: tempo.eligible ? 1 : 0,
+          allowDominantTrigger: queuedIntent?.requiredInput === 'dominant-trigger',
           onCombatSwing: (event) => {
             if (event.actorId !== String(actor.id)) return;
             dispatchVREmbodiedCombatInput(actor, event.nominatedTargetId, event.input);
@@ -2276,6 +2296,9 @@ export class GameState implements EngineContext {
           },
           onGrenadeTrigger: () => {
             commitVRArmedGrenade(actor, target ? String(target.id) : null);
+          },
+          onCombatTargetInvalidated: () => {
+            vrArmedGrenadeState.cancel();
           },
           cancel: () => {
             vrCombatIntentQueue.clear();
@@ -2466,6 +2489,13 @@ export class GameState implements EngineContext {
             player.clearAllActions();
             player.combatData.combatState = false;
             player.cancelCombat();
+          },
+          canClearUpcomingActions: vrCombatIntentQueue.getSnapshot().entries.length > 0,
+          clearUpcomingActions: () => {
+            // The three-slot queue is VR presentation/input state. Clearing it
+            // must not cancel an authored action already resolving in the
+            // engine, nor disarm a separately chosen grenade.
+            vrCombatIntentQueue.clear();
           },
         });
       },
