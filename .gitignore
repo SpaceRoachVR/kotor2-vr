@@ -26,6 +26,7 @@ extensions/
 .vscode/chrome-debug-profile/
 exports/
 .worktrees/
+.superpowers/
 
 # probe output
 tools/xr-probe/result.json
