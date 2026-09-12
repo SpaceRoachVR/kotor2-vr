@@ -4,6 +4,7 @@ import {
   createVRActionSourceKey,
   VRActionMenuEntry,
   VRActionWheelBuildContext,
+  VRActionWheelDirectAction,
   VRActionWheelEngineAction,
   VRActionWheelPartyMember,
 } from '@/vr/runtime/VRActionWheelModelBuilder';
@@ -42,6 +43,20 @@ function partyMember(
     label,
     resolveCurrentIndex: () => 1,
     switchLeader: jest.fn(),
+    ...overrides,
+  };
+}
+
+function directAction(
+  id: string,
+  label: string,
+  overrides: Partial<VRActionWheelDirectAction> = {},
+): VRActionWheelDirectAction {
+  return {
+    id,
+    label,
+    revalidate: () => true,
+    activate: jest.fn(),
     ...overrides,
   };
 }
@@ -133,6 +148,23 @@ test('splits Attacks from Force Powers along the panels the engine already filte
   // Hostile (target panel 1) and friendly (self panel 1) powers share one page.
   expect(contentIds(findSubmenu(menu, 'submenu:force-powers').buildMenu()))
     .toEqual(['engine:lightning', 'engine:heal']);
+});
+
+test('keeps grenade selection separate from the three-slot combat-action queue', () => {
+  const armGrenade = jest.fn();
+  const menu = buildVRActionWheel(context({
+    grenadeActions: [directAction('grenade:17:0:52', 'Plasma Grenade', {
+      icon: 'i_grenade_plasma',
+      activate: armGrenade,
+    })],
+  }));
+
+  const grenades = findSubmenu(menu, 'submenu:grenades').buildMenu();
+  const grenade = findAction(grenades, 'direct:grenade:17:0:52');
+  grenade.activate();
+
+  expect(armGrenade).toHaveBeenCalledTimes(1);
+  expect(contentIds(menu)).not.toContain('direct:grenade:17:0:52');
 });
 
 test('keeps world actions at the top level when the target is not a hostile creature', () => {

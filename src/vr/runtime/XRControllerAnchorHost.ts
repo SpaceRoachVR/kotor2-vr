@@ -67,6 +67,7 @@ function createPresentationClone(
 export class XRControllerAnchorHost {
   private readonly anchors: Readonly<Record<XRHandRole, THREE.Group>>;
   private readonly rayAnchors: Readonly<Record<XRHandRole, THREE.Group>>;
+  private readonly humanoidHandVisuals: Record<XRHandRole, THREE.Group | null> = { left: null, right: null };
   private readonly heldVisuals: Record<XRHandRole, THREE.Object3D | null> = { left: null, right: null };
   /** Sources are cached so an equipped model is cloned only when equipment changes. */
   private readonly heldSources: Record<XRHandRole, THREE.Object3D | null> = { left: null, right: null };
@@ -99,6 +100,32 @@ export class XRControllerAnchorHost {
 
   getRayAnchor(hand: XRHandRole): THREE.Group {
     return this.rayAnchors[hand];
+  }
+
+  /**
+   * Displays first-person forearms and hands for humanoid player characters.
+   *
+   * Equipment remains a separate flattened presentation model on the same
+   * controller anchor. That preserves the authored weapon model and grip while
+   * providing the hand/weapon relationship that a first-person VR view needs.
+   * Droid player characters pass `false`: their equipment remains visibly
+   * stabilized at the dominant controller, but no humanoid anatomy is shown.
+   */
+  setHumanoidHandsVisible(visible: boolean): void {
+    if (typeof visible !== 'boolean') {
+      throw new TypeError('humanoid-hand visibility must be a boolean');
+    }
+
+    for (const hand of ['left', 'right'] as const) {
+      let presentation = this.humanoidHandVisuals[hand];
+      if (!presentation) {
+        if (!visible) continue;
+        presentation = this.createHumanoidHandVisual(hand);
+        this.anchors[hand].add(presentation);
+        this.humanoidHandVisuals[hand] = presentation;
+      }
+      presentation.visible = visible;
+    }
   }
 
   update(inputFrame: XRInputFrame | null): void {
@@ -244,6 +271,62 @@ export class XRControllerAnchorHost {
     const anchor = new THREE.Group();
     anchor.name = `Kotor2VR.${hand}ControllerAnchor`;
     return anchor;
+  }
+
+  /**
+   * Creates a compact, controller-relative sleeve, palm, and finger silhouette
+   * with host-owned geometry. These are deliberately independent of the
+   * creature model, whose skinned body mesh cannot safely be split and cloned
+   * for first-person rendering without mutating the world avatar.
+   */
+  private createHumanoidHandVisual(hand: XRHandRole): THREE.Group {
+    const root = new THREE.Group();
+    root.name = `Kotor2VR.${hand}HumanoidHandVisual`;
+    const lateralDirection = hand === 'left' ? -1 : 1;
+    const sleeveMaterial = this.createHandMaterial(0x34485d);
+    const gloveMaterial = this.createHandMaterial(0x6d7f90);
+
+    const sleeveGeometry = new THREE.CylinderGeometry(0.052, 0.068, 0.24, 10);
+    const sleeve = new THREE.Mesh(sleeveGeometry, sleeveMaterial);
+    sleeve.name = `${root.name}.Sleeve`;
+    sleeve.rotation.x = Math.PI / 2;
+    sleeve.position.set(0, 0.01, 0.12);
+    root.add(sleeve);
+    this.disposableGeometries.push(sleeveGeometry);
+
+    const palmGeometry = new THREE.SphereGeometry(0.065, 12, 8);
+    const palm = new THREE.Mesh(palmGeometry, gloveMaterial);
+    palm.name = `${root.name}.Palm`;
+    palm.scale.set(0.92, 0.62, 1.16);
+    palm.position.set(0, -0.018, -0.025);
+    root.add(palm);
+    this.disposableGeometries.push(palmGeometry);
+
+    const fingerGeometry = new THREE.CylinderGeometry(0.012, 0.014, 0.072, 8);
+    for (let index = 0; index < 3; index += 1) {
+      const finger = new THREE.Mesh(fingerGeometry, gloveMaterial);
+      finger.name = `${root.name}.Finger${index + 1}`;
+      finger.rotation.x = Math.PI / 2;
+      finger.position.set((index - 1) * 0.023, -0.008, -0.09);
+      root.add(finger);
+    }
+    this.disposableGeometries.push(fingerGeometry);
+
+    const thumbGeometry = new THREE.CylinderGeometry(0.014, 0.016, 0.062, 8);
+    const thumb = new THREE.Mesh(thumbGeometry, gloveMaterial);
+    thumb.name = `${root.name}.Thumb`;
+    thumb.rotation.set(Math.PI / 2, 0, lateralDirection * Math.PI / 4);
+    thumb.position.set(lateralDirection * 0.058, -0.012, -0.042);
+    root.add(thumb);
+    this.disposableGeometries.push(thumbGeometry);
+
+    return root;
+  }
+
+  private createHandMaterial(color: THREE.ColorRepresentation): THREE.MeshBasicMaterial {
+    const material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
+    this.disposableMaterials.push(material);
+    return material;
   }
 
   private createRayAnchor(

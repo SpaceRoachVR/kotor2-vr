@@ -20,7 +20,9 @@ import { BitWise } from "@/utility/BitWise";
 import { Dice } from "@/utility/Dice";
 import { ItemProperty } from "@/engine/ItemProperty";
 import { GameState } from "@/GameState";
-import { ActionParameterType, GameEffectDurationType, ModuleCreatureAnimState, SkillType } from "@/enums";
+import { ActionParameterType, ActionType, GameEffectDurationType, ModuleCreatureAnimState, SkillType } from "@/enums";
+import { CombatActionType } from "@/enums/combat/CombatActionType";
+import { CombatRoundAction } from "@/combat/CombatRoundAction";
 import type { SWWeaponSound } from "@/engine/rules/SWWeaponSound";
 
 /**
@@ -467,20 +469,21 @@ export class ModuleItem extends ModuleObject {
       if(!property.isUseable()){ continue; }
 
       if(property.is(ModuleItemProperty.CastSpell)){
-        const action = new GameState.ActionFactory.ActionItemCastSpell();
-        action.setParameter(0, ActionParameterType.DWORD, oTarget);
-        action.setParameter(1, ActionParameterType.DWORD, oTarget.area);
-        action.setParameter(2, ActionParameterType.FLOAT, oTarget.position.x);
-        action.setParameter(3, ActionParameterType.FLOAT, oTarget.position.y);
-        action.setParameter(4, ActionParameterType.FLOAT, oTarget.position.z);
-        action.setParameter(5, ActionParameterType.INT, property.getValue());
-        action.setParameter(6, ActionParameterType.INT, 1);
-        action.setParameter(7, ActionParameterType.FLOAT, 1.0);
-        action.setParameter(8, ActionParameterType.INT, -1);
-        action.setParameter(9, ActionParameterType.INT, -1);
-        action.setParameter(10, ActionParameterType.DWORD, this);
-        action.setParameter(11, ActionParameterType.STRING, '');
-        oCaster.actionQueue.add(action);
+        const spellId = property.getValue();
+        if(!Number.isSafeInteger(spellId) || spellId < 0){ continue; }
+        // Item spells enter through CombatRound just like Force powers and
+        // feats. ActionCombat then writes the canonical ItemCastSpell action
+        // parameters after it has made this action current.
+        const combatAction = new CombatRoundAction(oCaster);
+        combatAction.actionType = CombatActionType.ITEM_CAST_SPELL;
+        combatAction.target = oTarget;
+        combatAction.item = this;
+        combatAction.setSpell(new TalentSpell(spellId));
+        combatAction.isUserAction = true;
+        oCaster.combatRound.addAction(combatAction);
+        if(!oCaster.actionQueue.actionTypeExists(ActionType.ActionCombat)){
+          oCaster.actionQueue.add(new GameState.ActionFactory.ActionCombat(0xFFFF));
+        }
       }else if(property.is(ModuleItemProperty.ThievesTools)){
         const action = new GameState.ActionFactory.ActionUnlockObject();
         action.setParameter(0, ActionParameterType.DWORD, oTarget);

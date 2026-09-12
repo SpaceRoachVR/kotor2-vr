@@ -6,6 +6,7 @@ import { ActionParameterType } from "@/enums/actions/ActionParameterType";
 import { ModuleObjectConstant, ModuleObjectType } from "@/enums";
 import { BitWise } from "@/utility/BitWise";
 import { GameState } from "@/GameState";
+import { writeItemCastSpellParameters } from "@/actions/ItemCastSpellParameters";
 // import { ActionQueue } from "@/actions/ActionQueue";
 
 /**
@@ -94,7 +95,25 @@ export class ActionCombat extends Action {
         this.owner.actionQueue.unshift(spellAction);
       break;
       case CombatActionType.ITEM_CAST_SPELL:
-        //TODO
+        if(!combatAction.item || !combatAction.spell || !combatAction.target){
+          return ActionStatus.FAILED;
+        }
+
+        const itemSpellAction = new GameState.ActionFactory.ActionItemCastSpell();
+        writeItemCastSpellParameters(itemSpellAction, {
+          target: combatAction.target,
+          area: combatAction.target.area,
+          targetPosition: combatAction.target.position,
+          spellId: combatAction.spell.id,
+          casterLevel: 1,
+          delay: 1.0,
+          projectilePath: combatAction.projectilePath,
+          projectileSpellId: -1,
+          item: combatAction.item,
+          impactScript: '',
+        });
+        itemSpellAction.isUserAction = combatAction.isUserAction;
+        this.owner.actionQueue.unshift(itemSpellAction);
       break;
       case CombatActionType.ITEM_EQUIP:
         const equipAction = new GameState.ActionFactory.ActionEquipItem();

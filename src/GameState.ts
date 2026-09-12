@@ -9,7 +9,7 @@ import {
 import type { SWRuleSet } from "@/engine/rules/SWRuleSet";
 
 import type { TalentObject, TalentFeat, TalentSkill, TalentSpell } from "@/talents";
-import type { ModuleObject, ModuleCreature, Module, ModuleDoor } from "@/module";
+import type { ModuleObject, ModuleCreature, Module, ModuleDoor, ModuleItem } from "@/module";
 import type { NWScript } from "@/nwscript/NWScript";
 import type { SaveGame } from "@/engine/SaveGame";
 import type { GameEffectFactory } from "@/effects/GameEffectFactory";
@@ -73,17 +73,23 @@ import {
   readVRCreaturePromptState,
 } from "@/vr/runtime/VRCreaturePromptRules";
 import {
-  formatVRAttackStanceReadout,
-  VRAttackStanceController,
-  type VRAttackStanceSelection,
-  type VRCombatRoundSnapshot,
-} from "@/vr/runtime/VRAttackStanceController";
+  VRCombatIntentQueue,
+  type VRCombatIntent,
+  type VRCombatRequiredInput,
+} from "@/vr/runtime/VRCombatIntentQueue";
+import { VRCombatIntentDispatcher } from "@/vr/runtime/VRCombatIntentDispatcher";
+import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
+import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
 import type { HeldItemClassFallbackTransform, HeldItemVisualDescriptor } from "@/vr/runtime/XRControllerAnchorHost";
 import { BaseItemType } from "@/enums/combat/BaseItemType";
+import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
+import { CombatActionType } from "@/enums/combat/CombatActionType";
+import { CombatRoundAction } from "@/combat/CombatRoundAction";
 import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
 import {
   buildVRActionWheel,
+  createVRActionSourceKey,
 } from "@/vr/runtime/VRActionWheelModelBuilder";
 import { findCullingBoundsAnomalies, describeCullingBoundsAnomalies } from "@/module/CullingBoundsAudit";
 import type { BoundsSample } from "@/module/CullingBoundsAudit";
@@ -302,27 +308,37 @@ function getVRActionIcon(entry: VRActionMenuEntry): string | undefined {
   return typeof entry.icon === 'string' && entry.icon.trim() ? entry.icon : undefined;
 }
 
-/**
- * ROADMAP 4.8 — attack modes are a persistent stance in VR, not a one-shot.
- *
- * The flat game queues exactly one Flurry attack when Flurry is picked. In VR
- * the attack is a gesture, so the wheel's Attacks page arms a stance instead
- * and every rolling swing thereafter attacks with it.
- */
-const vrAttackStance = new VRAttackStanceController();
+const vrCombatIntentQueue = new VRCombatIntentQueue();
+const vrCombatTempoGate = new VRCombatTempoGate();
+const vrArmedGrenadeState = new VRArmedGrenadeState();
+let vrCombatIntentDispatchInProgress = false;
+let vrCombatQueueActorId: number | null = null;
+let vrCombatQueueWeaponSignature: string | null = null;
+const vrGrenadeInventoryIdentities = new WeakMap<object, number>();
+let nextVRGrenadeInventoryIdentity = 1;
+
+interface VRGrenadeInventoryEntry {
+  readonly descriptor: VRArmedGrenadeDescriptor;
+  readonly item: ModuleItem;
+  readonly spellId: number;
+}
+
+const VR_GRENADE_BASE_ITEM_IDS = new Set<number>([
+  BaseItemType.FRAGMENTATION_GRENADES,
+  BaseItemType.STUN_GRENADES,
+  BaseItemType.THERMAL_DETONATOR,
+  BaseItemType.POISON_GRENADE,
+  BaseItemType.FLASH_GRENADE,
+  BaseItemType.SONIC_GRENADE,
+  BaseItemType.ADHESIVE_GRENADE,
+  BaseItemType.CRYOBAN_GRENADE,
+  BaseItemType.FIRE_GRENADE,
+  BaseItemType.ION_GRENADE,
+]);
 
 /** Melee and ranged attack-mode feat categories in `feat.2da`. */
 const VR_MELEE_ATTACK_FEAT_CATEGORY = 0x1104;
 const VR_RANGED_ATTACK_FEAT_CATEGORY = 0x1111;
-
-function resolveVRCombatRoundSnapshot(actor: ModuleCreature | null): VRCombatRoundSnapshot | null {
-  const round = actor?.combatRound;
-  if (!round) return null;
-  return {
-    roundStarted: round.roundStarted === true,
-    timerMilliseconds: round.timer,
-  };
-}
 
 function isVRAttackModeFeat(talent: unknown): talent is TalentFeat {
   const category = (talent as { category?: unknown } | null)?.category;
@@ -330,80 +346,304 @@ function isVRAttackModeFeat(talent: unknown): talent is TalentFeat {
     category === VR_RANGED_ATTACK_FEAT_CATEGORY;
 }
 
-/**
- * Maps the armed stance back to a feat the actor still has.
- *
- * Re-resolved against the live feat list every time rather than holding the
- * `TalentFeat` itself: attack modes are filtered by `getEquippedWeaponType()`,
- * so a stance armed with a sabre must not survive a swap to a blaster. If the
- * feat is no longer available the stance silently degrades to a plain attack,
- * which is the safe direction — the alternative is attacking with a feat the
- * character cannot legally use.
- */
-function resolveVRActiveStanceFeat(actor: ModuleCreature): TalentFeat | undefined {
-  const active = vrAttackStance.getState().active;
-  if (!active) return undefined;
-  try {
-    const feats = actor.getFeats() as readonly unknown[];
-    const match = feats.find((feat) => (feat as { __index?: unknown })?.__index === active.featId);
-    if (!isVRAttackModeFeat(match)) return undefined;
-
-    // `getFeats()` is not filtered by weapon, so a Flurry armed with a sabre
-    // would still resolve after swapping to a blaster and would then be
-    // attacked with illegally. ActionMenuManager offers melee feats only at
-    // weapon type 1 and ranged only at 4; hold the stance to the same rule.
-    const weaponType = actor.getEquippedWeaponType();
-    const category = (match as { category?: unknown }).category;
-    if (category === VR_MELEE_ATTACK_FEAT_CATEGORY && weaponType !== 1) return undefined;
-    if (category === VR_RANGED_ATTACK_FEAT_CATEGORY && weaponType !== 4) return undefined;
-
-    return match;
-  } catch {
-    return undefined;
+function resolveVRCombatWeaponSignature(actor: ModuleCreature): string {
+  switch (resolveVRCombatWeaponMode(actor)) {
+    case 'blaster': return 'ranged:blaster';
+    case 'melee-one-handed': return 'melee:one-handed';
+    case 'melee-double-bladed': return 'melee:double-bladed';
+    case 'melee-dual-wield': return 'melee:dual-wield';
+    default: return 'unarmed';
   }
 }
 
-/**
- * Turns a selection on the wheel's Attacks page into a stance change instead of
- * an immediate attack. Returns whether the selection was consumed.
- *
- * Only panel 0 is intercepted — that is the Attack panel. Panel 1 (Force
- * powers) and every non-creature target's panels keep the engine's own
- * behaviour, because those genuinely are one-shot actions.
- */
-function consumeVRAttackStanceSelection(panelIndex: number): boolean {
-  if (panelIndex !== 0) return false;
+function resetVREmbodiedCombatState(): void {
+  vrCombatIntentQueue.clear();
+  vrArmedGrenadeState.cancel();
+  vrCombatQueueActorId = null;
+  vrCombatQueueWeaponSignature = null;
+  vrCombatIssuedTargetId = null;
+}
+
+function observeVREmbodiedCombatActor(actor: ModuleCreature): void {
+  const weaponSignature = resolveVRCombatWeaponSignature(actor);
+  if (vrCombatQueueActorId !== actor.id || vrCombatQueueWeaponSignature !== weaponSignature) {
+    // A queued weapon feat is legal only for the weapon that supplied it. The
+    // inventory and Force queues are separate, so a weapon swap never spends
+    // or disarms a selected grenade.
+    vrCombatIntentQueue.clearForWeaponChange();
+    vrCombatQueueActorId = actor.id;
+    vrCombatQueueWeaponSignature = weaponSignature;
+  }
+}
+
+function getVRGrenadeInventoryIdentity(item: ModuleItem): number {
+  const cached = vrGrenadeInventoryIdentities.get(item);
+  if (cached !== undefined) return cached;
+  const identity = nextVRGrenadeInventoryIdentity++;
+  vrGrenadeInventoryIdentities.set(item, identity);
+  return identity;
+}
+
+function getVRCombatInventory(actor: ModuleCreature): readonly ModuleItem[] {
+  const party = GameState.PartyManager?.party;
+  if (Array.isArray(party) && party.includes(actor)) {
+    return Array.isArray(GameState.InventoryManager?.inventory)
+      ? GameState.InventoryManager.inventory
+      : [];
+  }
+  return Array.isArray(actor.inventory) ? actor.inventory : [];
+}
+
+function getVRGrenadeLabel(item: ModuleItem): string {
+  try {
+    const name = item.getName?.();
+    if (typeof name === 'string' && name.trim()) return name.trim();
+  } catch {
+    // Inventory data can be incomplete during a module transition. The icon
+    // and source validation below still determine whether we expose an entry.
+  }
+  return 'Grenade';
+}
+
+function getVRGrenadeIcon(item: ModuleItem): string {
+  try {
+    const icon = item.getIcon?.();
+    if (typeof icon === 'string' && icon.trim()) return icon.trim();
+  } catch {
+    // The generic radial item glyph is intentionally a safe fallback.
+  }
+  return 'i_grenade';
+}
+
+function describeVRGrenadeInventory(actor: ModuleCreature): readonly VRGrenadeInventoryEntry[] {
+  const descriptions: VRGrenadeInventoryEntry[] = [];
+  for (const item of getVRCombatInventory(actor)) {
+    if (!item || !VR_GRENADE_BASE_ITEM_IDS.has(item.getBaseItemId?.())) continue;
+    const properties = Array.isArray(item.properties) ? item.properties : [];
+    for (let propertyIndex = 0; propertyIndex < properties.length; propertyIndex += 1) {
+      const property = properties[propertyIndex];
+      try {
+        if (!property?.isUseable?.() || !property.is(ModuleItemProperty.CastSpell)) continue;
+        const spellId = property.getValue();
+        if (!Number.isSafeInteger(spellId) || spellId < 0) continue;
+        const itemIdentity = getVRGrenadeInventoryIdentity(item);
+        descriptions.push({
+          descriptor: {
+            sourceKey: `grenade:${itemIdentity}:${propertyIndex}:${spellId}`,
+            itemObjectId: itemIdentity,
+            label: getVRGrenadeLabel(item),
+            icon: getVRGrenadeIcon(item),
+          },
+          item,
+          spellId,
+        });
+      } catch {
+        // Omit a malformed inventory property rather than making the whole
+        // radial wheel unavailable during combat.
+      }
+    }
+  }
+  return descriptions;
+}
+
+function findVRArmedGrenade(actor: ModuleCreature, sourceKey: string): VRGrenadeInventoryEntry | undefined {
+  return describeVRGrenadeInventory(actor).find((entry) => entry.descriptor.sourceKey === sourceKey);
+}
+
+function getVREmbodiedTempoResult(actor: ModuleCreature, target: ModuleObject | null) {
+  const round = actor.combatRound;
+  return vrCombatTempoGate.evaluate({
+    actorCanAct: typeof actor.isDead === 'function' && !actor.isDead(),
+    hasLiveTarget: !!target && isVRCombatTarget(actor, target) && isWithinVRCombatRange(actor, target),
+    combatRound: round ? {
+      roundStarted: round.roundStarted === true,
+      roundPaused: round.roundPaused === true,
+      scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
+      playerActionCommitted: round.action !== undefined,
+      // Extra attacks remain resolved by the engine's current CombatRound;
+      // opening a second player input window here would double-spend it.
+      additionalActionWindowOpen: false,
+    } : undefined,
+  });
+}
+
+function resolveVRLiveCombatTarget(actor: ModuleCreature, targetId: string | null): ModuleObject | null {
+  const parsedId = targetId === null ? Number.NaN : Number(targetId);
+  if (!Number.isSafeInteger(parsedId)) return null;
+  const target = resolveVRAimedObject(parsedId);
+  return isVRCombatTarget(actor, target) && isWithinVRCombatRange(actor, target) ? target : null;
+}
+
+function dispatchVREmbodiedCombatInput(
+  actor: ModuleCreature,
+  targetId: string | null,
+  input: VRCombatRequiredInput,
+): boolean {
+  const initialTarget = resolveVRLiveCombatTarget(actor, targetId);
+  if (!getVREmbodiedTempoResult(actor, initialTarget).eligible) return false;
+
+  const dispatcher = new VRCombatIntentDispatcher<ModuleObject, VRCombatIntent>(vrCombatIntentQueue, {
+    resolveLiveTarget: () => resolveVRLiveCombatTarget(actor, targetId) ?? undefined,
+    resolveIntent: (intent) => intent,
+    dispatchIntent: (intent, target) => dispatchVRCombatIntent(actor, target, intent),
+    dispatchBasic: (target) => {
+      try {
+        actor.attackCreature(target);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+  const result = dispatcher.dispatch({
+    currentWeaponSignature: resolveVRCombatWeaponSignature(actor),
+    input,
+  });
+  if (result.state === 'basic-dispatched' || result.state === 'intent-dispatched' ||
+    result.state === 'intent-skipped-invalid' || result.state === 'deferred-input-mismatch' ||
+    result.state === 'deferred-weapon-mismatch') {
+    vrCombatIssuedTargetId = initialTarget.id;
+    return true;
+  }
+  return false;
+}
+
+function dispatchVRDirectionalForceGesture(
+  actor: ModuleCreature,
+  targetId: string | null,
+  gestureKind: 'push' | 'pull',
+): boolean {
+  const intent = vrCombatIntentQueue.getHead();
+  if (!intent || intent.requiredInput !== 'directional-force-gesture' ||
+    !new RegExp(`\\b${gestureKind}\\b`, 'i').test(intent.label)) {
+    return false;
+  }
+  const target = resolveVRLiveCombatTarget(actor, targetId);
+  if (!target || !getVREmbodiedTempoResult(actor, target).eligible) return false;
+  if (!dispatchVRCombatIntent(actor, target, intent)) return false;
+  vrCombatIntentQueue.consumeHead();
+  vrCombatIssuedTargetId = target.id;
+  return true;
+}
+
+function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): boolean {
+  const request = vrArmedGrenadeState.requestCommit();
+  if (request.state !== 'armed') return false;
+  const source = findVRArmedGrenade(actor, request.grenade.sourceKey);
+  const target = resolveVRLiveCombatTarget(actor, targetId);
+  if (!source || !target || !getVREmbodiedTempoResult(actor, target).eligible) {
+    vrArmedGrenadeState.completeCommit({ sourceKey: request.grenade.sourceKey, engineAccepted: false });
+    return false;
+  }
+
+  try {
+    const action = new CombatRoundAction(actor);
+    action.actionType = CombatActionType.ITEM_CAST_SPELL;
+    action.target = target;
+    action.item = source.item;
+    action.setSpell(new GameState.TalentSpell(source.spellId));
+    action.isUserAction = true;
+    actor.combatRound.addAction(action);
+    if (!actor.actionQueue.actionTypeExists(ActionType.ActionCombat)) {
+      actor.actionQueue.add(new GameState.ActionFactory.ActionCombat(0xFFFF));
+    }
+    vrArmedGrenadeState.completeCommit({ sourceKey: source.descriptor.sourceKey, engineAccepted: true });
+    vrCombatIssuedTargetId = target.id;
+    return true;
+  } catch {
+    vrArmedGrenadeState.completeCommit({ sourceKey: request.grenade.sourceKey, engineAccepted: false });
+    return false;
+  }
+}
+
+function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'self'): boolean {
   const actor = GameState.getCurrentPlayer();
   if (!actor) return false;
+  const target = GameState.ActionMenuManager.oTarget as ModuleObject | null;
+  if (kind === 'target' && !isVRCombatTarget(actor, target)) return false;
+  if (panelIndex !== 0 && panelIndex !== 1) return false;
 
-  // Gate on a hostile creature, not on the action type. Bash on a door is also
-  // `ActionType.ActionPhysicalAttacks` and also sits in target panel 0, so
-  // intercepting by type would silently swallow Bash and leave the player
-  // unable to break anything open.
-  if (!isVRCombatTarget(actor, GameState.ActionMenuManager.oTarget as ModuleObject)) return false;
-
-  let selected: { readonly talent?: unknown } | undefined;
+  let selected: VRActionMenuEntry | undefined;
   try {
-    selected = GameState.ActionMenuManager.ActionPanels
-      .targetPanels[panelIndex]?.getSelectedAction();
+    selected = (kind === 'target'
+      ? GameState.ActionMenuManager.ActionPanels.targetPanels[panelIndex]
+      : GameState.ActionMenuManager.ActionPanels.selfPanels[panelIndex]
+    )?.getSelectedAction();
   } catch {
     return false;
   }
   if (!selected) return false;
 
-  const talent = selected.talent;
-  const stance: VRAttackStanceSelection = isVRAttackModeFeat(talent)
-    ? {
-      featId: Number((talent as { __index?: unknown }).__index),
-      label: String((talent as { name?: unknown }).name ?? 'Attack'),
-    }
-    // The plain Attack entry on the same panel means "stop using a mode".
-    : null;
+  const label = getVRActionLabel(selected, target);
+  if (panelIndex === 0 && !isVRAttackModeFeat(selected.talent)) {
+    // Plain Attack is already the automatic fallback. Selecting it is a
+    // harmless acknowledgement, not an engine click or a queue entry.
+    return true;
+  }
+  if (panelIndex === 1 && !selected.talent) return false;
 
-  if (stance !== null && !Number.isInteger(stance.featId)) return false;
-
-  vrAttackStance.select(stance, resolveVRCombatRoundSnapshot(actor));
+  const normalizedEntry: VRActionMenuEntry = {
+    ...selected,
+    playerFacingLabel: label,
+  };
+  const isDirectionalForce = panelIndex === 1 && /\b(push|pull)\b/i.test(label);
+  const intent: VRCombatIntent = {
+    sourceKey: createVRActionSourceKey(kind, panelIndex, normalizedEntry),
+    label,
+    icon: getVRActionIcon(selected) ?? (panelIndex === 0 ? 'i_attack' : 'lbl_icn_abi2'),
+    kind: panelIndex === 0 ? 'attack-feat' : 'force-power',
+    requiredInput: isDirectionalForce
+      ? 'directional-force-gesture'
+      : panelIndex === 0 && resolveVRCombatWeaponMode(actor) !== 'blaster'
+        ? 'dominant-swing'
+        : 'dominant-trigger',
+    weaponSignature: panelIndex === 0 ? resolveVRCombatWeaponSignature(actor) : 'any',
+  };
+  // A full queue is feedback-only: never fall through to immediate authored
+  // activation, which would violate the player's explicitly selected order.
+  vrCombatIntentQueue.enqueue(intent);
   return true;
+}
+
+function dispatchVRCombatIntent(actor: ModuleCreature, target: ModuleObject, intent: VRCombatIntent): boolean {
+  const source = parseVRCombatIntentSourceKey(intent.sourceKey);
+  if (!source) return false;
+  try {
+    GameState.ActionMenuManager.SetPC(actor);
+    GameState.ActionMenuManager.SetTarget(target);
+    GameState.ActionMenuManager.UpdateMenuActions();
+    const panels = source.kind === 'target'
+      ? GameState.ActionMenuManager.ActionPanels.targetPanels
+      : GameState.ActionMenuManager.ActionPanels.selfPanels;
+    const panel = panels[source.panelIndex];
+    if (!panel || !Array.isArray(panel.actions)) return false;
+    const actionIndex = panel.actions.findIndex((entry: VRActionMenuEntry) =>
+      createVRActionSourceKey(source.kind, source.panelIndex, {
+        ...entry,
+        playerFacingLabel: getVRActionLabel(entry, target),
+      }) === intent.sourceKey
+    );
+    if (actionIndex < 0) return false;
+    panel.selectedIndex = actionIndex;
+    vrCombatIntentDispatchInProgress = true;
+    if (source.kind === 'target') GameState.ActionMenuManager.onTargetMenuAction(source.panelIndex);
+    else GameState.ActionMenuManager.onSelfMenuAction(source.panelIndex);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    vrCombatIntentDispatchInProgress = false;
+  }
+}
+
+function parseVRCombatIntentSourceKey(sourceKey: string): { kind: 'target' | 'self'; panelIndex: number } | null {
+  try {
+    const value = JSON.parse(sourceKey) as unknown;
+    if (!Array.isArray(value) || (value[0] !== 'target' && value[0] !== 'self') || !Number.isInteger(value[1])) return null;
+    return { kind: value[0], panelIndex: value[1] };
+  } catch {
+    return null;
+  }
 }
 
 const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreature, ModuleObject> = {
@@ -421,13 +661,13 @@ const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreat
   getIcon: (entry) => getVRActionIcon(entry),
   logger: console,
   onTargetMenuAction: (panelIndex) => {
-    // ROADMAP 4.8: on the Attacks page a selection arms a stance rather than
-    // launching one attack. Falls through to the engine's own handler for
-    // everything it does not claim.
-    if (VRSpike.isPresenting && consumeVRAttackStanceSelection(panelIndex)) return;
+    if (!vrCombatIntentDispatchInProgress && VRSpike.isPresenting && consumeVRCombatIntentSelection(panelIndex, 'target')) return;
     GameState.ActionMenuManager.onTargetMenuAction(panelIndex);
   },
-  onSelfMenuAction: (panelIndex) => GameState.ActionMenuManager.onSelfMenuAction(panelIndex),
+  onSelfMenuAction: (panelIndex) => {
+    if (!vrCombatIntentDispatchInProgress && VRSpike.isPresenting && consumeVRCombatIntentSelection(panelIndex, 'self')) return;
+    GameState.ActionMenuManager.onSelfMenuAction(panelIndex);
+  },
 };
 
 const vrWorldPromptActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreature, ModuleObject> = {
@@ -1180,14 +1420,6 @@ export function describeVRHeldItemVisuals(
   };
 }
 
-function findVRForceGestureSpell(actor: ModuleCreature, kind: 'push' | 'pull'): TalentSpell | null {
-  const keyword = kind.toLowerCase();
-  return actor.getSpells().find((spell) => {
-    const searchable = `${spell.label} ${spell.impactscript} ${spell.iconresref}`.toLowerCase();
-    return searchable.includes(keyword);
-  }) ?? null;
-}
-
 function getLegacyGUIVRPointerSemanticTargets(): readonly LegacyGUIVRPointerSemanticTarget[] {
   return discoverLegacyGUIVRPointerSemanticTargets(
     () => GameState.controls?.MenuGetActiveUIElements() ?? [],
@@ -1222,6 +1454,15 @@ const vrLegacyGUIPointerAdapter = new LegacyGUIVRPointerAdapter({
 });
 
 export class GameState implements EngineContext {
+
+  /**
+   * While WebXR owns the player, physical input explicitly creates each
+   * CombatRound action. The desktop simulation retains its authored automatic
+   * basic-attack behaviour as soon as the XR session ends.
+   */
+  static get isVREmbodiedCombatInputActive(): boolean {
+    return VRSpike.isPresenting;
+  }
 
   static eventListeners: any = {
     "init": [],
@@ -1912,7 +2153,25 @@ export class GameState implements EngineContext {
       getPlayerFacing: () => GameState.getCurrentPlayer()?.rotation.z ?? null,
       getHeldVisuals: () => {
         const player = GameState.getCurrentPlayer();
-        return describeVRHeldItemVisuals(player?.equipment);
+        if (!player) return describeVRHeldItemVisuals(undefined);
+        const armed = vrArmedGrenadeState.getSnapshot().armed;
+        const grenade = armed ? findVRArmedGrenade(player, armed.sourceKey)?.item ?? null : null;
+        // Arming never mutates equipment: the controller host renders a
+        // presentation-only off-hand copy until the engine accepts the throw.
+        return describeVRHeldItemVisuals({
+          LEFTHAND: grenade ?? player.equipment?.LEFTHAND ?? null,
+          RIGHTHAND: player.equipment?.RIGHTHAND ?? null,
+        });
+      },
+      getAvatarPresentation: () => {
+        const player = GameState.getCurrentPlayer();
+        // KotOR's own inventory rules reserve race 6 for droids (see
+        // InventoryManager.isItemUsableBy). A droid retains its controller-
+        // stabilized weapon/ability model but must never inherit humanoid arms.
+        return { humanoidHands: Boolean(player && player.getRace() !== 6) };
+      },
+      resetCombatInteraction: () => {
+        resetVREmbodiedCombatState();
       },
       applyLocomotion: (locomotion) => {
         if (GameState.State !== EngineState.RUNNING || GameState.Mode !== EngineMode.INGAME) return;
@@ -1987,44 +2246,40 @@ export class GameState implements EngineContext {
       getCombatContext: (aimedTargetId) => {
         const actor = GameState.getCurrentPlayer();
         if (!actor) {
-          // No player means a module transition or a load. The armed stance
-          // belongs to a character in a place; do not carry it across.
-          vrAttackStance.reset();
+          // A target and a queued action belong to a character in one module;
+          // neither is valid after a load, leader change, or transition.
+          resetVREmbodiedCombatState();
           return null;
         }
+        observeVREmbodiedCombatActor(actor);
         const candidate = resolveVRAimedObject(aimedTargetId);
         const target = isVRCombatTarget(actor, candidate) && isWithinVRCombatRange(actor, candidate)
           ? candidate
           : null;
-        // ROADMAP 4.8. Called every gameplay frame — before the target check in
-        // VRSpike.processCombatInput — so this is where a queued stance is
-        // promoted at the round boundary. Detecting the boundary here rather
-        // than hooking CombatRound.endCombatRound() keeps the engine untouched.
-        vrAttackStance.observeRound(resolveVRCombatRoundSnapshot(actor));
+        const tempo = getVREmbodiedTempoResult(actor, target);
+        const queuedIntent = vrCombatIntentQueue.getHead();
         return {
           actorId: String(actor.id),
           nominatedTargetId: target ? String(target.id) : null,
           weaponMode: resolveVRCombatWeaponMode(actor),
           inCombat: actor.combatData.combatState === true,
-          // Only worth a plaque once there is something to say. A permanent
-          // "ATTACK" on the weapon while exploring is noise; the readout earns
-          // its place when a mode is armed or a change is waiting on the round.
-          stanceReadout: (vrAttackStance.getState().active || vrAttackStance.hasPending())
-            ? formatVRAttackStanceReadout(vrAttackStance.getState())
-            : '',
+          // The hilt readout is the next requested action, never a hidden
+          // attack mode. An empty queue deliberately returns to basic attacks.
+          stanceReadout: queuedIntent?.label ?? '',
+          tempoReadiness: tempo.eligible ? 1 : 0,
           onCombatSwing: (event) => {
-            // The controller layer can animate all physical swings, but never
-            // creates damage. Only a cadence-authorized event aimed at the
-            // current engine target enters the normal CombatRound pipeline.
-            if (!event.rollEligible || !target || event.nominatedTargetId !== String(target.id)) return;
-            // ROADMAP 4.8: the armed stance decides what this swing rolls AS.
-            // With no stance it is `undefined`, which is the engine's own plain
-            // ATTACK path — so the gesture still gates the roll either way, per
-            // the locked swing governor.
-            actor.attackCreature(target, resolveVRActiveStanceFeat(actor));
-            vrCombatIssuedTargetId = target.id;
+            if (event.actorId !== String(actor.id)) return;
+            dispatchVREmbodiedCombatInput(actor, event.nominatedTargetId, event.input);
+          },
+          onDirectionalForceGesture: (gesture) => {
+            dispatchVRDirectionalForceGesture(actor, target ? String(target.id) : null, gesture.kind);
+          },
+          onGrenadeTrigger: () => {
+            commitVRArmedGrenade(actor, target ? String(target.id) : null);
           },
           cancel: () => {
+            vrCombatIntentQueue.clear();
+            vrArmedGrenadeState.cancel();
             const combatTarget = actor.combatData?.lastAttackTarget;
             if (!shouldAutoCancelNonCreatureCombat(combatTarget)) return;
             // NO `vrCombatIssuedTargetId === null` GUARD. That guard meant
@@ -2050,14 +2305,11 @@ export class GameState implements EngineContext {
       getForceContext: (aimedTargetId) => {
         const actor = GameState.getCurrentPlayer();
         if (!actor) return null;
-        const candidate = resolveVRAimedObject(aimedTargetId);
-        const target = isVRCombatTarget(actor, candidate) ? candidate : null;
+        observeVREmbodiedCombatActor(actor);
         return {
           onForceGesture: (gesture) => {
-            if (!target) return;
-            const spell = findVRForceGestureSpell(actor, gesture.kind);
-            if (!spell) return;
-            spell.useTalentOnObject(target, actor);
+            dispatchVRDirectionalForceGesture(actor,
+              aimedTargetId === null ? null : String(aimedTargetId), gesture.kind);
           },
         };
       },
@@ -2169,6 +2421,20 @@ export class GameState implements EngineContext {
             kind: 'self',
             panels: panels.selfPanels as readonly VRActionMenuPanel[],
           }, vrActionMenuBridgeDependencies),
+          grenadeActions: describeVRGrenadeInventory(actor).map((entry) => ({
+            id: entry.descriptor.sourceKey,
+            label: entry.descriptor.label,
+            icon: entry.descriptor.icon,
+            revalidate: () => findVRArmedGrenade(actor, entry.descriptor.sourceKey) !== undefined,
+            activate: () => {
+              // This does not create an engine action or consume inventory. It
+              // only puts a presentation copy in the off hand for a later,
+              // aimed off-hand-trigger commit.
+              if (findVRArmedGrenade(actor, entry.descriptor.sourceKey)) {
+                vrArmedGrenadeState.arm(entry.descriptor);
+              }
+            },
+          })),
           targetIsHostileCreature: target !== null,
           partyMembers: snapshotVRPartyMembers(),
           openComfortSettings: () => { vrComfortSettingsPanelOpen = true; },
@@ -2195,6 +2461,8 @@ export class GameState implements EngineContext {
           clearQueuedActions: () => {
             const player = GameState.getCurrentPlayer();
             if (!player) return;
+            vrCombatIntentQueue.clear();
+            vrArmedGrenadeState.cancel();
             player.clearAllActions();
             player.combatData.combatState = false;
             player.cancelCombat();

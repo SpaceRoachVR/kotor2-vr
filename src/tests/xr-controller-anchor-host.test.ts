@@ -143,6 +143,33 @@ describe('XRControllerAnchorHost', () => {
 
     expect(host.getAnchor('right').getObjectByName('Kotor2VR.rightHeldItem')).toBe(firstVisual);
   });
+
+  test('shows controller-anchored humanoid hands without treating droid equipment as handheld', () => {
+    const rig = new THREE.Group();
+    const host = new XRControllerAnchorHost(rig);
+
+    host.setHumanoidHandsVisible(true);
+    const leftHand = host.getAnchor('left').getObjectByName('Kotor2VR.leftHumanoidHandVisual');
+    const rightHand = host.getAnchor('right').getObjectByName('Kotor2VR.rightHumanoidHandVisual');
+
+    expect(leftHand).toBeDefined();
+    expect(rightHand).toBeDefined();
+    expect(leftHand!.visible).toBe(true);
+    expect(rightHand!.visible).toBe(true);
+
+    // Race-6 player characters have no humanoid hands. Their held-item
+    // presentation remains anchored, but the arm/hand silhouette disappears.
+    host.setHumanoidHandsVisible(false);
+
+    expect(leftHand!.visible).toBe(false);
+    expect(rightHand!.visible).toBe(false);
+  });
+
+  test('rejects an invalid humanoid-hand visibility state', () => {
+    const host = new XRControllerAnchorHost(new THREE.Group());
+
+    expect(() => host.setHumanoidHandsVisible('yes' as unknown as boolean)).toThrow(TypeError);
+  });
 });
 
 function inputFrame(rightPose: XRWorldPose, targetRayPose = rightPose): XRInputFrame {

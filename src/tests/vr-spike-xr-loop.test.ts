@@ -705,7 +705,7 @@ describe('VRSpike XR loop ownership', () => {
     expect(pointerSink.activatePointer).toHaveBeenCalledTimes(1);
   });
 
-  test('forwards a physical saber swing to the combat bridge while preserving its d20 eligibility', () => {
+  test('forwards a physical saber swing as a candidate for the engine-owned tempo gate', () => {
     const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
     const combatEvents: unknown[] = [];
     VRSpike.session = {
@@ -733,7 +733,9 @@ describe('VRSpike XR loop ownership', () => {
 
     (VRSpike as any).processCombatInput(1_000);
 
-    expect(combatEvents).toEqual([expect.objectContaining({ actorId: '7', nominatedTargetId: '42', rollEligible: true })]);
+    expect(combatEvents).toEqual([expect.objectContaining({
+      actorId: '7', nominatedTargetId: '42', input: 'dominant-swing',
+    })]);
   });
 
   test('a trigger held through an interaction-owned frame does not fire when combat resumes', () => {

@@ -23,6 +23,15 @@ export interface VRActionWheelEngineAction {
   activate(): void;
 }
 
+/** A VR-owned wheel route with the same safety contract as engine entries. */
+export interface VRActionWheelDirectAction {
+  readonly id: string;
+  readonly label: string;
+  readonly icon?: string;
+  revalidate(): boolean;
+  activate(): void;
+}
+
 /** Target panel 0: Attack plus the feats filtered by `getEquippedWeaponType()`. */
 const ATTACK_PANEL_INDEX = 0;
 /** Target panel 1 (hostile) and self panel 1 (friendly) are both Force powers. */
@@ -40,6 +49,8 @@ export interface VRActionWheelBuildContext {
   readonly id: string;
   readonly targetActions: readonly VRActionWheelEngineAction[];
   readonly selfActions: readonly VRActionWheelEngineAction[];
+  /** Consumable grenades arm in the off hand; they are not engine action-panel entries. */
+  readonly grenadeActions?: readonly VRActionWheelDirectAction[];
   /**
    * True only when the aimed target is a hostile creature — the sole case in
    * which `ActionMenuManager` fills the target panels with combat actions.
@@ -138,6 +149,14 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
     icon: 'lbl_icn_abi2',
     menuId: `${rootId}:force-powers`,
     actions: forcePowerActions,
+  });
+
+  appendSubmenuOfDirectActions(items, {
+    id: 'submenu:grenades',
+    label: 'Grenades',
+    icon: 'i_grenade',
+    menuId: `${rootId}:grenades`,
+    actions: context.grenadeActions ?? [],
   });
 
   // Anything the engine produced that the two combat panels did not claim:
@@ -277,6 +296,44 @@ function appendSubmenuOfEngineActions(
   });
 }
 
+/** Builds a submenu for a VR-owned route such as armed grenades. */
+function appendSubmenuOfDirectActions(
+  output: VRRadialContentItem[],
+  submenu: {
+    readonly id: string;
+    readonly label: string;
+    readonly icon: string;
+    readonly menuId: string;
+    readonly actions: readonly VRActionWheelDirectAction[];
+  },
+): void {
+  const buildItems = (): VRRadialContentItem[] => {
+    const items: VRRadialContentItem[] = [];
+    for (const action of submenu.actions) {
+      if (!isValidDirectAction(action) || !safelyRevalidateDirectAction(action)) continue;
+      items.push({
+        kind: 'action',
+        id: `direct:${action.id.trim()}`,
+        label: action.label.trim(),
+        ...(action.icon === undefined ? {} : { icon: action.icon.trim() }),
+        revalidate: () => safelyRevalidateDirectAction(action),
+        activate: () => action.activate(),
+      });
+    }
+    return items;
+  };
+
+  if (buildItems().length === 0) return;
+  output.push({
+    kind: 'submenu',
+    id: submenu.id,
+    label: submenu.label,
+    icon: submenu.icon,
+    revalidate: () => buildItems().length > 0,
+    buildMenu: () => createMenu(submenu.menuId, submenu.label, buildItems()),
+  });
+}
+
 function appendEngineActions(
   output: VRRadialContentItem[],
   actions: readonly VRActionWheelEngineAction[],
@@ -377,7 +434,8 @@ function validateBuildContext(context: VRActionWheelBuildContext): void {
   if (typeof context.id !== 'string' || context.id.trim().length === 0) {
     throw new TypeError('context id must be a non-empty string');
   }
-  if (!Array.isArray(context.targetActions) || !Array.isArray(context.selfActions)) {
+  if (!Array.isArray(context.targetActions) || !Array.isArray(context.selfActions) ||
+    (context.grenadeActions !== undefined && !Array.isArray(context.grenadeActions))) {
     throw new TypeError('engine action collections must be arrays');
   }
   if (!Array.isArray(context.partyMembers)) throw new TypeError('partyMembers must be an array');
@@ -400,6 +458,24 @@ function isValidEngineAction(action: VRActionWheelEngineAction): boolean {
     Number.isInteger(action.panelIndex) &&
     typeof action.revalidate === 'function' &&
     typeof action.activate === 'function';
+}
+
+function isValidDirectAction(action: VRActionWheelDirectAction): boolean {
+  return !!action &&
+    typeof action === 'object' &&
+    isNonEmptyString(action.id) &&
+    isNonEmptyString(action.label) &&
+    (action.icon === undefined || isNonEmptyString(action.icon)) &&
+    typeof action.revalidate === 'function' &&
+    typeof action.activate === 'function';
+}
+
+function safelyRevalidateDirectAction(action: VRActionWheelDirectAction): boolean {
+  try {
+    return action.revalidate() === true;
+  } catch {
+    return false;
+  }
 }
 
 function isValidPartyMember(member: VRActionWheelPartyMember): boolean {
