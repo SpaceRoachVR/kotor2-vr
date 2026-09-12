@@ -51,12 +51,17 @@ const LOCAL_X = new THREE.Vector3(1, 0, 0);
 const LOCAL_Y = new THREE.Vector3(0, 1, 0);
 
 /**
- * Where the rod axis sits relative to the finger loop, in grip space (metres).
- * The loop centroid lands slightly on the knuckle side of the true hole;
- * nudging toward the palm (−X for a right hand's back-of-hand +X) centres the
- * held handle. Mirrored for the left hand.
+ * Where the rod axis sits relative to the finger-joint centroid, in grip space
+ * (metres), authored for a right hand and mirrored in X for the left.
+ *
+ * Joint positions are bone centres, and the curled fingertips pull their
+ * centroid out toward the fingertip side of the fist. Measured on the held
+ * pose: palm skin sits ~3 cm toward +X (the back-of-hand side) from the
+ * fingertips' inner surface, and the proximal phalanges ~1 cm below. The hole
+ * centre is ~5 mm further toward the palm and ~4 mm toward the wrist than the
+ * raw centroid, which is what this moves.
  */
-const GRIP_ORIGIN_CORRECTION_METRES = new THREE.Vector3(-0.012, 0, 0);
+const GRIP_ORIGIN_CORRECTION_METRES = new THREE.Vector3(0.005, 0.004, 0);
 
 /** The curl the grip frame is measured in — a fist around a controller. */
 const GRIP_REFERENCE_CURL: VRHandFingerCurl = { thumb: 0.7, index: 0.8, middle: 0.8, ring: 0.8, pinky: 0.8 };
@@ -152,7 +157,7 @@ export class VRHandSkeletonPoser {
 
     const correction = GRIP_ORIGIN_CORRECTION_METRES.clone();
     // Correction is authored for a right hand, where +X is the back of the
-    // hand; the left hand's +X is its palm, so the palm-ward nudge flips.
+    // hand; the left hand's +X is its palm, so the X nudge flips.
     if (this.hand === 'left') correction.x = -correction.x;
     const armatureFromGrip = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis).setPosition(origin);
     armatureFromGrip.multiply(new THREE.Matrix4().makeTranslation(correction.x, correction.y, correction.z));
