@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, jest, test } from '@jest/globals';
 import { XRControllerAnchorHost } from '@/vr/runtime/XRControllerAnchorHost';
 import { XRInputFrame, XRWorldPose } from '@/vr/runtime/XRTypes';
+import { VRHandModel } from '@/vr/runtime/hands/VRHandModel';
 
 describe('XRControllerAnchorHost', () => {
   test('places tracked hands relative to the rig and clears stale tracking', () => {
@@ -143,7 +144,126 @@ describe('XRControllerAnchorHost', () => {
 
     expect(host.getAnchor('right').getObjectByName('Kotor2VR.rightHeldItem')).toBe(firstVisual);
   });
+
+  test('shows controller-anchored humanoid hands without treating droid equipment as handheld', async () => {
+    const rig = new THREE.Group();
+    const loads: string[] = [];
+    const host = new XRControllerAnchorHost(rig, false, {
+      loadHandModel: async (hand) => { loads.push(hand); return fakeHandModel(hand); },
+    });
+
+    host.setHumanoidHandsVisible(true);
+    host.setHumanoidHandsVisible(true);
+    await flushPromises();
+    const leftHand = host.getAnchor('left').getObjectByName('Kotor2VR.leftHumanoidHandVisual');
+    const rightHand = host.getAnchor('right').getObjectByName('Kotor2VR.rightHumanoidHandVisual');
+
+    expect(loads).toEqual(['left', 'right']);
+    expect(leftHand).toBeDefined();
+    expect(rightHand).toBeDefined();
+    expect(leftHand!.visible).toBe(true);
+    expect(rightHand!.visible).toBe(true);
+    expect(host.getHandModel('right')!.root.parent).toBe(rightHand);
+
+    // Race-6 player characters have no humanoid hands. Their held-item
+    // presentation remains anchored, but the hand disappears.
+    host.setHumanoidHandsVisible(false);
+
+    expect(leftHand!.visible).toBe(false);
+    expect(rightHand!.visible).toBe(false);
+  });
+
+  test('curls the loaded hand from controller buttons and closes it around a held item', async () => {
+    const host = new XRControllerAnchorHost(new THREE.Group(), false, {
+      loadHandModel: async (hand) => fakeHandModel(hand),
+    });
+    host.setHumanoidHandsVisible(true);
+    await flushPromises();
+    const pose = worldPose(new THREE.Vector3(0.2, 1.2, -0.4));
+    const model = host.getHandModel('right')!;
+
+    const pressed = inputFrame(pose);
+    (pressed.hands.right as { buttons: unknown }).buttons = { 0: { pressed: true, touched: true, value: 1 } };
+    host.update(pressed);
+    expect(model.getCurl().index).toBeCloseTo(1);
+    expect(model.getCurl().middle).toBeLessThan(0.2);
+
+    host.setHeldVisual('right', {
+      model: new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.3)),
+      baseItemClass: 'lightsaber',
+      classFallback: {},
+    });
+    host.update(inputFrame(pose));
+    expect(model.getCurl().middle).toBeGreaterThan(0.75);
+  });
+
+  test('disposes a hand that finishes loading after the host is gone, and reports a failed load once', async () => {
+    let resolveLeft!: (model: ReturnType<typeof fakeHandModel>) => void;
+    const lateModel = fakeHandModel('left');
+    const dispose = jest.spyOn(lateModel, 'dispose');
+    const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const host = new XRControllerAnchorHost(new THREE.Group(), false, {
+      loadHandModel: (hand) => hand === 'left'
+        ? new Promise((resolve) => { resolveLeft = resolve; })
+        : Promise.reject(new Error('corrupt glb')),
+    });
+
+    host.setHumanoidHandsVisible(true);
+    await flushPromises();
+    host.setHumanoidHandsVisible(true);
+    await flushPromises();
+    expect(error).toHaveBeenCalledTimes(1);
+
+    host.dispose();
+    resolveLeft(lateModel);
+    await flushPromises();
+    expect(dispose).toHaveBeenCalled();
+    expect(host.getHandModel('left')).toBeNull();
+    error.mockRestore();
+  });
+
+  test('rejects an invalid humanoid-hand visibility state', () => {
+    const host = new XRControllerAnchorHost(new THREE.Group());
+
+    expect(() => host.setHumanoidHandsVisible('yes' as unknown as boolean)).toThrow(TypeError);
+  });
 });
+
+function flushPromises(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/** A skeleton-only model: real posing maths, synthetic but convention-correct joints. */
+function fakeHandModel(hand: 'left' | 'right'): VRHandModel {
+  const armature = new THREE.Group();
+  const side = hand === 'right' ? 1 : -1;
+  // Fingers along −Y, back of hand toward +X (right) / −X (left), thumb side −Z,
+  // with WebXR joint axes: local −Z along the bone, +Y out of the back.
+  const boneRotation = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(0, 0, side), new THREE.Vector3(side, 0, 0), new THREE.Vector3(0, 1, 0),
+  ));
+  const add = (name: string, x: number, y: number, z: number) => {
+    const bone = new THREE.Bone();
+    bone.name = name;
+    bone.position.set(x, y, z);
+    bone.quaternion.copy(boneRotation);
+    armature.add(bone);
+  };
+  add('wrist', 0, 0.06, 0);
+  const fingers: [string, number][] = [['index-finger', -0.02], ['middle-finger', 0], ['ring-finger', 0.02], ['pinky-finger', 0.04]];
+  for (const [finger, z] of fingers) {
+    add(`${finger}-metacarpal`, 0, 0.03, z);
+    add(`${finger}-phalanx-proximal`, 0, -0.03, z);
+    add(`${finger}-phalanx-intermediate`, 0, -0.07, z);
+    add(`${finger}-phalanx-distal`, 0, -0.095, z);
+    add(`${finger}-tip`, 0, -0.11, z);
+  }
+  add('thumb-metacarpal', 0, 0.02, -0.03);
+  add('thumb-phalanx-proximal', 0, -0.005, -0.045);
+  add('thumb-phalanx-distal', 0, -0.03, -0.055);
+  add('thumb-tip', 0, -0.045, -0.06);
+  return new VRHandModel(armature, hand, new THREE.MeshBasicMaterial());
+}
 
 function inputFrame(rightPose: XRWorldPose, targetRayPose = rightPose): XRInputFrame {
   return {

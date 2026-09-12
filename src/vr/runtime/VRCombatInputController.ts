@@ -4,7 +4,6 @@ import { CombatWeaponMode, XRHandRole, XRInputFrame, XRWorldPose } from './XRTyp
 export interface VRCombatInputConfiguration {
   readonly minimumSwingSpeedMetresPerSecond: number;
   readonly visualSwingCooldownMilliseconds: number;
-  readonly rollCooldownMilliseconds: number;
   /**
    * How far along the blade, in metres, the swing is measured when both hands
    * are on the hilt. Sampling at the hands alone is what made the off hand
@@ -27,6 +26,12 @@ export interface VRCombatInputContext {
   readonly timestamp: number;
   readonly offhandGrip: boolean;
   readonly weaponActionPressed: boolean;
+  /** Physical controller used for the equipped weapon and aimed powers. */
+  readonly dominantHand: XRHandRole;
+  /** The other controller; grenade release and a two-handed hilt use it. */
+  readonly offhandHand: XRHandRole;
+  /** True only when the head queued intent consumes an aimed trigger. */
+  readonly allowDominantTrigger: boolean;
 }
 
 export interface VRCombatSwingEvent {
@@ -35,9 +40,10 @@ export interface VRCombatSwingEvent {
   readonly hand: XRHandRole;
   readonly weaponMode: CombatWeaponMode;
   readonly speedMetresPerSecond: number;
-  readonly rollEligible: boolean;
   readonly pose: XRWorldPose;
   readonly timestamp: number;
+  /** The deliberate physical input that created this candidate action. */
+  readonly input: 'dominant-swing' | 'dominant-trigger';
   /**
    * Hand separation when a two-handed grip was resolved, for on-device tuning
    * of `twoHandedGripMaxSeparationMetres`. Absent for one-handed swings.
@@ -48,15 +54,14 @@ export interface VRCombatSwingEvent {
 const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
   minimumSwingSpeedMetresPerSecond: 0.8,
   visualSwingCooldownMilliseconds: 120,
-  rollCooldownMilliseconds: 3_000,
   bladeSampleDistanceMetres: 0.6,
   twoHandedGripMaxSeparationMetres: 0.35,
 };
 
 /**
- * Converts tracked controller movement into bounded combat requests. It emits
- * every legitimate physical swing for presentation, while the engine receives
- * a d20-authorized request only at the configured round cadence.
+ * Converts tracked controller movement into bounded combat input events. It
+ * has no knowledge of d20 timing: GameState evaluates each event against the
+ * current CombatRound immediately before it queues an engine action.
  */
 export class VRCombatInputController {
   private readonly configuration: VRCombatInputConfiguration;
@@ -64,7 +69,6 @@ export class VRCombatInputController {
   private previousSamplePoint: THREE.Vector3 | null = null;
   private previousTimestamp: number | null = null;
   private lastVisualSwingAt = Number.NEGATIVE_INFINITY;
-  private nextRollAt = Number.NEGATIVE_INFINITY;
   private weaponActionHeld = false;
 
   constructor(configuration: Partial<VRCombatInputConfiguration> = {}) {
@@ -72,38 +76,33 @@ export class VRCombatInputController {
     VRCombatInputController.validateConfiguration(this.configuration);
   }
 
-  /**
-   * Round-timer readiness for the diegetic hilt indicator (ROADMAP 3.5):
-   * 0 right after a roll-eligible swing/shot, 1 once the next one is
-   * eligible again. `timestamp` should be the same clock `process()` is
-   * driven with.
-   */
-  getRollReadiness(timestamp: number): number {
-    if (!Number.isFinite(timestamp)) {
-      throw new TypeError('timestamp must be finite');
-    }
-    if (this.nextRollAt === Number.NEGATIVE_INFINITY) return 1;
-    const remaining = this.nextRollAt - timestamp;
-    if (remaining <= 0) return 1;
-    return 1 - Math.min(1, remaining / this.configuration.rollCooldownMilliseconds);
-  }
-
   process(inputFrame: XRInputFrame, context: VRCombatInputContext): readonly VRCombatSwingEvent[] {
     VRCombatInputController.validateContext(context);
-    if (context.weaponMode === 'blaster') return this.processBlaster(inputFrame, context);
-    if (!VRCombatInputController.isMelee(context.weaponMode)) {
+    const triggerEvents = this.processDominantTrigger(
+      inputFrame,
+      context,
+      context.weaponMode === 'blaster' || context.allowDominantTrigger,
+    );
+    if (context.weaponMode === 'blaster') {
       this.resetMeleeSample();
-      return [];
+      return triggerEvents;
+    }
+    // Unarmed counts as melee: a punch is the only way an unarmed character
+    // can attack, because embodied VR turns off the engine's automatic
+    // basic-attack queue and the wheel's plain Attack is not an engine click.
+    if (!VRCombatInputController.isMelee(context.weaponMode) && context.weaponMode !== 'unarmed') {
+      this.resetMeleeSample();
+      return triggerEvents;
     }
 
-    const dominantPose = inputFrame.hands.right?.pose;
+    const dominantPose = inputFrame.hands[context.dominantHand]?.pose;
     if (!dominantPose || dominantPose.trackingState === 'unavailable') {
       this.resetMeleeSample();
-      return [];
+      return triggerEvents;
     }
     // ROADMAP 3.3. A two-handed grip is a physical claim, not just a held
     // button: both hands must be tracked and close enough to be on one hilt.
-    const offhandPose = inputFrame.hands.left?.pose ?? null;
+    const offhandPose = inputFrame.hands[context.offhandHand]?.pose ?? null;
     const grip = this.resolveTwoHandedGrip(context, dominantPose, offhandPose);
 
     // Measure the swing where the blade actually is. With both hands on the
@@ -123,21 +122,19 @@ export class VRCombatInputController {
     this.previousTimestamp = context.timestamp;
     if (speed < this.configuration.minimumSwingSpeedMetresPerSecond ||
       context.timestamp - this.lastVisualSwingAt < this.configuration.visualSwingCooldownMilliseconds) {
-      return [];
+      return triggerEvents;
     }
 
     this.lastVisualSwingAt = context.timestamp;
-    const rollEligible = context.timestamp >= this.nextRollAt;
-    if (rollEligible) this.nextRollAt = context.timestamp + this.configuration.rollCooldownMilliseconds;
-    return [{
+    return [...triggerEvents, {
       actorId: context.actorId,
       nominatedTargetId: context.nominatedTargetId,
-      hand: 'right',
+      hand: context.dominantHand,
       weaponMode: grip ? 'melee-two-handed' : context.weaponMode,
       speedMetresPerSecond: speed,
-      rollEligible,
       pose: VRCombatInputController.clonePose(dominantPose),
       timestamp: context.timestamp,
+      input: 'dominant-swing',
       ...(grip ? { gripSeparationMetres: grip.separationMetres } : {}),
     }];
   }
@@ -208,28 +205,28 @@ export class VRCombatInputController {
   reset(): void {
     this.resetMeleeSample();
     this.lastVisualSwingAt = Number.NEGATIVE_INFINITY;
-    this.nextRollAt = Number.NEGATIVE_INFINITY;
     this.weaponActionHeld = false;
   }
 
-  private processBlaster(inputFrame: XRInputFrame, context: VRCombatInputContext): readonly VRCombatSwingEvent[] {
-    this.resetMeleeSample();
+  private processDominantTrigger(
+    inputFrame: XRInputFrame,
+    context: VRCombatInputContext,
+    triggerAllowed: boolean,
+  ): readonly VRCombatSwingEvent[] {
     const wasHeld = this.weaponActionHeld;
     this.weaponActionHeld = context.weaponActionPressed;
-    if (!context.weaponActionPressed || wasHeld) return [];
-    const pose = inputFrame.hands.right?.targetRayPose;
+    if (!triggerAllowed || !context.weaponActionPressed || wasHeld) return [];
+    const pose = inputFrame.hands[context.dominantHand]?.targetRayPose;
     if (!pose || pose.trackingState === 'unavailable') return [];
-    const rollEligible = context.timestamp >= this.nextRollAt;
-    if (rollEligible) this.nextRollAt = context.timestamp + this.configuration.rollCooldownMilliseconds;
     return [{
       actorId: context.actorId,
       nominatedTargetId: context.nominatedTargetId,
-      hand: 'right',
-      weaponMode: 'blaster',
+      hand: context.dominantHand,
+      weaponMode: context.weaponMode,
       speedMetresPerSecond: 0,
-      rollEligible,
       pose: VRCombatInputController.clonePose(pose),
       timestamp: context.timestamp,
+      input: 'dominant-trigger',
     }];
   }
 
@@ -269,6 +266,14 @@ export class VRCombatInputController {
     }
     if (!Number.isFinite(context.timestamp) || context.timestamp < 0) {
       throw new RangeError('combat context timestamp must be finite and non-negative');
+    }
+    if ((context.dominantHand !== 'left' && context.dominantHand !== 'right') ||
+      (context.offhandHand !== 'left' && context.offhandHand !== 'right') ||
+      context.dominantHand === context.offhandHand) {
+      throw new TypeError('combat context requires distinct dominant and offhand roles');
+    }
+    if (typeof context.allowDominantTrigger !== 'boolean') {
+      throw new TypeError('combat context allowDominantTrigger must be boolean');
     }
   }
 

@@ -23,6 +23,15 @@ export interface VRActionWheelEngineAction {
   activate(): void;
 }
 
+/** A VR-owned wheel route with the same safety contract as engine entries. */
+export interface VRActionWheelDirectAction {
+  readonly id: string;
+  readonly label: string;
+  readonly icon?: string;
+  revalidate(): boolean;
+  activate(): void;
+}
+
 /** Target panel 0: Attack plus the feats filtered by `getEquippedWeaponType()`. */
 const ATTACK_PANEL_INDEX = 0;
 /** Target panel 1 (hostile) and self panel 1 (friendly) are both Force powers. */
@@ -40,6 +49,8 @@ export interface VRActionWheelBuildContext {
   readonly id: string;
   readonly targetActions: readonly VRActionWheelEngineAction[];
   readonly selfActions: readonly VRActionWheelEngineAction[];
+  /** Consumable grenades arm in the off hand; they are not engine action-panel entries. */
+  readonly grenadeActions?: readonly VRActionWheelDirectAction[];
   /**
    * True only when the aimed target is a hostile creature — the sole case in
    * which `ActionMenuManager` fills the target panels with combat actions.
@@ -74,6 +85,10 @@ export interface VRActionWheelBuildContext {
   readonly canClearActions: boolean;
   /** Clears the action queue and cancels combat, as BTN_CLEARALL does. */
   readonly clearQueuedActions: () => void;
+  /** True when the VR-owned three-slot upcoming-action queue has entries. */
+  readonly canClearUpcomingActions: boolean;
+  /** Clears only the VR-owned upcoming-action queue. */
+  readonly clearUpcomingActions: () => void;
 }
 
 export interface VRActionMenuEntry {
@@ -140,6 +155,14 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
     actions: forcePowerActions,
   });
 
+  appendSubmenuOfDirectActions(items, {
+    id: 'submenu:grenades',
+    label: 'Grenades',
+    icon: 'i_grenade',
+    menuId: `${rootId}:grenades`,
+    actions: context.grenadeActions ?? [],
+  });
+
   // Anything the engine produced that the two combat panels did not claim:
   // world actions when the target is not hostile, and any future panel this
   // build does not know about. Dropping them silently would make an authored
@@ -179,7 +202,18 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
   // up/down controls have no VR counterpart by design: they exist because the
   // flat panel shows one action at a time, and the wheel already enumerates
   // every panel action at once.
-  if (context.canClearActions === true) {
+  // The upcoming-action queue is presentation/input state, not the engine
+  // action queue. Its clear route must therefore never call BTN_CLEARALL or
+  // cancel a live authored combat action. One clear wedge is shown at a time
+  // so the combat root retains its six-item, no-pagination guarantee.
+  if (context.canClearUpcomingActions === true) {
+    items.push(createStaticAction(
+      'action:clear-upcoming',
+      'Clear Upcoming',
+      'i_noaction',
+      context.clearUpcomingActions,
+    ));
+  } else if (context.canClearActions === true) {
     items.push(createStaticAction(
       'action:clear-queue',
       'Clear Actions',
@@ -273,6 +307,44 @@ function appendSubmenuOfEngineActions(
     revalidate: () => buildItems().length > 0,
     // Called lazily when the submenu opens, so the page re-snapshots the
     // engine's validity then rather than when the wheel was first opened.
+    buildMenu: () => createMenu(submenu.menuId, submenu.label, buildItems()),
+  });
+}
+
+/** Builds a submenu for a VR-owned route such as armed grenades. */
+function appendSubmenuOfDirectActions(
+  output: VRRadialContentItem[],
+  submenu: {
+    readonly id: string;
+    readonly label: string;
+    readonly icon: string;
+    readonly menuId: string;
+    readonly actions: readonly VRActionWheelDirectAction[];
+  },
+): void {
+  const buildItems = (): VRRadialContentItem[] => {
+    const items: VRRadialContentItem[] = [];
+    for (const action of submenu.actions) {
+      if (!isValidDirectAction(action) || !safelyRevalidateDirectAction(action)) continue;
+      items.push({
+        kind: 'action',
+        id: `direct:${action.id.trim()}`,
+        label: action.label.trim(),
+        ...(action.icon === undefined ? {} : { icon: action.icon.trim() }),
+        revalidate: () => safelyRevalidateDirectAction(action),
+        activate: () => action.activate(),
+      });
+    }
+    return items;
+  };
+
+  if (buildItems().length === 0) return;
+  output.push({
+    kind: 'submenu',
+    id: submenu.id,
+    label: submenu.label,
+    icon: submenu.icon,
+    revalidate: () => buildItems().length > 0,
     buildMenu: () => createMenu(submenu.menuId, submenu.label, buildItems()),
   });
 }
@@ -377,7 +449,8 @@ function validateBuildContext(context: VRActionWheelBuildContext): void {
   if (typeof context.id !== 'string' || context.id.trim().length === 0) {
     throw new TypeError('context id must be a non-empty string');
   }
-  if (!Array.isArray(context.targetActions) || !Array.isArray(context.selfActions)) {
+  if (!Array.isArray(context.targetActions) || !Array.isArray(context.selfActions) ||
+    (context.grenadeActions !== undefined && !Array.isArray(context.grenadeActions))) {
     throw new TypeError('engine action collections must be arrays');
   }
   if (!Array.isArray(context.partyMembers)) throw new TypeError('partyMembers must be an array');
@@ -388,6 +461,12 @@ function validateBuildContext(context: VRActionWheelBuildContext): void {
   }
   if (typeof context.clearQueuedActions !== 'function') {
     throw new TypeError('clearQueuedActions must be callable');
+  }
+  if (typeof context.canClearUpcomingActions !== 'boolean') {
+    throw new TypeError('canClearUpcomingActions must be boolean');
+  }
+  if (typeof context.clearUpcomingActions !== 'function') {
+    throw new TypeError('clearUpcomingActions must be callable');
   }
 }
 
@@ -400,6 +479,24 @@ function isValidEngineAction(action: VRActionWheelEngineAction): boolean {
     Number.isInteger(action.panelIndex) &&
     typeof action.revalidate === 'function' &&
     typeof action.activate === 'function';
+}
+
+function isValidDirectAction(action: VRActionWheelDirectAction): boolean {
+  return !!action &&
+    typeof action === 'object' &&
+    isNonEmptyString(action.id) &&
+    isNonEmptyString(action.label) &&
+    (action.icon === undefined || isNonEmptyString(action.icon)) &&
+    typeof action.revalidate === 'function' &&
+    typeof action.activate === 'function';
+}
+
+function safelyRevalidateDirectAction(action: VRActionWheelDirectAction): boolean {
+  try {
+    return action.revalidate() === true;
+  } catch {
+    return false;
+  }
 }
 
 function isValidPartyMember(member: VRActionWheelPartyMember): boolean {

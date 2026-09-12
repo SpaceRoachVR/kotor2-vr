@@ -35,6 +35,7 @@ import { EngineMode } from "@/enums/engine/EngineMode";
 import { SSFType } from "@/enums/resource/SSFType";
 import { ActionType } from "@/enums/actions/ActionType";
 import { ActionParameterType } from "@/enums/actions/ActionParameterType";
+import { ItemCastSpellParameter } from "@/actions/ItemCastSpellParameters";
 import EngineLocation from "@/engine/EngineLocation";
 import { AttackResult } from "@/enums/combat/AttackResult";
 import { CombatFeatType } from "@/enums/combat/CombatFeatType";
@@ -65,6 +66,7 @@ import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { ExperienceType } from "@/enums/engine/ExperienceType";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { resolveKillExperience } from "@/combat/killExperience";
+import { shouldAutoQueueControlledBasicAttack } from "@/vr/runtime/VRCombatAutoQueuePolicy";
 
 /**
 * ModuleCreature class.
@@ -1013,8 +1015,14 @@ export class ModuleCreature extends ModuleObject {
     }
 
     if(this.combatData.combatState){
-      //If creature is being controller by the player, keep at least one basic action in the attack queue while attack target is still alive 
-      if(GameState.getCurrentPlayer() == this){
+      // Desktop combat keeps one basic action queued while a target is alive.
+      // Embodied VR deliberately does not: each eligible physical swing or
+      // trigger is what creates the authored CombatRound action. The normal
+      // desktop queue returns immediately when the XR session ends.
+      if(shouldAutoQueueControlledBasicAttack({
+        isControlledActor: GameState.getCurrentPlayer() == this,
+        embodiedVRInputActive: GameState.isVREmbodiedCombatInputActive,
+      })){
         if(!this.combatRound.scheduledActionList.length && !this.combatRound.action){
           if( this.combatData.lastAttackTarget ){
             this.attackCreature(this.combatData.lastAttackTarget, undefined);
@@ -1064,8 +1072,8 @@ export class ModuleCreature extends ModuleObject {
           return true;
         }
       }else if(action.type == ActionType.ActionItemCastSpell){
-        const spell = new TalentSpell( action.getParameter(0) );
-        const target: ModuleObject = action.getParameter(5);
+        const spell = new TalentSpell(action.getParameter(ItemCastSpellParameter.SpellId));
+        const target: ModuleObject = action.getParameter(ItemCastSpellParameter.Target);
         if(target instanceof ModuleObject){
           return spell.inRange(target, this);
         }else{

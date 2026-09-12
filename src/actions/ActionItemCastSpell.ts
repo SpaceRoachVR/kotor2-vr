@@ -1,6 +1,19 @@
 import { ActionStatus } from "@/enums/actions/ActionStatus";
 import { ActionType } from "@/enums/actions/ActionType";
 import { Action } from "@/actions/Action";
+import { ItemCastSpellParameter } from "@/actions/ItemCastSpellParameters";
+import { isItemCastSpellSourceUsable } from "@/actions/ItemCastSpellValidation";
+import { releaseUnstartedItemCastCombatAction } from "@/actions/ItemCastSpellRoundCleanup";
+import { ActionParameterType } from "@/enums/actions/ActionParameterType";
+import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
+import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
+import { ModuleObjectConstant } from "@/enums/module/ModuleObjectConstant";
+import { GameState } from "@/GameState";
+import { SpellCastInstance } from "@/combat";
+import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
+import { BitWise } from "@/utility/BitWise";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
+import type { ModuleCreature, ModuleItem, ModuleObject } from "@/module";
 
 /**
  * ActionItemCastSpell class.
@@ -13,25 +26,118 @@ import { Action } from "@/actions/Action";
  */
 export class ActionItemCastSpell extends Action {
 
-  spell: any = {}
+  spell: any = undefined;
 
   constructor( actionId: number = -1, groupId: number = -1 ){
     super(actionId, groupId);
     this.type = ActionType.ActionItemCastSpell;
 
-    //PARAMS - need to verify!! https://github.com/nwnxee/unified/blob/2f732e7f5e278e4de848d119bf3689dc928f2ab2/Plugins/Creature/Creature.cpp#L2846
-    // 0 - dword: oTarget
-    // 1 - dword: oArea
-    // 2 - float: x
-    // 3 - float: y
-    // 4 - float: z
-    // 5 - int: spellId
-    // 6 - int: casterLevel
-    // 7 - float: delay
-    // 8 - int: projectilePath
-    // 9 - int: projectileSpellId
-    // 10 - dword: oItem
-    // 11 - string: impactScript
+  }
+
+  update(delta: number = 0): ActionStatus {
+    const target = this.getParameter<ModuleObject>(ItemCastSpellParameter.Target);
+    const item = this.getParameter<ModuleItem>(ItemCastSpellParameter.Item);
+    const spellId = this.getParameter<number>(ItemCastSpellParameter.SpellId);
+
+    if (!BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)) return ActionStatus.FAILED;
+    const owner = this.owner as ModuleCreature;
+    if (!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleObject) || target.isDead()) {
+      return this.rejectItemCast(owner);
+    }
+    if (!Number.isSafeInteger(spellId) || spellId < 0) {
+      return this.rejectItemCast(owner);
+    }
+
+    if (!isItemCastSpellSourceUsable({
+      sourceItem: item,
+      requestedSpellId: spellId,
+      isOwnedByCaster: (candidate) => this.isSourceItemOwnedBy(owner, candidate),
+      castSpellPropertyType: ModuleItemProperty.CastSpell,
+    })) {
+      return this.rejectItemCast(owner);
+    }
+
+    const combatRound = owner.combatRound;
+    if (!combatRound) {
+      return ActionStatus.FAILED;
+    }
+    if (combatRound.roundPaused) {
+      return ActionStatus.IN_PROGRESS;
+    }
+
+    this.spell = new GameState.TalentSpell(spellId);
+    if (!this.spell || !this.spell.inRange(target, owner)) {
+      const moveStatus = this.moveIntoCastRange(owner, target);
+      return moveStatus === ActionStatus.FAILED ? this.rejectItemCast(owner) : moveStatus;
+    }
+
+    owner.force = 0;
+    owner.speed = 0;
+    combatRound.beginCombatRound();
+    combatRound.pauseRound(owner, combatRound.roundLength);
+    if (combatRound.action) {
+      combatRound.action.animation = ModuleCreatureAnimState.CASTOUT1;
+    }
+    if (!combatRound.roundStarted) {
+      return ActionStatus.IN_PROGRESS;
+    }
+
+    const spellCastInstance = new SpellCastInstance(owner, target, this.spell);
+    owner.area.attachSpellInstance(spellCastInstance);
+    spellCastInstance.init();
+    this.consumeSourceItem(owner, item);
+    return ActionStatus.COMPLETE;
+  }
+
+  private moveIntoCastRange(owner: ModuleCreature, target: ModuleObject): ActionStatus {
+    if (!this.spell || !target?.position || !target.area) {
+      return ActionStatus.FAILED;
+    }
+    // VR owns the player's position; walking them into cast range drags the
+    // rig through the world. Same actor-scoped rule as every other approach.
+    // Failing (rather than waiting) releases the unstarted round action.
+    if (ActionApproachPolicy.isApproachSuppressedFor(owner)) {
+      return ActionStatus.FAILED;
+    }
+
+    const actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint(this.groupId);
+    actionMoveToTarget.setParameter(0, ActionParameterType.FLOAT, target.position.x);
+    actionMoveToTarget.setParameter(1, ActionParameterType.FLOAT, target.position.y);
+    actionMoveToTarget.setParameter(2, ActionParameterType.FLOAT, target.position.z);
+    actionMoveToTarget.setParameter(3, ActionParameterType.DWORD, target.area.id);
+    actionMoveToTarget.setParameter(4, ActionParameterType.DWORD, target.id || ModuleObjectConstant.OBJECT_INVALID);
+    actionMoveToTarget.setParameter(5, ActionParameterType.INT, 1);
+    actionMoveToTarget.setParameter(6, ActionParameterType.FLOAT, this.spell.getCastRange());
+    actionMoveToTarget.setParameter(7, ActionParameterType.INT, 0);
+    actionMoveToTarget.setParameter(8, ActionParameterType.FLOAT, 30.0);
+    owner.actionQueue.addFront(actionMoveToTarget);
+    return ActionStatus.IN_PROGRESS;
+  }
+
+  private rejectItemCast(owner: ModuleCreature): ActionStatus {
+    releaseUnstartedItemCastCombatAction(owner.combatRound);
+    return ActionStatus.FAILED;
+  }
+
+  private isSourceItemOwnedBy(owner: ModuleCreature, candidate: unknown): boolean {
+    if (!candidate) {
+      return false;
+    }
+    const party = GameState.PartyManager?.party;
+    if (Array.isArray(party) && party.includes(owner)) {
+      return Array.isArray(GameState.InventoryManager?.inventory) &&
+        GameState.InventoryManager.inventory.includes(candidate as ModuleItem);
+    }
+    return Array.isArray(owner.inventory) && owner.inventory.includes(candidate as ModuleItem);
+  }
+
+  private consumeSourceItem(owner: ModuleCreature, item: ModuleItem): void {
+    const party = GameState.PartyManager?.party;
+    if (Array.isArray(party) && party.includes(owner)) {
+      GameState.InventoryManager.removeItem(item, 1);
+      return;
+    }
+    owner.removeItem(item, 1);
   }
 
 }

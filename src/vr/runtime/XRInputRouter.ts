@@ -91,6 +91,10 @@ function standardBindings(
     { action: SemanticXRAction.Recenter, context: 'global', hand: 'dominant', input: { kind: 'button', index: 3 } },
     { action: SemanticXRAction.Pause, context: 'global', hand: 'dominant', input: { kind: 'button', index: 5 } },
     { action: SemanticXRAction.WeaponAction, context: 'combat', hand: 'dominant', input: { kind: 'button', index: 0 } },
+    // An armed grenade is intentionally committed only by the offhand trigger.
+    // It shares the semantic action with the dominant weapon trigger, but the
+    // combat runtime receives the physical hand and cannot confuse the two.
+    { action: SemanticXRAction.WeaponAction, context: 'combat', hand: 'offhand', input: { kind: 'button', index: 0 } },
     { action: SemanticXRAction.ToggleWalkRun, context: 'locomotion', hand: 'offhand', input: { kind: 'button', index: 3 } },
     // ToggleLocomotionMode is deliberately unbound. It shared the offhand
     // trigger with radial-wheel Select, and having smooth/blink on a physical

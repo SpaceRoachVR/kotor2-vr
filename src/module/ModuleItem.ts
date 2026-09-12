@@ -21,6 +21,7 @@ import { Dice } from "@/utility/Dice";
 import { ItemProperty } from "@/engine/ItemProperty";
 import { GameState } from "@/GameState";
 import { ActionParameterType, GameEffectDurationType, ModuleCreatureAnimState, SkillType } from "@/enums";
+import { writeItemCastSpellParameters } from "@/actions/ItemCastSpellParameters";
 import type { SWWeaponSound } from "@/engine/rules/SWWeaponSound";
 
 /**
@@ -467,19 +468,26 @@ export class ModuleItem extends ModuleObject {
       if(!property.isUseable()){ continue; }
 
       if(property.is(ModuleItemProperty.CastSpell)){
+        const spellId = property.getValue();
+        if(!Number.isSafeInteger(spellId) || spellId < 0){ continue; }
+        // Ordinary item use remains an authored direct item-cast action. The
+        // embodied grenade bridge is the sole caller that deliberately enters
+        // CombatRound, because only it needs an eligible d20 tempo window.
+        // Routing every item through CombatRound changes flat-game semantics
+        // and can strand non-combat consumables behind combat state.
         const action = new GameState.ActionFactory.ActionItemCastSpell();
-        action.setParameter(0, ActionParameterType.DWORD, oTarget);
-        action.setParameter(1, ActionParameterType.DWORD, oTarget.area);
-        action.setParameter(2, ActionParameterType.FLOAT, oTarget.position.x);
-        action.setParameter(3, ActionParameterType.FLOAT, oTarget.position.y);
-        action.setParameter(4, ActionParameterType.FLOAT, oTarget.position.z);
-        action.setParameter(5, ActionParameterType.INT, property.getValue());
-        action.setParameter(6, ActionParameterType.INT, 1);
-        action.setParameter(7, ActionParameterType.FLOAT, 1.0);
-        action.setParameter(8, ActionParameterType.INT, -1);
-        action.setParameter(9, ActionParameterType.INT, -1);
-        action.setParameter(10, ActionParameterType.DWORD, this);
-        action.setParameter(11, ActionParameterType.STRING, '');
+        writeItemCastSpellParameters(action, {
+          target: oTarget,
+          area: oTarget.area,
+          targetPosition: oTarget.position,
+          spellId,
+          casterLevel: 1,
+          delay: 1.0,
+          projectilePath: 0,
+          projectileSpellId: -1,
+          item: this,
+          impactScript: '',
+        });
         oCaster.actionQueue.add(action);
       }else if(property.is(ModuleItemProperty.ThievesTools)){
         const action = new GameState.ActionFactory.ActionUnlockObject();

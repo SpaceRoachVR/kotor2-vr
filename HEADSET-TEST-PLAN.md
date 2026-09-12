@@ -267,6 +267,27 @@ physically unpleasant rather than merely wrong.
 | F15 | Open the wheel aimed at a door, a container, and empty space | No ring. Kill a target with the wheel still up — the ring stops marking the corpse |
 | F16 | Wheel → **Force Powers** | Lists only powers the engine says are available. **Known gap:** no Force-point affordability or range check, so an unaffordable power still lists. Invisible on Peragus; note it if it bites |
 
+> **F10–F13 describe the attack-stance model.** `codex/embodied-vr-combat` replaces
+> it with a three-slot upcoming-action queue, where the hilt plaque shows the next
+> queued action. Rewrite those rows against the queue before running them on that
+> branch.
+
+### First-person hands (`codex/embodied-vr-combat`)
+
+Rigged WebXR generic hands, posed from the controller buttons. The grip alignment
+and finger poses were checked in a standalone render, not in the headset.
+**Scale, skin tone against KOTOR lighting, and how the fist sits on a real
+controller can only be judged on device.**
+
+| # | What to do | What "pass" looks like |
+|---|---|---|
+| F17 | Look at your empty hands, then rest a finger on each trigger and a thumb on each stick | Hands are glove-dark, roughly life-size, and track the controllers without lag. A touched trigger curls the index slightly; a touched stick lowers the thumb |
+| F18 | Pull each trigger, then squeeze each grip, slowly and then fast | Index closes with the trigger; the other three fingers close with the grip; motion is smooth, never a one-frame snap |
+| F19 | Equip a lightsaber, then a blaster | Dominant fist closes **around** the hilt/grip — handle inside the fingers, not through the back of the hand or floating beside it. Blaster: the trigger pull still visibly moves the index |
+| F20 | Swap the party leader to a droid (e.g. T3-M4) | No humanoid hands; the equipped item still floats at the controller |
+| F21 | Grip-held forward thrust with a saber and **no** Force Push queued | Registers as a swing, not a swallowed Force gesture |
+| F22 | Unarmed, punch an enemy | The punch attacks (unarmed has no automatic basic attack in VR) |
+
 ## G. Cutscenes and dialogue (Phase 5)
 
 | # | What to do | What "pass" looks like |

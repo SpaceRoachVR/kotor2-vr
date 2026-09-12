@@ -33,14 +33,19 @@ export class VRForceGestureController {
     }
   }
 
-  process(inputFrame: XRInputFrame, gripModifierHeld: boolean, timestamp: number): VRForceGesture | null {
+  process(
+    inputFrame: XRInputFrame,
+    gripModifierHeld: boolean,
+    timestamp: number,
+    dominantHand: XRHandRole = 'right',
+  ): VRForceGesture | null {
     if (!Number.isFinite(timestamp) || timestamp < 0) {
       throw new RangeError('timestamp must be finite and non-negative');
     }
     if (!gripModifierHeld || timestamp < this.nextGestureAt) return null;
-    const hand = inputFrame.hands.right;
-    const velocity = hand?.pose.linearVelocity;
-    if (!hand || hand.pose.trackingState === 'unavailable' || !velocity || !Number.isFinite(velocity.length())) {
+    const controller = inputFrame.hands[dominantHand];
+    const velocity = controller?.pose.linearVelocity;
+    if (!controller || controller.pose.trackingState === 'unavailable' || !velocity || !Number.isFinite(velocity.length())) {
       return null;
     }
 
@@ -52,8 +57,8 @@ export class VRForceGestureController {
     this.nextGestureAt = timestamp + this.configuration.cooldownMilliseconds;
     return {
       kind: signedSpeed > 0 ? 'push' : 'pull',
-      hand: 'right',
-      pose: VRForceGestureController.clonePose(hand.pose),
+      hand: dominantHand,
+      pose: VRForceGestureController.clonePose(controller.pose),
       speedMetresPerSecond: Math.abs(signedSpeed),
       timestamp,
     };

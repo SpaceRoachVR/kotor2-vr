@@ -4,6 +4,7 @@ import {
   createVRActionSourceKey,
   VRActionMenuEntry,
   VRActionWheelBuildContext,
+  VRActionWheelDirectAction,
   VRActionWheelEngineAction,
   VRActionWheelPartyMember,
 } from '@/vr/runtime/VRActionWheelModelBuilder';
@@ -46,6 +47,20 @@ function partyMember(
   };
 }
 
+function directAction(
+  id: string,
+  label: string,
+  overrides: Partial<VRActionWheelDirectAction> = {},
+): VRActionWheelDirectAction {
+  return {
+    id,
+    label,
+    revalidate: () => true,
+    activate: jest.fn(),
+    ...overrides,
+  };
+}
+
 function context(overrides: Partial<VRActionWheelBuildContext> = {}): VRActionWheelBuildContext {
   return {
     id: 'action-wheel',
@@ -57,6 +72,8 @@ function context(overrides: Partial<VRActionWheelBuildContext> = {}): VRActionWh
     openMenu: jest.fn(),
     canClearActions: false,
     clearQueuedActions: jest.fn(),
+    canClearUpcomingActions: false,
+    clearUpcomingActions: jest.fn(),
     ...overrides,
   };
 }
@@ -133,6 +150,23 @@ test('splits Attacks from Force Powers along the panels the engine already filte
   // Hostile (target panel 1) and friendly (self panel 1) powers share one page.
   expect(contentIds(findSubmenu(menu, 'submenu:force-powers').buildMenu()))
     .toEqual(['engine:lightning', 'engine:heal']);
+});
+
+test('keeps grenade selection separate from the three-slot combat-action queue', () => {
+  const armGrenade = jest.fn();
+  const menu = buildVRActionWheel(context({
+    grenadeActions: [directAction('grenade:17:0:52', 'Plasma Grenade', {
+      icon: 'i_grenade_plasma',
+      activate: armGrenade,
+    })],
+  }));
+
+  const grenades = findSubmenu(menu, 'submenu:grenades').buildMenu();
+  const grenade = findAction(grenades, 'direct:grenade:17:0:52');
+  grenade.activate();
+
+  expect(armGrenade).toHaveBeenCalledTimes(1);
+  expect(contentIds(menu)).not.toContain('direct:grenade:17:0:52');
 });
 
 test('keeps world actions at the top level when the target is not a hostile creature', () => {
@@ -389,9 +423,36 @@ test('offers Clear Actions only when something is queued', () => {
   expect(clearQueuedActions).toHaveBeenCalledTimes(1);
 });
 
+test('clears only upcoming VR intents without cancelling authored combat actions', () => {
+  const clearQueuedActions = jest.fn();
+  const clearUpcomingActions = jest.fn();
+  const menu = buildVRActionWheel(context({
+    canClearActions: true,
+    clearQueuedActions,
+    canClearUpcomingActions: true,
+    clearUpcomingActions,
+  }));
+
+  expect(contentIds(menu)).toContain('action:clear-upcoming');
+  // The limited radial layout deliberately offers one clear route at a time.
+  // When upcoming intents exist, it must be the non-destructive VR-only one.
+  expect(contentIds(menu)).not.toContain('action:clear-queue');
+
+  findAction(menu, 'action:clear-upcoming').activate();
+  expect(clearUpcomingActions).toHaveBeenCalledTimes(1);
+  expect(clearQueuedActions).not.toHaveBeenCalled();
+});
+
 test('rejects a build context without a clear-queue route', () => {
   const broken = context();
   delete (broken as unknown as Record<string, unknown>).clearQueuedActions;
 
   expect(() => buildVRActionWheel(broken)).toThrow('clearQueuedActions must be callable');
+});
+
+test('rejects a build context without an upcoming-intent clear route', () => {
+  const broken = context();
+  delete (broken as unknown as Record<string, unknown>).clearUpcomingActions;
+
+  expect(() => buildVRActionWheel(broken)).toThrow('clearUpcomingActions must be callable');
 });

@@ -73,6 +73,9 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).combatCancelHeld = false;
     (VRSpike as any).combatInputController?.reset();
     (VRSpike as any).forceGestureController?.reset();
+    (VRSpike as any).combatTargetLock?.clear();
+    (VRSpike as any).offhandGrenadeTriggerHeld = false;
+    VRSpike.setDominantHand('right');
     (VRSpike as any).interactionTargetSet?.clear();
     (VRSpike as any).interactionSystem?.cancelTransientState();
     (VRSpike as any).previousXRInputTimestamp = null;
@@ -705,7 +708,7 @@ describe('VRSpike XR loop ownership', () => {
     expect(pointerSink.activatePointer).toHaveBeenCalledTimes(1);
   });
 
-  test('forwards a physical saber swing to the combat bridge while preserving its d20 eligibility', () => {
+  test('forwards a physical saber swing as a candidate for the engine-owned tempo gate', () => {
     const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
     const combatEvents: unknown[] = [];
     VRSpike.session = {
@@ -733,7 +736,70 @@ describe('VRSpike XR loop ownership', () => {
 
     (VRSpike as any).processCombatInput(1_000);
 
-    expect(combatEvents).toEqual([expect.objectContaining({ actorId: '7', nominatedTargetId: '42', rollEligible: true })]);
+    expect(combatEvents).toEqual([expect.objectContaining({
+      actorId: '7', nominatedTargetId: '42', input: 'dominant-swing',
+    })]);
+  });
+
+  test('routes left-dominant weapon input through the selected controller', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const combatEvents: unknown[] = [];
+    VRSpike.setDominantHand('left');
+    VRSpike.session = {
+      inputSources: [{ handedness: 'left', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        left: {
+          pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(0, 2, 0), trackingState: 'tracked' },
+          targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+        },
+      },
+    };
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat: true, stanceReadout: '',
+        onCombatSwing: (event) => combatEvents.push(event),
+      }),
+    };
+
+    (VRSpike as any).processCombatInput(1_000);
+
+    expect(combatEvents).toEqual([expect.objectContaining({ hand: 'left', input: 'dominant-swing' })]);
+  });
+
+  test('clears a stale soft lock and target-dependent transient state after engine invalidation', () => {
+    let targetIsValid = true;
+    let invalidated = 0;
+    VRSpike.session = { inputSources: [] } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' }, hands: {},
+    };
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: targetIsValid ? '42' : null, weaponMode: 'unarmed', inCombat: true,
+        stanceReadout: '', onCombatSwing: () => undefined,
+        onCombatTargetInvalidated: () => { invalidated += 1; },
+      }),
+    };
+
+    (VRSpike as any).processCombatInput(1_000);
+    expect((VRSpike as any).combatTargetLock.getSnapshot().lockedTargetId).toBe('42');
+
+    targetIsValid = false;
+    (VRSpike as any).processCombatInput(1_050);
+
+    expect(invalidated).toBe(1);
+    expect((VRSpike as any).combatTargetLock.getSnapshot().lockedTargetId).toBeUndefined();
   });
 
   test('a trigger held through an interaction-owned frame does not fire when combat resumes', () => {
@@ -898,6 +964,32 @@ describe('VRSpike XR loop ownership', () => {
 
     expect((VRSpike as any).processForceInput(1_000)).toBe(true);
     expect(gestures).toEqual([expect.objectContaining({ kind: 'push' })]);
+  });
+
+  test('a grip-held thrust with no queued Push/Pull is left for the melee swing', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    buttons[1] = { pressed: true, touched: true, value: 1 };
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: {
+          pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(0, 0, -2), trackingState: 'tracked' },
+          targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+        },
+      },
+    };
+    const offered: unknown[] = [];
+    (VRSpike as any).forceGestureController.reset?.();
+
+    const consumed = (VRSpike as any).processForceInput(50_000, {
+      onDirectionalForceGesture: (gesture: unknown) => { offered.push(gesture); return false; },
+    });
+
+    expect(offered).toEqual([expect.objectContaining({ kind: 'push' })]);
+    expect(consumed).toBe(false);
   });
 
   test('aligns neutral headset forward with KOTOR follower-camera forward', () => {
@@ -2918,6 +3010,7 @@ function createGameStateWorldPromptHarness(): {
     jest.doMock('three/examples/jsm/shaders/ColorCorrectionShader', () => ({ ColorCorrectionShader: {} }));
     jest.doMock('three/examples/jsm/shaders/CopyShader', () => ({ CopyShader: {} }));
     jest.doMock('three/examples/jsm/libs/stats.module', () => ({ __esModule: true, default: EmptyClass }));
+    jest.doMock('@/vr/runtime/hands/GenericHandLoader', () => ({ loadGenericHandModel: async () => { throw new Error('no hands in Jest'); } }));
     jest.doMock('@/engine/Planetary', () => ({ Planetary: EmptyClass }));
     jest.doMock('@/engine/Debugger', () => ({ Debugger: EmptyClass }));
     jest.doMock('@/utility/PerformanceMonitor', () => ({ PerformanceMonitor: EmptyClass }));

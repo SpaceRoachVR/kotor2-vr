@@ -4,19 +4,29 @@ import { VRCombatInputController } from '@/vr/runtime/VRCombatInputController';
 import { CombatWeaponMode, XRInputFrame, XRWorldPose } from '@/vr/runtime/XRTypes';
 
 describe('VRCombatInputController', () => {
-  test('emits every saber swing but only makes an on-tempo swing roll eligible', () => {
+  test('emits every saber swing without assigning a local d20 cooldown', () => {
     const controller = new VRCombatInputController({
       minimumSwingSpeedMetresPerSecond: 0.8,
       visualSwingCooldownMilliseconds: 100,
-      rollCooldownMilliseconds: 2_000,
     });
 
     expect(controller.process(frame(0, 0), context('melee-one-handed', 0))).toEqual([]);
     const firstSwing = controller.process(frame(160, -0.3), context('melee-one-handed', 160));
     const secondSwing = controller.process(frame(320, 0), context('melee-one-handed', 320));
 
-    expect(firstSwing).toEqual([expect.objectContaining({ rollEligible: true, weaponMode: 'melee-one-handed' })]);
-    expect(secondSwing).toEqual([expect.objectContaining({ rollEligible: false, weaponMode: 'melee-one-handed' })]);
+    expect(firstSwing).toEqual([expect.objectContaining({ weaponMode: 'melee-one-handed' })]);
+    expect(secondSwing).toEqual([expect.objectContaining({ weaponMode: 'melee-one-handed' })]);
+    expect(firstSwing[0]).not.toHaveProperty('rollEligible');
+    expect(secondSwing[0]).not.toHaveProperty('rollEligible');
+  });
+
+  test('an unarmed punch is a swing, because VR has no automatic basic attack', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+
+    controller.process(frame(0, 0), context('unarmed', 0));
+    const punch = controller.process(frame(160, -0.3), context('unarmed', 160));
+
+    expect(punch).toEqual([expect.objectContaining({ weaponMode: 'unarmed', input: 'dominant-swing' })]);
   });
 
   test('promotes to two-handed only when both hands are actually on the hilt', () => {
@@ -96,59 +106,65 @@ describe('VRCombatInputController', () => {
     }
   });
 
-  test('fires a blaster once per weapon-action press edge without bypassing the d20 path', () => {
+  test('fires a blaster once per dominant weapon-action press edge', () => {
     const controller = new VRCombatInputController();
 
     expect(controller.process(frame(0, 0), context('blaster', 0, false, false))).toEqual([]);
     expect(controller.process(frame(10, 0), context('blaster', 10, false, true)))
-      .toEqual([expect.objectContaining({ weaponMode: 'blaster', rollEligible: true })]);
+      .toEqual([expect.objectContaining({ weaponMode: 'blaster', hand: 'right' })]);
     expect(controller.process(frame(20, 0), context('blaster', 20, false, true))).toEqual([]);
   });
 
-  test('emits every blaster trigger pull but only makes an on-tempo pull roll eligible', () => {
+  test('uses the selected left dominant hand for a deliberate blaster shot', () => {
+    const controller = new VRCombatInputController();
+
+    const events = controller.process(
+      frame(0, 0, new THREE.Vector3(0, -0.15, -0.4)),
+      context('blaster', 0, false, true, 'left'),
+    );
+
+    expect(events).toEqual([expect.objectContaining({
+      weaponMode: 'blaster', input: 'dominant-trigger', hand: 'left',
+    })]);
+  });
+
+  test('does not convert a melee trigger into a basic attack without a queued aimed Force power', () => {
+    const controller = new VRCombatInputController();
+
+    expect(controller.process(frame(0, 0), context('melee-one-handed', 0, false, true))).toEqual([]);
+  });
+
+  test('keeps an aimed dominant trigger available for a queued Force power while melee is equipped', () => {
+    const controller = new VRCombatInputController();
+
+    const events = controller.process(frame(0, 0), context('melee-one-handed', 0, false, true, 'right', true));
+
+    expect(events).toEqual([expect.objectContaining({
+      weaponMode: 'melee-one-handed', input: 'dominant-trigger', hand: 'right',
+    })]);
+  });
+
+  test('emits every deliberate blaster trigger press after release', () => {
     const controller = new VRCombatInputController({
       minimumSwingSpeedMetresPerSecond: 0.8,
       visualSwingCooldownMilliseconds: 100,
-      rollCooldownMilliseconds: 2_000,
     });
 
-    // Rising edge #1: within the first cooldown window, so it rolls.
     const firstShot = controller.process(frame(0, 0), context('blaster', 0, false, true));
-    expect(firstShot).toEqual([expect.objectContaining({ weaponMode: 'blaster', rollEligible: true })]);
+    expect(firstShot).toEqual([expect.objectContaining({ weaponMode: 'blaster' })]);
 
-    // Release, then a second rising edge before the roll cooldown elapses:
-    // the shot still fires visually but must not roll a second time.
     controller.process(frame(50, 0), context('blaster', 50, false, false));
     const secondShot = controller.process(frame(100, 0), context('blaster', 100, false, true));
-    expect(secondShot).toEqual([expect.objectContaining({ weaponMode: 'blaster', rollEligible: false })]);
+    expect(secondShot).toEqual([expect.objectContaining({ weaponMode: 'blaster' })]);
 
-    // Release, then a third rising edge after the roll cooldown elapses: rolls again.
     controller.process(frame(150, 0), context('blaster', 150, false, false));
-    const thirdShot = controller.process(frame(2_100, 0), context('blaster', 2_100, false, true));
-    expect(thirdShot).toEqual([expect.objectContaining({ weaponMode: 'blaster', rollEligible: true })]);
+    const thirdShot = controller.process(frame(200, 0), context('blaster', 200, false, true));
+    expect(thirdShot).toEqual([expect.objectContaining({ weaponMode: 'blaster' })]);
   });
 
-  test('reports roll readiness for the diegetic hilt timer', () => {
-    const controller = new VRCombatInputController({
-      minimumSwingSpeedMetresPerSecond: 0.8,
-      visualSwingCooldownMilliseconds: 100,
-      rollCooldownMilliseconds: 2_000,
-    });
-
-    // Never swung yet — ready.
-    expect(controller.getRollReadiness(0)).toBe(1);
-
-    controller.process(frame(0, 0), context('melee-one-handed', 0));
-    controller.process(frame(160, -0.3), context('melee-one-handed', 160));
-
-    expect(controller.getRollReadiness(160)).toBeCloseTo(0);
-    expect(controller.getRollReadiness(1_160)).toBeCloseTo(0.5);
-    expect(controller.getRollReadiness(2_160)).toBe(1);
-  });
-
-  test('rejects a non-finite readiness timestamp', () => {
+  test('rejects a non-finite recognition timestamp', () => {
     const controller = new VRCombatInputController();
-    expect(() => controller.getRollReadiness(Number.NaN)).toThrow(TypeError);
+    expect(() => controller.process(frame(0, 0), context('melee-one-handed', Number.NaN))).toThrow(RangeError);
   });
 });
 
@@ -156,7 +172,9 @@ function context(
   weaponMode: CombatWeaponMode,
   timestamp: number,
   offhandGrip = false,
-  weaponActionPressed = false
+  weaponActionPressed = false,
+  dominantHand: 'left' | 'right' = 'right',
+  allowDominantTrigger = false,
 ) {
   return {
     actorId: '7',
@@ -165,6 +183,9 @@ function context(
     timestamp,
     offhandGrip,
     weaponActionPressed,
+    dominantHand,
+    offhandHand: dominantHand === 'right' ? 'left' as const : 'right' as const,
+    allowDominantTrigger,
   } as const;
 }
 

@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { XRCoordinateConverter } from "./runtime/XRCoordinateConverter";
 import { XRControllerAnchorHost } from "./runtime/XRControllerAnchorHost";
 import type { HeldItemVisualDescriptor } from "./runtime/XRControllerAnchorHost";
+import type { VRHandModelLoader } from "./runtime/hands/VRHandModel";
 import { XRGamepadReader } from "./runtime/XRGamepadReader";
 import { XRInputFrameBuilder } from "./runtime/XRInputFrameBuilder";
 import { RoutedXRAction, XRActionContext, XRInputRouter } from "./runtime/XRInputRouter";
@@ -17,6 +18,7 @@ import { VRKeyboardHost } from "./runtime/VRKeyboardHost";
 import { VRKeyboardInputController } from "./runtime/VRKeyboardInputController";
 import { VR_KEYBOARD_DONE_KEY } from "./runtime/VRKeyboardLayout";
 import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatInputController";
+import { VRCombatTargetLock } from "./runtime/VRCombatTargetLock";
 import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
 import { VRRadialControllerEffect, VRRadialMenuController } from "./runtime/VRRadialMenuController";
 import { VRRadialMenuHost } from "./runtime/VRRadialMenuHost";
@@ -227,7 +229,16 @@ export interface VRSpikeHooks {
      * round turns over the swing still rolls as the *active* stance.
      */
     readonly stanceReadout: string;
+    /** 0 while the engine owns the round, 1 for its next legal input window. */
+    readonly tempoReadiness?: number;
+    /** True only while the queue head needs an aimed dominant-hand trigger. */
+    readonly allowDominantTrigger?: boolean;
     onCombatSwing(event: VRCombatSwingEvent): void;
+    /** Returns true only when the gesture was spent on a queued Push/Pull. */
+    onDirectionalForceGesture?(gesture: VRForceGesture): boolean;
+    onGrenadeTrigger?(): void;
+    /** Cancels transient target-dependent VR state after engine invalidation. */
+    onCombatTargetInvalidated?(): void;
     cancel?(): void;
   } | null;
   /** Engine-owned held-item descriptors; the anchor host creates presentation-only clones. */
@@ -236,12 +247,26 @@ export interface VRSpikeHooks {
     readonly right: HeldItemVisualDescriptor | null;
   }>;
   /**
+   * Humanoids receive first-person sleeve/hand presentation around their
+   * controller-anchored equipment. Droids deliberately retain only the
+   * stabilized floating equipment presentation.
+   */
+  getAvatarPresentation?: () => Readonly<{ humanoidHands: boolean }> | null;
+  /**
+   * Loads the skinned first-person hand. Supplied by the engine side because
+   * the production loader depends on three's ESM GLTF loader, which the VR
+   * runtime must not import (see GenericHandLoader).
+   */
+  loadHandModel?: VRHandModelLoader;
+  /**
    * Available Force powers and the engine action bridge for a recognized
    * gesture. `aimedTargetId` is VRSpike's own live right-hand interaction-ray
    * resolution for this frame, for the same reason documented on
    * `getCombatContext`.
    */
   getForceContext?: (aimedTargetId: number | null) => { onForceGesture(gesture: VRForceGesture): void } | null;
+  /** Clears VR-only lock, queue, and armed-item state on a session lifecycle boundary. */
+  resetCombatInteraction?: () => void;
   /** Builds the engine-safe all-purpose action wheel for the current aim. */
   createActionWheel?: (aimedTargetId: number | null) => VRRadialMenuDefinition | null;
   /**
@@ -310,6 +335,7 @@ export class VRSpike {
   private static traceXRStartupCallbacksSeen = 0;
   private static xrFrameRenderTarget: THREE.WebGLRenderTarget | null = null;
   private static readonly inputRouter = new XRInputRouter();
+  private static dominantHand: XRHandRole = 'right';
   private static inputCapabilityValidator = new XRInputCapabilityValidator();
   private static desktopLoopNeedsRestart = false;
   private static readonly sessionController = new XRSessionController({
@@ -343,6 +369,8 @@ export class VRSpike {
   private static comfortVignetteHost: VRComfortVignetteHost | null = null;
   private static hiltTimerHost: VRHiltTimerHost | null = null;
   private static weaponStanceHost: VRWeaponStanceHost | null = null;
+  private static readonly combatTargetLock = new VRCombatTargetLock();
+  private static offhandGrenadeTriggerHeld = false;
   private static combatTargetHighlightHost: VRCombatTargetHighlightHost | null = null;
   private static combatTargetHighlightErrorReported = false;
   /**
@@ -515,7 +543,7 @@ export class VRSpike {
     // KOTOR's world is Z-up; WebXR hands back Y-up poses. This rotation is the
     // whole conversion — without it you are lying on your back in the level.
     XRCoordinateConverter.applyXRToGameBasis(VRSpike.rig);
-    VRSpike.controllerAnchorHost = new XRControllerAnchorHost(VRSpike.rig);
+    VRSpike.controllerAnchorHost = VRSpike.createControllerAnchorHost(VRSpike.rig);
 
     VRSpike.camera = new THREE.PerspectiveCamera(70, 1, 0.05, 15000);
     VRSpike.rig.add(VRSpike.camera);
@@ -657,10 +685,40 @@ export class VRSpike {
     }
   };
 
+  /** Hooks are read at load time, so a host built before they are set still gets hands. */
+  private static createControllerAnchorHost(rig: THREE.Object3D): XRControllerAnchorHost {
+    return new XRControllerAnchorHost(rig, false, {
+      loadHandModel: (hand) => {
+        const loader = VRSpike.hooks?.loadHandModel;
+        return loader
+          ? loader(hand)
+          : Promise.reject(new Error('VRSpike hooks supply no loadHandModel'));
+      },
+    });
+  }
+
   static setDominantHand(hand: XRHandRole): void {
+    if (hand !== 'left' && hand !== 'right') throw new TypeError('dominant hand must be left or right');
+    if (hand !== VRSpike.dominantHand) {
+      // These are mounted to a concrete controller anchor. Recreate them on
+      // the next combat frame so a preference change never leaves the timer,
+      // stance plaque, or aiming laser attached to the former weapon hand.
+      VRSpike.hiltTimerHost?.dispose();
+      VRSpike.hiltTimerHost = null;
+      VRSpike.weaponStanceHost?.dispose();
+      VRSpike.weaponStanceHost = null;
+      VRSpike.blasterLaserHost?.dispose();
+      VRSpike.blasterLaserHost = null;
+    }
+    VRSpike.dominantHand = hand;
     VRSpike.inputRouter.setDominantHand(hand);
     VRSpike.inputCapabilityValidator = new XRInputCapabilityValidator(undefined, hand);
     VRSpike.onInputSourcesChange();
+  }
+
+  /** Current weapon/aim hand, shared with held-item presentation. */
+  static getDominantHand(): XRHandRole {
+    return VRSpike.dominantHand;
   }
 
   private static prepareXRSession(session: XRSession): void {
@@ -705,6 +763,9 @@ export class VRSpike {
     VRSpike.worldPromptSelectHeld = { left: true, right: true };
     VRSpike.interactionAimedTargetId = null;
     VRSpike.combatInputController.reset();
+    VRSpike.combatTargetLock.clear();
+    VRSpike.offhandGrenadeTriggerHeld = false;
+    VRSpike.hooks?.resetCombatInteraction?.();
     VRSpike.forceGestureController.reset();
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
@@ -779,6 +840,9 @@ export class VRSpike {
     VRSpike.keyboardCancelHeld = false;
     VRSpike.keyboardWasActive = false;
     VRSpike.combatCancelHeld = false;
+    VRSpike.offhandGrenadeTriggerHeld = false;
+    VRSpike.combatTargetLock.clear();
+    VRSpike.hooks?.resetCombatInteraction?.();
     VRSpike.clearTrackedInput();
     VRSpike.interactionTargetSet.clear();
     VRSpike.panelInputController.cancel();
@@ -990,11 +1054,13 @@ export class VRSpike {
       );
       VRSpike.latestInputFrame = inputFrame;
       if (!VRSpike.controllerAnchorHost) {
-        VRSpike.controllerAnchorHost = new XRControllerAnchorHost(rig);
+        VRSpike.controllerAnchorHost = VRSpike.createControllerAnchorHost(rig);
       }
       const heldVisuals = VRSpike.hooks?.getHeldVisuals?.();
       VRSpike.controllerAnchorHost.setHeldVisual('left', heldVisuals?.left ?? null);
       VRSpike.controllerAnchorHost.setHeldVisual('right', heldVisuals?.right ?? null);
+      const avatarPresentation = VRSpike.hooks?.getAvatarPresentation?.();
+      VRSpike.controllerAnchorHost.setHumanoidHandsVisible(avatarPresentation?.humanoidHands === true);
       VRSpike.controllerAnchorHost.update(inputFrame);
     } catch (error) {
       VRSpike.clearTrackedInput();
@@ -1010,6 +1076,8 @@ export class VRSpike {
     VRSpike.latestInputFrame = null;
     VRSpike.interactionPreviewIndicator = null;
     VRSpike.interactionAimedTargetId = null;
+    VRSpike.combatTargetLock.clear();
+    VRSpike.offhandGrenadeTriggerHeld = false;
     VRSpike.worldPromptSelectHeld = { left: true, right: true };
     VRSpike.clearWorldActionPrompt(false);
     VRSpike.controllerAnchorHost?.clear();
@@ -1757,7 +1825,8 @@ export class VRSpike {
   private static parseModuleObjectTargetId(id: string | null): number | null {
     if (!id) return null;
     const match = /^module-object:(\d+)$/.exec(id);
-    return match ? Number(match[1]) : null;
+    if (match) return Number(match[1]);
+    return /^\d+$/.test(id) ? Number(id) : null;
   }
 
   /**
@@ -1783,7 +1852,7 @@ export class VRSpike {
         new Set(['combat', 'interaction', 'ui'])
       );
       const cancelPressed = actions.some((action) =>
-        action.action === SemanticXRAction.Cancel && action.hand === 'right' && action.pressed
+        action.action === SemanticXRAction.Cancel && action.hand === VRSpike.dominantHand && action.pressed
       );
       if (cancelPressed && !VRSpike.combatCancelHeld) {
         // Resolve the context without a nominated target: a cancel must still
@@ -1842,33 +1911,75 @@ export class VRSpike {
       VRSpike.combatCancelHeld = false;
       VRSpike.hiltTimerHost?.clear();
       VRSpike.weaponStanceHost?.clear();
+      VRSpike.combatTargetLock.clear();
+      VRSpike.updateCombatTargetHighlight();
       return;
     }
-    const context = VRSpike.hooks?.getCombatContext?.(VRSpike.resolveAimedTargetId()) ?? null;
+    // Resolve the candidate through the engine first. The lock intentionally
+    // never sees raw ray ids, because a door, corpse, or stale selectable must
+    // not become a combat target during the aim-loss grace window.
+    const candidateContext = VRSpike.hooks?.getCombatContext?.(VRSpike.resolveAimedTargetId()) ?? null;
+    const lock = VRSpike.combatTargetLock.update({
+      candidateTargetId: candidateContext?.nominatedTargetId ?? undefined,
+      nowMilliseconds: timestamp,
+    });
+    const lockedTargetId = VRSpike.parseModuleObjectTargetId(lock.lockedTargetId);
+    // Re-resolve the soft lock even during aim-loss grace. The original
+    // candidate may be absent while a natural melee swing crosses the target,
+    // but the engine target remains authoritative for that grace window.
+    const context = VRSpike.hooks?.getCombatContext?.(lockedTargetId) ?? null;
+    if (lockedTargetId !== null && context?.nominatedTargetId === null) {
+      // A target that was once valid has died, transitioned, or otherwise been
+      // rejected by the engine. Do not retain an armed grenade aimed at an
+      // impossible target, and do not leave the highlight lying about it.
+      VRSpike.combatTargetLock.clear();
+      context.onCombatTargetInvalidated?.();
+    }
     if (!context) {
       VRSpike.combatCancelHeld = false;
       VRSpike.hiltTimerHost?.clear();
       VRSpike.weaponStanceHost?.clear();
+      VRSpike.updateCombatTargetHighlight();
       return;
     }
 
-    VRSpike.updateHiltTimer(context.weaponMode, timestamp, context.inCombat, context.stanceReadout);
+    VRSpike.updateHiltTimer(
+      context.weaponMode,
+      context.tempoReadiness ?? 0,
+      context.inCombat,
+      context.stanceReadout,
+    );
+    VRSpike.updateCombatTargetHighlight();
 
     try {
       const actions = VRSpike.inputRouter.route(
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['combat', 'interaction', 'ui'])
       );
+      const dominantHand = VRSpike.dominantHand;
+      const offhandHand: XRHandRole = dominantHand === 'right' ? 'left' : 'right';
+      const offhandGrip = actions.some((action) =>
+        action.action === SemanticXRAction.Grab && action.hand === offhandHand && action.pressed
+      );
+      const weaponActionPressed = actions.some((action) =>
+        action.action === SemanticXRAction.WeaponAction && action.hand === dominantHand && action.pressed
+      );
+      const offhandGrenadePressed = actions.some((action) =>
+        action.action === SemanticXRAction.WeaponAction && action.hand === offhandHand && action.pressed
+      );
+      if (offhandGrenadePressed && !VRSpike.offhandGrenadeTriggerHeld) {
+        context.onGrenadeTrigger?.();
+      }
+      VRSpike.offhandGrenadeTriggerHeld = offhandGrenadePressed;
+
       // Cancel is handled by processCombatCancel, which runs every gameplay
       // frame regardless of whether a world prompt consumed input first.
       if (!context.nominatedTargetId) return;
 
-      const offhandGrip = actions.some((action) =>
-        action.action === SemanticXRAction.Grab && action.hand === 'left' && action.pressed
-      );
-      const weaponActionPressed = actions.some((action) =>
-        action.action === SemanticXRAction.WeaponAction && action.hand === 'right' && action.pressed
-      );
+      if (VRSpike.processForceInput(timestamp, context)) {
+        VRSpike.combatInputController.reset();
+        return;
+      }
       const events = VRSpike.combatInputController.process(inputFrame, {
         actorId: context.actorId,
         nominatedTargetId: context.nominatedTargetId,
@@ -1876,6 +1987,9 @@ export class VRSpike {
         timestamp,
         offhandGrip,
         weaponActionPressed,
+        dominantHand,
+        offhandHand,
+        allowDominantTrigger: context.allowDominantTrigger === true,
       });
       for (const event of events) context.onCombatSwing(event);
     } catch (error) {
@@ -1888,7 +2002,7 @@ export class VRSpike {
 
   private static updateHiltTimer(
     weaponMode: CombatWeaponMode,
-    timestamp: number,
+    tempoReadiness: number,
     inCombat: boolean,
     stanceReadout = ''
   ): void {
@@ -1898,8 +2012,8 @@ export class VRSpike {
     // substantially (grip follows the handle, target ray follows where the
     // controller points), and putting the laser on the grip is what made it
     // visibly diverge from the correctly-aimed menu pointer.
-    const gripAnchor = VRSpike.controllerAnchorHost?.getAnchor('right') ?? null;
-    const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor('right') ?? null;
+    const gripAnchor = VRSpike.controllerAnchorHost?.getAnchor(VRSpike.dominantHand) ?? null;
+    const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor(VRSpike.dominantHand) ?? null;
     if (!gripAnchor || weaponMode === 'unarmed') {
       VRSpike.hiltTimerHost?.clear();
       VRSpike.weaponStanceHost?.clear();
@@ -1909,12 +2023,12 @@ export class VRSpike {
     if (!VRSpike.hiltTimerHost) {
       VRSpike.hiltTimerHost = new VRHiltTimerHost(gripAnchor);
     }
-    VRSpike.hiltTimerHost.present(VRSpike.combatInputController.getRollReadiness(timestamp));
+    VRSpike.hiltTimerHost.present(Number.isFinite(tempoReadiness)
+      ? Math.min(1, Math.max(0, tempoReadiness))
+      : 0);
 
-    // ROADMAP 4.8. Same grip anchor as the ring, so the stance belongs to
-    // whatever is held — the hilt for a sabre, the body for a blaster. The ring
-    // hides itself once the roll is ready; the stance stays up, because it is
-    // persistent state the player needs to be able to check at any moment.
+    // Same grip anchor as the ring, so the upcoming player-selected action
+    // belongs to the equipped weapon rather than a screen-space HUD.
     try {
       if (!VRSpike.weaponStanceHost) {
         VRSpike.weaponStanceHost = new VRWeaponStanceHost(gripAnchor);
@@ -1941,23 +2055,39 @@ export class VRSpike {
     }
   }
 
-  private static processForceInput(timestamp: number): boolean {
+  private static processForceInput(
+    timestamp: number,
+    combatContext?: { onDirectionalForceGesture?(gesture: VRForceGesture): boolean },
+  ): boolean {
     const inputFrame = VRSpike.latestInputFrame;
     const session = VRSpike.session;
     if (!inputFrame || !session) return false;
-    const context = VRSpike.hooks?.getForceContext?.(VRSpike.resolveAimedTargetId()) ?? null;
-    if (!context) return false;
+    const legacyContext = combatContext
+      ? null
+      : (VRSpike.hooks?.getForceContext?.(VRSpike.resolveAimedTargetId()) ?? null);
+    if (!combatContext?.onDirectionalForceGesture && !legacyContext) return false;
     try {
       const actions = VRSpike.inputRouter.route(
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['interaction'])
       );
       const gripModifierHeld = actions.some((action) =>
-        action.action === SemanticXRAction.Grab && action.hand === 'right' && action.pressed
+        action.action === SemanticXRAction.Grab && action.hand === VRSpike.dominantHand && action.pressed
       );
-      const gesture = VRSpike.forceGestureController.process(inputFrame, gripModifierHeld, timestamp);
+      const gesture = VRSpike.forceGestureController.process(
+        inputFrame,
+        gripModifierHeld,
+        timestamp,
+        VRSpike.dominantHand,
+      );
       if (!gesture) return false;
-      context.onForceGesture(gesture);
+      // A grip-held thrust looks exactly like a push flick. Only swallow the
+      // frame's melee input when the gesture was actually spent on a queued
+      // Push/Pull; otherwise the same motion must still land as a swing.
+      if (combatContext?.onDirectionalForceGesture) {
+        return combatContext.onDirectionalForceGesture(gesture) === true;
+      }
+      legacyContext?.onForceGesture(gesture);
       return true;
     } catch (error) {
       if (!VRSpike.forceGestureErrorReported) {
@@ -2192,9 +2322,14 @@ export class VRSpike {
         VRSpike.COMBAT_CONTEXT_ONLY,
       );
       const pressed = actions.some((action) =>
-        action.action === SemanticXRAction.WeaponAction && action.hand === 'right' && action.pressed
+        action.action === SemanticXRAction.WeaponAction && action.hand === VRSpike.dominantHand && action.pressed
+      );
+      const offhandHand: XRHandRole = VRSpike.dominantHand === 'right' ? 'left' : 'right';
+      const offhandPressed = actions.some((action) =>
+        action.action === SemanticXRAction.WeaponAction && action.hand === offhandHand && action.pressed
       );
       VRSpike.combatInputController.synchronizeWeaponActionHeld(pressed);
+      VRSpike.offhandGrenadeTriggerHeld = offhandPressed;
     } catch {
       // Keep the prior latch on malformed optional input rather than treating
       // an unreadable controller as a release that can fire on the next frame.
@@ -3067,23 +3202,24 @@ export class VRSpike {
   }
 
   /**
-   * ROADMAP 4.8 — marks the creature the open wheel is acting on.
-   *
-   * Driven from the frozen target rather than live aim, matching the wheel
-   * itself. Shows nothing when the wheel is closed, or when it was opened on a
-   * door, a container, or empty space.
+   * Marks the current combat target. While a wheel is open its frozen target
+   * wins; otherwise this follows the soft-lock, including its aim-loss grace.
    */
   private static updateCombatTargetHighlight(): void {
     const worldScene = VRSpike.scene;
-    const frozenTargetId = VRSpike.radialMenuController.isOpen
+    const radialTargetId = VRSpike.radialMenuController.isOpen
       ? VRSpike.radialFrozenTargetId
       : null;
-    if (!worldScene || frozenTargetId === null) {
+    const softLockTargetId = VRSpike.parseModuleObjectTargetId(
+      VRSpike.combatTargetLock.getSnapshot().lockedTargetId ?? null,
+    );
+    const targetId = radialTargetId ?? softLockTargetId;
+    if (!worldScene || targetId === null) {
       VRSpike.combatTargetHighlightHost?.clear();
       return;
     }
     try {
-      const highlight = VRSpike.hooks?.getCombatTargetHighlight?.(frozenTargetId) ?? null;
+      const highlight = VRSpike.hooks?.getCombatTargetHighlight?.(targetId) ?? null;
       if (!highlight) {
         VRSpike.combatTargetHighlightHost?.clear();
         return;
