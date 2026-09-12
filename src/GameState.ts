@@ -83,6 +83,7 @@ import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
 import type { HeldItemClassFallbackTransform, HeldItemVisualDescriptor } from "@/vr/runtime/XRControllerAnchorHost";
+import { loadGenericHandModel } from "@/vr/runtime/hands/GenericHandLoader";
 import { BaseItemType } from "@/enums/combat/BaseItemType";
 import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 import { CombatActionType } from "@/enums/combat/CombatActionType";
@@ -532,7 +533,6 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
   if (request.state !== 'armed') return false;
   const source = findVRArmedGrenade(actor, request.grenade.sourceKey);
   const target = resolveVRLiveCombatTarget(actor, targetId);
-  const eligibility = resolveVRArmedGrenadeCommitEligibility({
   // A trigger pulled at empty space is a miss-aim, not an invalid target: keep
   // the grenade armed. A locked target that became invalid is cancelled by
   // onCombatTargetInvalidated instead. `resolveVRLiveCombatTarget` returns
@@ -549,6 +549,7 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
       return false;
     }
   }
+  const eligibility = resolveVRArmedGrenadeCommitEligibility({
     sourceAvailable: source !== undefined,
     targetAvailable: target !== null,
     tempoEligible: source !== undefined && target !== null && getVREmbodiedTempoResult(actor, target).eligible,
@@ -590,11 +591,11 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   if (!actor) return false;
   const target = GameState.ActionMenuManager.oTarget as ModuleObject | null;
   if (kind === 'target' && !isVRCombatTarget(actor, target)) return false;
-  if (panelIndex !== 0 && panelIndex !== 1) return false;
   // Friendly powers outside combat (a heal after the fight, a buff before it)
   // have no hostile target to spend a tempo window on, so the intent queue
   // could never dispatch them. Let the engine cast them immediately.
   if (kind === 'self' && actor.combatData?.combatState !== true) return false;
+  if (panelIndex !== 0 && panelIndex !== 1) return false;
 
   let selected: VRActionMenuEntry | undefined;
   try {
@@ -2202,6 +2203,7 @@ export class GameState implements EngineContext {
           ? equipmentVisuals
           : { left: equipmentVisuals.right, right: equipmentVisuals.left };
       },
+      loadHandModel: loadGenericHandModel,
       getAvatarPresentation: () => {
         const player = GameState.getCurrentPlayer();
         // KotOR's own inventory rules reserve race 6 for droids (see

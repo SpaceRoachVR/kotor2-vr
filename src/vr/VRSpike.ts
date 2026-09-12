@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { XRCoordinateConverter } from "./runtime/XRCoordinateConverter";
 import { XRControllerAnchorHost } from "./runtime/XRControllerAnchorHost";
 import type { HeldItemVisualDescriptor } from "./runtime/XRControllerAnchorHost";
+import type { VRHandModelLoader } from "./runtime/hands/VRHandModel";
 import { XRGamepadReader } from "./runtime/XRGamepadReader";
 import { XRInputFrameBuilder } from "./runtime/XRInputFrameBuilder";
 import { RoutedXRAction, XRActionContext, XRInputRouter } from "./runtime/XRInputRouter";
@@ -251,6 +252,12 @@ export interface VRSpikeHooks {
    * stabilized floating equipment presentation.
    */
   getAvatarPresentation?: () => Readonly<{ humanoidHands: boolean }> | null;
+  /**
+   * Loads the skinned first-person hand. Supplied by the engine side because
+   * the production loader depends on three's ESM GLTF loader, which the VR
+   * runtime must not import (see GenericHandLoader).
+   */
+  loadHandModel?: VRHandModelLoader;
   /**
    * Available Force powers and the engine action bridge for a recognized
    * gesture. `aimedTargetId` is VRSpike's own live right-hand interaction-ray
@@ -536,7 +543,7 @@ export class VRSpike {
     // KOTOR's world is Z-up; WebXR hands back Y-up poses. This rotation is the
     // whole conversion — without it you are lying on your back in the level.
     XRCoordinateConverter.applyXRToGameBasis(VRSpike.rig);
-    VRSpike.controllerAnchorHost = new XRControllerAnchorHost(VRSpike.rig);
+    VRSpike.controllerAnchorHost = VRSpike.createControllerAnchorHost(VRSpike.rig);
 
     VRSpike.camera = new THREE.PerspectiveCamera(70, 1, 0.05, 15000);
     VRSpike.rig.add(VRSpike.camera);
@@ -677,6 +684,18 @@ export class VRSpike {
       console.warn('[VRSpike] XR controller topology is missing required semantic actions', update);
     }
   };
+
+  /** Hooks are read at load time, so a host built before they are set still gets hands. */
+  private static createControllerAnchorHost(rig: THREE.Object3D): XRControllerAnchorHost {
+    return new XRControllerAnchorHost(rig, false, {
+      loadHandModel: (hand) => {
+        const loader = VRSpike.hooks?.loadHandModel;
+        return loader
+          ? loader(hand)
+          : Promise.reject(new Error('VRSpike hooks supply no loadHandModel'));
+      },
+    });
+  }
 
   static setDominantHand(hand: XRHandRole): void {
     if (hand !== 'left' && hand !== 'right') throw new TypeError('dominant hand must be left or right');
@@ -1035,7 +1054,7 @@ export class VRSpike {
       );
       VRSpike.latestInputFrame = inputFrame;
       if (!VRSpike.controllerAnchorHost) {
-        VRSpike.controllerAnchorHost = new XRControllerAnchorHost(rig);
+        VRSpike.controllerAnchorHost = VRSpike.createControllerAnchorHost(rig);
       }
       const heldVisuals = VRSpike.hooks?.getHeldVisuals?.();
       VRSpike.controllerAnchorHost.setHeldVisual('left', heldVisuals?.left ?? null);

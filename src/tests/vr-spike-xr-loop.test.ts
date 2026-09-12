@@ -3010,6 +3010,7 @@ function createGameStateWorldPromptHarness(): {
     jest.doMock('three/examples/jsm/shaders/ColorCorrectionShader', () => ({ ColorCorrectionShader: {} }));
     jest.doMock('three/examples/jsm/shaders/CopyShader', () => ({ CopyShader: {} }));
     jest.doMock('three/examples/jsm/libs/stats.module', () => ({ __esModule: true, default: EmptyClass }));
+    jest.doMock('@/vr/runtime/hands/GenericHandLoader', () => ({ loadGenericHandModel: async () => { throw new Error('no hands in Jest'); } }));
     jest.doMock('@/engine/Planetary', () => ({ Planetary: EmptyClass }));
     jest.doMock('@/engine/Debugger', () => ({ Debugger: EmptyClass }));
     jest.doMock('@/utility/PerformanceMonitor', () => ({ PerformanceMonitor: EmptyClass }));
