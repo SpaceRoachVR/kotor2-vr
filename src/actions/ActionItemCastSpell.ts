@@ -12,6 +12,7 @@ import { GameState } from "@/GameState";
 import { SpellCastInstance } from "@/combat";
 import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 import { BitWise } from "@/utility/BitWise";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 import type { ModuleCreature, ModuleItem, ModuleObject } from "@/module";
 
 /**
@@ -90,6 +91,12 @@ export class ActionItemCastSpell extends Action {
 
   private moveIntoCastRange(owner: ModuleCreature, target: ModuleObject): ActionStatus {
     if (!this.spell || !target?.position || !target.area) {
+      return ActionStatus.FAILED;
+    }
+    // VR owns the player's position; walking them into cast range drags the
+    // rig through the world. Same actor-scoped rule as every other approach.
+    // Failing (rather than waiting) releases the unstarted round action.
+    if (ActionApproachPolicy.isApproachSuppressedFor(owner)) {
       return ActionStatus.FAILED;
     }
 

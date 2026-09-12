@@ -966,6 +966,32 @@ describe('VRSpike XR loop ownership', () => {
     expect(gestures).toEqual([expect.objectContaining({ kind: 'push' })]);
   });
 
+  test('a grip-held thrust with no queued Push/Pull is left for the melee swing', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    buttons[1] = { pressed: true, touched: true, value: 1 };
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: {
+          pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(0, 0, -2), trackingState: 'tracked' },
+          targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+        },
+      },
+    };
+    const offered: unknown[] = [];
+    (VRSpike as any).forceGestureController.reset?.();
+
+    const consumed = (VRSpike as any).processForceInput(50_000, {
+      onDirectionalForceGesture: (gesture: unknown) => { offered.push(gesture); return false; },
+    });
+
+    expect(offered).toEqual([expect.objectContaining({ kind: 'push' })]);
+    expect(consumed).toBe(false);
+  });
+
   test('aligns neutral headset forward with KOTOR follower-camera forward', () => {
     VRSpike.rig = new THREE.Group();
     VRSpike.hooks = {

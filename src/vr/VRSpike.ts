@@ -233,7 +233,8 @@ export interface VRSpikeHooks {
     /** True only while the queue head needs an aimed dominant-hand trigger. */
     readonly allowDominantTrigger?: boolean;
     onCombatSwing(event: VRCombatSwingEvent): void;
-    onDirectionalForceGesture?(gesture: VRForceGesture): void;
+    /** Returns true only when the gesture was spent on a queued Push/Pull. */
+    onDirectionalForceGesture?(gesture: VRForceGesture): boolean;
     onGrenadeTrigger?(): void;
     /** Cancels transient target-dependent VR state after engine invalidation. */
     onCombatTargetInvalidated?(): void;
@@ -2037,7 +2038,7 @@ export class VRSpike {
 
   private static processForceInput(
     timestamp: number,
-    combatContext?: { onDirectionalForceGesture?(gesture: VRForceGesture): void },
+    combatContext?: { onDirectionalForceGesture?(gesture: VRForceGesture): boolean },
   ): boolean {
     const inputFrame = VRSpike.latestInputFrame;
     const session = VRSpike.session;
@@ -2061,8 +2062,13 @@ export class VRSpike {
         VRSpike.dominantHand,
       );
       if (!gesture) return false;
-      if (combatContext?.onDirectionalForceGesture) combatContext.onDirectionalForceGesture(gesture);
-      else legacyContext?.onForceGesture(gesture);
+      // A grip-held thrust looks exactly like a push flick. Only swallow the
+      // frame's melee input when the gesture was actually spent on a queued
+      // Push/Pull; otherwise the same motion must still land as a swing.
+      if (combatContext?.onDirectionalForceGesture) {
+        return combatContext.onDirectionalForceGesture(gesture) === true;
+      }
+      legacyContext?.onForceGesture(gesture);
       return true;
     } catch (error) {
       if (!VRSpike.forceGestureErrorReported) {

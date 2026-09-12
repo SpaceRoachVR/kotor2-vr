@@ -87,7 +87,10 @@ export class VRCombatInputController {
       this.resetMeleeSample();
       return triggerEvents;
     }
-    if (!VRCombatInputController.isMelee(context.weaponMode)) {
+    // Unarmed counts as melee: a punch is the only way an unarmed character
+    // can attack, because embodied VR turns off the engine's automatic
+    // basic-attack queue and the wheel's plain Attack is not an engine click.
+    if (!VRCombatInputController.isMelee(context.weaponMode) && context.weaponMode !== 'unarmed') {
       this.resetMeleeSample();
       return triggerEvents;
     }

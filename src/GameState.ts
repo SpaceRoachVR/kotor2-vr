@@ -533,9 +533,25 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
   const source = findVRArmedGrenade(actor, request.grenade.sourceKey);
   const target = resolveVRLiveCombatTarget(actor, targetId);
   const eligibility = resolveVRArmedGrenadeCommitEligibility({
+  // A trigger pulled at empty space is a miss-aim, not an invalid target: keep
+  // the grenade armed. A locked target that became invalid is cancelled by
+  // onCombatTargetInvalidated instead. `resolveVRLiveCombatTarget` returns
+  // null (never undefined), so this must be an explicit null check — the
+  // earlier `!== undefined` treated "no target" as available.
+  if (source !== undefined && target === null) return false;
+  // Out of throw range also keeps it armed. In VR the engine may not walk the
+  // player into range (ActionApproachPolicy), so committing now would only
+  // spend the arm on a cast ActionItemCastSpell is bound to reject.
+  if (source !== undefined && target !== null) {
+    try {
+      if (!new GameState.TalentSpell(source.spellId).inRange(target, actor)) return false;
+    } catch {
+      return false;
+    }
+  }
     sourceAvailable: source !== undefined,
-    targetAvailable: target !== undefined,
-    tempoEligible: source !== undefined && target !== undefined && getVREmbodiedTempoResult(actor, target).eligible,
+    targetAvailable: target !== null,
+    tempoEligible: source !== undefined && target !== null && getVREmbodiedTempoResult(actor, target).eligible,
   });
   if (eligibility === 'cancel-invalid') {
     vrArmedGrenadeState.cancel();
@@ -575,6 +591,10 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   const target = GameState.ActionMenuManager.oTarget as ModuleObject | null;
   if (kind === 'target' && !isVRCombatTarget(actor, target)) return false;
   if (panelIndex !== 0 && panelIndex !== 1) return false;
+  // Friendly powers outside combat (a heal after the fight, a buff before it)
+  // have no hostile target to spend a tempo window on, so the intent queue
+  // could never dispatch them. Let the engine cast them immediately.
+  if (kind === 'self' && actor.combatData?.combatState !== true) return false;
 
   let selected: VRActionMenuEntry | undefined;
   try {
@@ -2291,9 +2311,8 @@ export class GameState implements EngineContext {
             if (event.actorId !== String(actor.id)) return;
             dispatchVREmbodiedCombatInput(actor, event.nominatedTargetId, event.input);
           },
-          onDirectionalForceGesture: (gesture) => {
-            dispatchVRDirectionalForceGesture(actor, target ? String(target.id) : null, gesture.kind);
-          },
+          onDirectionalForceGesture: (gesture) =>
+            dispatchVRDirectionalForceGesture(actor, target ? String(target.id) : null, gesture.kind),
           onGrenadeTrigger: () => {
             commitVRArmedGrenade(actor, target ? String(target.id) : null);
           },

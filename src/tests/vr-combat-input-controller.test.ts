@@ -20,6 +20,15 @@ describe('VRCombatInputController', () => {
     expect(secondSwing[0]).not.toHaveProperty('rollEligible');
   });
 
+  test('an unarmed punch is a swing, because VR has no automatic basic attack', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+
+    controller.process(frame(0, 0), context('unarmed', 0));
+    const punch = controller.process(frame(160, -0.3), context('unarmed', 160));
+
+    expect(punch).toEqual([expect.objectContaining({ weaponMode: 'unarmed', input: 'dominant-swing' })]);
+  });
+
   test('promotes to two-handed only when both hands are actually on the hilt', () => {
     // ROADMAP 3.3. The grip button alone is not a two-handed grip: the off hand
     // has to be tracked and close enough to be holding the same weapon.
