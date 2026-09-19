@@ -361,7 +361,7 @@ export class PartyManager {
         availNPCSList.addChildStruct(availStruct);
       }
 
-      partytable.RootNode.addField(new GFFField(GFFDataType.INT, 'PT_CHEAT_USED')).setValue(0);
+      partytable.RootNode.addField(new GFFField(GFFDataType.BYTE, 'PT_CHEAT_USED')).setValue(0);
       partytable.RootNode.addField(new GFFField(GFFDataType.INT, 'PT_CONTROLLED_NP')).setValue( GameState.getCurrentPlayer() == GameState.PartyManager.Player ? -1 : GameState.PartyManager.party.indexOf(GameState.getCurrentPlayer()) );
       partytable.RootNode.addField(new GFFField(GFFDataType.LIST, 'PT_COST_MULT_LIS'));
 

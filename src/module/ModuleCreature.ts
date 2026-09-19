@@ -3712,7 +3712,7 @@ export class ModuleCreature extends ModuleObject {
         this.bodyBag = this.template.getFieldByLabel('BodyBag').getValue();
 
       if(this.template.RootNode.hasField('BodyVariation'))
-        this.bodyBag = this.template.getFieldByLabel('BodyVariation').getValue();
+        this.bodyVariation = this.template.getFieldByLabel('BodyVariation').getValue();
 
       if(this.template.RootNode.hasField('ChallengeRating'))
         this.challengeRating = this.template.getFieldByLabel('ChallengeRating').getValue();
@@ -3809,7 +3809,23 @@ export class ModuleCreature extends ModuleObject {
 
       if(this.template.RootNode.hasField('MaxForcePoints')){
         this.maxForcePoints = this.template.getFieldByLabel('MaxForcePoints').getValue();
+      }else if(this.maxForcePoints === undefined){
+        // Retail UTC templates carry only ForcePoints (base) and CurrentForce;
+        // MaxForcePoints appears in saves. Left undefined, setFP/addFP did
+        // arithmetic on undefined. Base is the maximum until bonuses apply.
+        this.maxForcePoints = this.forcePoints || 0;
       }
+
+      // Template saving-throw bonuses (UTC fortbonus/refbonus/willbonus) were
+      // written by save() but never read back, so every creature lost them.
+      if(this.template.RootNode.hasField('fortbonus'))
+        this.fortbonus = this.template.getFieldByLabel('fortbonus').getValue();
+
+      if(this.template.RootNode.hasField('refbonus'))
+        this.refbonus = this.template.getFieldByLabel('refbonus').getValue();
+
+      if(this.template.RootNode.hasField('willbonus'))
+        this.willbonus = this.template.getFieldByLabel('willbonus').getValue();
 
       if(this.template.RootNode.hasField('Min1HP'))
         this.min1HP = this.template.getFieldByLabel('Min1HP').getValue();
@@ -4334,6 +4350,7 @@ export class ModuleCreature extends ModuleObject {
     //gff.RootNode.addField( new GFFField(GFFDataType.DWORD, 'AreaId') ).setValue(1);
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'ArmorClass') ).setValue(this.getAC());
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'BodyBag') ).setValue(this.bodyBag);
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'BodyVariation') ).setValue(this.bodyVariation);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Cha') ).setValue(this.cha);
     gff.RootNode.addField( new GFFField(GFFDataType.FLOAT, 'ChallengeRating') ).setValue(this.challengeRating);
 
@@ -4561,7 +4578,9 @@ export class ModuleCreature extends ModuleObject {
 
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'fortbonus') ).setValue(this.fortbonus);
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'refbonus') ).setValue(this.refbonus);
-    gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'refbonus') ).setValue(this.refbonus);
+    gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'willbonus') ).setValue(this.willbonus);
+    // Retail saves write Hologram (BYTE); it was loaded but never saved.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Hologram') ).setValue(this.isHologram ? 1 : 0);
 
     this.template = gff;
 

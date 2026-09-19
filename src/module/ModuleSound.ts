@@ -192,6 +192,7 @@ export class ModuleSound extends ModuleObject {
     this.audioEmitter.name = this.tag;
     this.audioEmitter.isActive = this.active;
     this.audioEmitter.isLooping = this.looping;
+    this.audioEmitter.isContinuous = this.continuous;
     this.audioEmitter.isRandom = this.random;
     this.audioEmitter.isRandomPosition = this.randomPosition;
     this.audioEmitter.interval = this.interval;
@@ -279,6 +280,11 @@ export class ModuleSound extends ModuleObject {
 
     if(this.template.RootNode.hasField('Active'))
       this.active = !!this.template.getFieldByLabel('Active').getValue()
+
+    // Saved by save() but never read, so every sound object loaded as
+    // non-continuous (tools/parity: 11 Peragus sounds, retail true).
+    if(this.template.RootNode.hasField('Continuous'))
+      this.continuous = !!this.template.getFieldByLabel('Continuous').getValue();
 
     if(this.template.RootNode.hasField('Priority'))
       this.priority = this.template.getFieldByLabel('Priority').getValue()
@@ -423,10 +429,11 @@ export class ModuleSound extends ModuleObject {
     // Blueprint reference; dropped by every save path until now - see ModulePlaceable.save.
 
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, 'TemplateResRef') ).setValue(this.templateResRef || '');
-    gff.RootNode.addField( new GFFField(GFFDataType.FLOAT, 'Times') ).setValue(this.times);
+    // Times, Volume and VolumeVrtn are BYTEs in UTS templates and retail saves.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Times') ).setValue(this.times);
     gff.RootNode.addField( new GFFField(GFFDataType.LIST, 'VarTable') );
-    gff.RootNode.addField( new GFFField(GFFDataType.FLOAT, 'Volume') ).setValue(Math.max(0, Math.min(127, this.volume)));
-    gff.RootNode.addField( new GFFField(GFFDataType.FLOAT, 'VolumeVrtn') ).setValue(Math.max(0, Math.min(127, this.volumeVariation)));
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Volume') ).setValue(Math.round(Math.max(0, Math.min(127, this.volume))));
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'VolumeVrtn') ).setValue(Math.round(Math.max(0, Math.min(127, this.volumeVariation))));
     gff.RootNode.addField( new GFFField(GFFDataType.FLOAT, 'Elevation') ).setValue(this.elevation);
     gff.RootNode.addField( new GFFField(GFFDataType.FLOAT, 'XPosition') ).setValue(this.position.x);
     gff.RootNode.addField( new GFFField(GFFDataType.FLOAT, 'YPosition') ).setValue(this.position.y);
