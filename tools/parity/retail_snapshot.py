@@ -61,20 +61,83 @@ TEXTURE_ORDER = [
 ]
 
 
+def require_module_scoped_capsules(capsules):
+    """Return the active module capsules or reject an unsafe module lookup."""
+    if capsules is None or isinstance(capsules, (str, bytes)):
+        raise ValueError("Module-scoped lookup requires non-empty capsules")
+    try:
+        validated = tuple(capsules)
+    except TypeError as error:
+        raise ValueError("Module-scoped lookup requires non-empty capsules") from error
+    if not validated or any(capsule is None for capsule in validated):
+        raise ValueError("Module-scoped lookup requires non-empty capsules")
+    return validated
+
+
+def normalize_retail_input(resref_value, restype, source, data: bytes) -> dict:
+    """Create a stable source record from the exact bytes used for comparison."""
+    if not isinstance(data, bytes) or not data:
+        raise ValueError("Retail input requires non-empty bytes for sha256")
+    normalized_resref = resref(resref_value)
+    normalized_restype = str(getattr(restype, "name", restype) or "").strip().upper()
+    normalized_source = str(source or "").strip()
+    if not normalized_resref:
+        raise ValueError("Retail input requires a non-empty resref")
+    if not normalized_restype:
+        raise ValueError("Retail input requires a non-empty restype")
+    if not normalized_source:
+        raise ValueError("Retail input requires a non-empty source")
+    return {
+        "resref": normalized_resref,
+        "restype": normalized_restype,
+        "source": normalized_source,
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def record_retail_input(retail_inputs: list[dict], resref_value, restype, source, data: bytes) -> dict:
+    """Append a unique normalized retail source record and return it."""
+    record = normalize_retail_input(resref_value, restype, source, data)
+    if record not in retail_inputs:
+        retail_inputs.append(record)
+    return record
+
+
+def record_resource_input(retail_inputs: list[dict], result) -> dict:
+    """Record a PyKotor resource result without retaining its retail bytes."""
+    return record_retail_input(retail_inputs, result.resname, result.restype, result.filepath, result.data)
+
+
+def record_module_capsule_inputs(retail_inputs: list[dict], capsules) -> None:
+    """Record each active module capsule as an immutable input to this capture."""
+    for capsule in require_module_scoped_capsules(capsules):
+        capsule_path = Path(capsule.filepath())
+        record_retail_input(
+            retail_inputs,
+            capsule_path.stem,
+            capsule_path.suffix.lstrip("."),
+            capsule_path,
+            capsule_path.read_bytes(),
+        )
+
+
 def resref(value) -> str:
     return str(value or "").strip().lower()
 
 
-def item_tag(inst: Installation, item_resref, capsules) -> str | None:
+def item_tag(inst: Installation, item_resref, capsules, retail_inputs: list[dict]) -> str | None:
+    capsules = require_module_scoped_capsules(capsules)
     result = inst.resource(resref(item_resref), ResourceType.UTI,
                            [SearchLocation.OVERRIDE, SearchLocation.CUSTOM_MODULES, SearchLocation.CHITIN],
                            capsules=capsules)
     if result is None:
         return None
+    record_resource_input(retail_inputs, result)
     return resref(read_uti(result.data).tag)
 
 
-def creature_record(inst: Installation, git_index: int, template: str, capsules) -> dict:
+def creature_record(inst: Installation, git_index: int, template: str, capsules, retail_inputs: list[dict]) -> dict:
+    capsules = require_module_scoped_capsules(capsules)
     rec: dict = {"gitIndex": git_index, "template": template}
     # CUSTOM_MODULES searches only the capsules passed in. SearchLocation.MODULES
     # searches every module on disk and returns the first hit, which resolved
@@ -87,6 +150,7 @@ def creature_record(inst: Installation, git_index: int, template: str, capsules)
         return rec
     rec["status"] = "ok"
     rec["source"] = str(result.filepath)
+    record_resource_input(retail_inputs, result)
     utc = read_utc(result.data)
     rec.update({
         "tag": utc.tag,
@@ -114,12 +178,16 @@ def creature_record(inst: Installation, git_index: int, template: str, capsules)
         "feats": sorted(int(f) for f in utc.feats),
         "skills": [getattr(utc, s) for s in SKILLS],
         "equipment": {slot.name: resref(item.resref) for slot, item in utc.equipment.items()},
-        "equipmentTags": {slot.name: item_tag(inst, item.resref, capsules) for slot, item in utc.equipment.items()},
+        "equipmentTags": {
+            slot.name: item_tag(inst, item.resref, capsules, retail_inputs)
+            for slot, item in utc.equipment.items()
+        },
     })
     return rec
 
 
 def texture_record(inst: Installation, name: str, capsules) -> dict:
+    capsules = require_module_scoped_capsules(capsules)
     found = []
     winner = None
     for label, loc in TEXTURE_ORDER:
@@ -158,10 +226,11 @@ def sound_location(inst: Installation, name: str) -> str:
     return "none"
 
 
-def twoda_resource(inst: Installation, table: str, row: int) -> str | None:
+def twoda_resource(inst: Installation, table: str, row: int, retail_inputs: list[dict]) -> str | None:
     result = inst.resource(table, ResourceType.TwoDA, [SearchLocation.OVERRIDE, SearchLocation.CHITIN])
     if result is None or row is None or row < 0:
         return None
+    record_resource_input(retail_inputs, result)
     t = read_2da(result.data)
     if row >= t.get_height():
         return None
@@ -169,8 +238,9 @@ def twoda_resource(inst: Installation, table: str, row: int) -> str | None:
     return None if value in ("", "****") else value.lower()
 
 
-def audio_snapshot(inst: Installation, module, git, capsules) -> dict:
+def audio_snapshot(inst: Installation, module, git, capsules, retail_inputs: list[dict]) -> dict:
     """Area music/ambience from the GIT's AreaProperties, and every placed sound."""
+    capsules = require_module_scoped_capsules(capsules)
     root = read_gff(module.git().data()).root
     props = root.get_struct("AreaProperties") if root.exists("AreaProperties") else None
     area = {}
@@ -181,10 +251,10 @@ def audio_snapshot(inst: Installation, module, git, capsules) -> dict:
                 area[label] = props.acquire(label, 0)
     tracks = {}
     for label in ("MusicDay", "MusicNight", "MusicBattle"):
-        res = twoda_resource(inst, "ambientmusic", area.get(label, -1))
+        res = twoda_resource(inst, "ambientmusic", area.get(label, -1), retail_inputs)
         tracks[label] = {"resource": res, "retailSource": sound_location(inst, res) if res else None}
     for label in ("AmbientSndDay", "AmbientSndNight"):
-        res = twoda_resource(inst, "ambientsound", area.get(label, -1))
+        res = twoda_resource(inst, "ambientsound", area.get(label, -1), retail_inputs)
         tracks[label] = {"resource": res, "retailSource": sound_location(inst, res) if res else None}
 
     sounds = []
@@ -198,6 +268,8 @@ def audio_snapshot(inst: Installation, module, git, capsules) -> dict:
             rec["status"] = "template-missing"
             sounds.append(rec)
             continue
+        rec["source"] = str(result.filepath)
+        record_resource_input(retail_inputs, result)
         uts = read_uts(result.data)
         names = [resref(n) for n in uts.sounds]
         rec.update({
@@ -227,23 +299,32 @@ def main() -> int:
     # Module() prints every model's texture list to stdout; keep our output readable.
     with contextlib.redirect_stdout(io.StringIO()):
         module = Module(module_name, inst)
-    capsules = list(module.capsules())
+    capsules = require_module_scoped_capsules(module.capsules())
+    retail_inputs: list[dict] = []
+    record_module_capsule_inputs(retail_inputs, capsules)
 
     git_res = module.git()
+    if git_res is not None:
+        git_data = git_res.data()
+        git_source = git_res.active()
+        if git_data is None or git_source is None:
+            raise ValueError(f"Module {module_name} GIT lacks readable source bytes")
+        record_retail_input(retail_inputs, git_res.resname(), git_res.restype(), git_source, git_data)
     git = git_res.resource() if git_res else None
     creatures = []
     if git is not None:
         for i, c in enumerate(git.creatures):
-            creatures.append(creature_record(inst, i, resref(c.resref), capsules))
+            creatures.append(creature_record(inst, i, resref(c.resref), capsules, retail_inputs))
 
     snapshot = {
         "schema": "kotor2-vr/parity-retail@1",
         "module": module_name,
         "game": args.game,
         "gitFound": git is not None,
+        "retailInputs": retail_inputs,
         "creatures": creatures,
         "textures": [],
-        "audio": audio_snapshot(inst, module, git, capsules),
+        "audio": audio_snapshot(inst, module, git, capsules, retail_inputs),
     }
 
     # Textures retail's own models reference, plus anything the engine asked for.

@@ -73,6 +73,21 @@ open saves from builds that wrote empty lists as `0xFFFFFFFF`.
 
 Output goes to `tools/parity/out/` (gitignored).
 
+## Retail provenance
+
+Every retail snapshot includes `retailInputs`, an immutable, deduplicated list
+of `{resref, restype, source, sha256}` records. `resref` is lower-case,
+`restype` is upper-case, `source` is the exact retail path, and `sha256` is
+computed from the exact resource or capsule bytes used by the snapshot. The
+list includes the active module capsules, GIT, compared UTC/UTI/UTS templates,
+and the 2DA/template inputs that define the captured audio behavior chain.
+
+Module-local template and texture resolution always receives the non-empty
+capsule list returned by `Module(module_name, Installation(game))`. Do not
+substitute `SearchLocation.MODULES`: a global lookup can select the same resref
+from a different module and invalidate the comparison. A missing capsule list
+is a capture error, not a fallback condition.
+
 ## Reading a report
 
 Findings are grouped by code and ranked by how many objects each touches.
