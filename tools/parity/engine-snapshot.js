@@ -30,14 +30,37 @@ const LOAD_TIMEOUT_MS = 300_000;
 const SETTLE_MS = 8_000;
 
 function parseArgs(argv) {
-  const args = { module: null, url: null, port: 9447 };
+  const args = { module: null, url: null, port: 9447, canonical: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--module') args.module = argv[++i];
     else if (argv[i] === '--url') args.url = argv[++i];
     else if (argv[i] === '--port') args.port = Number(argv[++i]);
+    else if (argv[i] === '--canonical') args.canonical = true;
   }
   if (!args.module) throw new Error('usage: node tools/parity/engine-snapshot.js --module 101PER [--url <url>]');
   return args;
+}
+
+/**
+ * Rejects a state that cannot represent the authored fresh-game 101PER
+ * baseline. This deliberately fails closed: an unknown player or party is not
+ * interchangeable with the T3-M4 bootstrap state.
+ *
+ * @param {{ loadedFromSave?: unknown, playerName?: unknown, partySize?: unknown }} state
+ */
+function assertCanonicalEngineState(state) {
+  if (!state || typeof state !== 'object') {
+    throw new TypeError('Canonical parity capture rejected: engine state is unavailable');
+  }
+  if (state.loadedFromSave === true) {
+    throw new Error('Canonical parity capture rejected: module is save-derived');
+  }
+  if (state.loadedFromSave !== false) {
+    throw new Error('Canonical parity capture rejected: save origin could not be verified');
+  }
+  if (state.playerName !== 'T3-M4' || state.partySize !== 1) {
+    throw new Error('Canonical parity capture rejected: expected fresh T3-M4 single-member party');
+  }
 }
 
 function buildSnapshotSource(moduleName) {
@@ -190,6 +213,15 @@ function buildSnapshotSource(moduleName) {
   return {
     audio,
     loadedFromSave,
+    playerName: String(attempt(() => {
+      const party = K.PartyManager && K.PartyManager.party;
+      const player = Array.isArray(party) ? party[0] : null;
+      return player && player.getName ? player.getName() : '';
+    }, '') || ''),
+    partySize: num(attempt(() => {
+      const party = K.PartyManager && K.PartyManager.party;
+      return Array.isArray(party) ? party.length : null;
+    }, null)),
     module: String(GS.module.filename || '').toLowerCase(),
     creatures, textures,
     diagnosticsBufferFull: diags.length >= 10000,
@@ -221,6 +253,20 @@ async function main() {
     let bundleMtime = null;
     try { bundleMtime = fs.statSync(path.join(dist, 'KotOR.js')).mtime.toISOString(); } catch { /* optional */ }
 
+    if (args.canonical) assertCanonicalEngineState(snapshot);
+
+    const engineCommit = (() => {
+      try {
+        return require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {
+          cwd: path.join(__dirname, '..', '..'),
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+      } catch {
+        return null;
+      }
+    })();
+
     const out = {
       schema: 'kotor2-vr/parity-engine@1',
       capturedAt: new Date().toISOString(),
@@ -228,6 +274,19 @@ async function main() {
       bundleMtime,
       ...snapshot,
     };
+    if (args.canonical) {
+      // Canonical capture identity includes retail provenance. Task 3 supplies
+      // it; do not fabricate a retail input here merely to satisfy the contract.
+      // This is the engine-side portion that must be paired with retail inputs
+      // before createCaptureIdentity can validate the complete evidence identity.
+      out.captureIdentity = Object.freeze({
+        module: String(args.module).toUpperCase(),
+        freshState: true,
+        loadedFromSave: false,
+        engineCommit,
+        bundleMtime,
+      });
+    }
     fs.mkdirSync(OUT_DIR, { recursive: true });
     const file = path.join(OUT_DIR, `${args.module.toLowerCase()}.engine.json`);
     fs.writeFileSync(file, JSON.stringify(out, null, 2));
@@ -242,4 +301,4 @@ if (require.main === module) {
   main().catch((error) => { console.error(error); process.exit(1); });
 }
 
-module.exports = { buildSnapshotSource, parseArgs };
+module.exports = { assertCanonicalEngineState, buildSnapshotSource, parseArgs };
