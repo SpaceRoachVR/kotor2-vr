@@ -41,6 +41,7 @@ from pykotor.resource.generics.utc import read_utc  # noqa: E402
 from pykotor.resource.generics.uti import read_uti  # noqa: E402
 from pykotor.resource.generics.uts import read_uts  # noqa: E402
 from pykotor.resource.formats.gff import read_gff  # noqa: E402
+from pykotor.resource.formats.tpc import read_tpc  # noqa: E402
 from pykotor.resource.formats.twoda import read_2da  # noqa: E402
 from pykotor.resource.type import ResourceType  # noqa: E402
 
@@ -186,20 +187,31 @@ def creature_record(inst: Installation, git_index: int, template: str, capsules,
     return rec
 
 
-def texture_record(inst: Installation, name: str, capsules) -> dict:
+def texture_record(inst: Installation, name: str, capsules, retail_inputs: list[dict]) -> dict:
     capsules = require_module_scoped_capsules(capsules)
     found = []
     winner = None
     for label, loc in TEXTURE_ORDER:
         try:
-            tpc = inst.texture(name, [loc], capsules=capsules if loc is SearchLocation.CUSTOM_MODULES else None)
+            result, _txi_text = inst.texture_resource_result(
+                name,
+                [loc],
+                capsules=capsules if loc is SearchLocation.CUSTOM_MODULES else None,
+            )
         except Exception as error:  # a corrupt entry is itself a finding
             found.append({"source": label, "error": str(error)[:200]})
             continue
-        if tpc is None:
+        if result is None:
             continue
+        record_resource_input(retail_inputs, result)
+        tpc = read_tpc(result.data)
         width, height = tpc.dimensions()
-        entry = {"source": label, "width": width, "height": height}
+        entry = {
+            "source": label,
+            "sourcePath": str(result.filepath),
+            "width": width,
+            "height": height,
+        }
         try:
             mip = tpc.get(0, 0)
             entry["format"] = str(mip.tpc_format.name)
@@ -337,7 +349,7 @@ def main() -> int:
         engine_textures = {resref(t.get("requestedResref")) for t in engine.get("textures", [])}
     names = sorted((module_textures | engine_textures) - {"", "****", "null"})
     for name in names:
-        rec = texture_record(inst, name, capsules)
+        rec = texture_record(inst, name, capsules, retail_inputs)
         rec["namedByRetailModels"] = name in module_textures
         snapshot["textures"].append(rec)
 
