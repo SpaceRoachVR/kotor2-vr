@@ -2439,7 +2439,10 @@ export class ModuleCreature extends ModuleObject {
   }
 
   getSubRace(){
-    return this.subrace;
+    // SUBRACE_* comes from the UTC's SubraceIndex (what getHP switches on).
+    // This returned `subrace`, which is only ever set from a 'SubRace' field no
+    // retail template has, so GetSubRace answered 0 for every creature.
+    return this.subraceIndex;
   }
 
   getGender(){
@@ -3881,8 +3884,6 @@ export class ModuleCreature extends ModuleObject {
       if(this.template.RootNode.hasField('SoundSetFile'))
         this.soundSetFile = this.template.RootNode.getFieldByLabel('SoundSetFile').getValue();
     
-      if(this.template.RootNode.hasField('SubRace'))
-        this.subrace = this.template.RootNode.getFieldByLabel('SubRace').getValue();
 
       if(this.template.RootNode.hasField('Tag'))
         this.tag = this.template.getFieldByLabel('Tag').getValue();
@@ -4555,7 +4556,7 @@ export class ModuleCreature extends ModuleObject {
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'StealthMode') ).setValue(0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Str') ).setValue(this.str);
     gff.RootNode.addField( new GFFField(GFFDataType.CEXOSTRING, 'Subrace') ).setValue('');
-    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'SubraceIndex') ).setValue(this.subrace);
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'SubraceIndex') ).setValue(this.subraceIndex);
     gff.RootNode.addField( new GFFField(GFFDataType.CEXOSTRING, 'Tag') ).setValue(this.tag);
     // Blueprint reference; dropped by every save path until now - see ModulePlaceable.save.
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, 'TemplateResRef') ).setValue(this.templateResRef || '');

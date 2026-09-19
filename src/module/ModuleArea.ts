@@ -2055,7 +2055,7 @@ export class ModuleArea extends ModuleObject {
     for(let i = 0; i < this.sounds.length; i++){
       try{
         const sound = this.sounds[i];
-        sound.load();
+        await sound.load();
         await sound.loadSound();
       }catch(e){
         console.error(e);

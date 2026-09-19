@@ -143,10 +143,20 @@ export class ModuleSound extends ModuleObject {
 
   }
 
-  load(){
+  async load(){
     if(this.getTemplateResRef()){
       //Load template and merge fields
-      const buffer = ResourceLoader.loadCachedResource(ResourceTypes['uts'], this.getTemplateResRef());
+      // The cache holds what module load happened to pre-cache. On 103PER that
+      // was 3 of 47 sound templates, and the other 44 fell through to the GIT
+      // struct alone: no tag, no sound files, volume 0, nothing positional
+      // (found by tools/parity). A miss now fetches the UTS like any other
+      // resource instead of silently accepting an empty emitter.
+      let buffer: Uint8Array | null | undefined =
+        ResourceLoader.loadCachedResource(ResourceTypes['uts'], this.getTemplateResRef());
+      if(!buffer){
+        buffer = await ResourceLoader.loadResource(ResourceTypes['uts'], this.getTemplateResRef())
+          .catch((): undefined => undefined);
+      }
       if(buffer){
         const gff = new GFFObject(buffer);
         this.template.merge(gff);

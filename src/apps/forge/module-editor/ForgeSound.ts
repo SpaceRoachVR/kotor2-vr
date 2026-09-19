@@ -51,9 +51,7 @@ export class ForgeSound extends ForgeGameObject {
     }
     if(property === 'templateResRef'){
       if(newValue !== oldValue){
-        this.loadBlueprint().then(() => {
-          this.load();
-        });
+        this.loadBlueprint().then(() => this.load());
       }
     }
   }
