@@ -63,6 +63,54 @@ function assertCanonicalEngineState(state) {
   }
 }
 
+function normalizeModuleName(moduleName, fieldName) {
+  if (typeof moduleName !== 'string' || !moduleName.trim()) {
+    throw new TypeError(`${fieldName} must be a non-empty module name`);
+  }
+  return moduleName.trim().toUpperCase();
+}
+
+function assertRequestedModuleIdentity(actualModule, requestedModule) {
+  const actual = normalizeModuleName(actualModule, 'Loaded module');
+  const requested = normalizeModuleName(requestedModule, 'Requested module');
+  if (actual !== requested) {
+    throw new Error(`Canonical parity capture rejected: module mismatch (requested ${requested}, loaded ${actual})`);
+  }
+  return actual;
+}
+
+function assertModuleLoadResult(result, requestedModule) {
+  if (!result || typeof result !== 'object') {
+    throw new TypeError('Module load did not return a result');
+  }
+  if (typeof result.error === 'string' && result.error.trim()) {
+    throw new Error(result.error);
+  }
+  if (!result.state || typeof result.state !== 'object') {
+    throw new TypeError('Module load did not return settled state');
+  }
+  assertRequestedModuleIdentity(result.state.module, requestedModule);
+  return result.state;
+}
+
+function createEngineIdentity(state, metadata) {
+  if (!metadata || typeof metadata !== 'object') {
+    throw new TypeError('Engine identity requires metadata');
+  }
+  for (const field of ['engineCommit', 'bundleMtime']) {
+    if (typeof metadata[field] !== 'string' || !metadata[field].trim()) {
+      throw new TypeError(`Engine identity requires ${field}`);
+    }
+  }
+  return Object.freeze({
+    module: normalizeModuleName(state && state.module, 'Loaded module'),
+    freshState: true,
+    loadedFromSave: false,
+    engineCommit: metadata.engineCommit,
+    bundleMtime: metadata.bundleMtime,
+  });
+}
+
 function buildSnapshotSource(moduleName) {
   return `(async () => {
   const NAME = ${JSON.stringify(moduleName.toUpperCase())};
@@ -92,7 +140,11 @@ function buildSnapshotSource(moduleName) {
         && GS.module.readyToProcessEvents === true && !!GS.module.area, false)) break;
     await sleep(500);
   }
-  if (!attempt(() => GS.module !== previous && !!GS.module.area, false)) return { error: 'module did not settle' };
+  if (threw) return { error: 'LoadModule threw: ' + threw };
+  if (!attempt(() => GS.module && GS.module !== previous && GS.loadingModule === false
+      && GS.module.readyToProcessEvents === true && !!GS.module.area, false)) {
+    return { error: 'module did not settle before timeout' };
+  }
   await sleep(${SETTLE_MS});
 
   const creatures = [];
@@ -244,7 +296,7 @@ async function main() {
     await bootEngine(harness, log, true);
     log(`loading ${args.module}...`);
     const snapshot = await harness.evaluate(buildSnapshotSource(args.module), { timeoutMs: LOAD_TIMEOUT_MS + 60_000 });
-    if (!snapshot || snapshot.error) throw new Error(snapshot ? snapshot.error : 'empty snapshot');
+    const loadedState = assertModuleLoadResult({ state: snapshot, error: snapshot && snapshot.error }, args.module);
 
     // Which build was measured: tools/build-stamp.js writes dist/.build-stamp.
     const dist = path.join(__dirname, '..', '..', 'dist');
@@ -253,7 +305,7 @@ async function main() {
     let bundleMtime = null;
     try { bundleMtime = fs.statSync(path.join(dist, 'KotOR.js')).mtime.toISOString(); } catch { /* optional */ }
 
-    if (args.canonical) assertCanonicalEngineState(snapshot);
+    if (args.canonical) assertCanonicalEngineState(loadedState);
 
     const engineCommit = (() => {
       try {
@@ -274,19 +326,7 @@ async function main() {
       bundleMtime,
       ...snapshot,
     };
-    if (args.canonical) {
-      // Canonical capture identity includes retail provenance. Task 3 supplies
-      // it; do not fabricate a retail input here merely to satisfy the contract.
-      // This is the engine-side portion that must be paired with retail inputs
-      // before createCaptureIdentity can validate the complete evidence identity.
-      out.captureIdentity = Object.freeze({
-        module: String(args.module).toUpperCase(),
-        freshState: true,
-        loadedFromSave: false,
-        engineCommit,
-        bundleMtime,
-      });
-    }
+    if (args.canonical) out.engineIdentity = createEngineIdentity(loadedState, { engineCommit, bundleMtime });
     fs.mkdirSync(OUT_DIR, { recursive: true });
     const file = path.join(OUT_DIR, `${args.module.toLowerCase()}.engine.json`);
     fs.writeFileSync(file, JSON.stringify(out, null, 2));
@@ -301,4 +341,11 @@ if (require.main === module) {
   main().catch((error) => { console.error(error); process.exit(1); });
 }
 
-module.exports = { assertCanonicalEngineState, buildSnapshotSource, parseArgs };
+module.exports = {
+  assertCanonicalEngineState,
+  assertModuleLoadResult,
+  assertRequestedModuleIdentity,
+  buildSnapshotSource,
+  createEngineIdentity,
+  parseArgs,
+};

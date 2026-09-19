@@ -13,7 +13,7 @@ const path = require('path');
 const { VrHarness } = require('../vr-emulator/harness');
 const { startAssetService } = require('../vr-emulator/asset-service');
 const { bootEngine } = require('../vr-emulator/module-sweep');
-const { assertCanonicalEngineState } = require('./engine-snapshot');
+const { assertCanonicalEngineState, assertModuleLoadResult } = require('./engine-snapshot');
 
 function parseArgs(argv) {
   const args = { module: '101PER', canonical: false };
@@ -51,37 +51,41 @@ async function main() {
       // false save-derived rejection.
       let loadedFromSave = null;
       try { loadedFromSave = !!(await K.CurrentGame.IsModuleSaved(${JSON.stringify(moduleName)})); } catch (e) { /* unknown */ }
-      Promise.resolve(GS.LoadModule(${JSON.stringify(moduleName)})).catch(() => undefined);
+      let loadError = null;
+      Promise.resolve(GS.LoadModule(${JSON.stringify(moduleName)})).catch((error) => {
+        loadError = String((error && error.stack) || error);
+      });
       const deadline = Date.now() + 300000;
       while (Date.now() < deadline) {
+        if (loadError) return { error: 'LoadModule threw: ' + loadError };
         if (GS.module && GS.module !== previous && GS.loadingModule === false
             && GS.module.readyToProcessEvents === true && GS.module.area) break;
         await sleep(500);
+      }
+      if (loadError) return { error: 'LoadModule threw: ' + loadError };
+      if (!(GS.module && GS.module !== previous && GS.loadingModule === false
+          && GS.module.readyToProcessEvents === true && GS.module.area)) {
+        return { error: 'module did not settle before timeout' };
       }
       await sleep(8000);
       const party = K.PartyManager && K.PartyManager.party;
       const player = Array.isArray(party) ? party[0] : null;
       const state = {
         loadedFromSave,
+        module: String(GS.module.filename || ''),
         playerName: player && player.getName ? String(player.getName() || '') : '',
         partySize: Array.isArray(party) ? party.length : null,
       };
-      if (${args.canonical}) return { state };
-      const before = new Set(K.SaveGame.saves.map((s) => s.folderName));
-      await K.SaveGame.SaveCurrentGame('parity ${moduleName}');
-      const created = K.SaveGame.saves.map((s) => s.folderName).filter((f) => !before.has(f));
-      return { folder: created[0] || null, state };
+      return { state };
     })()`, { timeoutMs: 420_000 });
-    if (!folder) throw new Error('SaveCurrentGame did not return a result');
-    if (args.canonical) assertCanonicalEngineState(folder.state);
-    if (args.canonical) {
-      folder.folder = await harness.evaluate(`(async () => {
+    const state = assertModuleLoadResult(folder, moduleName);
+    if (args.canonical) assertCanonicalEngineState(state);
+    folder.folder = await harness.evaluate(`(async () => {
         const before = new Set(window.KotOR.SaveGame.saves.map((save) => save.folderName));
         await window.KotOR.SaveGame.SaveCurrentGame('parity ${moduleName}');
         return window.KotOR.SaveGame.saves.map((save) => save.folderName)
           .find((name) => !before.has(name)) || null;
       })()`, { timeoutMs: 120_000 });
-    }
     if (!folder.folder) throw new Error('SaveCurrentGame did not add a save');
     console.log(path.join(service.userRoot || path.join(process.env.LOCALAPPDATA, 'Kotor2VR'), 'Saves', folder.folder));
   } finally {
