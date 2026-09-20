@@ -1617,6 +1617,12 @@ export class GameState implements EngineContext {
   static maxSelectableDistance = 20;
   static maxSelectableDistanceSquared = GameState.maxSelectableDistance * GameState.maxSelectableDistance;
 
+  /** DisableHealthRegen: stops vitality regeneration for everyone. */
+  static healthRegenDisabled: boolean = false;
+  /** DisableMap: hides the map on the in-game overlay and the map screen. */
+  static mapDisabled: boolean = false;
+  /** SetKeepStealthInDialog: stealth survives a conversation instead of dropping. */
+  static keepStealthInDialog: boolean = false;
   static delta: number = 0;
 
   static SaveGame: SaveGame;

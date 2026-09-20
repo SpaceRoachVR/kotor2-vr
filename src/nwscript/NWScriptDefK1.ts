@@ -42,6 +42,7 @@ import { CreatureClassType } from "@/enums/nwscript/CreatureClassType";
 import { TalkVolume } from "@/enums/engine/TalkVolume";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
 import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
+import { DLGNode } from "@/resource/DLGNode";
 
 /**
  * NWScriptDefK1 class.
@@ -1857,7 +1858,11 @@ NWScriptDefK1.Actions = {
     comment: "139: Get the ability score of type nAbility for a creature (otherwise 0)\n- oCreature: the creature whose ability score we wish to find out\n- nAbilityType: ABILITY_*\nReturn value on error: 0\n",
     name: "GetAbilityScore",
     type: NWScriptDataType.INTEGER,
-    args: [NWScriptDataType.OBJECT, NWScriptDataType.INTEGER]
+    args: [NWScriptDataType.OBJECT, NWScriptDataType.INTEGER],
+    action: function(this: NWScriptInstance, args: [ModuleObject, number]){
+      if(!BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)) return 0;
+      return (args[0] as ModuleCreature).getAbilityScoreByIndex(args[1]);
+    },
   },
   140:{
     comment: "140: * Returns TRUE if oCreature is a dead NPC, dead PC or a dying PC.\n",
@@ -7929,7 +7934,21 @@ NWScriptDefK1.Actions = {
     comment: "700. ActionBarkString\nthis will cause a creature to bark the strRef from the talk table.\n",
     name: "ActionBarkString",
     type: NWScriptDataType.VOID,
-    args: [NWScriptDataType.INTEGER]
+    args: [NWScriptDataType.INTEGER],
+    action: function(this: NWScriptInstance, args: [number]){
+      // The caller barks the talk-table string, with the strref's own VO if it
+      // has one. Retail shows this in the bark bubble, not the dialogue UI.
+      const speaker: any = this.caller;
+      if(!speaker) return undefined;
+      const entry = GameState.TLKManager.GetStringById(args[0]);
+      if(!entry || !entry.Value) return undefined;
+      const node = new DLGNode();
+      node.speaker = speaker;
+      node.text = entry.Value;
+      node.vo_resref = entry.SoundResRef ? String(entry.SoundResRef) : '';
+      GameState.MenuManager.InGameBark.bark(node);
+      return undefined;
+    },
   },
   701:{
     comment: "701. GetIsConversationActive\nChecks to see if any conversations are currently taking place\n",
