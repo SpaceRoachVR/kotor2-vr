@@ -168,15 +168,13 @@ async function identifyServingBundle(harness) {
       throw new Error('KotOR.js source URL is not safe to retain for canonical provenance');
     }
     const url = sourceUrl.toString();
+    const pathMatch = /^\/bundles\/([a-f0-9]{64})\/KotOR\.js$/.exec(sourceUrl.pathname);
+    if (!pathMatch) throw new Error('KotOR.js was not loaded from an immutable content-addressed runtime route');
+    const sha256 = pathMatch[1].toLowerCase();
+    const integrity = 'sha256-' + btoa(sha256.match(/../g).map((hex) => String.fromCharCode(parseInt(hex, 16))).join(''));
+    if (candidates[0].integrity !== integrity) throw new Error('KotOR.js script integrity does not bind the executed runtime bytes');
     const loaded = performance.getEntriesByType('resource').some((entry) => entry.initiatorType === 'script' && entry.name === url);
     if (!loaded) throw new Error('KotOR.js source is not associated with a loaded script resource');
-    const response = await fetch(url, { credentials: 'same-origin' });
-    if (!response.ok || response.url !== url) throw new Error('Loaded KotOR.js source could not be revalidated');
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength === 0) throw new Error('KotOR.js was empty');
-    if (!window.crypto || !window.crypto.subtle) throw new Error('Web Crypto digest is unavailable');
-    const digest = await window.crypto.subtle.digest('SHA-256', bytes);
-    const sha256 = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
     return { url, sha256 };
   })()`);
   if (!identity || typeof identity.url !== 'string' || !/^[a-f0-9]{64}$/i.test(identity.sha256 || '')) {
@@ -186,6 +184,10 @@ async function identifyServingBundle(harness) {
   try { verifiedUrl = new URL(identity.url); } catch (_) { throw new Error('Cannot identify serving build from authenticated browser response'); }
   if (!['http:', 'https:'].includes(verifiedUrl.protocol) || verifiedUrl.username || verifiedUrl.password || verifiedUrl.search || verifiedUrl.hash) {
     throw new Error('Cannot retain an unsafe serving bundle URL');
+  }
+  const identityPath = /^\/bundles\/([a-f0-9]{64})\/KotOR\.js$/.exec(verifiedUrl.pathname);
+  if (!identityPath || identityPath[1].toLowerCase() !== identity.sha256.toLowerCase()) {
+    throw new Error('Cannot retain a serving bundle without an immutable executed-byte identity');
   }
   return Object.freeze({ url: verifiedUrl.toString(), sha256: identity.sha256.toLowerCase() });
 }

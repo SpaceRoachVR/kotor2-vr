@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 
 const { createAssetService, normalizeHttpOrigin } = require('../../tools/asset-http/asset-service');
@@ -29,7 +30,7 @@ describe('asset service', () => {
     fs.mkdirSync(path.join(distRoot, 'game'), { recursive: true });
     fs.writeFileSync(path.join(assetRoot, 'chitin.key'), Buffer.from('0123456789'));
     fs.writeFileSync(path.join(assetRoot, 'data', 'models.bif'), Buffer.from('abcdefghij'));
-    fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), '<!doctype html><title>KOTOR II VR</title>');
+    fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), '<!doctype html><title>KOTOR II VR</title><script type="text/javascript" src="../KotOR.js"></script>');
     fs.writeFileSync(path.join(distRoot, 'KotOR.js'), 'globalThis.KotOR = {};');
     fs.writeFileSync(path.join(distRoot, 'three.min.js'), 'globalThis.THREE = {};');
   });
@@ -467,6 +468,26 @@ describe('asset service', () => {
     expect(writeAttempt.status).toBe(405);
     expect(unauthorized.status).toBe(401);
     expect(fs.readFileSync(path.join(distRoot, 'KotOR.js'), 'utf8')).toBe('globalThis.KotOR = {};');
+  });
+
+  test('binds the executed KotOR runtime to immutable content-addressed bytes', async () => {
+    await start();
+    const bundleBytes = Buffer.from('globalThis.KotOR = {};');
+    const bundleHash = createHash('sha256').update(bundleBytes).digest('hex');
+    const integrity = `sha256-${createHash('sha256').update(bundleBytes).digest('base64')}`;
+
+    const document = await request('/game/index.html');
+    const html = await document.text();
+    const bundle = await request(`/bundles/${bundleHash}/KotOR.js`);
+    fs.writeFileSync(path.join(distRoot, 'KotOR.js'), 'globalThis.KotOR = { swapped: true };');
+    const swapped = await request(`/bundles/${bundleHash}/KotOR.js`);
+
+    expect(document.status).toBe(200);
+    expect(html).toContain(`/bundles/${bundleHash}/KotOR.js`);
+    expect(html).toContain(`integrity="${integrity}"`);
+    expect(await bundle.text()).toBe(bundleBytes.toString('utf8'));
+    expect(bundle.headers.get('cache-control')).toContain('immutable');
+    expect(swapped.status).toBe(409);
   });
 
   test('supports idempotent start and close, then restarts on the same service instance', async () => {

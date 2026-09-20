@@ -8,6 +8,8 @@ import { createHash } from 'crypto';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { toParityDefectRecords } = require('../../tools/parity/ledger-adapter');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
+const { deriveCaptureId } = require('../../tools/parity/parity-contract');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { normalizeFindingForReport } = require('../../tools/parity/compare');
 
 const engineArtifact = JSON.stringify({ module: '101per', engineIdentity: {
@@ -18,16 +20,22 @@ const sidecarArtifact = JSON.stringify({ module: '101PER', records: [] });
 const hash = (contents: string): string => createHash('sha256').update(contents).digest('hex');
 function promoteRetainedReport(report: { module: string; findings: unknown[]; [key: string]: unknown }, reportPath: string) {
   const comparisonArtifact = JSON.stringify({ module: report.module.toLowerCase(), findings: report.findings });
+  const rawArtifacts = {
+    engine: { sha256: hash(engineArtifact) }, retail: { sha256: hash(retailArtifact) },
+    comparison: { sha256: hash(comparisonArtifact) }, sidecar: { sha256: hash(sidecarArtifact) },
+  };
+  const captureId = deriveCaptureId('101PER', rawArtifacts);
+  const artifacts = Object.fromEntries(Object.entries(rawArtifacts).map(([name, artifact]) => [name, {
+    ...artifact, path: `tools/parity/out/captures/101per/${captureId}/${name}.json`,
+  }]));
   report.captureManifest = {
-    schema: 'kotor2-vr/parity-capture@1', module: '101PER', artifacts: {
-      engine: { path: 'engine.json', sha256: hash(engineArtifact) },
-      retail: { path: 'retail.json', sha256: hash(retailArtifact) },
-      comparison: { path: 'comparison.json', sha256: hash(comparisonArtifact) },
-      sidecar: { path: 'sidecar.json', sha256: hash(sidecarArtifact) },
-    },
+    schema: 'kotor2-vr/parity-capture@1', module: '101PER', captureId, artifacts,
   };
   return toParityDefectRecords(report, reportPath, { readArtifact: (artifactPath: string): string | undefined => ({
-    'engine.json': engineArtifact, 'retail.json': retailArtifact, 'comparison.json': comparisonArtifact, 'sidecar.json': sidecarArtifact,
+    [`tools/parity/out/captures/101per/${captureId}/engine.json`]: engineArtifact,
+    [`tools/parity/out/captures/101per/${captureId}/retail.json`]: retailArtifact,
+    [`tools/parity/out/captures/101per/${captureId}/comparison.json`]: comparisonArtifact,
+    [`tools/parity/out/captures/101per/${captureId}/sidecar.json`]: sidecarArtifact,
   })[artifactPath] });
 }
 

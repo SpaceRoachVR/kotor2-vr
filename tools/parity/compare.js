@@ -18,6 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { deriveCaptureId } = require('./parity-contract');
 
 const OUT_DIR = path.join(__dirname, 'out');
 
@@ -531,7 +532,9 @@ function retainCaptureArtifacts({ module, root = OUT_DIR, files }) {
   for (const key of ['engine', 'retail', 'comparison']) sources[key] = assertCaptureSource(root, files[key]);
   if (files.sidecar) sources.sidecar = assertCaptureSource(root, files.sidecar);
   const sourceHashes = Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, sha256File(source)]));
-  const captureId = crypto.createHash('sha256').update(JSON.stringify({ module: normalizedModule, sourceHashes })).digest('hex');
+  const captureId = deriveCaptureId(normalizedModule, Object.fromEntries(
+    Object.entries(sourceHashes).map(([key, sha256]) => [key, { sha256 }]),
+  ));
   const destination = path.join(path.resolve(root), 'captures', normalizedModule, captureId);
   fs.mkdirSync(destination, { recursive: true });
   const artifacts = {};

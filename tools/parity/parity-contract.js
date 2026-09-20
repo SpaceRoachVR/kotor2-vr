@@ -11,6 +11,32 @@ function requireSha256(value, field) {
   return value.toLowerCase();
 }
 
+function deriveCaptureId(module, artifacts) {
+  const normalizedModule = String(module || '').trim().toLowerCase();
+  if (!/^[a-z0-9_]{1,16}$/.test(normalizedModule)) throw new TypeError('Canonical capture requires a valid module identifier');
+  if (!artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts)) throw new TypeError('Canonical capture requires artifacts');
+  const sourceHashes = {};
+  for (const name of ['engine', 'retail', 'comparison']) {
+    if (!artifacts[name]) throw new TypeError(`Canonical capture requires retained ${name} artifact`);
+    sourceHashes[name] = requireSha256(artifacts[name].sha256, `Canonical capture ${name} artifact`);
+  }
+  if (artifacts.sidecar) sourceHashes.sidecar = requireSha256(artifacts.sidecar.sha256, 'Canonical capture sidecar artifact');
+  return crypto.createHash('sha256').update(JSON.stringify({ module: normalizedModule, sourceHashes })).digest('hex');
+}
+
+function requireCaptureArtifactPath(artifact, artifactName, module, captureId) {
+  if (!artifact || typeof artifact.path !== 'string' || !artifact.path.trim()) throw new TypeError(`Canonical capture requires retained ${artifactName} artifact`);
+  const normalizedPath = artifact.path.replace(/\\/g, '/');
+  const expectedDirectory = `tools/parity/out/captures/${module.toLowerCase()}/${captureId}/`;
+  const directoryIndex = normalizedPath.toLowerCase().lastIndexOf(expectedDirectory);
+  if (directoryIndex < 0 || directoryIndex + expectedDirectory.length >= normalizedPath.length) {
+    throw new TypeError(`Canonical capture ${artifactName} artifact is not beneath its content-addressed capture directory`);
+  }
+  const suffix = normalizedPath.slice(directoryIndex + expectedDirectory.length);
+  if (suffix.includes('/') || suffix === 'capture.json') throw new TypeError(`Canonical capture ${artifactName} artifact path is invalid`);
+  return artifact.path;
+}
+
 function createCaptureIdentity(input) {
   if (!input || input.freshState !== true || input.loadedFromSave === true) {
     throw new TypeError('Canonical parity capture must be fresh and not save-derived');
@@ -39,11 +65,11 @@ function createCaptureIdentity(input) {
   });
 }
 
-function artifactText(artifacts, artifact, name) {
-  if (!artifact || typeof artifact.path !== 'string' || !artifact.path.trim()) throw new TypeError(`Canonical capture requires retained ${name} artifact`);
+function artifactText(artifacts, artifact, name, module, captureId) {
+  const artifactPath = requireCaptureArtifactPath(artifact, name, module, captureId);
   requireSha256(artifact.sha256, `Canonical capture ${name} artifact`);
-  const text = artifacts && artifacts[artifact.path];
-  if (typeof text !== 'string') throw new TypeError(`Canonical capture ${name} artifact is not retained: ${artifact.path}`);
+  const text = artifacts && artifacts[artifactPath];
+  if (typeof text !== 'string') throw new TypeError(`Canonical capture ${name} artifact is not retained: ${artifactPath}`);
   const actual = crypto.createHash('sha256').update(text).digest('hex');
   if (actual !== artifact.sha256.toLowerCase()) throw new TypeError(`Canonical capture ${name} artifact hash does not match retained content`);
   try { return JSON.parse(text); } catch { throw new TypeError(`Canonical capture ${name} artifact is not valid JSON`); }
@@ -78,9 +104,15 @@ function validateCanonicalCaptureManifest(manifest, artifacts) {
   if (!manifest || manifest.schema !== 'kotor2-vr/parity-capture@1') throw new TypeError('Canonical capture manifest has an unsupported schema');
   const module = String(manifest.module || '').trim().toUpperCase();
   if (!module) throw new TypeError('Canonical capture manifest requires module');
-  const engine = artifactText(artifacts, manifest.artifacts && manifest.artifacts.engine, 'engine');
-  const retail = artifactText(artifacts, manifest.artifacts && manifest.artifacts.retail, 'retail');
-  const comparison = artifactText(artifacts, manifest.artifacts && manifest.artifacts.comparison, 'comparison');
+  const captureId = typeof manifest.captureId === 'string' && /^[a-f0-9]{64}$/i.test(manifest.captureId)
+    ? manifest.captureId.toLowerCase()
+    : null;
+  if (!captureId) throw new TypeError('Canonical capture manifest requires a content-addressed captureId');
+  const manifestArtifacts = manifest.artifacts;
+  if (deriveCaptureId(module, manifestArtifacts) !== captureId) throw new TypeError('Canonical capture manifest captureId does not match retained artifact hashes');
+  const engine = artifactText(artifacts, manifestArtifacts && manifestArtifacts.engine, 'engine', module, captureId);
+  const retail = artifactText(artifacts, manifestArtifacts && manifestArtifacts.retail, 'retail', module, captureId);
+  const comparison = artifactText(artifacts, manifestArtifacts && manifestArtifacts.comparison, 'comparison', module, captureId);
   if (String(engine.module || '').toUpperCase() !== module || String(retail.module || '').toUpperCase() !== module
       || String(comparison.module || '').toUpperCase() !== module) {
     throw new TypeError('Canonical capture manifest artifact module mismatch');
@@ -96,7 +128,7 @@ function validateCanonicalCaptureManifest(manifest, artifacts) {
     if (!input || typeof input.resref !== 'string' || typeof input.restype !== 'string') throw new TypeError('Canonical capture retail input identity is incomplete');
     requireSha256(input.sha256, 'Canonical capture retail input');
   }
-  const sidecar = manifest.artifacts.sidecar ? artifactText(artifacts, manifest.artifacts.sidecar, 'sidecar') : null;
+  const sidecar = manifestArtifacts.sidecar ? artifactText(artifacts, manifestArtifacts.sidecar, 'sidecar', module, captureId) : null;
   if (sidecar) validateManifestSidecar(sidecar, retail, module);
   return Object.freeze({ module, engine, retail, comparison, sidecar, identity, manifest: Object.freeze({ ...manifest }) });
 }
@@ -115,4 +147,4 @@ function validateEvidenceRecord(record) {
   return Object.freeze({ ...record });
 }
 
-module.exports = { CLASSIFICATIONS, createCaptureIdentity, validateEvidenceRecord, validateCanonicalCaptureManifest };
+module.exports = { CLASSIFICATIONS, createCaptureIdentity, validateEvidenceRecord, validateCanonicalCaptureManifest, deriveCaptureId };
