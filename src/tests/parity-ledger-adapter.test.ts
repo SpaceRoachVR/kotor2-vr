@@ -6,6 +6,8 @@ import { createDefectRecord } from '@/qa/DefectLedger';
 // duplicate validator.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { toParityDefectRecords } = require('../../tools/parity/ledger-adapter');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { normalizeFindingForReport } = require('../../tools/parity/compare');
 
 describe('parity ledger adapter', () => {
   test('every promoted parity record satisfies the real ledger contract', () => {
@@ -28,5 +30,19 @@ describe('parity ledger adapter', () => {
     for (const record of records) {
       expect(() => createDefectRecord(record)).not.toThrow();
     }
+  });
+
+  test('accepts normalized comparator arrays and nulls through the real ledger contract', () => {
+    const finding = normalizeFindingForReport({
+      confidence: 'defect', code: 'powers', object: 't3m4#0', retail: [100, 101], engine: null,
+    });
+    const [record] = toParityDefectRecords({
+      module: '101PER', findings: [finding],
+      evidenceRefs: ['tools/parity/out/101per.engine.json', 'tools/parity/out/101per.retail.json'],
+    }, 'tools/parity/out/101per.parity.json');
+
+    expect(record.expected).toBe('[100,101]');
+    expect(record.observed).toBe('null');
+    expect(() => createDefectRecord(record)).not.toThrow();
   });
 });

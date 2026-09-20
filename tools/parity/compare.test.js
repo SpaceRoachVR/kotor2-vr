@@ -11,7 +11,16 @@ const {
   compareAudio,
   compareModelPresentation,
   normalizeFindingForReport,
+  reportEvidenceRefs,
 } = require('./compare');
+
+test('retains engine and retail snapshot provenance on every parity report', () => {
+  assert.deepStrictEqual(reportEvidenceRefs('101PER', 'tools/parity/out/101per.evidence.json'), [
+    'tools/parity/out/101per.engine.json',
+    'tools/parity/out/101per.retail.json',
+    'tools/parity/out/101per.evidence.json',
+  ]);
+});
 
 test('normalizes confirmed comparator output into ledger-ready expected and observed fields', () => {
   assert.deepStrictEqual(normalizeFindingForReport({

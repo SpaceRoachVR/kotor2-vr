@@ -82,12 +82,16 @@ whose `classification` is exactly `engine-defect`:
 node -e "const fs=require('fs'); const {toParityDefectRecords}=require('./tools/parity/ledger-adapter'); const report=JSON.parse(fs.readFileSync('tools/parity/out/101per.parity.json')); console.log(JSON.stringify(toParityDefectRecords(report, 'tools/parity/out/101per.parity.json'), null, 2));"
 ```
 
-Each emitted record includes the exact parity report path and the finding's
-retained evidence references. `authored-retail-behavior`,
+Each emitted record includes the exact parity report path plus the report's
+retained engine and retail snapshot paths. A matching sidecar is supplementary,
+not required: ordinary confirmed deterministic mismatches retain their baseline
+provenance through the report. `authored-retail-behavior`,
 `unsupported-but-nonblocking`, `missing-evidence`, and
 `variable-runtime-output` remain report observations and are never promoted.
-The adapter rejects a promotable finding without a report path or non-empty
-finding evidence references; it does not invent provenance.
+The adapter rejects a promotable finding without the retained report path; it
+does not invent provenance. Repeated findings with the same code are grouped
+in stable object-identity order, preserving each expected and observed value as
+JSON in one ledger record. Arrays and `null` values are serialized explicitly.
 
 The automated parity tools establish data and engine-observation evidence only.
 They do not accept headset presentation, comfort, haptics, stereo, or compositor

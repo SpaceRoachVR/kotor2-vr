@@ -426,6 +426,16 @@ function normalizeFindingForReport(finding) {
   return normalized;
 }
 
+function reportEvidenceRefs(module, evidencePath) {
+  const normalizedModule = String(module || '').trim().toLowerCase();
+  if (!normalizedModule) throw new TypeError('Parity report requires a module for retained evidence references');
+  return [...new Set([
+    `tools/parity/out/${normalizedModule}.engine.json`,
+    `tools/parity/out/${normalizedModule}.retail.json`,
+    ...(typeof evidencePath === 'string' && evidencePath.trim() ? [evidencePath] : []),
+  ])];
+}
+
 function fmt(v) {
   if (v === undefined) return '';
   if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
@@ -476,6 +486,7 @@ function main() {
     module: mod,
     engineCapturedAt: engine.capturedAt,
     bundleMtime: engine.bundleMtime,
+    evidenceRefs: reportEvidenceRefs(mod, evidence.path),
     loadedFromSave: engine.loadedFromSave === true,
     creatures, textures, audio, modelPresentation,
     ranked: rank(findings),
@@ -495,4 +506,5 @@ module.exports = {
   pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar,
   classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
   describeAudioSemanticEvidence, selectedRetailPlayStyle, classificationForFinding, normalizeFindingForReport,
+  reportEvidenceRefs,
 };
