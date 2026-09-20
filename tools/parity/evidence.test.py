@@ -1,7 +1,9 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from evidence import load_evidence, validate_evidence, write_evidence
 
@@ -81,6 +83,17 @@ class EvidenceTests(unittest.TestCase):
     def test_sidecar_module_cannot_escape_the_ignored_output_directory(self):
         with self.assertRaisesRegex(ValueError, "module"):
             write_evidence("../escape", [], {})
+
+    def test_sidecar_rejects_a_linked_output_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            linked_output = root / "out"
+            target.mkdir()
+            os.symlink(target, linked_output, target_is_directory=True)
+            with patch("evidence.OUT_DIR", linked_output):
+                with self.assertRaisesRegex(ValueError, "linked"):
+                    write_evidence("101PER", [], {})
 
     def test_load_evidence_requires_a_list_of_valid_records(self):
         with tempfile.TemporaryDirectory() as directory:

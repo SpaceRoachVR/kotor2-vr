@@ -6,7 +6,9 @@ retail NCS/NSS bytes or GUI-exported assets.
 
 import argparse
 import json
+import os
 import re
+import stat
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -21,6 +23,7 @@ AUTHORITY_BY_KIND = {
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 MODULE_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 OUT_DIR = Path(__file__).resolve().parent / "out"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _required_string(record: Mapping[str, Any], field: str) -> str:
@@ -45,6 +48,36 @@ def _evidence_hash(record: Mapping[str, Any]) -> str:
     if sha256 is not None and contract_hash is not None and sha256.strip().lower() != contract_hash.strip().lower():
         raise ValueError("Evidence record hash and sha256 must match")
     return selected.lower()
+
+
+def _is_linked_path(path: Path) -> bool:
+    """Return whether a path entry is a symlink, junction, or other reparse point."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    return path.is_symlink() or bool(reparse_point and attributes & reparse_point)
+
+
+def _validated_output_dir() -> Path:
+    """Return the repository's real ignored output root, rejecting linked paths."""
+    configured = Path(os.path.abspath(OUT_DIR))
+    if _is_linked_path(configured):
+        raise ValueError("Evidence sidecar output root must not be linked")
+
+    repository = REPO_ROOT.resolve()
+    expected = repository / "tools" / "parity" / "out"
+    if configured != expected:
+        raise ValueError("Evidence sidecar output root must be tools/parity/out within the repository")
+    if configured.exists() and not configured.is_dir():
+        raise ValueError("Evidence sidecar output root must be a directory")
+    configured.mkdir(parents=True, exist_ok=True)
+    resolved = configured.resolve()
+    if resolved != expected:
+        raise ValueError("Evidence sidecar output root must resolve within the repository")
+    return resolved
 
 
 def validate_evidence(record: Mapping[str, Any], retail_hashes: Mapping[str, str]) -> dict[str, Any]:
@@ -126,8 +159,7 @@ def write_evidence(module: str, records: Sequence[Mapping[str, Any]], retail_has
 
     normalized_module = module.strip().upper()
     normalized = [validate_evidence(record, retail_hashes) for record in records]
-    output_dir = OUT_DIR.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = _validated_output_dir()
     output = (output_dir / f"{normalized_module.lower()}.evidence.json").resolve()
     if output.parent != output_dir:
         raise RuntimeError("Evidence sidecar output escaped the ignored output directory")
