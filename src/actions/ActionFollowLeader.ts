@@ -37,7 +37,12 @@ export class ActionFollowLeader extends Action {
         return ActionStatus.FAILED;
       }
 
-      this.target = GameState.PartyManager.party[0];
+      // ActionFollowOwner (routine 843) is the same behaviour aimed at the
+      // puppet's owner rather than the party leader, so it queues this action
+      // and the target is chosen here. Reusing the action keeps saved action
+      // lists readable by retail ids, which a made-up id would not.
+      const owner = GameState.PartyManager.GetPUPOwner(this.owner as any);
+      this.target = owner || GameState.PartyManager.party[0];
 
       const follow_destination = GameState.PartyManager.GetFollowPosition(this.owner as any);
       const distance = Utility.Distance2D(this.owner.position, this.target.position.clone());

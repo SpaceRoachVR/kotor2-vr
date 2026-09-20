@@ -11,6 +11,7 @@ import { NWScriptDef } from "@/nwscript/NWScriptDef";
 import { NWScriptDefK1 } from "@/nwscript/NWScriptDefK1";
 import { NWScriptInstance } from "@/nwscript/NWScriptInstance";
 import { getRandomWalkableDestination } from "@/nwscript/actions/GetRandomDestination";
+import EngineLocation from "@/engine/EngineLocation";
 
 /**
  * NWScriptDefK2 class.
@@ -5683,21 +5684,29 @@ NWScriptDefK2.Actions = {
     name: 'GetInfluence',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      return GameState.PartyManager.getInfluence(args[0]);
+    }
   },
   796: {
     comment: 'DJS-OEI 1/29/2004\n796: Sets the PC\'s influence on the alignment of a CNPC.\nParameters:\nnNPC - NPC_* constant identifying the CNPC we\'re interested in.\nIf this character is not an available party member, nothing\nwill happen.\nnInfluence - The new value for the influence on this CNPC.',
     name: 'SetInfluence',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, number]){
+      GameState.PartyManager.setInfluence(args[0], args[1]);
+      return undefined;
+    }
   },
   797: {
     comment: 'DJS-OEI 1/29/2004\n797: Modifies the PC\'s influence on the alignment of a CNPC.\nParameters:\nnNPC - NPC_* constant identifying the CNPC we\'re interested in.\nIf this character is not an available party member, nothing\nwill happen.\nnModifier - The modifier to the current influence on this CNPC.\nThis may be a negative value to reduce the influence.',
     name: 'ModifyInfluence',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, number]){
+      GameState.PartyManager.modifyInfluence(args[0], args[1]);
+      return undefined;
+    }
   },
   798: {
     comment: 'FAK - OEI 2/3/04\n798: returns the racial sub-type of the oTarget object',
@@ -6050,35 +6059,52 @@ NWScriptDefK2.Actions = {
     name: 'AddAvailablePUPByTemplate',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.STRING ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, string]){
+      return GameState.PartyManager.AddAvailablePUPByTemplate(args[0], args[1]) ? 1 : 0;
+    }
   },
   837: {
     comment: '837\nRWT-OEI 07/17/04\nThis function adds a Puppet to the Puppet Table by\ncreature ID\nReturns 1 if successful, 0 if there was an error\nThis does not spawn the puppet or anything. It just\nadds it to the party table and makes it available for\nuse down the line. Exactly like AddAvailableNPCByTemplate',
     name: 'AddAvailablePUPByObject',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, ModuleObject]){
+      return GameState.PartyManager.AddAvailablePUPByObject(args[0], args[1] as ModuleCreature) ? 1 : 0;
+    }
   },
   838: {
     comment: '838\nRWT-OEI 07/17/04\nThis function assigns a PUPPET constant to a\nParty NPC.  The party NPC -MUST- be in the game\nbefore calling this.\nBoth the PUP and the NPC have\nto be available in their respective tables\nReturns 1 if successful, 0 if there was an error',
     name: 'AssignPUP',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, number]){
+      return GameState.PartyManager.AssignPUP(args[0], args[1]) ? 1 : 0;
+    }
   },
   839: {
     comment: '839\nRWT-OEI 07/17/04\nThis function spawns a Party PUPPET.\nThis must be used whenever you want a copy\nof the puppet around to manipulate in the game\nsince the puppet is stored in the party table\njust like NPCs are.  Once a puppet is assigned\nto a party NPC (see AssignPUP), it will spawn\nor disappear whenever its owner joins or leaves\nthe party.\nThis does not add it to the party automatically,\njust like SpawnNPC doesn\'t. You must call AddPuppet()\nto actually add it to the party',
     name: 'SpawnAvailablePUP',
     type: NWScriptDataType.OBJECT,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.LOCATION ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, EngineLocation]){
+      // Spawning is asynchronous (the model has to load), but the routine must
+      // return an object now. The creature exists immediately; its model
+      // attaches a frame or two later, the same as any other spawn.
+      const location = args[1];
+      const puppet = GameState.PartyManager.SpawnAvailablePUPSync(
+        args[0], location ? location.position : undefined, location ? location.facing : 0
+      );
+      return puppet;
+    }
   },
   840: {
     comment: '840\nRWT-OEI 07/18/04\nThis adds an existing puppet object to the party. The\npuppet object must already exist via SpawnAvailablePUP\nand must already be available via AddAvailablePUP*\nfunctions.',
     name: 'AddPartyPuppet',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, ModuleObject]){
+      return GameState.PartyManager.AddPartyPuppet(args[0], args[1] as ModuleCreature) ? 1 : 0;
+    }
   },
   841: {
     comment: '841\nRWT-OEI 07/19/04\nThis returns the object ID of the puppet\'s owner.\nThe Puppet\'s owner must exist and must be in the party\nin order to be found.\nReturns invalid object Id if the owner cannot be found.',
@@ -6086,9 +6112,8 @@ NWScriptDefK2.Actions = {
     type: NWScriptDataType.OBJECT,
     args: [ NWScriptDataType.OBJECT ],
     action: function(this: NWScriptInstance, args: [ModuleObject]){
-      // Puppets (Bao-Dur's remote, Hanharr's hunt) are not implemented, so no
-      // object has an owner. Returning invalid is what "not a puppet" means.
-      return undefined;
+      const target = args[0] || this.caller;
+      return GameState.PartyManager.GetPUPOwner(target as ModuleCreature);
     }
   },
   842: {
@@ -6097,7 +6122,8 @@ NWScriptDefK2.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.OBJECT ],
     action: function(this: NWScriptInstance, args: [ModuleObject]){
-      return 0; // no puppet system; see GetPUPOwner
+      const target = args[0] || this.caller;
+      return GameState.PartyManager.GetIsPuppet(target as ModuleCreature) ? 1 : 0;
     }
   },
   843: {
@@ -6105,7 +6131,13 @@ NWScriptDefK2.Actions = {
     name: 'ActionFollowOwner',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.FLOAT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      const creature: any = this.caller;
+      if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return undefined;
+      const action = new GameState.ActionFactory.ActionFollowLeader();
+      creature.actionQueue.add(action);
+      return undefined;
+    }
   },
   844: {
     comment: '844\nRWT-OEI 07/21/04\nReturns TRUE if the object ID passed is the character\nthat the player is actively controlling at that point.\nNote that this function is *NOT* able to return correct\ninformation during Area Loading since the player is not\nactively controlling anyone at that point.',
@@ -6393,7 +6425,9 @@ NWScriptDefK2.Actions = {
     name: 'SavePUPByObject',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, ModuleObject]){
+      return GameState.PartyManager.SavePUPByObject(args[0], args[1] as ModuleCreature) ? 1 : 0;
+    }
   },
   875: {
     comment: '875\nRWT-OEI 10/29/04\nReturns TRUE if the object passed in is the character that the player\nmade at the start of the game',

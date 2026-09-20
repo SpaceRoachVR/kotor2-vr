@@ -177,6 +177,10 @@ export class ModuleCreature extends ModuleObject {
     HIDE: ModuleItem; 
   };
   regenTimer: number;
+  /** PUP_* slot when this creature is a party puppet, else -1. */
+  pupId: number = -1;
+  /** NPC_* the puppet belongs to (AssignPUP), else -1. */
+  pupOwnerNPC: number = -1;
   /** SetCreatureAILevel / ResetCreatureAILevel (AI_LEVEL_*; -1 is the default). */
   aiLevel: number = -1;
   /** SetOrientOnClick: whether the creature turns to face whoever clicks it. */
