@@ -696,6 +696,11 @@ export class ModuleMGPlayer extends ModuleObject {
 
   load(){
     this.initProperties();
+    // Without this the script map stays empty and every minigame event -
+    // OnCreate, OnHeartbeat, OnAccelerate, OnBrake, OnFire, OnHitObstacle,
+    // OnTrackLoop, OnDeath - silently does nothing, which is why a swoop race
+    // never started and a turret never fired.
+    this.loadScripts();
     GameState.scene.add(this.sphere_geom);
   }
 

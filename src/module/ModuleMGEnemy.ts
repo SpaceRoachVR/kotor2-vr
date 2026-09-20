@@ -255,6 +255,7 @@ export class ModuleMGEnemy extends ModuleObject {
 
   async load(){
     this.initProperties();
+    this.loadScripts(); // see ModuleMGPlayer.load
     GameState.scene.add(this.sphere_geom);
     return this.template;
   }

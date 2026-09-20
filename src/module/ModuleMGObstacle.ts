@@ -37,6 +37,7 @@ export class ModuleMGObstacle extends ModuleObject {
   setTemplate(template: GFFObject){
     this.template = template;
     this.initProperties();
+    this.loadScripts(); // see ModuleMGPlayer.load
   }
 
   update(delta: number = 0){

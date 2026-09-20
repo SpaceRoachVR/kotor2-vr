@@ -12,6 +12,7 @@ import { NWScriptDefK1 } from "@/nwscript/NWScriptDefK1";
 import { NWScriptInstance } from "@/nwscript/NWScriptInstance";
 import { getRandomWalkableDestination } from "@/nwscript/actions/GetRandomDestination";
 import EngineLocation from "@/engine/EngineLocation";
+import * as THREE from "three";
 
 /**
  * NWScriptDefK2 class.
@@ -4392,7 +4393,11 @@ NWScriptDefK2.Actions = {
     name: 'SWMG_GetSphereRadius',
     type: NWScriptDataType.FLOAT,
     args: [ NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      const target: any = args[0] || this.caller;
+      const radius = target ? target.sphere_radius : undefined;
+      return typeof radius === 'number' ? radius : 0.0;
+    }
   },
   620: {
     comment: '620: SWMG_SetSphereRadius',
@@ -4595,7 +4600,15 @@ NWScriptDefK2.Actions = {
     name: 'SWMG_SetPlayerInvincibility',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.FLOAT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      const player: any = GameState.module?.area?.miniGame?.player;
+      if(!player) return undefined;
+      // The data field is the length of the invincibility window; setting it
+      // also opens one now, which is what the callers (hit reactions) want.
+      player.invince_period = args[0];
+      player.invince = args[0];
+      return undefined;
+    }
   },
   649: {
     comment: '649: SWMG_SetPlayerSpeed',
@@ -5631,14 +5644,25 @@ NWScriptDefK2.Actions = {
     name: 'SWMG_GetTrackPosition',
     type: NWScriptDataType.VECTOR,
     args: [ NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      const target: any = args[0] || this.caller;
+      const track = target ? target.track : undefined;
+      return track ? track.position.clone() : new THREE.Vector3();
+    }
   },
   790: {
     comment: 'FAK - OEI 1/15/04\n790: minigame function that lets you psuedo-set the position of a follower object',
     name: 'SWMG_SetFollowerPosition',
     type: NWScriptDataType.VECTOR,
     args: [ NWScriptDataType.VECTOR ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [THREE.Vector3]){
+      const follower: any = this.caller;
+      const position = args[0];
+      if(!follower || !position) return undefined;
+      if(follower.track){ follower.track.position.copy(position); }
+      else if(follower.position){ follower.position.copy(position); }
+      return undefined;
+    }
   },
   791: {
     comment: '//RWT-OEI 01/16/04\n791: A function to put the character into a true combat state but the reason set to\n     not real combat. This should help us control animations in cutscenes with a bit\n     more precision. -- Not totally sure this is doing anything just yet. Seems\n     the combat condition gets cleared shortly after anyway.\n     If nEnable is 1, it enables fake combat mode. If 0, it disables it.\n     WARNING: Whenever using this function to enable fake combat mode, you should\n              have a matching call to it to disable it. (pass 0 for nEnable).',
@@ -5656,7 +5680,20 @@ NWScriptDefK2.Actions = {
     name: 'SWMG_DestroyMiniGameObject',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      const target: any = args[0] || this.caller;
+      const mg: any = GameState.module?.area?.miniGame;
+      if(!target || !mg) return undefined;
+      for(const list of [mg.enemies, mg.obstacles]){
+        if(!Array.isArray(list)) continue;
+        const index = list.indexOf(target);
+        if(index < 0) continue;
+        list.splice(index, 1);
+        try { target.destroy(); } catch (e) { /* the model may already be gone */ }
+        break;
+      }
+      return undefined;
+    }
   },
   793: {
     comment: 'DJS-OEI 1/26/2004\n793: Returns the Demolitions skill of the creature that\nplaced this mine. This will often be 0. This function accepts\nthe object that the mine is attached to (Door, Placeable, or Trigger)\nand will determine which one it actually is at runtime.',
@@ -5769,7 +5806,12 @@ NWScriptDefK2.Actions = {
     name: 'SWMG_SetJumpSpeed',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.FLOAT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      const player: any = GameState.module?.area?.miniGame?.player;
+      if(!player) return undefined;
+      player.jumpVelcolity = args[0];
+      return undefined;
+    }
   },
   805: {
     comment: 'PC CODE MERGER\n805. IsMoviePlaying--dummy func so we can compile',
@@ -5962,7 +6004,15 @@ NWScriptDefK2.Actions = {
     name: 'SWMG_PlayerApplyForce',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.VECTOR ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [THREE.Vector3]){
+      const player: any = GameState.module?.area?.miniGame?.player;
+      const force = args[0];
+      if(!player || !force) return undefined;
+      // Applied to the track offset, the same place the per-frame force vector
+      // lands, so a scripted shove reads like the player's own movement.
+      player.track?.position.add(force);
+      return undefined;
+    }
   },
   826: {
     comment: '826\nDJS-OEI 6/12/2004\nThis function allows a script to set the conditions which constitute\na combat forfeit by a member of the player\'s party. This is typically\nused to handle Battle Circle behavior or other challenge-based combats.\nnForfeitFlags: This is an OR\'ed together series of FORFEIT_* defines.',
