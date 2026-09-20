@@ -258,6 +258,17 @@ function classifyAudioSemantic(retail, engine, playStyleMapping) {
   return expected === engine.playStyle ? 'authored-retail-behavior' : 'engine-defect';
 }
 
+function describeAudioSemanticEvidence(playStyleMapping, engine) {
+  const mappingAvailable = Boolean(playStyleMapping && typeof playStyleMapping === 'object');
+  const observationAvailable = Boolean(engine && engine.playStyleAvailable === true);
+  if (!mappingAvailable && !observationAvailable) {
+    return 'retail play-style mapping is missing; engine play-style observation is unavailable';
+  }
+  if (!mappingAvailable) return 'retail play-style mapping is missing';
+  if (!observationAvailable) return 'engine play-style observation is unavailable';
+  return 'captured retail play-style mapping disagrees with the engine';
+}
+
 /**
  * A placeable can deliberately reuse a creature MDL as a static prop. A
  * missing runtime animation for that authored combination is bind-pose
@@ -306,12 +317,11 @@ function compareAudio(retailSnap, engineSnap, add) {
     const object = `${rs.template}#${rs.gitIndex}`;
     if (!same(rs.continuous, es.continuous)) {
       const classification = classifyAudioSemantic(rs, es, e.playStyleMapping);
-      if (classification === 'authored-retail-behavior') continue;
-      add({ area: 'audio', code: 'sound:play-style', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
-        classification, object, retail: rs.continuous, engine: es.playStyle ?? null,
-        detail: classification === 'missing-evidence'
-          ? 'UTS continuous flag differs, but no retail play-style mapping was captured'
-          : 'captured retail play-style mapping disagrees with the engine' });
+      if (classification !== 'authored-retail-behavior') {
+        add({ area: 'audio', code: 'sound:play-style', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
+          classification, object, retail: rs.continuous, engine: es.playStyle ?? null,
+          detail: describeAudioSemanticEvidence(e.playStyleMapping, es) });
+      }
     }
     for (const field of SOUND_FIELDS) {
       if (!same(rs[field], es[field])) {
@@ -456,4 +466,5 @@ if (require.main === module) main();
 module.exports = {
   pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar,
   classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
+  describeAudioSemanticEvidence,
 };

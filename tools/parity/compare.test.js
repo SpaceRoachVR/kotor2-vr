@@ -29,20 +29,30 @@ test('a placeable creature model is authored bind-pose evidence, not an animatio
   );
 });
 
-test('snapshot comparator omits a continuous mismatch when documented play-style mapping matches the engine observation', () => {
+test('unavailable audio semantics retain independent volume mismatch evidence', () => {
   const findings = [];
   compareAudio({
     module: '101per',
-    audio: { area: {}, tracks: {}, sounds: [{ status: 'ok', template: 'rumble', gitIndex: 0, continuous: true, sounds: [] }] },
+    audio: { area: {}, tracks: {}, sounds: [{ status: 'ok', template: 'rumble', gitIndex: 0, continuous: true, volume: 75, sounds: [] }] },
   }, {
     loadedFromSave: false,
     audio: {
       area: {},
-      playStyleMapping: { true: 'loop', false: 'oneshot' },
-      sounds: [{ template: 'rumble', continuous: false, playStyle: 'loop', playStyleAvailable: true, sounds: [] }],
+      sounds: [{ template: 'rumble', continuous: false, playStyle: null, playStyleAvailable: false, volume: 25, sounds: [] }],
     },
   }, (finding) => findings.push(finding));
-  assert.deepStrictEqual(findings, []);
+  assert.deepStrictEqual(findings, [{
+    area: 'audio',
+    code: 'sound:play-style',
+    confidence: 'coverage',
+    classification: 'missing-evidence',
+    object: 'rumble#0',
+    retail: true,
+    engine: null,
+    detail: 'retail play-style mapping is missing; engine play-style observation is unavailable',
+  }, {
+    area: 'audio', code: 'sound:volume', confidence: 'defect', object: 'rumble#0', retail: 75, engine: 25,
+  }]);
 });
 
 test('snapshot comparator records an ordinary requested but unapplied placeable animation as missing evidence', () => {
