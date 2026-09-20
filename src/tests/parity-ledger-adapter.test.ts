@@ -14,24 +14,25 @@ const engineArtifact = JSON.stringify({ module: '101per', engineIdentity: {
   module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64),
 } });
 const retailArtifact = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
-const comparisonArtifact = JSON.stringify({ module: '101per', findings: [] });
 const hash = (contents: string): string => createHash('sha256').update(contents).digest('hex');
-const canonicalCaptureManifest = {
-  schema: 'kotor2-vr/parity-capture@1', module: '101PER', artifacts: {
-    engine: { path: 'engine.json', sha256: hash(engineArtifact) },
-    retail: { path: 'retail.json', sha256: hash(retailArtifact) },
-    comparison: { path: 'comparison.json', sha256: hash(comparisonArtifact) },
-  },
-};
-const readRetainedArtifact = (artifactPath: string): string | undefined => ({
-  'engine.json': engineArtifact, 'retail.json': retailArtifact, 'comparison.json': comparisonArtifact,
-})[artifactPath];
+function promoteRetainedReport(report: { module: string; findings: unknown[]; [key: string]: unknown }, reportPath: string) {
+  const comparisonArtifact = JSON.stringify({ module: report.module.toLowerCase(), findings: report.findings });
+  report.captureManifest = {
+    schema: 'kotor2-vr/parity-capture@1', module: '101PER', artifacts: {
+      engine: { path: 'engine.json', sha256: hash(engineArtifact) },
+      retail: { path: 'retail.json', sha256: hash(retailArtifact) },
+      comparison: { path: 'comparison.json', sha256: hash(comparisonArtifact) },
+    },
+  };
+  return toParityDefectRecords(report, reportPath, { readArtifact: (artifactPath: string): string | undefined => ({
+    'engine.json': engineArtifact, 'retail.json': retailArtifact, 'comparison.json': comparisonArtifact,
+  })[artifactPath] });
+}
 
 describe('parity ledger adapter', () => {
   test('every promoted parity record satisfies the real ledger contract', () => {
-    const records = toParityDefectRecords({
+    const report = {
       module: '101PER',
-      captureManifest: canonicalCaptureManifest,
       evidenceRefs: ['tools/parity/out/101per.engine.json', 'tools/parity/out/101per.retail.json'],
       findings: [
         {
@@ -44,7 +45,8 @@ describe('parity ledger adapter', () => {
           expected: 'loop', observed: 'unknown', evidenceRefs: ['tools/parity/out/101per.evidence.json'],
         },
       ],
-    }, 'tools/parity/out/101per.parity.json', { readArtifact: readRetainedArtifact });
+    };
+    const records = promoteRetainedReport(report, 'tools/parity/out/101per.parity.json');
 
     expect(records).toHaveLength(1);
     for (const record of records) {
@@ -56,11 +58,11 @@ describe('parity ledger adapter', () => {
     const finding = normalizeFindingForReport({
       confidence: 'defect', code: 'powers', object: 't3m4#0', retail: [100, 101], engine: null,
     });
-    const [record] = toParityDefectRecords({
+    const report = {
       module: '101PER', findings: [finding],
-      captureManifest: canonicalCaptureManifest,
       evidenceRefs: ['tools/parity/out/101per.engine.json', 'tools/parity/out/101per.retail.json'],
-    }, 'tools/parity/out/101per.parity.json', { readArtifact: readRetainedArtifact });
+    };
+    const [record] = promoteRetainedReport(report, 'tools/parity/out/101per.parity.json');
 
     expect(record.expected).toBe('[100,101]');
     expect(record.observed).toBe('null');

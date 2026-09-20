@@ -4,6 +4,7 @@ const CLASSIFICATIONS = Object.freeze([
 ]);
 const crypto = require('crypto');
 const SHA256 = /^[a-f0-9]{64}$/i;
+const EVIDENCE_AUTHORITIES = Object.freeze({ kotormcp: 'parsed-retail', holocron: 'human-review', dencs: 'hypothesis' });
 
 function requireSha256(value, field) {
   if (typeof value !== 'string' || !SHA256.test(value)) throw new TypeError(`${field} requires a SHA-256 hash`);
@@ -48,6 +49,27 @@ function artifactText(artifacts, artifact, name) {
   try { return JSON.parse(text); } catch { throw new TypeError(`Canonical capture ${name} artifact is not valid JSON`); }
 }
 
+function validateManifestSidecar(sidecar, retail, module) {
+  if (!sidecar || String(sidecar.module || '').toUpperCase() !== module) throw new TypeError('Canonical capture sidecar module mismatch');
+  if (!Array.isArray(sidecar.records)) throw new TypeError('Canonical capture sidecar requires records');
+  const retailHashes = new Map(retail.retailInputs.map((input) => [
+    `${String(input.resref).toLowerCase()}:${String(input.restype).toUpperCase()}`, requireSha256(input.sha256, 'Canonical capture retail input'),
+  ]));
+  for (const record of sidecar.records) {
+    if (!record || typeof record !== 'object') throw new TypeError('Canonical capture sidecar record must be an object');
+    const kind = String(record.kind || '').toLowerCase();
+    const resref = String(record.resref || '').toLowerCase();
+    const restype = String(record.restype || '').toUpperCase();
+    const sha256 = requireSha256(record.sha256 || record.hash, 'Canonical capture sidecar record');
+    if (!resref || !restype || !EVIDENCE_AUTHORITIES[kind] || record.authority !== EVIDENCE_AUTHORITIES[kind]) {
+      throw new TypeError('Canonical capture sidecar has invalid typed authority');
+    }
+    if (kind === 'dencs' && (restype !== 'NCS' || retailHashes.get(`${resref}:${restype}`) !== sha256)) {
+      throw new TypeError('Canonical capture DeNCS sidecar hash does not match retail NCS');
+    }
+  }
+}
+
 function validateCanonicalCaptureManifest(manifest, artifacts) {
   if (!manifest || manifest.schema !== 'kotor2-vr/parity-capture@1') throw new TypeError('Canonical capture manifest has an unsupported schema');
   const module = String(manifest.module || '').trim().toUpperCase();
@@ -70,7 +92,9 @@ function validateCanonicalCaptureManifest(manifest, artifacts) {
     if (!input || typeof input.resref !== 'string' || typeof input.restype !== 'string') throw new TypeError('Canonical capture retail input identity is incomplete');
     requireSha256(input.sha256, 'Canonical capture retail input');
   }
-  return Object.freeze({ module, engine, retail, identity, manifest: Object.freeze({ ...manifest }) });
+  const sidecar = manifest.artifacts.sidecar ? artifactText(artifacts, manifest.artifacts.sidecar, 'sidecar') : null;
+  if (sidecar) validateManifestSidecar(sidecar, retail, module);
+  return Object.freeze({ module, engine, retail, comparison, sidecar, identity, manifest: Object.freeze({ ...manifest }) });
 }
 
 function validateEvidenceRecord(record) {

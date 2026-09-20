@@ -21,7 +21,6 @@
  */
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { VrHarness } = require('../vr-emulator/harness');
 const { startAssetService } = require('../vr-emulator/asset-service');
 const { waitForMenu, newGameThroughCharacterCreation } = require('../vr-emulator/playthrough-steps');
@@ -153,17 +152,23 @@ async function bootstrapFreshNewGame(harness, log) {
   return provenance;
 }
 
-async function identifyServingBundle(baseUrl, fetchImpl = global.fetch) {
-  if (typeof fetchImpl !== 'function') throw new Error('Cannot identify serving build: fetch is unavailable');
-  let bundleUrl;
-  try { bundleUrl = new URL('KotOR.js', String(baseUrl).endsWith('/') ? baseUrl : `${baseUrl}/`).toString(); }
-  catch (error) { throw new TypeError(`Cannot identify serving build URL: ${error.message}`); }
-  let response;
-  try { response = await fetchImpl(bundleUrl); } catch (error) { throw new Error(`Cannot identify serving build: ${error.message}`); }
-  if (!response || !response.ok) throw new Error(`Cannot identify serving build: ${bundleUrl} returned ${response && response.status}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length === 0) throw new Error('Cannot identify serving build: KotOR.js was empty');
-  return Object.freeze({ url: bundleUrl, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+async function identifyServingBundle(harness) {
+  if (!harness || typeof harness.evaluate !== 'function') throw new TypeError('Cannot identify serving build without an authenticated browser harness');
+  const identity = await harness.evaluate(`(async () => {
+    const url = new URL('KotOR.js', window.location.href).toString();
+    const response = await fetch(url, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error('KotOR.js returned ' + response.status);
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength === 0) throw new Error('KotOR.js was empty');
+    if (!window.crypto || !window.crypto.subtle) throw new Error('Web Crypto digest is unavailable');
+    const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+    const sha256 = Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    return { url, sha256 };
+  })()`);
+  if (!identity || typeof identity.url !== 'string' || !/^[a-f0-9]{64}$/i.test(identity.sha256 || '')) {
+    throw new Error('Cannot identify serving build from authenticated browser response');
+  }
+  return Object.freeze({ url: identity.url, sha256: identity.sha256.toLowerCase() });
 }
 
 function buildSnapshotSource(moduleName) {
@@ -393,7 +398,7 @@ async function main() {
   const log = (line) => console.log(line);
   try {
     await harness.launch(url);
-    const servingBundle = await identifyServingBundle(url);
+    const servingBundle = await identifyServingBundle(harness);
     await bootstrapFreshNewGame(harness, log);
     log(`loading ${args.module}...`);
     const snapshot = await harness.evaluate(buildSnapshotSource(args.module), { timeoutMs: LOAD_TIMEOUT_MS + 60_000 });

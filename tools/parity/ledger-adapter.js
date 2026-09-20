@@ -128,6 +128,10 @@ function toParityDefectRecords(report, reportPath, options = {}) {
   }
   const capture = validateCanonicalCaptureManifest(report.captureManifest, artifacts);
   if (capture.module !== module) throw new TypeError('Parity ledger adapter capture manifest module mismatch');
+  if (!Array.isArray(capture.comparison.findings)
+      || JSON.stringify(report.findings) !== JSON.stringify(capture.comparison.findings)) {
+    throw new TypeError('Parity ledger adapter requires report findings to exactly match retained comparison findings');
+  }
 
   // A report pathname says where a claim was written, not what was compared.
   // Retained engine and retail snapshot references are mandatory provenance.

@@ -6,19 +6,19 @@ const crypto = require('crypto');
 
 const fixtureEngine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
 const fixtureRetail = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
-const fixtureComparison = JSON.stringify({ module: '101per', findings: [] });
 const fixtureHash = (contents) => crypto.createHash('sha256').update(contents).digest('hex');
-const fixtureManifest = {
-  schema: 'kotor2-vr/parity-capture@1', module: '101PER',
-  artifacts: {
-    engine: { path: 'engine.json', sha256: fixtureHash(fixtureEngine) },
-    retail: { path: 'retail.json', sha256: fixtureHash(fixtureRetail) },
-    comparison: { path: 'comparison.json', sha256: fixtureHash(fixtureComparison) },
-  },
-};
 function toParityDefectRecords(report, reportPath, options = {}) {
-  if (!report.captureManifest) report.captureManifest = fixtureManifest;
-  return promote(report, reportPath, { readArtifact: (name) => ({ 'engine.json': fixtureEngine, 'retail.json': fixtureRetail, 'comparison.json': fixtureComparison })[name], ...options });
+  const comparison = JSON.stringify({ module: String(report.module || '').toLowerCase(), findings: report.findings });
+  if (!report.captureManifest) report.captureManifest = {
+    schema: 'kotor2-vr/parity-capture@1', module: '101PER', artifacts: {
+      engine: { path: 'engine.json', sha256: fixtureHash(fixtureEngine) },
+      retail: { path: 'retail.json', sha256: fixtureHash(fixtureRetail) },
+      comparison: { path: 'comparison.json', sha256: fixtureHash(comparison) },
+    },
+  };
+  return promote(report, reportPath, { readArtifact: (name) => ({
+    'engine.json': fixtureEngine, 'retail.json': fixtureRetail, 'comparison.json': comparison,
+  })[name], ...options });
 }
 
 function reportWith(findings) {
@@ -140,7 +140,7 @@ test('promotion requires a retained verified canonical capture manifest, not mut
   const hash = (contents) => crypto.createHash('sha256').update(contents).digest('hex');
   const engine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
   const retail = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
-  const comparison = JSON.stringify({ module: '101per', findings: [] });
+  const comparison = JSON.stringify({ module: '101per', findings: report.findings });
   report.captureManifest = {
     schema: 'kotor2-vr/parity-capture@1', module: '101PER',
     artifacts: {
@@ -151,4 +151,16 @@ test('promotion requires a retained verified canonical capture manifest, not mut
   const artifacts = { 'engine.json': engine, 'retail.json': retail, 'comparison.json': comparison };
   const records = toParityDefectRecords(report, 'report.json', { readArtifact: (name) => artifacts[name] });
   assert.equal(records.length, 1);
+});
+
+test('promotion rejects mutable report findings that differ from the retained comparison artifact', () => {
+  const report = reportWith([{ classification: 'engine-defect', code: 'invented:defect', expected: 'retail', observed: 'engine' }]);
+  const comparison = JSON.stringify({ module: '101per', findings: [] });
+  report.captureManifest = { schema: 'kotor2-vr/parity-capture@1', module: '101PER', artifacts: {
+    engine: { path: 'engine.json', sha256: fixtureHash(fixtureEngine) }, retail: { path: 'retail.json', sha256: fixtureHash(fixtureRetail) },
+    comparison: { path: 'comparison.json', sha256: fixtureHash(comparison) },
+  } };
+  assert.throws(() => promote(report, 'report.json', { readArtifact: (name) => ({
+    'engine.json': fixtureEngine, 'retail.json': fixtureRetail, 'comparison.json': comparison,
+  })[name] }), /retained comparison findings/i);
 });

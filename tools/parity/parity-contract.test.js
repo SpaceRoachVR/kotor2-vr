@@ -10,6 +10,7 @@ const {
   assertModuleLoadResult,
   assertRequestedModuleIdentity,
   createEngineIdentity,
+  identifyServingBundle,
 } = require('./engine-snapshot');
 
 test('capture identity rejects save-derived canonical evidence', () => {
@@ -100,6 +101,17 @@ test('a remote serving bundle does not inherit checkout commit or mtime identity
   assert.equal(identity.bundleMtime, null);
 });
 
+test('serving bundle identity is read through the authenticated browser session without exposing tokens', async () => {
+  let source = '';
+  const identity = await identifyServingBundle({ evaluate: async (expression) => {
+    source = expression;
+    return { url: 'http://127.0.0.1:9447/KotOR.js', sha256: 'a'.repeat(64) };
+  } });
+  assert.equal(identity.sha256, 'a'.repeat(64));
+  assert.match(source, /credentials: 'same-origin'/);
+  assert.doesNotMatch(source, /token|authorization|cookie/i);
+});
+
 test('canonical identity requires the hash of the bundle actually served to the harness', () => {
   assert.throws(() => createCaptureIdentity({
     module: '101PER', freshState: true, loadedFromSave: false,
@@ -116,4 +128,17 @@ test('canonical manifest rejects a save-derived engine artifact even when its mo
     schema: 'kotor2-vr/parity-capture@1', module: '101PER',
     artifacts: { engine: artifact('engine.json', engine), retail: artifact('retail.json', retail), comparison: artifact('comparison.json', comparison) },
   }, { 'engine.json': engine, 'retail.json': retail, 'comparison.json': comparison }), /save-derived/i);
+});
+
+test('canonical manifest rejects a foreign or stale DeNCS sidecar', () => {
+  const hash = (contents) => require('crypto').createHash('sha256').update(contents).digest('hex');
+  const engine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
+  const retail = JSON.stringify({ module: '101per', retailInputs: [{ resref: 'a_script', restype: 'NCS', sha256: 'b'.repeat(64) }] });
+  const comparison = JSON.stringify({ module: '101per', findings: [] });
+  const sidecar = JSON.stringify({ module: '102PER', records: [{ kind: 'dencs', resref: 'a_script', restype: 'NCS', sha256: 'c'.repeat(64), authority: 'hypothesis', path: 'a_script.nss' }] });
+  const artifacts = { 'engine.json': engine, 'retail.json': retail, 'comparison.json': comparison, 'sidecar.json': sidecar };
+  const artifact = (name) => ({ path: name, sha256: hash(artifacts[name]) });
+  assert.throws(() => validateCanonicalCaptureManifest({ schema: 'kotor2-vr/parity-capture@1', module: '101PER', artifacts: {
+    engine: artifact('engine.json'), retail: artifact('retail.json'), comparison: artifact('comparison.json'), sidecar: artifact('sidecar.json'),
+  } }, artifacts), /sidecar module|DeNCS/i);
 });
