@@ -11,11 +11,16 @@ grouped `expected` and `observed` values retain every object/value pair as JSON.
 Single values preserve non-empty strings and serialize arrays, objects, empty
 strings, and `null` explicitly as JSON-compatible non-empty strings.
 
-Every ledger record includes the retained parity-report path. `compare.js` also
-stores report-level provenance for the matching engine and retail snapshots;
-matching evidence sidecars are optional supplementary references. This permits
-an ordinary deterministic confirmed mismatch to promote without pretending a
-sidecar exists.
+Every ledger record includes the retained parity-report path and requires
+report-level provenance for both matching engine and retail snapshots. The path
+alone cannot promote a finding. Matching evidence sidecars are optional
+supplementary references, so ordinary deterministic confirmed mismatches can
+promote without pretending a sidecar exists.
+
+The promotion boundary rejects a report that has only a report path or only one
+baseline snapshot reference, rejects missing source `expected`/`observed`
+values before grouping, and selects a stable canonical title when distinct
+codes normalize to the same ledger ID.
 
 ## Automated evidence
 
@@ -23,7 +28,7 @@ Completed successfully:
 
 ```text
 node --test tools/parity/ledger-adapter.test.js tools/parity/compare.test.js tools/parity/parity-contract.test.js
-# 27 passed, 0 failed
+# 30 passed, 0 failed
 
 npx jest --ci --silent src/tests/parity-ledger-adapter.test.ts src/tests/defect-ledger.test.ts
 # 2 suites passed, 13 tests passed

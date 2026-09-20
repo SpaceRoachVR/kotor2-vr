@@ -13,6 +13,7 @@ describe('parity ledger adapter', () => {
   test('every promoted parity record satisfies the real ledger contract', () => {
     const records = toParityDefectRecords({
       module: '101PER',
+      evidenceRefs: ['tools/parity/out/101per.engine.json', 'tools/parity/out/101per.retail.json'],
       findings: [
         {
           classification: 'engine-defect', code: 'sound:play-style', object: 'metalstrain#0',

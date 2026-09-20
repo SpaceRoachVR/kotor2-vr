@@ -4,7 +4,10 @@ const assert = require('node:assert/strict');
 const { toParityDefectRecords } = require('./ledger-adapter');
 
 function reportWith(findings) {
-  return { module: '101PER', findings };
+  return {
+    module: '101PER', findings,
+    evidenceRefs: ['tools/parity/out/101per.engine.json', 'tools/parity/out/101per.retail.json'],
+  };
 }
 
 test('only confirmed engine defects become ledger records', () => {
@@ -31,6 +34,8 @@ test('keeps exact report and finding evidence references without duplicates', ()
 
   assert.deepEqual(records[0].evidenceRefs, [
     'tools/parity/out/101per.parity.json',
+    'tools/parity/out/101per.engine.json',
+    'tools/parity/out/101per.retail.json',
     'tools/parity/out/101per.evidence.json',
   ]);
   assert.deepEqual(records[0].reproductionSteps, ['Inspect panel_a.', 'Load fresh 101PER.']);
@@ -42,6 +47,24 @@ test('rejects a promotable finding that lacks exact comparison evidence', () => 
   assert.throws(() => toParityDefectRecords(reportWith([{
     classification: 'engine-defect', code: 'stat:str', object: 't3m4#0', expected: 10, observed: 0,
   }]), ''), /report path/i);
+});
+
+test('rejects a report path without retained engine and retail snapshot evidence', () => {
+  const finding = { classification: 'engine-defect', code: 'stat:str', object: 't3m4#0', expected: 10, observed: 0 };
+  assert.throws(() => toParityDefectRecords({ module: '101PER', findings: [finding] }, 'tools/parity/out/101per.parity.json'), /baseline.*evidence/i);
+  assert.throws(() => toParityDefectRecords({
+    module: '101PER', findings: [finding], evidenceRefs: ['tools/parity/out/101per.engine.json'],
+  }, 'tools/parity/out/101per.parity.json'), /retail.*baseline/i);
+});
+
+test('rejects missing expected or observed values before grouping', () => {
+  assert.throws(() => toParityDefectRecords(reportWith([
+    { classification: 'engine-defect', code: 'stat:str', object: 't3m4#0', observed: 8 },
+    { classification: 'engine-defect', code: 'stat:str', object: 't3m4#1', expected: 10, observed: 9 },
+  ]), 'tools/parity/out/101per.parity.json'), /expected/i);
+  assert.throws(() => toParityDefectRecords(reportWith([
+    { classification: 'engine-defect', code: 'stat:str', object: 't3m4#0', expected: 10 },
+  ]), 'tools/parity/out/101per.parity.json'), /observed/i);
 });
 
 test('groups repeated defect codes deterministically into one ledger record', () => {
@@ -78,6 +101,21 @@ test('serializes comparator-shaped arrays and nulls and accepts baseline provena
     'tools/parity/out/101per.engine.json',
     'tools/parity/out/101per.retail.json',
   ]);
+});
+
+test('normalization-equivalent codes select a deterministic canonical title and order', () => {
+  const first = toParityDefectRecords(reportWith([
+    { classification: 'engine-defect', code: 'sound:play style', object: 'sound#1', expected: 'loop', observed: 'oneshot' },
+    { classification: 'engine-defect', code: 'sound-play-style', object: 'sound#0', expected: 'loop', observed: 'oneshot' },
+  ]), 'tools/parity/out/101per.parity.json');
+  const second = toParityDefectRecords(reportWith([
+    { classification: 'engine-defect', code: 'sound-play-style', object: 'sound#0', expected: 'loop', observed: 'oneshot' },
+    { classification: 'engine-defect', code: 'sound:play style', object: 'sound#1', expected: 'loop', observed: 'oneshot' },
+  ]), 'tools/parity/out/101per.parity.json');
+
+  assert.deepEqual(first, second);
+  assert.equal(first[0].id, 'parity-101per-sound-play-style');
+  assert.equal(first[0].title, 'sound-play-style in 101PER');
 });
 
 test('does not infer defects from a confidence label', () => {

@@ -83,15 +83,18 @@ node -e "const fs=require('fs'); const {toParityDefectRecords}=require('./tools/
 ```
 
 Each emitted record includes the exact parity report path plus the report's
-retained engine and retail snapshot paths. A matching sidecar is supplementary,
+mandatory retained engine and retail snapshot paths. A report pathname alone is
+not evidence and cannot promote a finding. A matching sidecar is supplementary,
 not required: ordinary confirmed deterministic mismatches retain their baseline
-provenance through the report. `authored-retail-behavior`,
+provenance through those two snapshots. `authored-retail-behavior`,
 `unsupported-but-nonblocking`, `missing-evidence`, and
 `variable-runtime-output` remain report observations and are never promoted.
-The adapter rejects a promotable finding without the retained report path; it
-does not invent provenance. Repeated findings with the same code are grouped
-in stable object-identity order, preserving each expected and observed value as
-JSON in one ledger record. Arrays and `null` values are serialized explicitly.
+The adapter rejects a promotable finding without the retained report path and
+both baseline snapshot references; it does not invent provenance. Repeated
+findings with the same normalized code are grouped in stable object-identity
+order with a canonical code title. Every source finding must explicitly contain
+expected and observed values before grouping. Arrays and `null` values are
+serialized explicitly as JSON.
 
 The automated parity tools establish data and engine-observation evidence only.
 They do not accept headset presentation, comfort, haptics, stereo, or compositor

@@ -33,6 +33,14 @@ function defectId(module, code) {
   return `parity-${module.toLowerCase()}-${normalizedCode}`;
 }
 
+function normalizedCode(code) {
+  return code.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function findingObject(finding) {
   return typeof finding.object === 'string' && finding.object.trim() ? finding.object : '(module-wide)';
 }
@@ -41,12 +49,15 @@ function groupConfirmedFindings(findings) {
   const groups = new Map();
   for (const finding of findings) {
     const code = nonEmptyString(finding.code, 'finding code');
-    const key = code.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const key = normalizedCode(code);
     if (!key) throw new TypeError('Promoted parity finding requires a usable code');
-    if (!groups.has(key)) groups.set(key, { code, findings: [] });
+    if (!groups.has(key)) groups.set(key, { codes: new Set(), findings: [] });
+    groups.get(key).codes.add(code);
     groups.get(key).findings.push(finding);
   }
-  return [...groups.values()].sort((left, right) => left.code.localeCompare(right.code));
+  return [...groups.entries()]
+    .sort(([left], [right]) => compareText(left, right))
+    .map(([, group]) => ({ code: [...group.codes].sort(compareText)[0], findings: group.findings }));
 }
 
 function sortedFindings(findings) {
@@ -58,7 +69,7 @@ function sortedFindings(findings) {
 
 function groupedValue(findings, field) {
   if (findings.length === 1) return serializeFindingValue(findings[0][field], field);
-  return JSON.stringify(findings.map((finding) => ({ object: findingObject(finding), value: finding[field] === undefined ? null : finding[field] })));
+  return JSON.stringify(findings.map((finding) => ({ object: findingObject(finding), value: finding[field] })));
 }
 
 function chooseSeverity(findings) {
@@ -72,6 +83,29 @@ function groupedSteps(findings, module) {
   return steps.length > 0 ? [...new Set(steps)].sort() : [`node tools/parity/compare.js --module ${module}`];
 }
 
+function requireBaselineEvidence(report, module) {
+  const refs = optionalStringArray(report.evidenceRefs, 'report evidence references');
+  const expected = [
+    `tools/parity/out/${module.toLowerCase()}.engine.json`,
+    `tools/parity/out/${module.toLowerCase()}.retail.json`,
+  ];
+  const available = new Set(refs);
+  for (const evidenceRef of expected) {
+    if (!available.has(evidenceRef)) {
+      throw new TypeError(`Parity ledger adapter requires retained ${evidenceRef.includes('.engine.') ? 'engine' : 'retail'} baseline evidence: ${evidenceRef}`);
+    }
+  }
+  return refs;
+}
+
+function validatePromotedFindings(findings) {
+  for (const finding of findings) {
+    nonEmptyString(finding.code, 'finding code');
+    if (finding.expected === undefined) throw new TypeError('Promoted parity finding requires expected');
+    if (finding.observed === undefined) throw new TypeError('Promoted parity finding requires observed');
+  }
+}
+
 function toParityDefectRecords(report, reportPath) {
   if (!report || typeof report !== 'object' || Array.isArray(report)) throw new TypeError('Parity ledger adapter requires a report object');
   const module = nonEmptyString(report.module, 'report module').toUpperCase();
@@ -79,9 +113,11 @@ function toParityDefectRecords(report, reportPath) {
   const confirmed = report.findings.filter((finding) => finding && typeof finding === 'object' && finding.classification === DEFECT_CLASSIFICATION);
   if (confirmed.length === 0) return [];
 
-  // The retained parity report is universal evidence. compare.js adds both
-  // baseline snapshots at report level; finding sidecars are supplementary.
-  const evidenceBase = [nonEmptyString(reportPath, 'report path'), ...optionalStringArray(report.evidenceRefs, 'report evidence references')];
+  validatePromotedFindings(confirmed);
+
+  // A report pathname says where a claim was written, not what was compared.
+  // Retained engine and retail snapshot references are mandatory provenance.
+  const evidenceBase = [nonEmptyString(reportPath, 'report path'), ...requireBaselineEvidence(report, module)];
   return groupConfirmedFindings(confirmed).map(({ code, findings }) => {
     const ordered = sortedFindings(findings);
     const rooms = [...new Set(ordered.map((finding) => typeof finding.room === 'string' && finding.room.trim() ? finding.room : '(module-wide)'))];
