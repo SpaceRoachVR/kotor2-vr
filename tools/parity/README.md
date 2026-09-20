@@ -73,6 +73,26 @@ open saves from builds that wrote empty lists as `0xFFFFFFFF`.
 
 Output goes to `tools/parity/out/` (gitignored).
 
+## Defect-ledger promotion
+
+After reviewing a parity report, create ledger-ready records only from findings
+whose `classification` is exactly `engine-defect`:
+
+```bash
+node -e "const fs=require('fs'); const {toParityDefectRecords}=require('./tools/parity/ledger-adapter'); const report=JSON.parse(fs.readFileSync('tools/parity/out/101per.parity.json')); console.log(JSON.stringify(toParityDefectRecords(report, 'tools/parity/out/101per.parity.json'), null, 2));"
+```
+
+Each emitted record includes the exact parity report path and the finding's
+retained evidence references. `authored-retail-behavior`,
+`unsupported-but-nonblocking`, `missing-evidence`, and
+`variable-runtime-output` remain report observations and are never promoted.
+The adapter rejects a promotable finding without a report path or non-empty
+finding evidence references; it does not invent provenance.
+
+The automated parity tools establish data and engine-observation evidence only.
+They do not accept headset presentation, comfort, haptics, stereo, or compositor
+behavior; any such question remains a manual headset-review gate.
+
 ## Retail provenance
 
 Every retail snapshot includes `retailInputs`, an immutable, deduplicated list

@@ -10,7 +10,17 @@ const {
   classifyModelPresentation,
   compareAudio,
   compareModelPresentation,
+  normalizeFindingForReport,
 } = require('./compare');
+
+test('normalizes confirmed comparator output into ledger-ready expected and observed fields', () => {
+  assert.deepStrictEqual(normalizeFindingForReport({
+    confidence: 'defect', code: 'stat:str', retail: 10, engine: 8,
+  }), {
+    confidence: 'defect', classification: 'engine-defect', code: 'stat:str',
+    retail: 10, engine: 8, expected: 10, observed: 8,
+  });
+});
 
 test('continuous audio is not an engine defect without a captured play-style mapping', () => {
   assert.strictEqual(

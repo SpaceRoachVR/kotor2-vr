@@ -406,6 +406,26 @@ function rank(findings) {
     .sort((a, b) => order[a.confidence] - order[b.confidence] || b.count - a.count || a.code.localeCompare(b.code));
 }
 
+function classificationForFinding(finding) {
+  if (typeof finding.classification === 'string' && finding.classification.trim()) {
+    return finding.classification;
+  }
+  if (finding.confidence === 'defect') return 'engine-defect';
+  if (finding.confidence === 'variable') return 'variable-runtime-output';
+  return 'missing-evidence';
+}
+
+function normalizeFindingForReport(finding) {
+  const normalized = { ...finding, classification: classificationForFinding(finding) };
+  if (normalized.expected === undefined && normalized.retail !== undefined) {
+    normalized.expected = normalized.retail;
+  }
+  if (normalized.observed === undefined && normalized.engine !== undefined) {
+    normalized.observed = normalized.engine;
+  }
+  return normalized;
+}
+
 function fmt(v) {
   if (v === undefined) return '';
   if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
@@ -443,7 +463,10 @@ function main() {
   const evidence = loadEvidenceSidecar(mod);
 
   const findings = [];
-  const add = (f) => findings.push(linkEvidence(f, evidence.records, evidence.path));
+  const add = (f) => {
+    const linkedFinding = linkEvidence(f, evidence.records, evidence.path);
+    findings.push(normalizeFindingForReport(linkedFinding));
+  };
   const creatures = compareCreatures(retail, engine, add);
   const textures = compareTextures(retail, engine, add);
   const audio = compareAudio(retail, engine, add);
@@ -471,5 +494,5 @@ if (require.main === module) main();
 module.exports = {
   pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar,
   classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
-  describeAudioSemanticEvidence, selectedRetailPlayStyle,
+  describeAudioSemanticEvidence, selectedRetailPlayStyle, classificationForFinding, normalizeFindingForReport,
 };
