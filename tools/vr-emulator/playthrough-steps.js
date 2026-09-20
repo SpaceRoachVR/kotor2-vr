@@ -5527,4 +5527,5 @@ module.exports = {
   resumeFromCheckpoint,
   sleep,
   line,
+  newGameThroughCharacterCreation,
 };

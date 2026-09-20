@@ -1,6 +1,8 @@
 /** Converts confirmed parity findings into DefectLedger-compatible records. */
 
 const DEFECT_CLASSIFICATION = 'engine-defect';
+const fs = require('fs');
+const { validateCanonicalCaptureManifest } = require('./parity-contract');
 const SEVERITIES = new Set(['blocker', 'critical', 'major', 'minor', 'cosmetic']);
 const SEVERITY_ORDER = ['cosmetic', 'minor', 'major', 'critical', 'blocker'];
 
@@ -106,7 +108,7 @@ function validatePromotedFindings(findings) {
   }
 }
 
-function toParityDefectRecords(report, reportPath) {
+function toParityDefectRecords(report, reportPath, options = {}) {
   if (!report || typeof report !== 'object' || Array.isArray(report)) throw new TypeError('Parity ledger adapter requires a report object');
   const module = nonEmptyString(report.module, 'report module').toUpperCase();
   if (!Array.isArray(report.findings)) throw new TypeError('Parity ledger adapter requires report findings');
@@ -114,10 +116,30 @@ function toParityDefectRecords(report, reportPath) {
   if (confirmed.length === 0) return [];
 
   validatePromotedFindings(confirmed);
+  const reportReference = nonEmptyString(reportPath, 'report path');
+
+  if (!report.captureManifest) throw new TypeError('Parity ledger adapter requires a verified canonical capture manifest');
+  const readArtifact = typeof options.readArtifact === 'function'
+    ? options.readArtifact
+    : (artifactPath) => fs.readFileSync(artifactPath, 'utf8');
+  const artifacts = {};
+  for (const artifact of Object.values(report.captureManifest.artifacts || {})) {
+    if (artifact && artifact.path) artifacts[artifact.path] = readArtifact(artifact.path);
+  }
+  const capture = validateCanonicalCaptureManifest(report.captureManifest, artifacts);
+  if (capture.module !== module) throw new TypeError('Parity ledger adapter capture manifest module mismatch');
 
   // A report pathname says where a claim was written, not what was compared.
   // Retained engine and retail snapshot references are mandatory provenance.
-  const evidenceBase = [nonEmptyString(reportPath, 'report path'), ...requireBaselineEvidence(report, module)];
+  // Do not carry mutable tools/parity/out/<module> convenience pointers into
+  // the ledger.  A ledger record must keep resolving to the exact capture it
+  // was promoted from even after a later capture replaces the latest files.
+  const evidenceBase = [
+    capture.manifest.artifacts.comparison.path,
+    capture.manifest.artifacts.engine.path,
+    capture.manifest.artifacts.retail.path,
+    ...(capture.manifest.artifacts.sidecar ? [capture.manifest.artifacts.sidecar.path] : []),
+  ];
   return groupConfirmedFindings(confirmed).map(({ code, findings }) => {
     const ordered = sortedFindings(findings);
     const rooms = [...new Set(ordered.map((finding) => typeof finding.room === 'string' && finding.room.trim() ? finding.room : '(module-wide)'))];

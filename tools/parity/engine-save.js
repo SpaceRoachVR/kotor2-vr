@@ -12,8 +12,7 @@
 const path = require('path');
 const { VrHarness } = require('../vr-emulator/harness');
 const { startAssetService } = require('../vr-emulator/asset-service');
-const { bootEngine } = require('../vr-emulator/module-sweep');
-const { assertCanonicalEngineState, assertModuleLoadResult } = require('./engine-snapshot');
+const { assertCanonicalEngineState, assertModuleLoadResult, bootstrapFreshNewGame } = require('./engine-snapshot');
 
 function parseArgs(argv) {
   const args = { module: '101PER', canonical: false };
@@ -38,7 +37,7 @@ async function main() {
   const harness = new VrHarness({ port: 9448 });
   try {
     await harness.launch(service.url);
-    await bootEngine(harness, console.log, true);
+    await bootstrapFreshNewGame(harness, console.log);
     console.log(`loading ${moduleName}...`);
     const folder = await harness.evaluate(`(async () => {
       const K = window.KotOR, GS = K.GameState;
@@ -72,6 +71,7 @@ async function main() {
       const player = Array.isArray(party) ? party[0] : null;
       const state = {
         loadedFromSave,
+        bootstrap: 'new-game-ui',
         module: String(GS.module.filename || ''),
         playerName: player && player.getName ? String(player.getName() || '') : '',
         partySize: Array.isArray(party) ? party.length : null,

@@ -1,8 +1,8 @@
 /**
  * Engine side of the parity check: what our build actually loaded.
  *
- * Boots the browser build the same way `vr:sweep` does (EULA, first save to
- * establish a party), warps into one module, lets it settle, and dumps the
+ * Boots the browser build, establishes a party through the visible fresh
+ * new-game path, warps into one module, lets it settle, and dumps the
  * fields `retail_snapshot.py` reads from the retail data:
  *
  *   - every creature in the area: template, attributes, HP/FP, saves, classes,
@@ -21,9 +21,10 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { VrHarness } = require('../vr-emulator/harness');
 const { startAssetService } = require('../vr-emulator/asset-service');
-const { bootEngine } = require('../vr-emulator/module-sweep');
+const { waitForMenu, newGameThroughCharacterCreation } = require('../vr-emulator/playthrough-steps');
 
 const OUT_DIR = path.join(__dirname, 'out');
 const LOAD_TIMEOUT_MS = 300_000;
@@ -46,7 +47,7 @@ function parseArgs(argv) {
  * baseline. This deliberately fails closed: an unknown player or party is not
  * interchangeable with the T3-M4 bootstrap state.
  *
- * @param {{ loadedFromSave?: unknown, playerName?: unknown, partySize?: unknown }} state
+ * @param {{ loadedFromSave?: unknown, bootstrap?: unknown, playerName?: unknown, partySize?: unknown }} state
  */
 function assertCanonicalEngineState(state) {
   if (!state || typeof state !== 'object') {
@@ -57,6 +58,9 @@ function assertCanonicalEngineState(state) {
   }
   if (state.loadedFromSave !== false) {
     throw new Error('Canonical parity capture rejected: save origin could not be verified');
+  }
+  if (state.bootstrap !== 'new-game-ui') {
+    throw new Error('Canonical parity capture rejected: expected fresh new-game bootstrap');
   }
   if (state.playerName !== 'T3-M4' || state.partySize !== 1) {
     throw new Error('Canonical parity capture rejected: expected fresh T3-M4 single-member party');
@@ -97,10 +101,13 @@ function createEngineIdentity(state, metadata) {
   if (!metadata || typeof metadata !== 'object') {
     throw new TypeError('Engine identity requires metadata');
   }
-  for (const field of ['engineCommit', 'bundleMtime']) {
+  for (const field of ['servingBundleSha256']) {
     if (typeof metadata[field] !== 'string' || !metadata[field].trim()) {
       throw new TypeError(`Engine identity requires ${field}`);
     }
+  }
+  if (!/^[a-f0-9]{64}$/i.test(metadata.servingBundleSha256)) {
+    throw new TypeError('Engine identity requires a verified serving bundle SHA-256');
   }
   return Object.freeze({
     module: normalizeModuleName(state && state.module, 'Loaded module'),
@@ -108,7 +115,55 @@ function createEngineIdentity(state, metadata) {
     loadedFromSave: false,
     engineCommit: metadata.engineCommit,
     bundleMtime: metadata.bundleMtime,
+    servingBundleSha256: metadata.servingBundleSha256.toLowerCase(),
   });
+}
+
+/**
+ * Establish a party through the visible new-game route.  Canonical capture
+ * deliberately never delegates to module-sweep's save-loading bootstrap:
+ * save-derived state can make an unvisited target look clean while preserving
+ * a foreign party and globals.
+ */
+async function bootstrapFreshNewGame(harness, log) {
+  const accepted = await harness.evaluate(`(() => {
+    const button = Array.from(document.querySelectorAll('button')).find((candidate) => (candidate.textContent || '').trim() === 'OK');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  if (accepted) log('EULA accepted for fresh new-game bootstrap');
+  await harness.waitFor(`document.querySelector('#vr-spike-button') !== null`, 90_000, 500);
+  await waitForMenu(harness, 'MainMenu', 90_000);
+  await newGameThroughCharacterCreation(harness);
+  const provenance = await harness.evaluate(`(() => {
+    const K = window.KotOR;
+    const party = K.PartyManager && K.PartyManager.party;
+    return {
+      bootstrap: 'new-game-ui',
+      partyPresent: Array.isArray(party) && party.length > 0,
+      saveLoadInvoked: false,
+      currentModule: K.GameState && K.GameState.module ? String(K.GameState.module.filename || '') : null,
+    };
+  })()`);
+  if (!provenance.partyPresent || provenance.saveLoadInvoked !== false) {
+    throw new Error('Fresh new-game bootstrap did not establish an unsaved party');
+  }
+  log(`fresh new-game bootstrap established in ${provenance.currentModule || 'unknown module'}`);
+  return provenance;
+}
+
+async function identifyServingBundle(baseUrl, fetchImpl = global.fetch) {
+  if (typeof fetchImpl !== 'function') throw new Error('Cannot identify serving build: fetch is unavailable');
+  let bundleUrl;
+  try { bundleUrl = new URL('KotOR.js', String(baseUrl).endsWith('/') ? baseUrl : `${baseUrl}/`).toString(); }
+  catch (error) { throw new TypeError(`Cannot identify serving build URL: ${error.message}`); }
+  let response;
+  try { response = await fetchImpl(bundleUrl); } catch (error) { throw new Error(`Cannot identify serving build: ${error.message}`); }
+  if (!response || !response.ok) throw new Error(`Cannot identify serving build: ${bundleUrl} returned ${response && response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length === 0) throw new Error('Cannot identify serving build: KotOR.js was empty');
+  return Object.freeze({ url: bundleUrl, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
 }
 
 function buildSnapshotSource(moduleName) {
@@ -285,6 +340,8 @@ function buildSnapshotSource(moduleName) {
       template: String(attempt(() => placeable.templateResRef, '') || attempt(() => placeable.getTemplateResRef(), '') || '').toLowerCase(),
       objectType: 'placeable',
       modelKind: attempt(() => model && model.constructor && model.constructor.name, null),
+      modelPresent: model !== null,
+      modelStatus: model === null ? 'missing' : (manager === null ? 'unresolved' : 'loaded'),
       modelName: modelName == null ? null : String(modelName).toLowerCase(),
       requestedAnimation: requestedAnimation == null ? null : String(requestedAnimation).toLowerCase(),
       currentAnimation: currentAnimation == null ? null : String(currentAnimation).toLowerCase(),
@@ -295,6 +352,18 @@ function buildSnapshotSource(moduleName) {
 
   return {
     audio,
+    // A behavior result is valid only when a bounded interaction supplied its
+    // source identity plus an action/event/result trace.  This capture has no
+    // such driver yet, so it deliberately records the missing probe rather
+    // than implying that an idle module state is a successful interaction.
+    behaviorChain: {
+      coverage: 'missing-evidence',
+      interactionId: null,
+      eventDispatchLocated: false,
+      actionQueueLocated: false,
+      resultStateLocated: false,
+      reason: 'No bounded interaction driver was supplied to this engine capture',
+    },
     loadedFromSave,
     playerName: String(attempt(() => {
       const party = K.PartyManager && K.PartyManager.party;
@@ -324,9 +393,11 @@ async function main() {
   const log = (line) => console.log(line);
   try {
     await harness.launch(url);
-    await bootEngine(harness, log, true);
+    const servingBundle = await identifyServingBundle(url);
+    await bootstrapFreshNewGame(harness, log);
     log(`loading ${args.module}...`);
     const snapshot = await harness.evaluate(buildSnapshotSource(args.module), { timeoutMs: LOAD_TIMEOUT_MS + 60_000 });
+    snapshot.bootstrap = 'new-game-ui';
     const loadedState = assertModuleLoadResult({ state: snapshot, error: snapshot && snapshot.error }, args.module);
 
     // Which build was measured: tools/build-stamp.js writes dist/.build-stamp.
@@ -338,7 +409,7 @@ async function main() {
 
     if (args.canonical) assertCanonicalEngineState(loadedState);
 
-    const engineCommit = (() => {
+    const engineCommit = args.url ? null : (() => {
       try {
         return require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], {
           cwd: path.join(__dirname, '..', '..'),
@@ -357,7 +428,14 @@ async function main() {
       bundleMtime,
       ...snapshot,
     };
-    if (args.canonical) out.engineIdentity = createEngineIdentity(loadedState, { engineCommit, bundleMtime });
+    if (args.url) {
+      buildStamp = null;
+      bundleMtime = null;
+    }
+    if (args.canonical) out.engineIdentity = createEngineIdentity(loadedState, {
+      engineCommit, bundleMtime, servingBundleSha256: servingBundle.sha256,
+    });
+    out.servingBundle = servingBundle;
     fs.mkdirSync(OUT_DIR, { recursive: true });
     const file = path.join(OUT_DIR, `${args.module.toLowerCase()}.engine.json`);
     fs.writeFileSync(file, JSON.stringify(out, null, 2));
@@ -378,5 +456,7 @@ module.exports = {
   assertRequestedModuleIdentity,
   buildSnapshotSource,
   createEngineIdentity,
+  bootstrapFreshNewGame,
+  identifyServingBundle,
   parseArgs,
 };

@@ -1,7 +1,25 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { toParityDefectRecords } = require('./ledger-adapter');
+const { toParityDefectRecords: promote } = require('./ledger-adapter');
+const crypto = require('crypto');
+
+const fixtureEngine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
+const fixtureRetail = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
+const fixtureComparison = JSON.stringify({ module: '101per', findings: [] });
+const fixtureHash = (contents) => crypto.createHash('sha256').update(contents).digest('hex');
+const fixtureManifest = {
+  schema: 'kotor2-vr/parity-capture@1', module: '101PER',
+  artifacts: {
+    engine: { path: 'engine.json', sha256: fixtureHash(fixtureEngine) },
+    retail: { path: 'retail.json', sha256: fixtureHash(fixtureRetail) },
+    comparison: { path: 'comparison.json', sha256: fixtureHash(fixtureComparison) },
+  },
+};
+function toParityDefectRecords(report, reportPath, options = {}) {
+  if (!report.captureManifest) report.captureManifest = fixtureManifest;
+  return promote(report, reportPath, { readArtifact: (name) => ({ 'engine.json': fixtureEngine, 'retail.json': fixtureRetail, 'comparison.json': fixtureComparison })[name], ...options });
+}
 
 function reportWith(findings) {
   return {
@@ -33,10 +51,7 @@ test('keeps exact report and finding evidence references without duplicates', ()
   }]), 'tools/parity/out/101per.parity.json');
 
   assert.deepEqual(records[0].evidenceRefs, [
-    'tools/parity/out/101per.parity.json',
-    'tools/parity/out/101per.engine.json',
-    'tools/parity/out/101per.retail.json',
-    'tools/parity/out/101per.evidence.json',
+    'comparison.json', 'engine.json', 'retail.json', 'tools/parity/out/101per.evidence.json',
   ]);
   assert.deepEqual(records[0].reproductionSteps, ['Inspect panel_a.', 'Load fresh 101PER.']);
   assert.equal(records[0].room, '101PER_02');
@@ -49,12 +64,10 @@ test('rejects a promotable finding that lacks exact comparison evidence', () => 
   }]), ''), /report path/i);
 });
 
-test('rejects a report path without retained engine and retail snapshot evidence', () => {
+test('uses the verified capture manifest instead of mutable latest baseline path strings', () => {
   const finding = { classification: 'engine-defect', code: 'stat:str', object: 't3m4#0', expected: 10, observed: 0 };
-  assert.throws(() => toParityDefectRecords({ module: '101PER', findings: [finding] }, 'tools/parity/out/101per.parity.json'), /baseline.*evidence/i);
-  assert.throws(() => toParityDefectRecords({
-    module: '101PER', findings: [finding], evidenceRefs: ['tools/parity/out/101per.engine.json'],
-  }, 'tools/parity/out/101per.parity.json'), /retail.*baseline/i);
+  const records = toParityDefectRecords({ module: '101PER', findings: [finding] }, 'tools/parity/out/101per.parity.json');
+  assert.deepEqual(records[0].evidenceRefs, ['comparison.json', 'engine.json', 'retail.json']);
 });
 
 test('rejects missing expected or observed values before grouping', () => {
@@ -96,11 +109,7 @@ test('serializes comparator-shaped arrays and nulls and accepts baseline provena
 
   assert.equal(record.expected, '[100,101]');
   assert.equal(record.observed, 'null');
-  assert.deepEqual(record.evidenceRefs, [
-    'tools/parity/out/101per.parity.json',
-    'tools/parity/out/101per.engine.json',
-    'tools/parity/out/101per.retail.json',
-  ]);
+  assert.deepEqual(record.evidenceRefs, ['comparison.json', 'engine.json', 'retail.json']);
 });
 
 test('normalization-equivalent codes select a deterministic canonical title and order', () => {
@@ -123,4 +132,23 @@ test('does not infer defects from a confidence label', () => {
     confidence: 'defect', code: 'sound:volume', object: 'rumble#0', expected: 75, observed: 25,
   }]), 'tools/parity/out/101per.parity.json');
   assert.deepEqual(records, []);
+});
+
+test('promotion requires a retained verified canonical capture manifest, not mutable baseline path strings', () => {
+  const report = reportWith([{ classification: 'engine-defect', code: 'stat:str', expected: 10, observed: 8 }]);
+  assert.throws(() => promote(report, 'tools/parity/out/101per.parity.json'), /capture manifest/i);
+  const hash = (contents) => crypto.createHash('sha256').update(contents).digest('hex');
+  const engine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
+  const retail = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
+  const comparison = JSON.stringify({ module: '101per', findings: [] });
+  report.captureManifest = {
+    schema: 'kotor2-vr/parity-capture@1', module: '101PER',
+    artifacts: {
+      engine: { path: 'engine.json', sha256: hash(engine) }, retail: { path: 'retail.json', sha256: hash(retail) },
+      comparison: { path: 'comparison.json', sha256: hash(comparison) },
+    },
+  };
+  const artifacts = { 'engine.json': engine, 'retail.json': retail, 'comparison.json': comparison };
+  const records = toParityDefectRecords(report, 'report.json', { readArtifact: (name) => artifacts[name] });
+  assert.equal(records.length, 1);
 });

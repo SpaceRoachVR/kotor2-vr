@@ -367,6 +367,24 @@ def audio_snapshot(inst: Installation, module, git, capsules, retail_inputs: lis
     return {"area": area, "tracks": tracks, "sounds": sounds}
 
 
+def behavior_chain_snapshot() -> dict:
+    """State the bounded behavior-chain coverage honestly until an interaction is selected.
+
+    A passive module read cannot prove an authored DLG/GFF/NCS interaction.  The
+    explicit record prevents downstream comparison from fabricating an action
+    queue or global result when no safe, user-driven interaction trace exists.
+    """
+    return {
+        "coverage": "missing-evidence",
+        "interactionId": None,
+        "gffDlgLocated": False,
+        "ncsLocated": False,
+        "ncsIdentity": None,
+        "resultState": None,
+        "reason": "No bounded GFF/DLG/NCS interaction was selected for this retail snapshot",
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--module", required=True, help="module resref, e.g. 101PER")
@@ -406,6 +424,7 @@ def main() -> int:
         "creatures": creatures,
         "textures": [],
         "audio": audio_snapshot(inst, module, git, capsules, retail_inputs),
+        "behaviorChain": behavior_chain_snapshot(),
         "modelPresentation": model_presentation_snapshot(inst, git, capsules, retail_inputs),
     }
 

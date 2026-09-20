@@ -6,10 +6,13 @@ Compares what our engine does with what retail KOTOR II ships, using PyKotor
 ## Contract, authority, and adoption
 
 `parity-contract.js` is the boundary shared by later capture and comparison
-steps. Canonical engine evidence must identify a fresh state, must not be
-save-derived, and must name the module, engine commit, bundle modification time,
-and non-empty retail inputs. Evidence records must name their kind, resource,
-hash, and authority. The available finding classifications are deliberately
+steps. Canonical engine evidence must begin through the visible fresh-new-game
+route (never the sweep's save bootstrap), must not be save-derived, and must
+name the module and SHA-256 of the bundle actually served to the harness.
+Local captures also record checkout commit and bundle modification time.
+`--url` is hashed from that URL and records neither local commit nor mtime, so
+it never borrows the local checkout's bundle identity. Evidence records must name their
+module-scoped, typed resource identity, hash, and authority. The available finding classifications are deliberately
 closed: `engine-defect`, `authored-retail-behavior`,
 `unsupported-but-nonblocking`, `missing-evidence`, and
 `variable-runtime-output`.
@@ -33,11 +36,14 @@ tree after recording these SHA-256 values:
 | `retail_snapshot.py` | `5F2BE2D0957D77A6FBA05DD95CB514B31A33C545E8E0D9FFBAEF6CBDAC5AE388` |
 | `save_schema.py` | `C64E724B5C560D2DE4E69F1D063827596C96D97D951310DC370B70733878A7AE` |
 
-`tools/parity/out/` is gitignored evidence retention, never source adoption:
-keep only reproducible snapshots, sidecars, reports, and their identities for
-the applicable review period. Do not commit retail assets, extracted NCS/NSS,
-GUI exports, or save data there; regenerate them from the read-only retail
-install when needed.
+`tools/parity/out/` is gitignored evidence retention, never source adoption.
+The fixed `<module>.engine.json`, `<module>.retail.json`, and report files are
+latest-capture convenience pointers only. `compare.js` freezes every compared
+engine, retail, optional sidecar, and report into a content-addressed
+`out/captures/<module>/<sha256>/` manifest. Ledger promotion accepts only that
+verified manifest and emits those immutable artifact paths, so an existing
+ledger record never changes when a later capture refreshes the fixed files. Do
+not commit retail assets, extracted NCS/NSS, GUI exports, or save data there.
 
 | Check | Retail side | Engine side | Report |
 |---|---|---|---|
@@ -82,15 +88,17 @@ whose `classification` is exactly `engine-defect`:
 node -e "const fs=require('fs'); const {toParityDefectRecords}=require('./tools/parity/ledger-adapter'); const report=JSON.parse(fs.readFileSync('tools/parity/out/101per.parity.json')); console.log(JSON.stringify(toParityDefectRecords(report, 'tools/parity/out/101per.parity.json'), null, 2));"
 ```
 
-Each emitted record includes the exact parity report path plus the report's
-mandatory retained engine and retail snapshot paths. A report pathname alone is
-not evidence and cannot promote a finding. A matching sidecar is supplementary,
-not required: ordinary confirmed deterministic mismatches retain their baseline
-provenance through those two snapshots. `authored-retail-behavior`,
+Each emitted record includes only capture-specific immutable engine, retail,
+comparison, and optional sidecar paths from the verified manifest. A report
+pathname or fixed latest baseline pathname alone is not evidence and cannot
+promote a finding. A matching sidecar is supplementary, not required:
+ordinary confirmed deterministic mismatches retain their baseline provenance
+through those two snapshots. `authored-retail-behavior`,
 `unsupported-but-nonblocking`, `missing-evidence`, and
 `variable-runtime-output` remain report observations and are never promoted.
-The adapter rejects a promotable finding without the retained report path and
-both baseline snapshot references; it does not invent provenance. Repeated
+The adapter rejects a promotable finding without verified fresh-state engine
+provenance, matching module identities, hashed retail inputs, and retained
+artifact contents; it does not invent provenance. Repeated
 findings with the same normalized code are grouped in stable object-identity
 order with a canonical code title. Every source finding must explicitly contain
 expected and observed values before grouping. Arrays and `null` values are

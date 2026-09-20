@@ -17,6 +17,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const OUT_DIR = path.join(__dirname, 'out');
 
@@ -67,10 +68,33 @@ function diffSets(retail, engine) {
   return { missing, extra };
 }
 
+const AUTHORITY_BY_KIND = Object.freeze({ kotormcp: 'parsed-retail', holocron: 'human-review', dencs: 'hypothesis' });
+const SHA256 = /^[a-f0-9]{64}$/i;
+
 function evidenceMatchesFinding(record, finding) {
-  const resref = String(record.resref || '').toLowerCase();
-  const object = String(finding.object || '').toLowerCase();
-  return resref.length > 0 && (object === resref || object.startsWith(`${resref}#`));
+  const identity = finding && finding.resourceIdentity;
+  return Boolean(identity && typeof identity.resref === 'string' && typeof identity.restype === 'string'
+    && record.resref === identity.resref.toLowerCase() && record.restype === identity.restype.toUpperCase());
+}
+
+function validateEvidenceSidecar(document, retailSnapshot, requestedModule) {
+  const module = String(requestedModule || '').trim().toUpperCase();
+  if (!document || String(document.module || '').toUpperCase() !== module) throw new TypeError('Evidence sidecar module does not match comparison module');
+  if (!Array.isArray(document.records)) throw new TypeError('Evidence sidecar requires records');
+  const retailHashes = new Map((retailSnapshot && retailSnapshot.retailInputs || []).map((input) => [
+    `${String(input.resref || '').toLowerCase()}:${String(input.restype || '').toUpperCase()}`, String(input.sha256 || '').toLowerCase(),
+  ]));
+  return document.records.map((record) => {
+    if (!record || typeof record !== 'object') throw new TypeError('Evidence sidecar record must be an object');
+    const kind = String(record.kind || '').toLowerCase();
+    const resref = String(record.resref || '').toLowerCase();
+    const restype = String(record.restype || '').toUpperCase();
+    const sha256 = String(record.sha256 || record.hash || '').toLowerCase();
+    if (!AUTHORITY_BY_KIND[kind] || record.authority !== AUTHORITY_BY_KIND[kind]) throw new TypeError('Evidence sidecar authority is invalid for its tool');
+    if (!resref || !restype || !SHA256.test(sha256)) throw new TypeError('Evidence sidecar requires typed resource identity and SHA-256 hash');
+    if (kind === 'dencs' && (restype !== 'NCS' || retailHashes.get(`${resref}:${restype}`) !== sha256)) throw new TypeError('DeNCS evidence hash does not match current retail NCS');
+    return { ...record, kind, resref, restype, sha256, hash: sha256 };
+  });
 }
 
 function linkEvidence(finding, evidenceRecords, evidencePath) {
@@ -81,14 +105,14 @@ function linkEvidence(finding, evidenceRecords, evidencePath) {
   return { ...finding, evidenceRefs: [...new Set([...(finding.evidenceRefs || []), linkedPath])] };
 }
 
-function loadEvidenceSidecar(module) {
+function loadEvidenceSidecar(module, retailSnapshot) {
   const sidecarPath = path.join(OUT_DIR, `${module}.evidence.json`);
   if (!fs.existsSync(sidecarPath)) return { records: [], path: null };
   const document = JSON.parse(fs.readFileSync(sidecarPath, 'utf8'));
   if (!document || !Array.isArray(document.records)) {
     throw new TypeError(`Evidence sidecar requires records: ${sidecarPath}`);
   }
-  return { records: document.records, path: path.relative(process.cwd(), sidecarPath).replace(/\\/g, '/') };
+  return { records: validateEvidenceSidecar(document, retailSnapshot, module), path: path.relative(process.cwd(), sidecarPath).replace(/\\/g, '/') };
 }
 
 /**
@@ -280,6 +304,7 @@ function describeAudioSemanticEvidence(retail, playStyleMapping, engine) {
  * evidence, not an animation-runtime defect.
  */
 function classifyModelPresentation(retail, engine) {
+  if (!engine || engine.modelStatus === 'missing' || engine.modelStatus === 'unresolved') return 'missing-evidence';
   if (retail && retail.objectType === 'placeable' && retail.modelKind === 'creature'
       && engine && engine.animationApplied === false) {
     return 'authored-retail-behavior';
@@ -391,6 +416,26 @@ function compareModelPresentation(retailSnap, engineSnap, add) {
   return { paired };
 }
 
+/** Compare one explicitly bounded authored interaction without treating absent trace data as a match. */
+function compareBehaviorChain(retailSnap, engineSnap, add) {
+  const retail = retailSnap && retailSnap.behaviorChain;
+  const engine = engineSnap && engineSnap.behaviorChain;
+  const retailReady = retail && retail.coverage === 'complete' && retail.gffDlgLocated === true && retail.ncsLocated === true;
+  const engineReady = engine && engine.coverage === 'complete' && engine.eventDispatchLocated === true
+    && engine.actionQueueLocated === true && engine.resultStateLocated === true;
+  if (!retailReady || !engineReady) {
+    add({ area: 'behavior-chain', code: 'behavior-chain:bounded-interaction', confidence: 'coverage',
+      classification: 'missing-evidence', object: (retail && retail.interactionId) || (engine && engine.interactionId) || '101PER',
+      detail: 'The bounded GFF/DLG/NCS interaction lacks a complete retail source or engine action/event/result trace' });
+    return { coverage: 'missing-evidence', retail: retail || null, engine: engine || null };
+  }
+  const matches = same(retail.resultState, engine.resultState);
+  if (!matches) add({ area: 'behavior-chain', code: 'behavior-chain:result-state', confidence: 'defect',
+    classification: 'engine-defect', object: retail.interactionId, retail: retail.resultState, engine: engine.resultState,
+    resourceIdentity: retail.ncsIdentity || undefined });
+  return { coverage: matches ? 'match' : 'engine-defect', retail, engine };
+}
+
 function rank(findings) {
   const groups = new Map();
   for (const f of findings) {
@@ -436,6 +481,53 @@ function reportEvidenceRefs(module, evidencePath) {
   ])];
 }
 
+function sha256File(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function assertCaptureSource(root, fileName) {
+  if (typeof fileName !== 'string' || !fileName.trim()) throw new TypeError('Capture artifact requires a source file name');
+  const source = path.resolve(root, fileName);
+  const resolvedRoot = path.resolve(root);
+  if (source !== resolvedRoot && !source.startsWith(`${resolvedRoot}${path.sep}`)) throw new TypeError('Capture artifact source escaped its output root');
+  if (!fs.statSync(source).isFile()) throw new TypeError(`Capture artifact is not a file: ${fileName}`);
+  return source;
+}
+
+/**
+ * Freeze a comparison's evidence under a content-addressed capture directory.
+ * The mutable per-module files remain convenience pointers only; promotions use
+ * the returned manifest and its exact retained copies.
+ */
+function retainCaptureArtifacts({ module, root = OUT_DIR, files }) {
+  const normalizedModule = String(module || '').trim().toLowerCase();
+  if (!/^[a-z0-9_]{1,16}$/.test(normalizedModule)) throw new TypeError('Capture manifest requires a module identifier');
+  if (!files || typeof files !== 'object') throw new TypeError('Capture manifest requires artifact files');
+  const sources = {};
+  for (const key of ['engine', 'retail', 'comparison']) sources[key] = assertCaptureSource(root, files[key]);
+  if (files.sidecar) sources.sidecar = assertCaptureSource(root, files.sidecar);
+  const sourceHashes = Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, sha256File(source)]));
+  const captureId = crypto.createHash('sha256').update(JSON.stringify({ module: normalizedModule, sourceHashes })).digest('hex');
+  const destination = path.join(path.resolve(root), 'captures', normalizedModule, captureId);
+  fs.mkdirSync(destination, { recursive: true });
+  const artifacts = {};
+  for (const [key, source] of Object.entries(sources)) {
+    const artifactPath = path.join(destination, path.basename(source));
+    if (!fs.existsSync(artifactPath)) fs.copyFileSync(source, artifactPath, fs.constants.COPYFILE_EXCL);
+    if (sha256File(artifactPath) !== sourceHashes[key]) throw new Error(`Retained ${key} artifact hash mismatch`);
+    artifacts[key] = { path: artifactPath, sha256: sourceHashes[key] };
+  }
+  const manifest = { schema: 'kotor2-vr/parity-capture@1', module: normalizedModule.toUpperCase(), captureId, artifacts };
+  const manifestPath = path.join(destination, 'capture.json');
+  const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
+  if (fs.existsSync(manifestPath)) {
+    if (fs.readFileSync(manifestPath, 'utf8') !== serialized) throw new Error(`Capture manifest collision: ${manifestPath}`);
+  } else {
+    fs.writeFileSync(manifestPath, serialized, { flag: 'wx' });
+  }
+  return { path: manifestPath, manifest };
+}
+
 function fmt(v) {
   if (v === undefined) return '';
   if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
@@ -470,7 +562,7 @@ function main() {
   const mod = process.argv[i + 1].toLowerCase();
   const engine = JSON.parse(fs.readFileSync(path.join(OUT_DIR, `${mod}.engine.json`), 'utf8'));
   const retail = JSON.parse(fs.readFileSync(path.join(OUT_DIR, `${mod}.retail.json`), 'utf8'));
-  const evidence = loadEvidenceSidecar(mod);
+  const evidence = loadEvidenceSidecar(mod, retail);
 
   const findings = [];
   const add = (f) => {
@@ -481,6 +573,7 @@ function main() {
   const textures = compareTextures(retail, engine, add);
   const audio = compareAudio(retail, engine, add);
   const modelPresentation = compareModelPresentation(retail, engine, add);
+  const behaviorChain = compareBehaviorChain(retail, engine, add);
   const report = {
     schema: 'kotor2-vr/parity-report@1',
     module: mod,
@@ -488,12 +581,20 @@ function main() {
     bundleMtime: engine.bundleMtime,
     evidenceRefs: reportEvidenceRefs(mod, evidence.path),
     loadedFromSave: engine.loadedFromSave === true,
-    creatures, textures, audio, modelPresentation,
+    creatures, textures, audio, modelPresentation, behaviorChain,
     ranked: rank(findings),
     findings,
   };
-  fs.writeFileSync(path.join(OUT_DIR, `${mod}.parity.json`), JSON.stringify(report, null, 2));
+  const parityJsonPath = path.join(OUT_DIR, `${mod}.parity.json`);
+  fs.writeFileSync(parityJsonPath, JSON.stringify(report, null, 2));
   fs.writeFileSync(path.join(OUT_DIR, `${mod}.parity.md`), toMarkdown(report));
+  const retained = retainCaptureArtifacts({ module: mod, root: OUT_DIR, files: {
+    engine: `${mod}.engine.json`, retail: `${mod}.retail.json`, comparison: `${mod}.parity.json`,
+    ...(evidence.path ? { sidecar: `${mod}.evidence.json` } : {}),
+  } });
+  report.captureManifestPath = retained.path;
+  report.captureManifest = retained.manifest;
+  fs.writeFileSync(parityJsonPath, JSON.stringify(report, null, 2));
   const counts = { defect: 0, variable: 0, coverage: 0 };
   for (const g of report.ranked) counts[g.confidence] += 1;
   console.log(`${mod}: ${findings.length} findings in ${report.ranked.length} groups ` +
@@ -503,8 +604,9 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar,
+  pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar, validateEvidenceSidecar,
   classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
+  compareBehaviorChain,
   describeAudioSemanticEvidence, selectedRetailPlayStyle, classificationForFinding, normalizeFindingForReport,
-  reportEvidenceRefs,
+  reportEvidenceRefs, retainCaptureArtifacts,
 };

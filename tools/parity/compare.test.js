@@ -12,6 +12,9 @@ const {
   compareModelPresentation,
   normalizeFindingForReport,
   reportEvidenceRefs,
+  validateEvidenceSidecar,
+  retainCaptureArtifacts,
+  compareBehaviorChain,
 } = require('./compare');
 
 test('retains engine and retail snapshot provenance on every parity report', () => {
@@ -162,12 +165,60 @@ test('arm slots map by bit value: PyKotor RIGHT_ARM is 0x80, which TSL calls LEF
   assert.strictEqual(SLOT_MAP.LEFT_ARM, 'RIGHTARMBAND');
 });
 
-test('links matching evidence paths without changing a finding classification', () => {
-  const finding = { object: 'a_script#0', code: 'sound:files', confidence: 'coverage' };
+test('links matching typed evidence paths without changing a finding classification', () => {
+  const finding = { object: 'a_script#0', code: 'sound:files', confidence: 'coverage', resourceIdentity: { resref: 'a_script', restype: 'NCS' } };
   const linked = linkEvidence(finding, [{
     kind: 'dencs', resref: 'a_script', restype: 'NCS', sha256: 'a'.repeat(64),
     authority: 'hypothesis', path: 'tools/parity/out/101per.evidence.json',
   }]);
   assert.deepStrictEqual(linked.evidenceRefs, ['tools/parity/out/101per.evidence.json']);
   assert.strictEqual(linked.confidence, 'coverage');
+});
+
+test('does not link a DeNCS sidecar by bare resref when its typed identity is absent', () => {
+  const linked = linkEvidence({ object: 'a_script#0' }, [{
+    kind: 'dencs', resref: 'a_script', restype: 'NCS', sha256: 'a'.repeat(64), authority: 'hypothesis',
+  }], 'sidecar.json');
+  assert.equal(linked.evidenceRefs, undefined);
+});
+
+test('rejects stale, foreign, and edited DeNCS sidecars at Node ingestion', () => {
+  const retail = { module: '101per', retailInputs: [{ resref: 'a_script', restype: 'NCS', sha256: 'a'.repeat(64) }] };
+  const record = { kind: 'dencs', resref: 'a_script', restype: 'NCS', sha256: 'a'.repeat(64), authority: 'hypothesis', path: 'a_script.nss' };
+  assert.throws(() => validateEvidenceSidecar({ module: '102PER', records: [record] }, retail, '101PER'), /module/i);
+  assert.throws(() => validateEvidenceSidecar({ module: '101PER', records: [{ ...record, sha256: 'b'.repeat(64) }] }, retail, '101PER'), /hash/i);
+  assert.throws(() => validateEvidenceSidecar({ module: '101PER', records: [{ ...record, authority: 'parsed-retail' }] }, retail, '101PER'), /authority/i);
+});
+
+test('missing or unresolved engine models are missing evidence, never bind-pose evidence', () => {
+  assert.equal(classifyModelPresentation(
+    { objectType: 'placeable', modelKind: 'creature' },
+    { modelStatus: 'missing', animationApplied: false },
+  ), 'missing-evidence');
+});
+
+test('retains immutable capture-specific copies instead of treating latest module files as evidence', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-capture-'));
+  try {
+    fs.writeFileSync(path.join(root, 'engine.json'), JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } }));
+    fs.writeFileSync(path.join(root, 'retail.json'), JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] }));
+    fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ module: '101per' }));
+    const manifest = retainCaptureArtifacts({ module: '101PER', root, files: { engine: 'engine.json', retail: 'retail.json', comparison: 'report.json' } });
+    assert.match(manifest.path, /captures[\\/]101per[\\/][a-f0-9]{64}[\\/]capture\.json$/);
+    assert.ok(fs.existsSync(manifest.path));
+    assert.notEqual(path.dirname(manifest.path), root);
+    assert.ok(manifest.manifest.artifacts.comparison.sha256);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a blocked authored behavior-chain probe is reported as missing evidence instead of inventing a result', () => {
+  const findings = [];
+  const coverage = compareBehaviorChain(
+    { behaviorChain: { coverage: 'missing-evidence', gffDlgLocated: false, ncsLocated: false, reason: 'no bounded interaction metadata' } },
+    { behaviorChain: { coverage: 'missing-evidence', eventDispatchLocated: false, actionQueueLocated: false, resultStateLocated: false } },
+    (finding) => findings.push(finding),
+  );
+  assert.equal(coverage.coverage, 'missing-evidence');
+  assert.equal(findings[0].classification, 'missing-evidence');
 });
