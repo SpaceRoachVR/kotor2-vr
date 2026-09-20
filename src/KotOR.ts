@@ -92,3 +92,5 @@ export * from "@/engine/interaction/ActionApproachPolicy";
 // semantic actions are bound to physical buttons without reaching into the
 // bundle internals.
 export * from "@/vr/runtime/XRInputRouter";
+export * from "@/vr/runtime/VRMiniGameInputController";
+export * from "@/vr/runtime/VRMiniGameInputPolicy";

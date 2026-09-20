@@ -78,6 +78,7 @@ import {
   type VRCombatRequiredInput,
 } from "@/vr/runtime/VRCombatIntentQueue";
 import { VRCombatIntentDispatcher } from "@/vr/runtime/VRCombatIntentDispatcher";
+import { VRMiniGameInputController } from "@/vr/runtime/VRMiniGameInputController";
 import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
@@ -2181,12 +2182,37 @@ export class GameState implements EngineContext {
     GameState.renderPass.needsSwap = false;
     GameState.renderPassGUI.needsSwap = false;
 
+    // Swoop and turret VR input. The controller takes the live minigame through
+    // this provider rather than importing engine state, which keeps the VR
+    // layer independent of GameState (and its tests free of the engine).
+    VRSpike.miniGameInput = VRMiniGameInputController;
+    VRMiniGameInputController.setProvider(() => {
+      if (GameState.Mode !== EngineMode.MINIGAME) return null;
+      const miniGame: any = GameState.module?.area?.miniGame;
+      const player: any = miniGame?.player;
+      if (!miniGame || !player) return null;
+      return {
+        type: miniGame.type,
+        lateralAcceleration: player.accel_lateral_secs,
+        setLateralForce: (force: number) => { player.lateralForce = force; },
+        jump: () => player.jump?.(),
+        fire: () => player.fire?.(),
+        get pitch(){ return player.rotation?.x ?? 0; },
+        get yaw(){ return player.rotation?.z ?? 0; },
+        rotateBy: (pitchDelta: number, yawDelta: number) => {
+          player.rotate?.('x', pitchDelta);
+          player.rotate?.('z', yawDelta);
+        },
+      };
+    });
+
     /**
      * Phase 0.1 stereo perf spike. Async and deliberately not awaited — it only
      * promotes the GL context and adds a button, and nothing downstream depends
      * on it. If there is no WebXR runtime it logs and does nothing.
      */
     VRSpike.install(GameState.renderer, GameState.scene, {
+
       update: (timestamp, source) => GameState.Update(timestamp, source),
       getPlayerPosition: () => GameState.getCurrentPlayer()?.position ?? null,
       getFacing: () => FollowerCamera.facing,

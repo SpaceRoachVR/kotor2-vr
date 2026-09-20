@@ -334,6 +334,12 @@ export class VRSpike {
   private static traceXRStartup = false;
   private static traceXRStartupCallbacksSeen = 0;
   private static xrFrameRenderTarget: THREE.WebGLRenderTarget | null = null;
+  /**
+   * Minigame input, injected by the engine so VRSpike keeps no dependency on
+   * engine state (its tests mock the world, and importing GameState here pulled
+   * the whole engine into them).
+   */
+  static miniGameInput: { update: (frame: XRInputFrame | null) => void; reset: () => void } | null = null;
   private static readonly inputRouter = new XRInputRouter();
   private static dominantHand: XRHandRole = 'right';
   private static inputCapabilityValidator = new XRInputCapabilityValidator();
@@ -1062,6 +1068,10 @@ export class VRSpike {
       const avatarPresentation = VRSpike.hooks?.getAvatarPresentation?.();
       VRSpike.controllerAnchorHost.setHumanoidHandsVisible(avatarPresentation?.humanoidHands === true);
       VRSpike.controllerAnchorHost.update(inputFrame);
+      // Swoop and turret input, alongside the flatscreen KeyMapper handlers
+      // rather than replacing them. Reached through the runtime import so
+      // VRSpike keeps no dependency on engine state.
+      VRSpike.miniGameInput?.update(inputFrame);
     } catch (error) {
       VRSpike.clearTrackedInput();
       if (!VRSpike.trackedInputErrorReported) {
@@ -1072,6 +1082,7 @@ export class VRSpike {
   }
 
   private static clearTrackedInput(): void {
+    VRSpike.miniGameInput?.reset();
     VRSpike.closeRadialMenuForLifecycle(true);
     VRSpike.latestInputFrame = null;
     VRSpike.interactionPreviewIndicator = null;
