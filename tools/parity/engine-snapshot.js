@@ -256,11 +256,34 @@ function buildSnapshotSource(moduleName) {
         volume: num(attempt(() => snd.volume, null)), volumeVariation: num(attempt(() => snd.volumeVariation, null)),
         maxDistance: num(attempt(() => snd.maxDistance, null)), minDistance: num(attempt(() => snd.minDistance, null)),
         priority: num(attempt(() => snd.priority, null)), times: num(attempt(() => snd.times, null)),
+        // This is capture-only. AudioEmitter semantics are intentionally not
+        // changed by the parity harness.
+        playStyle: attempt(() => snd.audioEmitter && snd.audioEmitter.playStyle, null),
         sounds: (attempt(() => snd.soundResRefs, []) || []).map((n) => String(n).toLowerCase()),
         decoded: buffers,
       };
     }),
   };
+
+  // Placeables may intentionally use creature MDLs as static props. Capture
+  // the object/model state without changing model animation ownership.
+  const modelPresentation = (attempt(() => area.placeables, []) || []).map((placeable, i) => {
+    const model = attempt(() => placeable.model, null);
+    const manager = attempt(() => model && model.animationManager, null);
+    const currentAnimation = attempt(() => manager && manager.currentAnimation && manager.currentAnimation.name, null);
+    const requestedAnimation = attempt(() => placeable.animStateInfo && placeable.animStateInfo.currentAnimState, null);
+    const modelName = attempt(() => placeable.placeableAppearance && placeable.placeableAppearance.modelname, null);
+    return {
+      areaIndex: i,
+      template: String(attempt(() => placeable.templateResRef, '') || attempt(() => placeable.getTemplateResRef(), '') || '').toLowerCase(),
+      objectType: 'placeable',
+      modelKind: 'placeable',
+      modelName: modelName == null ? null : String(modelName).toLowerCase(),
+      requestedAnimation: num(requestedAnimation),
+      currentAnimation: currentAnimation == null ? null : String(currentAnimation).toLowerCase(),
+      animationApplied: currentAnimation != null,
+    };
+  });
 
   return {
     audio,
@@ -275,7 +298,7 @@ function buildSnapshotSource(moduleName) {
       return Array.isArray(party) ? party.length : null;
     }, null)),
     module: String(GS.module.filename || '').toLowerCase(),
-    creatures, textures,
+    creatures, textures, modelPresentation,
     diagnosticsBufferFull: diags.length >= 10000,
   };
 })()`;

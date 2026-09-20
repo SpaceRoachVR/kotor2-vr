@@ -40,6 +40,7 @@ from pykotor.extract.installation import Installation, SearchLocation  # noqa: E
 from pykotor.resource.generics.utc import read_utc  # noqa: E402
 from pykotor.resource.generics.uti import read_uti  # noqa: E402
 from pykotor.resource.generics.uts import read_uts  # noqa: E402
+from pykotor.resource.generics.utp import read_utp  # noqa: E402
 from pykotor.resource.formats.gff import read_gff  # noqa: E402
 from pykotor.resource.formats.tpc import read_tpc  # noqa: E402
 from pykotor.resource.formats.twoda import read_2da  # noqa: E402
@@ -250,6 +251,74 @@ def twoda_resource(inst: Installation, table: str, row: int, retail_inputs: list
     return None if value in ("", "****") else value.lower()
 
 
+def twoda_cell(inst: Installation, table: str, row: int, column: str, retail_inputs: list[dict]) -> str | None:
+    """Read one authored 2DA cell while retaining the exact table input."""
+    result = inst.resource(table, ResourceType.TwoDA, [SearchLocation.OVERRIDE, SearchLocation.CHITIN])
+    if result is None or row is None or row < 0:
+        return None
+    record_resource_input(retail_inputs, result)
+    table_data = read_2da(result.data)
+    if row >= table_data.get_height():
+        return None
+    try:
+        value = table_data.get_row(row).get_string(column)
+    except (KeyError, ValueError):
+        return None
+    normalized = str(value or "").strip().lower()
+    return None if normalized in ("", "****") else normalized
+
+
+def creature_model_names(inst: Installation, retail_inputs: list[dict]) -> set[str]:
+    """Return authored creature-model references from appearance.2da."""
+    result = inst.resource("appearance", ResourceType.TwoDA, [SearchLocation.OVERRIDE, SearchLocation.CHITIN])
+    if result is None:
+        return set()
+    record_resource_input(retail_inputs, result)
+    table_data = read_2da(result.data)
+    names: set[str] = set()
+    for index in range(table_data.get_height()):
+        row = table_data.get_row(index)
+        for column in ("modela", "modelb", "modelc", "modeld", "modele", "modelf"):
+            try:
+                value = str(row.get_string(column) or "").strip().lower()
+            except (KeyError, ValueError):
+                continue
+            if value and value != "****":
+                names.add(value)
+    return names
+
+
+def model_presentation_snapshot(inst: Installation, git, capsules, retail_inputs: list[dict]) -> list[dict]:
+    """Capture placeable template/model provenance without inferring animation intent."""
+    capsules = require_module_scoped_capsules(capsules)
+    creature_models = creature_model_names(inst, retail_inputs)
+    presentations: list[dict] = []
+    for index, entry in enumerate(git.placeables if git is not None else []):
+        template = resref(entry.resref)
+        record = {"gitIndex": index, "template": template, "objectType": "placeable"}
+        result = inst.resource(template, ResourceType.UTP,
+                               [SearchLocation.OVERRIDE, SearchLocation.CUSTOM_MODULES, SearchLocation.CHITIN],
+                               capsules=capsules)
+        if result is None:
+            record["status"] = "template-missing"
+            presentations.append(record)
+            continue
+        record_resource_input(retail_inputs, result)
+        utp = read_utp(result.data)
+        appearance_id = utp.appearance_id
+        model_name = twoda_cell(inst, "placeables", appearance_id, "modelname", retail_inputs)
+        record.update({
+            "status": "ok",
+            "source": str(result.filepath),
+            "appearance": appearance_id,
+            "modelName": model_name,
+            "modelKind": "creature" if model_name in creature_models else "placeable",
+            "requestedAnimation": None,
+        })
+        presentations.append(record)
+    return presentations
+
+
 def audio_snapshot(inst: Installation, module, git, capsules, retail_inputs: list[dict]) -> dict:
     """Area music/ambience from the GIT's AreaProperties, and every placed sound."""
     capsules = require_module_scoped_capsules(capsules)
@@ -337,6 +406,7 @@ def main() -> int:
         "creatures": creatures,
         "textures": [],
         "audio": audio_snapshot(inst, module, git, capsules, retail_inputs),
+        "modelPresentation": model_presentation_snapshot(inst, git, capsules, retail_inputs),
     }
 
     # Textures retail's own models reference, plus anything the engine asked for.

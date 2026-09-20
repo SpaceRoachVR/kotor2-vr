@@ -242,8 +242,33 @@ function compareTextures(retailSnap, engineSnap, add) {
   return { checked };
 }
 
-const SOUND_FIELDS = ['active', 'continuous', 'looping', 'positional', 'random', 'randomPosition',
+const SOUND_FIELDS = ['active', 'looping', 'positional', 'random', 'randomPosition',
   'interval', 'intervalVariation', 'volume', 'volumeVariation', 'maxDistance', 'minDistance', 'priority', 'times'];
+
+/**
+ * Classifies the runtime audio play style only when the retail boolean-to-style
+ * mapping was captured. UTS flags alone do not prove how the retail runtime
+ * schedules a sound, so an absent mapping must not become a defect claim.
+ */
+function classifyAudioSemantic(retail, engine, playStyleMapping) {
+  if (!playStyleMapping || typeof playStyleMapping !== 'object') return 'missing-evidence';
+  const expected = playStyleMapping[retail && retail.continuous === true ? 'true' : 'false'];
+  if (typeof expected !== 'string' || !expected.trim()) return 'missing-evidence';
+  return expected === engine.playStyle ? 'authored-retail-behavior' : 'engine-defect';
+}
+
+/**
+ * A placeable can deliberately reuse a creature MDL as a static prop. A
+ * missing runtime animation for that authored combination is bind-pose
+ * evidence, not an animation-runtime defect.
+ */
+function classifyModelPresentation(retail, engine) {
+  if (retail && retail.objectType === 'placeable' && retail.modelKind === 'creature'
+      && engine && engine.animationApplied === false) {
+    return 'authored-retail-behavior';
+  }
+  return engine && engine.animationApplied === true ? 'authored-retail-behavior' : 'missing-evidence';
+}
 
 function compareAudio(retailSnap, engineSnap, add) {
   const r = retailSnap.audio; const e = engineSnap.audio;
@@ -278,6 +303,14 @@ function compareAudio(retailSnap, engineSnap, add) {
     }
     paired++;
     const object = `${rs.template}#${rs.gitIndex}`;
+    if (!same(rs.continuous, es.continuous)) {
+      const classification = classifyAudioSemantic(rs, es, e.playStyleMapping);
+      add({ area: 'audio', code: 'sound:play-style', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
+        classification, object, retail: rs.continuous, engine: es.playStyle ?? null,
+        detail: classification === 'missing-evidence'
+          ? 'UTS continuous flag differs, but no retail play-style mapping was captured'
+          : 'captured retail play-style mapping disagrees with the engine' });
+    }
     for (const field of SOUND_FIELDS) {
       if (!same(rs[field], es[field])) {
         add({ area: 'audio', code: `sound:${field}`, confidence: 'defect', object, retail: rs[field], engine: es[field] });
@@ -303,6 +336,40 @@ function compareAudio(retailSnap, engineSnap, add) {
       add({ area: 'audio', code: 'sound-not-in-git', confidence: 'coverage', object: es.template || es.tag,
         detail: 'engine area has a sound object the GIT does not place' });
     }
+  }
+  return { paired };
+}
+
+function compareModelPresentation(retailSnap, engineSnap, add) {
+  const retail = retailSnap.modelPresentation || [];
+  const engine = engineSnap.modelPresentation || [];
+  const pool = new Map();
+  for (const record of engine) {
+    if (!pool.has(record.template)) pool.set(record.template, []);
+    pool.get(record.template).push(record);
+  }
+  let paired = 0;
+  for (const record of retail) {
+    const candidates = pool.get(record.template);
+    const observed = candidates && candidates.shift();
+    if (!observed) {
+      add({ area: 'model', code: 'model-not-spawned', confidence: 'coverage', classification: 'missing-evidence',
+        object: record.template, detail: 'retail GIT places this model, but the engine area has no matching placeable' });
+      continue;
+    }
+    paired++;
+    const classification = classifyModelPresentation(record, observed);
+    const isAuthoredCreatureBindPose = record.objectType === 'placeable'
+      && record.modelKind === 'creature' && observed.animationApplied === false;
+    const needsUnprovenAnimationFinding = record.requestedAnimation != null
+      && observed.animationApplied === false;
+    if (!isAuthoredCreatureBindPose && !needsUnprovenAnimationFinding) continue;
+    add({ area: 'model', code: 'model:presentation', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
+      classification, object: `${record.template}#${record.gitIndex}`, retail: record.requestedAnimation ?? null,
+      engine: observed.currentAnimation ?? null,
+      detail: classification === 'authored-retail-behavior'
+        ? 'retail placeable/model metadata identifies an authored bind pose'
+        : 'animation application requires additional retail presentation evidence' });
   }
   return { paired };
 }
@@ -363,13 +430,14 @@ function main() {
   const creatures = compareCreatures(retail, engine, add);
   const textures = compareTextures(retail, engine, add);
   const audio = compareAudio(retail, engine, add);
+  const modelPresentation = compareModelPresentation(retail, engine, add);
   const report = {
     schema: 'kotor2-vr/parity-report@1',
     module: mod,
     engineCapturedAt: engine.capturedAt,
     bundleMtime: engine.bundleMtime,
     loadedFromSave: engine.loadedFromSave === true,
-    creatures, textures, audio,
+    creatures, textures, audio, modelPresentation,
     ranked: rank(findings),
     findings,
   };
@@ -383,4 +451,7 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar };
+module.exports = {
+  pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar,
+  classifyAudioSemantic, classifyModelPresentation, compareModelPresentation,
+};

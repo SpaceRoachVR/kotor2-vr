@@ -1,6 +1,31 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { pairCreatures, diffSets, textureLayer, SLOT_MAP, linkEvidence } = require('./compare');
+const {
+  pairCreatures,
+  diffSets,
+  textureLayer,
+  SLOT_MAP,
+  linkEvidence,
+  classifyAudioSemantic,
+  classifyModelPresentation,
+} = require('./compare');
+
+test('continuous audio is not an engine defect without a captured play-style mapping', () => {
+  assert.strictEqual(
+    classifyAudioSemantic({ continuous: true }, { continuous: false }, null),
+    'missing-evidence',
+  );
+});
+
+test('a placeable creature model is authored bind-pose evidence, not an animation defect', () => {
+  assert.strictEqual(
+    classifyModelPresentation(
+      { objectType: 'placeable', modelKind: 'creature' },
+      { animationApplied: false },
+    ),
+    'authored-retail-behavior',
+  );
+});
 
 test('pairs creatures by template regardless of order, keeping leftovers', () => {
   const retail = [{ template: 'a', gitIndex: 0 }, { template: 'b', gitIndex: 1 }, { template: 'a', gitIndex: 2 }];
