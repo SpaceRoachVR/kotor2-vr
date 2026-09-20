@@ -55,6 +55,49 @@ test('unavailable audio semantics retain independent volume mismatch evidence', 
   }]);
 });
 
+test('an incomplete selected retail audio mapping is reported as missing evidence', () => {
+  const findings = [];
+  compareAudio({
+    module: '101per',
+    audio: { area: {}, tracks: {}, sounds: [{ status: 'ok', template: 'rumble', gitIndex: 0, continuous: true, sounds: [] }] },
+  }, {
+    loadedFromSave: false,
+    audio: {
+      area: {},
+      playStyleMapping: { true: '   ', false: 'oneshot' },
+      sounds: [{ template: 'rumble', continuous: false, playStyle: 'loop', playStyleAvailable: true, sounds: [] }],
+    },
+  }, (finding) => findings.push(finding));
+  assert.strictEqual(findings[0].classification, 'missing-evidence');
+  assert.strictEqual(findings[0].detail, 'retail play-style mapping is missing');
+});
+
+test('matching audio semantic mapping retains scalar and sound-file mismatches', () => {
+  const findings = [];
+  compareAudio({
+    module: '101per',
+    audio: { area: {}, tracks: {}, sounds: [{
+      status: 'ok', template: 'rumble', gitIndex: 0, continuous: true, volume: 75,
+      sounds: ['rumble_a'],
+    }] },
+  }, {
+    loadedFromSave: false,
+    audio: {
+      area: {},
+      playStyleMapping: { true: 'loop', false: 'oneshot' },
+      sounds: [{
+        template: 'rumble', continuous: false, playStyle: 'loop', playStyleAvailable: true, volume: 25,
+        sounds: ['rumble_b'],
+      }],
+    },
+  }, (finding) => findings.push(finding));
+  assert.deepStrictEqual(findings, [{
+    area: 'audio', code: 'sound:volume', confidence: 'defect', object: 'rumble#0', retail: 75, engine: 25,
+  }, {
+    area: 'audio', code: 'sound:files', confidence: 'defect', object: 'rumble#0', retail: ['rumble_a'], engine: ['rumble_b'],
+  }]);
+});
+
 test('snapshot comparator records an ordinary requested but unapplied placeable animation as missing evidence', () => {
   const findings = [];
   compareModelPresentation({

@@ -250,16 +250,21 @@ const SOUND_FIELDS = ['active', 'looping', 'positional', 'random', 'randomPositi
  * mapping was captured. UTS flags alone do not prove how the retail runtime
  * schedules a sound, so an absent mapping must not become a defect claim.
  */
-function classifyAudioSemantic(retail, engine, playStyleMapping) {
-  if (!playStyleMapping || typeof playStyleMapping !== 'object') return 'missing-evidence';
-  if (!engine || engine.playStyleAvailable !== true) return 'missing-evidence';
+function selectedRetailPlayStyle(retail, playStyleMapping) {
+  if (!playStyleMapping || typeof playStyleMapping !== 'object') return null;
   const expected = playStyleMapping[retail && retail.continuous === true ? 'true' : 'false'];
-  if (typeof expected !== 'string' || !expected.trim()) return 'missing-evidence';
+  return typeof expected === 'string' && expected.trim() ? expected.trim() : null;
+}
+
+function classifyAudioSemantic(retail, engine, playStyleMapping) {
+  const expected = selectedRetailPlayStyle(retail, playStyleMapping);
+  if (!expected) return 'missing-evidence';
+  if (!engine || engine.playStyleAvailable !== true) return 'missing-evidence';
   return expected === engine.playStyle ? 'authored-retail-behavior' : 'engine-defect';
 }
 
-function describeAudioSemanticEvidence(playStyleMapping, engine) {
-  const mappingAvailable = Boolean(playStyleMapping && typeof playStyleMapping === 'object');
+function describeAudioSemanticEvidence(retail, playStyleMapping, engine) {
+  const mappingAvailable = selectedRetailPlayStyle(retail, playStyleMapping) !== null;
   const observationAvailable = Boolean(engine && engine.playStyleAvailable === true);
   if (!mappingAvailable && !observationAvailable) {
     return 'retail play-style mapping is missing; engine play-style observation is unavailable';
@@ -320,7 +325,7 @@ function compareAudio(retailSnap, engineSnap, add) {
       if (classification !== 'authored-retail-behavior') {
         add({ area: 'audio', code: 'sound:play-style', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
           classification, object, retail: rs.continuous, engine: es.playStyle ?? null,
-          detail: describeAudioSemanticEvidence(e.playStyleMapping, es) });
+          detail: describeAudioSemanticEvidence(rs, e.playStyleMapping, es) });
       }
     }
     for (const field of SOUND_FIELDS) {
@@ -466,5 +471,5 @@ if (require.main === module) main();
 module.exports = {
   pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar,
   classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
-  describeAudioSemanticEvidence,
+  describeAudioSemanticEvidence, selectedRetailPlayStyle,
 };
