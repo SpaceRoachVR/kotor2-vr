@@ -19,6 +19,7 @@ AUTHORITY_BY_KIND = {
     "dencs": "hypothesis",
 }
 SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+MODULE_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 OUT_DIR = Path(__file__).resolve().parent / "out"
 
 
@@ -27,6 +28,23 @@ def _required_string(record: Mapping[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Evidence record requires {field}")
     return value.strip()
+
+
+def _evidence_hash(record: Mapping[str, Any]) -> str:
+    sha256 = record.get("sha256")
+    contract_hash = record.get("hash")
+    if sha256 is None and contract_hash is None:
+        raise ValueError("Evidence record requires sha256 hash")
+    if sha256 is not None and not isinstance(sha256, str):
+        raise ValueError("Evidence record sha256 hash must be a string")
+    if contract_hash is not None and not isinstance(contract_hash, str):
+        raise ValueError("Evidence record hash must be a string")
+    selected = (sha256 if sha256 is not None else contract_hash).strip()
+    if not SHA256_PATTERN.fullmatch(selected):
+        raise ValueError("Evidence record requires a 64-character sha256 hash")
+    if sha256 is not None and contract_hash is not None and sha256.strip().lower() != contract_hash.strip().lower():
+        raise ValueError("Evidence record hash and sha256 must match")
+    return selected.lower()
 
 
 def validate_evidence(record: Mapping[str, Any], retail_hashes: Mapping[str, str]) -> dict[str, Any]:
@@ -45,14 +63,14 @@ def validate_evidence(record: Mapping[str, Any], retail_hashes: Mapping[str, str
 
     resref = _required_string(record, "resref").lower()
     restype = _required_string(record, "restype").upper()
-    sha256 = _required_string(record, "sha256").lower()
+    sha256 = _evidence_hash(record)
     source_path = _required_string(record, "path")
-    if not SHA256_PATTERN.fullmatch(sha256):
-        raise ValueError("Evidence record requires a 64-character sha256 hash")
-
     key = f"{resref}:{restype}"
-    if kind == "dencs" and retail_hashes.get(key, "").lower() != sha256:
-        raise ValueError("DeNCS evidence hash does not match retail NCS")
+    if kind == "dencs":
+        if restype != "NCS":
+            raise ValueError("DeNCS evidence restype must be NCS")
+        if retail_hashes.get(key, "").lower() != sha256:
+            raise ValueError("DeNCS evidence hash does not match retail NCS")
 
     normalized = dict(record)
     normalized.update({
@@ -60,6 +78,7 @@ def validate_evidence(record: Mapping[str, Any], retail_hashes: Mapping[str, str
         "resref": resref,
         "restype": restype,
         "sha256": sha256,
+        "hash": sha256,
         "authority": authority,
         "path": source_path,
     })
@@ -100,15 +119,19 @@ def load_evidence(path: str | Path, retail_hashes: Mapping[str, str]) -> list[di
 
 def write_evidence(module: str, records: Sequence[Mapping[str, Any]], retail_hashes: Mapping[str, str]) -> Path:
     """Write a validated identity-only sidecar beneath the ignored output directory."""
-    if not isinstance(module, str) or not module.strip():
-        raise ValueError("Evidence sidecar requires module")
+    if not isinstance(module, str) or not MODULE_PATTERN.fullmatch(module.strip()):
+        raise ValueError("Evidence sidecar requires an alphanumeric module identifier")
     if not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
         raise ValueError("Evidence sidecar records must be a list")
 
+    normalized_module = module.strip().upper()
     normalized = [validate_evidence(record, retail_hashes) for record in records]
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    output = OUT_DIR / f"{module.strip().lower()}.evidence.json"
-    output.write_text(json.dumps({"schema": "kotor2-vr/parity-evidence@1", "module": module.strip().upper(), "records": normalized}, indent=2) + "\n", encoding="utf-8")
+    output_dir = OUT_DIR.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = (output_dir / f"{normalized_module.lower()}.evidence.json").resolve()
+    if output.parent != output_dir:
+        raise RuntimeError("Evidence sidecar output escaped the ignored output directory")
+    output.write_text(json.dumps({"schema": "kotor2-vr/parity-evidence@1", "module": normalized_module, "records": normalized}, indent=2) + "\n", encoding="utf-8")
     return output
 
 
