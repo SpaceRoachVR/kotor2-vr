@@ -67,6 +67,30 @@ function diffSets(retail, engine) {
   return { missing, extra };
 }
 
+function evidenceMatchesFinding(record, finding) {
+  const resref = String(record.resref || '').toLowerCase();
+  const object = String(finding.object || '').toLowerCase();
+  return resref.length > 0 && (object === resref || object.startsWith(`${resref}#`));
+}
+
+function linkEvidence(finding, evidenceRecords, evidencePath) {
+  const matchingRecords = (evidenceRecords || []).filter((record) => evidenceMatchesFinding(record, finding));
+  if (matchingRecords.length === 0) return finding;
+  const linkedPath = evidencePath || matchingRecords[0].path;
+  if (typeof linkedPath !== 'string' || !linkedPath.trim()) return finding;
+  return { ...finding, evidenceRefs: [...new Set([...(finding.evidenceRefs || []), linkedPath])] };
+}
+
+function loadEvidenceSidecar(module) {
+  const sidecarPath = path.join(OUT_DIR, `${module}.evidence.json`);
+  if (!fs.existsSync(sidecarPath)) return { records: [], path: null };
+  const document = JSON.parse(fs.readFileSync(sidecarPath, 'utf8'));
+  if (!document || !Array.isArray(document.records)) {
+    throw new TypeError(`Evidence sidecar requires records: ${sidecarPath}`);
+  }
+  return { records: document.records, path: path.relative(process.cwd(), sidecarPath).replace(/\\/g, '/') };
+}
+
 /**
  * Pairs retail GIT creatures with engine area creatures by template, in order.
  * Order within a template is not meaningful (identical droids), and matching on
@@ -332,9 +356,10 @@ function main() {
   const mod = process.argv[i + 1].toLowerCase();
   const engine = JSON.parse(fs.readFileSync(path.join(OUT_DIR, `${mod}.engine.json`), 'utf8'));
   const retail = JSON.parse(fs.readFileSync(path.join(OUT_DIR, `${mod}.retail.json`), 'utf8'));
+  const evidence = loadEvidenceSidecar(mod);
 
   const findings = [];
-  const add = (f) => findings.push(f);
+  const add = (f) => findings.push(linkEvidence(f, evidence.records, evidence.path));
   const creatures = compareCreatures(retail, engine, add);
   const textures = compareTextures(retail, engine, add);
   const audio = compareAudio(retail, engine, add);
@@ -358,4 +383,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { pairCreatures, diffSets, textureLayer, rank, SLOT_MAP };
+module.exports = { pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar };
