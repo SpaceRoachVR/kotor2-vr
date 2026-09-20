@@ -256,9 +256,11 @@ function buildSnapshotSource(moduleName) {
         volume: num(attempt(() => snd.volume, null)), volumeVariation: num(attempt(() => snd.volumeVariation, null)),
         maxDistance: num(attempt(() => snd.maxDistance, null)), minDistance: num(attempt(() => snd.minDistance, null)),
         priority: num(attempt(() => snd.priority, null)), times: num(attempt(() => snd.times, null)),
-        // This is capture-only. AudioEmitter semantics are intentionally not
-        // changed by the parity harness.
-        playStyle: attempt(() => snd.audioEmitter && snd.audioEmitter.playStyle, null),
+        // AudioEmitter has no public play-style field. Keep that absence
+        // explicit rather than reading a nonexistent runtime property; the
+        // observable UTS-equivalent settings above remain the evidence.
+        playStyle: null,
+        playStyleAvailable: false,
         sounds: (attempt(() => snd.soundResRefs, []) || []).map((n) => String(n).toLowerCase()),
         decoded: buffers,
       };
@@ -271,17 +273,23 @@ function buildSnapshotSource(moduleName) {
     const model = attempt(() => placeable.model, null);
     const manager = attempt(() => model && model.animationManager, null);
     const currentAnimation = attempt(() => manager && manager.currentAnimation && manager.currentAnimation.name, null);
-    const requestedAnimation = attempt(() => placeable.animStateInfo && placeable.animStateInfo.currentAnimState, null);
+    const requestedAnimation = attempt(() => {
+      const state = placeable.animStateInfo && placeable.animStateInfo.currentAnimState;
+      const animation = state == null || typeof placeable.animationConstantToAnimation !== 'function'
+        ? null : placeable.animationConstantToAnimation(state);
+      return animation && animation.name ? animation.name : null;
+    }, null);
     const modelName = attempt(() => placeable.placeableAppearance && placeable.placeableAppearance.modelname, null);
     return {
       areaIndex: i,
       template: String(attempt(() => placeable.templateResRef, '') || attempt(() => placeable.getTemplateResRef(), '') || '').toLowerCase(),
       objectType: 'placeable',
-      modelKind: 'placeable',
+      modelKind: attempt(() => model && model.constructor && model.constructor.name, null),
       modelName: modelName == null ? null : String(modelName).toLowerCase(),
-      requestedAnimation: num(requestedAnimation),
+      requestedAnimation: requestedAnimation == null ? null : String(requestedAnimation).toLowerCase(),
       currentAnimation: currentAnimation == null ? null : String(currentAnimation).toLowerCase(),
-      animationApplied: currentAnimation != null,
+      animationApplied: requestedAnimation != null && currentAnimation != null
+        && String(requestedAnimation).toLowerCase() === String(currentAnimation).toLowerCase(),
     };
   });
 

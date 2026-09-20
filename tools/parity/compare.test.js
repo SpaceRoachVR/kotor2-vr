@@ -8,6 +8,8 @@ const {
   linkEvidence,
   classifyAudioSemantic,
   classifyModelPresentation,
+  compareAudio,
+  compareModelPresentation,
 } = require('./compare');
 
 test('continuous audio is not an engine defect without a captured play-style mapping', () => {
@@ -25,6 +27,41 @@ test('a placeable creature model is authored bind-pose evidence, not an animatio
     ),
     'authored-retail-behavior',
   );
+});
+
+test('snapshot comparator omits a continuous mismatch when documented play-style mapping matches the engine observation', () => {
+  const findings = [];
+  compareAudio({
+    module: '101per',
+    audio: { area: {}, tracks: {}, sounds: [{ status: 'ok', template: 'rumble', gitIndex: 0, continuous: true, sounds: [] }] },
+  }, {
+    loadedFromSave: false,
+    audio: {
+      area: {},
+      playStyleMapping: { true: 'loop', false: 'oneshot' },
+      sounds: [{ template: 'rumble', continuous: false, playStyle: 'loop', playStyleAvailable: true, sounds: [] }],
+    },
+  }, (finding) => findings.push(finding));
+  assert.deepStrictEqual(findings, []);
+});
+
+test('snapshot comparator records an ordinary requested but unapplied placeable animation as missing evidence', () => {
+  const findings = [];
+  compareModelPresentation({
+    modelPresentation: [{ status: 'ok', template: 'plc_console', gitIndex: 0, objectType: 'placeable', modelKind: 'placeable' }],
+  }, {
+    modelPresentation: [{ template: 'plc_console', requestedAnimation: 'open', currentAnimation: null, animationApplied: false }],
+  }, (finding) => findings.push(finding));
+  assert.deepStrictEqual(findings, [{
+    area: 'model',
+    code: 'model:presentation',
+    confidence: 'coverage',
+    classification: 'missing-evidence',
+    object: 'plc_console#0',
+    retail: null,
+    engine: null,
+    detail: 'animation application requires additional retail presentation evidence',
+  }]);
 });
 
 test('pairs creatures by template regardless of order, keeping leftovers', () => {

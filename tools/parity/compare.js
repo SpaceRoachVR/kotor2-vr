@@ -252,6 +252,7 @@ const SOUND_FIELDS = ['active', 'looping', 'positional', 'random', 'randomPositi
  */
 function classifyAudioSemantic(retail, engine, playStyleMapping) {
   if (!playStyleMapping || typeof playStyleMapping !== 'object') return 'missing-evidence';
+  if (!engine || engine.playStyleAvailable !== true) return 'missing-evidence';
   const expected = playStyleMapping[retail && retail.continuous === true ? 'true' : 'false'];
   if (typeof expected !== 'string' || !expected.trim()) return 'missing-evidence';
   return expected === engine.playStyle ? 'authored-retail-behavior' : 'engine-defect';
@@ -305,6 +306,7 @@ function compareAudio(retailSnap, engineSnap, add) {
     const object = `${rs.template}#${rs.gitIndex}`;
     if (!same(rs.continuous, es.continuous)) {
       const classification = classifyAudioSemantic(rs, es, e.playStyleMapping);
+      if (classification === 'authored-retail-behavior') continue;
       add({ area: 'audio', code: 'sound:play-style', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
         classification, object, retail: rs.continuous, engine: es.playStyle ?? null,
         detail: classification === 'missing-evidence'
@@ -361,7 +363,7 @@ function compareModelPresentation(retailSnap, engineSnap, add) {
     const classification = classifyModelPresentation(record, observed);
     const isAuthoredCreatureBindPose = record.objectType === 'placeable'
       && record.modelKind === 'creature' && observed.animationApplied === false;
-    const needsUnprovenAnimationFinding = record.requestedAnimation != null
+    const needsUnprovenAnimationFinding = observed.requestedAnimation != null
       && observed.animationApplied === false;
     if (!isAuthoredCreatureBindPose && !needsUnprovenAnimationFinding) continue;
     add({ area: 'model', code: 'model:presentation', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
@@ -453,5 +455,5 @@ if (require.main === module) main();
 
 module.exports = {
   pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar,
-  classifyAudioSemantic, classifyModelPresentation, compareModelPresentation,
+  classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
 };
