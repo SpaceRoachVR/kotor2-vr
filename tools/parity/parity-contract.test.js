@@ -102,15 +102,28 @@ test('a remote serving bundle does not inherit checkout commit or mtime identity
   assert.equal(identity.bundleMtime, null);
 });
 
-test('serving bundle identity is read through the authenticated browser session without exposing tokens', async () => {
+test('serving bundle identity follows the loaded script across a launch redirect without exposing tokens', async () => {
   let source = '';
   const identity = await identifyServingBundle({ evaluate: async (expression) => {
     source = expression;
+    // /launch redirects to /game/index.html, whose ../KotOR.js script resolves
+    // to this URL.  The harness returns the loaded script URL, not a guessed
+    // document-relative path.
     return { url: 'http://127.0.0.1:9447/KotOR.js', sha256: 'a'.repeat(64) };
   } });
   assert.equal(identity.sha256, 'a'.repeat(64));
   assert.match(source, /credentials: 'same-origin'/);
+  assert.match(source, /document\.querySelectorAll\('script\[src\]'\)/);
+  assert.match(source, /entry\.initiatorType === 'script'/);
+  assert.doesNotMatch(source, /new URL\('KotOR\.js', window\.location\.href\)/);
   assert.doesNotMatch(source, /token|authorization|cookie/i);
+});
+
+test('serving bundle identity rejects a token-bearing URL returned by an untrusted harness adapter', async () => {
+  await assert.rejects(
+    identifyServingBundle({ evaluate: async () => ({ url: 'http://127.0.0.1:9447/KotOR.js?token=secret', sha256: 'a'.repeat(64) }) }),
+    /unsafe serving bundle URL/i,
+  );
 });
 
 test('external URL snapshot artifact never emits local build metadata', () => {

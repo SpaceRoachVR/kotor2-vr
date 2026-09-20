@@ -155,9 +155,23 @@ async function bootstrapFreshNewGame(harness, log) {
 async function identifyServingBundle(harness) {
   if (!harness || typeof harness.evaluate !== 'function') throw new TypeError('Cannot identify serving build without an authenticated browser harness');
   const identity = await harness.evaluate(`(async () => {
-    const url = new URL('KotOR.js', window.location.href).toString();
+    // Do not infer the bundle from the final document URL.  /launch may redirect
+    // to a nested page whose script intentionally resolves via ../KotOR.js.
+    // The browser has already resolved and loaded the serving script, so bind
+    // provenance to that source URL and its matching resource-timing entry.
+    const candidates = Array.from(document.querySelectorAll('script[src]')).filter((script) => {
+      try { return new URL(script.src).pathname.toLowerCase().endsWith('/kotor.js'); } catch (_) { return false; }
+    });
+    if (candidates.length !== 1) throw new Error('Expected exactly one loaded KotOR.js script');
+    const sourceUrl = new URL(candidates[0].src);
+    if (sourceUrl.origin !== window.location.origin || sourceUrl.username || sourceUrl.password || sourceUrl.search || sourceUrl.hash) {
+      throw new Error('KotOR.js source URL is not safe to retain for canonical provenance');
+    }
+    const url = sourceUrl.toString();
+    const loaded = performance.getEntriesByType('resource').some((entry) => entry.initiatorType === 'script' && entry.name === url);
+    if (!loaded) throw new Error('KotOR.js source is not associated with a loaded script resource');
     const response = await fetch(url, { credentials: 'same-origin' });
-    if (!response.ok) throw new Error('KotOR.js returned ' + response.status);
+    if (!response.ok || response.url !== url) throw new Error('Loaded KotOR.js source could not be revalidated');
     const bytes = await response.arrayBuffer();
     if (bytes.byteLength === 0) throw new Error('KotOR.js was empty');
     if (!window.crypto || !window.crypto.subtle) throw new Error('Web Crypto digest is unavailable');
@@ -168,7 +182,12 @@ async function identifyServingBundle(harness) {
   if (!identity || typeof identity.url !== 'string' || !/^[a-f0-9]{64}$/i.test(identity.sha256 || '')) {
     throw new Error('Cannot identify serving build from authenticated browser response');
   }
-  return Object.freeze({ url: identity.url, sha256: identity.sha256.toLowerCase() });
+  let verifiedUrl;
+  try { verifiedUrl = new URL(identity.url); } catch (_) { throw new Error('Cannot identify serving build from authenticated browser response'); }
+  if (!['http:', 'https:'].includes(verifiedUrl.protocol) || verifiedUrl.username || verifiedUrl.password || verifiedUrl.search || verifiedUrl.hash) {
+    throw new Error('Cannot retain an unsafe serving bundle URL');
+  }
+  return Object.freeze({ url: verifiedUrl.toString(), sha256: identity.sha256.toLowerCase() });
 }
 
 function createSnapshotArtifact(snapshot, { externalUrl = false, buildStamp = null, bundleMtime = null } = {}) {

@@ -14,6 +14,7 @@ const engineArtifact = JSON.stringify({ module: '101per', engineIdentity: {
   module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64),
 } });
 const retailArtifact = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
+const sidecarArtifact = JSON.stringify({ module: '101PER', records: [] });
 const hash = (contents: string): string => createHash('sha256').update(contents).digest('hex');
 function promoteRetainedReport(report: { module: string; findings: unknown[]; [key: string]: unknown }, reportPath: string) {
   const comparisonArtifact = JSON.stringify({ module: report.module.toLowerCase(), findings: report.findings });
@@ -22,10 +23,11 @@ function promoteRetainedReport(report: { module: string; findings: unknown[]; [k
       engine: { path: 'engine.json', sha256: hash(engineArtifact) },
       retail: { path: 'retail.json', sha256: hash(retailArtifact) },
       comparison: { path: 'comparison.json', sha256: hash(comparisonArtifact) },
+      sidecar: { path: 'sidecar.json', sha256: hash(sidecarArtifact) },
     },
   };
   return toParityDefectRecords(report, reportPath, { readArtifact: (artifactPath: string): string | undefined => ({
-    'engine.json': engineArtifact, 'retail.json': retailArtifact, 'comparison.json': comparisonArtifact,
+    'engine.json': engineArtifact, 'retail.json': retailArtifact, 'comparison.json': comparisonArtifact, 'sidecar.json': sidecarArtifact,
   })[artifactPath] });
 }
 

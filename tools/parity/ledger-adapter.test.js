@@ -6,18 +6,22 @@ const crypto = require('crypto');
 
 const fixtureEngine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
 const fixtureRetail = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
+const fixtureSidecar = JSON.stringify({ module: '101PER', records: [] });
 const fixtureHash = (contents) => crypto.createHash('sha256').update(contents).digest('hex');
 function toParityDefectRecords(report, reportPath, options = {}) {
   const comparison = JSON.stringify({ module: String(report.module || '').toLowerCase(), findings: report.findings });
+  const referencesMutableSidecar = Array.isArray(report.findings) && report.findings.some((finding) => Array.isArray(finding.evidenceRefs)
+    && finding.evidenceRefs.includes('tools/parity/out/101per.evidence.json'));
   if (!report.captureManifest) report.captureManifest = {
     schema: 'kotor2-vr/parity-capture@1', module: '101PER', artifacts: {
       engine: { path: 'engine.json', sha256: fixtureHash(fixtureEngine) },
       retail: { path: 'retail.json', sha256: fixtureHash(fixtureRetail) },
       comparison: { path: 'comparison.json', sha256: fixtureHash(comparison) },
+      ...(referencesMutableSidecar ? { sidecar: { path: 'sidecar.json', sha256: fixtureHash(fixtureSidecar) } } : {}),
     },
   };
   return promote(report, reportPath, { readArtifact: (name) => ({
-    'engine.json': fixtureEngine, 'retail.json': fixtureRetail, 'comparison.json': comparison,
+    'engine.json': fixtureEngine, 'retail.json': fixtureRetail, 'comparison.json': comparison, 'sidecar.json': fixtureSidecar,
   })[name], ...options });
 }
 
@@ -42,7 +46,7 @@ test('only confirmed engine defects become ledger records', () => {
   assert.match(records[0].id, /^parity-101per-sound-play-style$/);
 });
 
-test('keeps exact report and finding evidence references without duplicates', () => {
+test('maps a mutable latest sidecar reference to its retained immutable artifact without duplicates', () => {
   const records = toParityDefectRecords(reportWith([{
     classification: 'engine-defect', code: 'texture:wrong-layer', object: 'panel_a#3',
     expected: 'module', observed: 'key-bif',
@@ -51,11 +55,29 @@ test('keeps exact report and finding evidence references without duplicates', ()
   }]), 'tools/parity/out/101per.parity.json');
 
   assert.deepEqual(records[0].evidenceRefs, [
-    'comparison.json', 'engine.json', 'retail.json', 'tools/parity/out/101per.evidence.json',
+    'comparison.json', 'engine.json', 'retail.json', 'sidecar.json',
   ]);
-  assert.deepEqual(records[0].reproductionSteps, ['Inspect panel_a.', 'Load fresh 101PER.']);
+  assert.deepEqual(records[0].reproductionSteps, ['Load fresh 101PER.', 'Inspect panel_a.']);
   assert.equal(records[0].room, '101PER_02');
   assert.equal(records[0].severity, 'minor');
+});
+
+test('preserves temporal step order and only deduplicates identical whole procedures', () => {
+  const [record] = toParityDefectRecords(reportWith([
+    { classification: 'engine-defect', code: 'stat:str', object: 't3m4#0', expected: 10, observed: 8, reproductionSteps: ['Load fresh 101PER.', 'Inspect T3-M4.'] },
+    { classification: 'engine-defect', code: 'stat:str', object: 't3m4#1', expected: 12, observed: 9, reproductionSteps: ['Load fresh 101PER.', 'Inspect T3-M4.'] },
+    { classification: 'engine-defect', code: 'stat:str', object: 't3m4#2', expected: 11, observed: 7, reproductionSteps: ['Trigger the panel.', 'Inspect resulting state.'] },
+  ]), 'tools/parity/out/101per.parity.json');
+  assert.deepEqual(record.reproductionSteps, [
+    'Load fresh 101PER.', 'Inspect T3-M4.', 'Trigger the panel.', 'Inspect resulting state.',
+  ]);
+});
+
+test('rejects an unretained mutable finding evidence reference', () => {
+  assert.throws(() => toParityDefectRecords(reportWith([{
+    classification: 'engine-defect', code: 'stat:str', object: 't3m4#0', expected: 10, observed: 8,
+    evidenceRefs: ['tools/parity/out/101per.unretained.evidence.json'],
+  }]), 'tools/parity/out/101per.parity.json'), /unretained mutable evidence/i);
 });
 
 test('rejects a promotable finding that lacks exact comparison evidence', () => {

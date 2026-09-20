@@ -81,8 +81,43 @@ function chooseSeverity(findings) {
 }
 
 function groupedSteps(findings, module) {
-  const steps = findings.flatMap((finding) => optionalStringArray(finding.reproductionSteps, 'reproduction steps'));
-  return steps.length > 0 ? [...new Set(steps)].sort() : [`node tools/parity/compare.js --module ${module}`];
+  const procedures = findings
+    .map((finding) => optionalStringArray(finding.reproductionSteps, 'reproduction steps'))
+    .filter((steps) => steps.length > 0);
+  if (procedures.length === 0) return [`node tools/parity/compare.js --module ${module}`];
+
+  // Steps are a temporal procedure, not an unordered set.  Deduplicate only
+  // identical whole procedures; flattening preserves each retained procedure's
+  // authored order.
+  const seenProcedures = new Set();
+  return procedures.flatMap((steps) => {
+    const key = JSON.stringify(steps);
+    if (seenProcedures.has(key)) return [];
+    seenProcedures.add(key);
+    return steps;
+  });
+}
+
+function retainedEvidenceReferences(capture, module, findings) {
+  const immutableArtifacts = Object.values(capture.manifest.artifacts || {})
+    .filter((artifact) => artifact && typeof artifact.path === 'string')
+    .map((artifact) => artifact.path);
+  const immutablePaths = new Set(immutableArtifacts);
+  const mutableSidecar = `tools/parity/out/${module.toLowerCase()}.evidence.json`;
+  const retainedSidecar = capture.manifest.artifacts.sidecar && capture.manifest.artifacts.sidecar.path;
+  const references = [];
+  for (const finding of findings) {
+    for (const reference of optionalStringArray(finding.evidenceRefs, 'finding evidence references')) {
+      if (reference === mutableSidecar && typeof retainedSidecar === 'string') {
+        references.push(retainedSidecar);
+      } else if (immutablePaths.has(reference)) {
+        references.push(reference);
+      } else {
+        throw new TypeError(`Promoted parity finding references unretained mutable evidence: ${reference}`);
+      }
+    }
+  }
+  return [...new Set(references)];
 }
 
 function requireBaselineEvidence(report, module) {
@@ -143,7 +178,7 @@ function toParityDefectRecords(report, reportPath, options = {}) {
   return groupConfirmedFindings(confirmed).map(({ code, findings }) => {
     const ordered = sortedFindings(findings);
     const rooms = [...new Set(ordered.map((finding) => typeof finding.room === 'string' && finding.room.trim() ? finding.room : '(module-wide)'))];
-    const evidenceRefs = [...new Set([...evidenceBase, ...ordered.flatMap((finding) => optionalStringArray(finding.evidenceRefs, 'finding evidence references'))])];
+    const evidenceRefs = [...new Set([...evidenceBase, ...retainedEvidenceReferences(capture, module, ordered)])];
     return {
       id: defectId(module, code), title: `${code} in ${module}`, module,
       room: rooms.length === 1 ? rooms[0] : '(module-wide)', severity: chooseSeverity(ordered), status: 'open',

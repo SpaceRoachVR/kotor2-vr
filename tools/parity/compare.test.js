@@ -45,7 +45,7 @@ test('a placeable creature model is authored bind-pose evidence, not an animatio
   assert.strictEqual(
     classifyModelPresentation(
       { objectType: 'placeable', modelKind: 'creature' },
-      { animationApplied: false },
+      { modelStatus: 'loaded', animationApplied: false },
     ),
     'authored-retail-behavior',
   );
@@ -125,7 +125,7 @@ test('snapshot comparator records an ordinary requested but unapplied placeable 
   compareModelPresentation({
     modelPresentation: [{ status: 'ok', template: 'plc_console', gitIndex: 0, objectType: 'placeable', modelKind: 'placeable' }],
   }, {
-    modelPresentation: [{ template: 'plc_console', requestedAnimation: 'open', currentAnimation: null, animationApplied: false }],
+    modelPresentation: [{ template: 'plc_console', modelStatus: 'loaded', requestedAnimation: 'open', currentAnimation: null, animationApplied: false }],
   }, (finding) => findings.push(finding));
   assert.deepStrictEqual(findings, [{
     area: 'model',
@@ -195,6 +195,24 @@ test('missing or unresolved engine models are missing evidence, never bind-pose 
     { objectType: 'placeable', modelKind: 'creature' },
     { modelStatus: 'missing', animationApplied: false },
   ), 'missing-evidence');
+  assert.equal(classifyModelPresentation(
+    { objectType: 'placeable', modelKind: 'creature' },
+    { modelStatus: null, animationApplied: false },
+  ), 'missing-evidence');
+});
+
+test('an ordinary observed model with no requested animation still reports missing model evidence', () => {
+  const findings = [];
+  compareModelPresentation({
+    modelPresentation: [{ status: 'ok', template: 'plc_console', gitIndex: 0, objectType: 'placeable', modelKind: 'placeable', modelName: 'plc_console' }],
+  }, {
+    modelPresentation: [{ template: 'plc_console', modelStatus: 'unresolved', requestedAnimation: null, animationApplied: false }],
+  }, (finding) => findings.push(finding));
+  assert.deepEqual(findings, [{
+    area: 'model', code: 'model:missing', confidence: 'coverage', classification: 'missing-evidence',
+    object: 'plc_console#0', retail: 'plc_console', engine: 'unresolved',
+    detail: 'engine model presence/load status is absent, missing, or unresolved',
+  }]);
 });
 
 test('retains immutable capture-specific copies instead of treating latest module files as evidence', () => {
@@ -221,4 +239,37 @@ test('a blocked authored behavior-chain probe is reported as missing evidence in
   );
   assert.equal(coverage.coverage, 'missing-evidence');
   assert.equal(findings[0].classification, 'missing-evidence');
+});
+
+test('behavior-chain defects require matching interaction, validated retail NCS, explicit results, and an action/event trace', () => {
+  const ncsIdentity = { resref: 'a_open_door', restype: 'NCS', sha256: 'a'.repeat(64) };
+  const retail = {
+    retailInputs: [{ ...ncsIdentity }],
+    behaviorChain: {
+      coverage: 'complete', interactionId: 'morgue-door', gffDlgLocated: true, ncsLocated: true,
+      ncsIdentity, resultState: { doorOpen: true },
+    },
+  };
+  const engine = {
+    behaviorChain: {
+      coverage: 'complete', interactionId: 'morgue-door', eventDispatchLocated: true, actionQueueLocated: true,
+      resultStateLocated: true, resultState: { doorOpen: false },
+      actionEventTrace: [{ action: 'ActionUseObject', event: 'OnUsed' }],
+    },
+  };
+  const defectFindings = [];
+  assert.equal(compareBehaviorChain(retail, engine, (finding) => defectFindings.push(finding)).coverage, 'engine-defect');
+  assert.equal(defectFindings[0].classification, 'engine-defect');
+
+  const invalidCases = [
+    { retail: { ...retail, behaviorChain: { ...retail.behaviorChain, interactionId: 'other-door' } }, engine },
+    { retail: { ...retail, retailInputs: [{ ...ncsIdentity, sha256: 'b'.repeat(64) }] }, engine },
+    { retail, engine: { ...engine, behaviorChain: { ...engine.behaviorChain, resultState: null } } },
+    { retail, engine: { ...engine, behaviorChain: { ...engine.behaviorChain, actionEventTrace: [{ action: 'ActionUseObject' }] } } },
+  ];
+  for (const invalid of invalidCases) {
+    const findings = [];
+    assert.equal(compareBehaviorChain(invalid.retail, invalid.engine, (finding) => findings.push(finding)).coverage, 'missing-evidence');
+    assert.equal(findings[0].classification, 'missing-evidence');
+  }
 });

@@ -304,7 +304,7 @@ function describeAudioSemanticEvidence(retail, playStyleMapping, engine) {
  * evidence, not an animation-runtime defect.
  */
 function classifyModelPresentation(retail, engine) {
-  if (!engine || engine.modelStatus === 'missing' || engine.modelStatus === 'unresolved') return 'missing-evidence';
+  if (!engine || engine.modelStatus !== 'loaded') return 'missing-evidence';
   if (retail && retail.objectType === 'placeable' && retail.modelKind === 'creature'
       && engine && engine.animationApplied === false) {
     return 'authored-retail-behavior';
@@ -400,6 +400,12 @@ function compareModelPresentation(retailSnap, engineSnap, add) {
       continue;
     }
     paired++;
+    if (observed.modelStatus !== 'loaded') {
+      add({ area: 'model', code: 'model:missing', confidence: 'coverage', classification: 'missing-evidence',
+        object: `${record.template}#${record.gitIndex}`, retail: record.modelName ?? null, engine: observed.modelStatus ?? null,
+        detail: 'engine model presence/load status is absent, missing, or unresolved' });
+      continue;
+    }
     const classification = classifyModelPresentation(record, observed);
     const isAuthoredCreatureBindPose = record.objectType === 'placeable'
       && record.modelKind === 'creature' && observed.animationApplied === false;
@@ -420,10 +426,28 @@ function compareModelPresentation(retailSnap, engineSnap, add) {
 function compareBehaviorChain(retailSnap, engineSnap, add) {
   const retail = retailSnap && retailSnap.behaviorChain;
   const engine = engineSnap && engineSnap.behaviorChain;
-  const retailReady = retail && retail.coverage === 'complete' && retail.gffDlgLocated === true && retail.ncsLocated === true;
+  const nonEmptyInteractionId = (value) => typeof value === 'string' && value.trim().length > 0;
+  const validNcsIdentity = (identity) => identity && typeof identity === 'object' && !Array.isArray(identity)
+    && typeof identity.resref === 'string' && identity.resref.trim().length > 0
+    && typeof identity.restype === 'string' && identity.restype.trim().toUpperCase() === 'NCS'
+    && typeof identity.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(identity.sha256);
+  const hasRetailNcsInput = (identity) => Array.isArray(retailSnap && retailSnap.retailInputs) && retailSnap.retailInputs.some((input) => input
+    && typeof input.resref === 'string' && typeof input.restype === 'string' && typeof input.sha256 === 'string'
+    && input.resref.trim().toLowerCase() === identity.resref.trim().toLowerCase()
+    && input.restype.trim().toUpperCase() === 'NCS'
+    && input.sha256.toLowerCase() === identity.sha256.toLowerCase());
+  const validTrace = (trace) => Array.isArray(trace) && trace.length > 0 && trace.every((entry) => entry && typeof entry === 'object'
+    && !Array.isArray(entry) && typeof entry.action === 'string' && entry.action.trim().length > 0
+    && typeof entry.event === 'string' && entry.event.trim().length > 0);
+  const sameInteraction = retail && engine && nonEmptyInteractionId(retail.interactionId)
+    && nonEmptyInteractionId(engine.interactionId) && retail.interactionId === engine.interactionId;
+  const retailReady = retail && retail.coverage === 'complete' && retail.gffDlgLocated === true && retail.ncsLocated === true
+    && validNcsIdentity(retail.ncsIdentity) && hasRetailNcsInput(retail.ncsIdentity)
+    && retail.resultState !== null && retail.resultState !== undefined;
   const engineReady = engine && engine.coverage === 'complete' && engine.eventDispatchLocated === true
-    && engine.actionQueueLocated === true && engine.resultStateLocated === true;
-  if (!retailReady || !engineReady) {
+    && engine.actionQueueLocated === true && engine.resultStateLocated === true
+    && engine.resultState !== null && engine.resultState !== undefined && validTrace(engine.actionEventTrace);
+  if (!sameInteraction || !retailReady || !engineReady) {
     add({ area: 'behavior-chain', code: 'behavior-chain:bounded-interaction', confidence: 'coverage',
       classification: 'missing-evidence', object: (retail && retail.interactionId) || (engine && engine.interactionId) || '101PER',
       detail: 'The bounded GFF/DLG/NCS interaction lacks a complete retail source or engine action/event/result trace' });
