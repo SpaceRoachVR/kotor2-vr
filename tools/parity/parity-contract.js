@@ -58,8 +58,12 @@ function validateManifestSidecar(sidecar, retail, module) {
   for (const record of sidecar.records) {
     if (!record || typeof record !== 'object') throw new TypeError('Canonical capture sidecar record must be an object');
     const kind = String(record.kind || '').toLowerCase();
-    const resref = String(record.resref || '').toLowerCase();
-    const restype = String(record.restype || '').toUpperCase();
+    if (typeof record.resref !== 'string' || !record.resref.trim()
+        || typeof record.restype !== 'string' || !record.restype.trim()) {
+      throw new TypeError('Canonical capture sidecar requires typed string resource identity');
+    }
+    const resref = record.resref.trim().toLowerCase();
+    const restype = record.restype.trim().toUpperCase();
     const sha256 = requireSha256(record.sha256 || record.hash, 'Canonical capture sidecar record');
     if (!resref || !restype || !EVIDENCE_AUTHORITIES[kind] || record.authority !== EVIDENCE_AUTHORITIES[kind]) {
       throw new TypeError('Canonical capture sidecar has invalid typed authority');

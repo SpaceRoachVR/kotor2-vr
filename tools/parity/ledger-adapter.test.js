@@ -153,14 +153,15 @@ test('promotion requires a retained verified canonical capture manifest, not mut
   assert.equal(records.length, 1);
 });
 
-test('promotion rejects mutable report findings that differ from the retained comparison artifact', () => {
+test('promotion ignores mutable report findings and uses only retained comparison findings', () => {
   const report = reportWith([{ classification: 'engine-defect', code: 'invented:defect', expected: 'retail', observed: 'engine' }]);
   const comparison = JSON.stringify({ module: '101per', findings: [] });
   report.captureManifest = { schema: 'kotor2-vr/parity-capture@1', module: '101PER', artifacts: {
     engine: { path: 'engine.json', sha256: fixtureHash(fixtureEngine) }, retail: { path: 'retail.json', sha256: fixtureHash(fixtureRetail) },
     comparison: { path: 'comparison.json', sha256: fixtureHash(comparison) },
   } };
-  assert.throws(() => promote(report, 'report.json', { readArtifact: (name) => ({
+  const records = promote(report, 'report.json', { readArtifact: (name) => ({
     'engine.json': fixtureEngine, 'retail.json': fixtureRetail, 'comparison.json': comparison,
-  })[name] }), /retained comparison findings/i);
+  })[name] });
+  assert.deepEqual(records, []);
 });

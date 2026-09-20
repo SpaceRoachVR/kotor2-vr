@@ -111,11 +111,6 @@ function validatePromotedFindings(findings) {
 function toParityDefectRecords(report, reportPath, options = {}) {
   if (!report || typeof report !== 'object' || Array.isArray(report)) throw new TypeError('Parity ledger adapter requires a report object');
   const module = nonEmptyString(report.module, 'report module').toUpperCase();
-  if (!Array.isArray(report.findings)) throw new TypeError('Parity ledger adapter requires report findings');
-  const confirmed = report.findings.filter((finding) => finding && typeof finding === 'object' && finding.classification === DEFECT_CLASSIFICATION);
-  if (confirmed.length === 0) return [];
-
-  validatePromotedFindings(confirmed);
   const reportReference = nonEmptyString(reportPath, 'report path');
 
   if (!report.captureManifest) throw new TypeError('Parity ledger adapter requires a verified canonical capture manifest');
@@ -128,10 +123,11 @@ function toParityDefectRecords(report, reportPath, options = {}) {
   }
   const capture = validateCanonicalCaptureManifest(report.captureManifest, artifacts);
   if (capture.module !== module) throw new TypeError('Parity ledger adapter capture manifest module mismatch');
-  if (!Array.isArray(capture.comparison.findings)
-      || JSON.stringify(report.findings) !== JSON.stringify(capture.comparison.findings)) {
-    throw new TypeError('Parity ledger adapter requires report findings to exactly match retained comparison findings');
-  }
+  if (!Array.isArray(capture.comparison.findings)) throw new TypeError('Parity ledger adapter retained comparison requires findings');
+  const confirmed = capture.comparison.findings.filter((finding) => finding && typeof finding === 'object'
+    && finding.classification === DEFECT_CLASSIFICATION);
+  if (confirmed.length === 0) return [];
+  validatePromotedFindings(confirmed);
 
   // A report pathname says where a claim was written, not what was compared.
   // Retained engine and retail snapshot references are mandatory provenance.

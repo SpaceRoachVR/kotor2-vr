@@ -171,6 +171,16 @@ async function identifyServingBundle(harness) {
   return Object.freeze({ url: identity.url, sha256: identity.sha256.toLowerCase() });
 }
 
+function createSnapshotArtifact(snapshot, { externalUrl = false, buildStamp = null, bundleMtime = null } = {}) {
+  return {
+    schema: 'kotor2-vr/parity-engine@1',
+    capturedAt: new Date().toISOString(),
+    buildStamp: externalUrl ? null : buildStamp,
+    bundleMtime: externalUrl ? null : bundleMtime,
+    ...snapshot,
+  };
+}
+
 function buildSnapshotSource(moduleName) {
   return `(async () => {
   const NAME = ${JSON.stringify(moduleName.toUpperCase())};
@@ -426,17 +436,11 @@ async function main() {
       }
     })();
 
-    const out = {
-      schema: 'kotor2-vr/parity-engine@1',
-      capturedAt: new Date().toISOString(),
-      buildStamp,
-      bundleMtime,
-      ...snapshot,
-    };
     if (args.url) {
       buildStamp = null;
       bundleMtime = null;
     }
+    const out = createSnapshotArtifact(snapshot, { externalUrl: Boolean(args.url), buildStamp, bundleMtime });
     if (args.canonical) out.engineIdentity = createEngineIdentity(loadedState, {
       engineCommit, bundleMtime, servingBundleSha256: servingBundle.sha256,
     });
@@ -463,5 +467,6 @@ module.exports = {
   createEngineIdentity,
   bootstrapFreshNewGame,
   identifyServingBundle,
+  createSnapshotArtifact,
   parseArgs,
 };
