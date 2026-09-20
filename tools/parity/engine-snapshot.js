@@ -173,11 +173,11 @@ async function identifyServingBundle(harness) {
 
 function createSnapshotArtifact(snapshot, { externalUrl = false, buildStamp = null, bundleMtime = null } = {}) {
   return {
+    ...snapshot,
     schema: 'kotor2-vr/parity-engine@1',
     capturedAt: new Date().toISOString(),
     buildStamp: externalUrl ? null : buildStamp,
     bundleMtime: externalUrl ? null : bundleMtime,
-    ...snapshot,
   };
 }
 

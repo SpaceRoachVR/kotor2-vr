@@ -114,7 +114,9 @@ test('serving bundle identity is read through the authenticated browser session 
 });
 
 test('external URL snapshot artifact never emits local build metadata', () => {
-  const output = createSnapshotArtifact({ module: '101per' }, {
+  const output = createSnapshotArtifact({
+    module: '101per', buildStamp: 'forged-harness-stamp', bundleMtime: 'forged-harness-mtime',
+  }, {
     externalUrl: true, buildStamp: '2026-09-20T00:00:00.000Z', bundleMtime: '2026-09-20T00:00:00.000Z',
   });
   assert.equal(output.buildStamp, null);
