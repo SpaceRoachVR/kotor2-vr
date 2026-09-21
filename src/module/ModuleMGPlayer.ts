@@ -442,7 +442,13 @@ export class ModuleMGPlayer extends ModuleObject {
     if(perSecond <= 0){ return; }
     const scaled = delta * (this.speed / perSecond);
     if(!(scaled > 0)){ return; }
-    track.update(scaled);
+
+    // Only the animation, not the whole model. `track.update()` walks a 632
+    // node tree and re-ticks its effects, materials, emitters and child models
+    // - and the bike hangs off this track's modelhook, so it was re-ticking the
+    // rider too, every frame, on top of the engine's own pass. The course needs
+    // exactly two nodes posed: the model root and modelhook.
+    track.animationManager?.update(scaled);
   }
 
   /** Whether an acceleration request is still standing. */
@@ -547,16 +553,33 @@ export class ModuleMGPlayer extends ModuleObject {
 
   }
 
+  /**
+   * Animation names as the lookup key: lower case, trimmed, and with the NUL
+   * padding an Odyssey resref carries stripped off.
+   *
+   * The de-duplication below used to compare a stored animation's raw name
+   * against the caller's string. A stored name is NUL-padded, so it never
+   * matched, nothing was ever replaced, and every play pushed another manager.
+   * The swoop's heartbeat plays the dashboard's timer digits continuously, so
+   * the list grew without bound: measured on 211TEL after a short ride, 3,419
+   * managers costing 9ms a frame to step, still climbing. That is the ride
+   * getting slower and glitchier the longer it goes on.
+   */
+  private static animationKey(name: string): string {
+    return String(name || '').replace(/\0[\s\S]*$/, '').toLowerCase().trim();
+  }
+
   playAnimation(name = '', bLooping = 0, bQueue = 0, bOverlay = 0){
-    // const padding = '                                             ';
-    //console.log(`play: ${name}${padding}`.substring(0, 20), `bLooping: ${bLooping ? 'true' : 'false'}${padding}`.substring(0, 20), `bQueue: ${bQueue ? 'true' : 'false'}${padding}`.substring(0, 20), `bOverlay: ${bOverlay ? 'true' : 'false'}${padding}`.substring(0, 20));
+    const key = ModuleMGPlayer.animationKey(name);
     for(let i = 0; i < this.models.length; i++){
       const model = this.models[i];
-      const anim = model.odysseyAnimationMap.get(name.toLowerCase().trim());
+      const anim = model.odysseyAnimationMap.get(key);
       if(anim){
 
         //Check if this animation has already been applied
-        const existingIndex = this.animationManagers.findIndex( am => am?.currentAnimation?.name == name );
+        const existingIndex = this.animationManagers.findIndex(
+          am => ModuleMGPlayer.animationKey(am?.currentAnimation?.name) == key
+        );
         if(existingIndex >= 0){
           this.animationManagers.splice(existingIndex, 1);
         }
@@ -575,9 +598,10 @@ export class ModuleMGPlayer extends ModuleObject {
   }
 
   removeAnimation(name = ''){
-    // const padding = '                                             ';
-    //console.log( `remove: ${name}${padding}`.substring(0, 20) );
-    const existingIndex = this.animationManagers.findIndex( am => am?.currentAnimation?.name == name );
+    const key = ModuleMGPlayer.animationKey(name);
+    const existingIndex = this.animationManagers.findIndex(
+      am => ModuleMGPlayer.animationKey(am?.currentAnimation?.name) == key
+    );
     if(existingIndex >= 0){
       this.animationManagers.splice(existingIndex, 1);
     }

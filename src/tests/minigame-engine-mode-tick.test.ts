@@ -158,9 +158,12 @@ describe('the VR rig rides the minigame vehicle', () => {
     expect(seat).toMatch(/GameState\.Mode != EngineMode\.MINIGAME/);
   });
 
-  test('facing is the heading of travel, less the 90 degrees VRSpike adds back', () => {
+  // The correction grew to a full half turn once it was measured in a headset
+  // rather than derived: rig yaw read pi against a travel heading of pi/2.
+  // swoop-seat-and-performance.test.ts owns that assertion now.
+  test('facing is taken from the direction of travel', () => {
     expect(seat).toMatch(/set\(0, 1, 0\)/);
-    expect(seat).toMatch(/Math\.atan2\([\s\S]*?\)\s*- Math\.PI \/ 2/);
+    expect(seat).toMatch(/Math\.atan2\(/);
   });
 
   test('the position and facing hooks both consult it', () => {

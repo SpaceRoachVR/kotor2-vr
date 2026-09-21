@@ -76,6 +76,14 @@ export class VRMiniGameInputController {
   /** Steering held across a brief hand dropout, and when it was last two-handed. */
   private static lastTwoHandedSteer = 0;
   private static lastTwoHandedAt = 0;
+  /** When the neutral last relaxed, for the elapsed time between frames. */
+  private static lastNeutralRelaxAt = 0;
+  /**
+   * How long a held offset takes to become the new straight-ahead. Long enough
+   * that a deliberate turn survives it, short enough that a bad posture cannot
+   * strand the rider at the tunnel wall.
+   */
+  private static readonly NEUTRAL_RELAX_SECONDS = 4;
   /**
    * How long a lost hand is treated as still there. The left controller drops
    * out of the input frame whenever its grip pose goes briefly untracked, and
@@ -106,6 +114,7 @@ export class VRMiniGameInputController {
     const config = VRMiniGameInputController.configuration;
     if (target.type === 1) {
       VRMiniGameInputController.captureNeutral(inputFrame, config);
+      VRMiniGameInputController.relaxNeutral(inputFrame);
 
       const intent = resolveSwoopIntent(
         inputFrame, VRMiniGameInputController.previousJumpHeld, config,
@@ -158,6 +167,7 @@ export class VRMiniGameInputController {
     VRMiniGameInputController.oneHandedNeutralCaptured = false;
     VRMiniGameInputController.lastTwoHandedSteer = 0;
     VRMiniGameInputController.lastTwoHandedAt = 0;
+    VRMiniGameInputController.lastNeutralRelaxAt = 0;
   }
 
   /**
@@ -167,6 +177,41 @@ export class VRMiniGameInputController {
   static recentreSteering(): void {
     VRMiniGameInputController.twoHandedNeutralCaptured = false;
     VRMiniGameInputController.oneHandedNeutralCaptured = false;
+  }
+
+  /**
+   * Lets straight-ahead drift towards however the rider is actually holding.
+   *
+   * A single capture is one sample of a moving target: hands settle, drop, get
+   * re-gripped. Measured in the headset after a captured neutral went stale,
+   * the rider was steering hard enough to sit pinned against the tunnel wall at
+   * full lock - which reads as steering being broken, because it is at the stop
+   * and nothing they do moves it back.
+   *
+   * The neutral therefore relaxes towards the current pose with a long time
+   * constant. A deliberate turn lasts a second or two and survives; a posture
+   * bias held for many seconds washes out. It cannot pin.
+   */
+  private static relaxNeutral(inputFrame: XRInputFrame): void {
+    const sampled = sampleSwoopNeutral(inputFrame);
+    if (!sampled) {
+      VRMiniGameInputController.lastNeutralRelaxAt = 0;
+      return;
+    }
+    const now = inputFrame.timestamp;
+    const previous = VRMiniGameInputController.lastNeutralRelaxAt;
+    VRMiniGameInputController.lastNeutralRelaxAt = now;
+    if (!previous || now <= previous) return;
+
+    const seconds = Math.min(0.1, (now - previous) / 1000);
+    const rate = Math.min(1, seconds / VRMiniGameInputController.NEUTRAL_RELAX_SECONDS);
+    const current = VRMiniGameInputController.neutral;
+    VRMiniGameInputController.neutral = {
+      heightDifference: current.heightDifference
+        + (sampled.heightDifference - current.heightDifference) * rate,
+      lateralOffset: current.lateralOffset
+        + (sampled.lateralOffset - current.lateralOffset) * rate,
+    };
   }
 
   /**

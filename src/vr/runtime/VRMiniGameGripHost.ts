@@ -20,10 +20,18 @@ import * as THREE from 'three';
  * geometry is parented to the bike so it rides with it.
  */
 
-/** Grip placement relative to the bike origin, in game units (Z up). */
+/**
+ * Grip placement relative to the bike origin, in game units (Z up).
+ *
+ * On the handlebars the bike actually has. The first attempt put these at the
+ * authored rider's own hand span, which is a different thing: seen from the
+ * saddle they sat low and close, well short of the bars, and the rider could
+ * not reach them. These sit on the cockpit bars themselves - just ahead of and
+ * below the windshield node (0, 1.58, 1.07), at the width the bars run.
+ */
 export const SWOOP_GRIP_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
-  [-0.24, 1.2, 0.85],
-  [0.24, 1.2, 0.85],
+  [-0.45, 1.6, 0.95],
+  [0.45, 1.6, 0.95],
 ];
 
 export const SWOOP_GRIP_GROUP_NAME = 'vr-swoop-grips';

@@ -80,6 +80,9 @@ import {
 import { VRCombatIntentDispatcher } from "@/vr/runtime/VRCombatIntentDispatcher";
 import { VRMiniGameInputController } from "@/vr/runtime/VRMiniGameInputController";
 import { attachSwoopGrips, detachSwoopGrips } from "@/vr/runtime/VRMiniGameGripHost";
+
+/** The bike the swoop grips are currently attached to, so it is done once. */
+let vrSwoopGripsAttachedTo: THREE.Object3D | null = null;
 import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
@@ -2192,12 +2195,17 @@ export class GameState implements EngineContext {
       const miniGame: any = GameState.module?.area?.miniGame;
       const player: any = miniGame?.player;
       if (!miniGame || !player) return null;
-      // Visible grips for the swoop, so steering has a fixed centre to hold to.
-      // The bike ships no handle of its own; these sit where its rider holds.
+      // Visible grips for the swoop, sitting on the bike's own handlebars.
+      // Attached once: getObjectByName walks the whole bike, and this provider
+      // runs every frame.
       if (miniGame.type === 1 && VRSpike.isPresenting) {
-        attachSwoopGrips(player.container);
-      } else if (miniGame.type !== 1) {
-        detachSwoopGrips(player.container);
+        if (vrSwoopGripsAttachedTo !== player.container) {
+          attachSwoopGrips(player.container);
+          vrSwoopGripsAttachedTo = player.container;
+        }
+      } else if (miniGame.type !== 1 && vrSwoopGripsAttachedTo) {
+        detachSwoopGrips(vrSwoopGripsAttachedTo);
+        vrSwoopGripsAttachedTo = null;
       }
       return {
         type: miniGame.type,
@@ -3205,8 +3213,14 @@ export class GameState implements EngineContext {
   private static miniGameSeatScale = new THREE.Vector3();
   private static miniGameSeatForward = new THREE.Vector3();
   private static miniGameSeat: { position: THREE.Vector3; facing: number } = {
-    position: GameState.miniGameSeatPosition, facing: 0,
+    position: new THREE.Vector3(), facing: 0,
   };
+
+  /**
+   * How far forward of the bike's origin the rider sits, in game units. Taken
+   * from the middle of the authored rider's own span (y 0.12 to 1.65).
+   */
+  static readonly MINIGAME_SEAT_FORWARD_OFFSET = 0.7;
 
   /**
    * The body the first-person submission must leave out.
@@ -3256,9 +3270,25 @@ export class GameState implements EngineContext {
       GameState.miniGameSeatScale,
     );
     GameState.miniGameSeatForward.set(0, 1, 0).applyQuaternion(GameState.miniGameSeatQuaternion);
+
+    // Sit the rider on the saddle rather than behind it. The hook the rider
+    // hangs from is the bike's own origin, which is well aft of the seat: in
+    // the headset that put the player's head behind the seat back, looking
+    // forward at it. The bike's own rider (`trider`) spans y 0.12 to 1.65 from
+    // that origin, so its head sits near the middle of that span.
+    GameState.miniGameSeat.position.copy(GameState.miniGameSeatPosition).addScaledVector(
+      GameState.miniGameSeatForward, GameState.MINIGAME_SEAT_FORWARD_OFFSET,
+    );
+
+    // Face the way the bike travels. VRSpike yaws the rig by `facing + pi/2`,
+    // matching how KOTOR renders its camera at bearing + 90 degrees - but a
+    // minigame rider is welded to a vehicle rather than orbited by a follower
+    // camera, and measured in the headset that convention left the rider facing
+    // 90 degrees left of travel: rig yaw pi against a heading of pi/2. The
+    // second half turn takes that back out.
     GameState.miniGameSeat.facing = Math.atan2(
       GameState.miniGameSeatForward.y, GameState.miniGameSeatForward.x,
-    ) - Math.PI / 2;
+    ) - Math.PI;
     return GameState.miniGameSeat;
   }
 
