@@ -79,10 +79,23 @@ export interface VRTurretIntent {
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
 
-function buttonValue(hand: XRHandInputFrame | undefined, names: readonly string[]): number {
+/**
+ * Button indices, not names. XRInputFrameBuilder keys `buttons` by the
+ * gamepad's own index as a string ("0", "1", ...) and XRInputRouter binds by
+ * index too, so the whole VR layer speaks indices. This file used to look up
+ * 'squeeze' and 'trigger', which are keys that never exist: every read returned
+ * 0, so the grip never closed, the swoop never steered and the throttle never
+ * opened - while the unit tests passed, because their fixtures were written to
+ * the same wrong shape. The order is the xr-standard mapping every profile in
+ * XRInputRouter uses.
+ */
+const XR_STANDARD_TRIGGER = '0';
+const XR_STANDARD_SQUEEZE = '1';
+
+function buttonValue(hand: XRHandInputFrame | undefined, indices: readonly string[]): number {
   if (!hand) return 0;
-  for (const name of names) {
-    const button = hand.buttons[name];
+  for (const index of indices) {
+    const button = hand.buttons[index];
     if (!button) continue;
     if (typeof button.value === 'number' && Number.isFinite(button.value)) return button.value;
     if (button.pressed) return 1;
@@ -108,8 +121,8 @@ function stickPush(hand: XRHandInputFrame | undefined): number {
   return -(y as number);
 }
 
-const SQUEEZE_BUTTONS = ['squeeze', 'grip', 'xr-standard-squeeze'] as const;
-const TRIGGER_BUTTONS = ['trigger', 'xr-standard-trigger', 'select'] as const;
+const SQUEEZE_BUTTONS = [XR_STANDARD_SQUEEZE] as const;
+const TRIGGER_BUTTONS = [XR_STANDARD_TRIGGER] as const;
 
 export function isGripping(
   hand: XRHandInputFrame | undefined, config: VRMiniGameInputConfiguration,
@@ -136,6 +149,25 @@ export function resolveGripState(
   return { state: MiniGameGripState.NONE, hands };
 }
 
+/**
+ * The swoop asks nothing of the hands but that they be tracked.
+ *
+ * A rider is strapped to a vehicle, not holding an object they might drop:
+ * there is nothing to let go of, so requiring a squeeze only creates a state
+ * where the controls silently do nothing. The turret keeps its squeeze, which
+ * is a deliberate grip on a mounted weapon.
+ */
+export function resolveRidingState(
+  frame: XRInputFrame,
+): { state: MiniGameGripState; hands: XRHandInputFrame[] } {
+  const hands = HAND_ROLES
+    .map((role) => frame.hands[role])
+    .filter((hand): hand is XRHandInputFrame => !!hand);
+  if (hands.length >= 2) return { state: MiniGameGripState.TWO_HANDED, hands };
+  if (hands.length === 1) return { state: MiniGameGripState.ONE_HANDED, hands };
+  return { state: MiniGameGripState.NONE, hands };
+}
+
 function applyDeadzone(value: number, deadzone: number): number {
   if (!Number.isFinite(value)) return 0;
   const magnitude = Math.abs(value);
@@ -153,7 +185,7 @@ function applyDeadzone(value: number, deadzone: number): number {
 export function resolveSteering(
   frame: XRInputFrame, config: VRMiniGameInputConfiguration,
 ): { grip: MiniGameGripState; steer: number } {
-  const { state, hands } = resolveGripState(frame, config);
+  const { state, hands } = resolveRidingState(frame);
   if (state === MiniGameGripState.NONE) return { grip: state, steer: 0 };
 
   if (state === MiniGameGripState.TWO_HANDED) {
@@ -181,7 +213,7 @@ export function resolveSteering(
 export function swoopJumpControlHeld(
   frame: XRInputFrame, config: VRMiniGameInputConfiguration,
 ): boolean {
-  const { state, hands } = resolveGripState(frame, config);
+  const { state, hands } = resolveRidingState(frame);
   if (state === MiniGameGripState.ONE_HANDED) {
     return stickPush(hands[0]) >= config.throttleThreshold;
   }
@@ -205,9 +237,9 @@ export function resolveSwoopIntent(
   config: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION,
 ): VRSwoopIntent {
   const { grip, steer } = resolveSteering(frame, config);
-  const { state, hands } = resolveGripState(frame, config);
+  const { state, hands } = resolveRidingState(frame);
 
-  // Hands off the bars is not riding, so nothing the triggers do counts.
+  // No tracked hand is not riding, so nothing the triggers do counts.
   const throttle = state === MiniGameGripState.NONE
     ? false
     : state === MiniGameGripState.ONE_HANDED

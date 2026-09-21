@@ -2266,7 +2266,17 @@ export class GameState implements EngineContext {
           FollowerCamera.clearFocusObject();
         }
       },
-      getCurrentRoomWalkmesh: () => GameState.getCurrentPlayer()?.room?.collisionManager?.walkmesh ?? null,
+      // No containment in a minigame: the rider is carried by a vehicle on a
+      // track, not walking a room. Feeding the soft-block a room walkmesh here
+      // ran away - the bike sits far outside any room, so every frame pushed
+      // the rig further to "correct" it, which moved the head further out
+      // still. Measured in-headset on 211TEL: the rig climbed from y 0.47 to
+      // y 1817 in seconds while the bike sat at y -183, which is the flashing,
+      // bike-less view the rider actually saw.
+      getCurrentRoomWalkmesh: () => {
+        if(GameState.Mode == EngineMode.MINIGAME){ return null; }
+        return GameState.getCurrentPlayer()?.room?.collisionManager?.walkmesh ?? null;
+      },
       getComfortSettings: () => ({ ...vrComfortSettings }),
       setComfortSettings: (patch) => Object.assign(vrComfortSettings, patch),
       // Walk/run already exists on the creature: `getMovementSpeed()` picks
@@ -3187,6 +3197,43 @@ export class GameState implements EngineContext {
     position: GameState.miniGameSeatPosition, facing: 0,
   };
 
+  /**
+   * The body the first-person submission must leave out.
+   *
+   * Ordinarily that is the party leader's model, welded to the rig at eye
+   * height. In a minigame the rider is not the party leader at all: the swoop
+   * carries its own rider, the `trider` node inside v_supertrike01, a 994-vertex
+   * figure seated exactly where the player is. Drawn in first person it reads as
+   * a second pair of arms in front of the player's own hands.
+   *
+   * Cached per model, because this runs once a frame and the lookup walks the
+   * bike's 340 nodes.
+   */
+  private static miniGameRiderCache = new WeakMap<object, THREE.Object3D | null>();
+
+  public static getFirstPersonHiddenBody(): THREE.Object3D | null | undefined {
+    if(GameState.Mode != EngineMode.MINIGAME){
+      return GameState.PartyManager.Player?.model;
+    }
+    const models: any[] = (GameState.module?.area?.miniGame?.player as any)?.models ?? [];
+    for(const model of models){
+      if(!model){ continue; }
+      if(GameState.miniGameRiderCache.has(model)){
+        const cached = GameState.miniGameRiderCache.get(model);
+        if(cached){ return cached; }
+        continue;
+      }
+      let rider: THREE.Object3D | null = null;
+      model.traverse((node: THREE.Object3D) => {
+        if(rider){ return; }
+        if(String(node.name || '').replace(/ [\s\S]*$/, '') === 'trider'){ rider = node; }
+      });
+      GameState.miniGameRiderCache.set(model, rider);
+      if(rider){ return rider; }
+    }
+    return null;
+  }
+
   public static getMiniGameSeat(): { position: THREE.Vector3; facing: number } | null {
     if(GameState.Mode != EngineMode.MINIGAME){ return null; }
     const container = (GameState.module?.area?.miniGame?.player as any)?.container;
@@ -3811,7 +3858,7 @@ export class GameState implements EngineContext {
       VRSpike.render(
         GameState.currentCamera,
         frameTimestamp,
-        GameState.PartyManager.Player?.model,
+        GameState.getFirstPersonHiddenBody(),
       );
       return;
     }

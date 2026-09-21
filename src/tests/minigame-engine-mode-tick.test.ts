@@ -175,3 +175,96 @@ describe('the VR rig rides the minigame vehicle', () => {
     expect(read('vr/VRSpike.ts')).toMatch(/facing \+ Math\.PI \/ 2 \+ VRSpike\.yawOffset/);
   });
 });
+
+/**
+ * The wall soft-block nudges the rig back when physical head tracking carries
+ * the player's head through a wall. It reads the current room's walkmesh, and
+ * in a minigame that is a trap: the vehicle rides a track far outside any room,
+ * so every frame pushed the rig to "correct" a head that was never coming back
+ * inside, which moved the head further out again. Measured in-headset on
+ * 211TEL: the rig climbed from y 0.47 to y 1817 within seconds while the bike
+ * sat at y -183. From the rider's seat that is a flashing world with no bike.
+ */
+describe('the wall soft-block stands down in a minigame', () => {
+  const gameState = read('GameState.ts');
+  const at = gameState.indexOf('getCurrentRoomWalkmesh: () =>');
+  const hook = gameState.slice(at, at + 320);
+
+  test('no walkmesh is offered while a minigame owns the frame', () => {
+    expect(at).toBeGreaterThan(-1);
+    expect(hook).toMatch(/GameState\.Mode == EngineMode\.MINIGAME[\s\S]*return null/);
+  });
+
+  test('ordinary play still gets the room walkmesh', () => {
+    expect(hook).toMatch(/room\?\.collisionManager\?\.walkmesh/);
+  });
+
+  test('VRSpike still applies a correction when one is offered', () => {
+    const spike = read('vr/VRSpike.ts');
+    expect(spike).toMatch(/getCurrentRoomWalkmesh\?\.\(\)/);
+    expect(spike).toMatch(/resolveWallSoftBlockCorrection\(headPosition, walkmesh\)/);
+  });
+});
+
+/**
+ * The bug this guards: the minigame policy read `buttons['squeeze']` and
+ * `buttons['trigger']`, but XRInputFrameBuilder keys buttons by the gamepad's
+ * own index as a string and XRInputRouter binds by index too. No named key ever
+ * exists on a real frame, so every read returned 0 — in the headset the grip
+ * never closed, the swoop never steered and the throttle never opened. The unit
+ * tests passed throughout, because their fixtures were written to the same
+ * invention. Assert the two ends agree, at the source, so they cannot drift.
+ */
+describe('minigame input reads the frame shape the builder writes', () => {
+  test('the builder keys buttons by gamepad index', () => {
+    expect(read('vr/runtime/XRInputFrameBuilder.ts')).toMatch(/buttons\[String\(index\)\]/);
+  });
+
+  test('the policy reads those indices, not invented names', () => {
+    const policy = read('vr/runtime/VRMiniGameInputPolicy.ts');
+    expect(policy).toMatch(/const XR_STANDARD_TRIGGER = '0';/);
+    expect(policy).toMatch(/const XR_STANDARD_SQUEEZE = '1';/);
+    expect(policy).toMatch(/SQUEEZE_BUTTONS = \[XR_STANDARD_SQUEEZE\]/);
+    expect(policy).toMatch(/TRIGGER_BUTTONS = \[XR_STANDARD_TRIGGER\]/);
+  });
+
+  test('no named button key survives anywhere in the policy', () => {
+    const policy = read('vr/runtime/VRMiniGameInputPolicy.ts');
+    for (const invented of ["'squeeze'", "'trigger'", "'xr-standard-squeeze'", "'xr-standard-trigger'"]) {
+      expect(policy.includes(`buttons[${invented}]`)).toBe(false);
+    }
+  });
+
+  test('the router binds by index too, which is why indices are the shared language', () => {
+    expect(read('vr/runtime/XRInputRouter.ts')).toMatch(/controller\.buttons\[binding\.input\.index\]/);
+  });
+});
+
+/**
+ * The swoop carries its own rider: `trider`, a 994-vertex figure inside
+ * v_supertrike01, seated exactly where the player is. In first person it reads
+ * as a second pair of arms in front of the player's own hands. Measured on
+ * 211TEL: 0.47 x 1.53 x 0.81, spanning z +0.42 to +1.24 from the bike origin.
+ */
+describe('the bike rider is not drawn in first person', () => {
+  const gameState = read('GameState.ts');
+  const at = gameState.indexOf('public static getFirstPersonHiddenBody()');
+  const body = gameState.slice(at, gameState.indexOf('public static getMiniGameSeat()', at));
+
+  test('a minigame hides the vehicle rider', () => {
+    expect(at).toBeGreaterThan(-1);
+    expect(body).toMatch(/'trider'/);
+  });
+
+  test('ordinary play still hides the party leader', () => {
+    expect(body).toMatch(/GameState\.Mode != EngineMode\.MINIGAME[\s\S]*PartyManager\.Player\?\.model/);
+  });
+
+  test('the render call asks for it rather than the party leader directly', () => {
+    expect(gameState).toMatch(/VRSpike\.render\([\s\S]{0,120}getFirstPersonHiddenBody\(\)/);
+  });
+
+  test('the lookup is cached, since it runs once a frame over 340 nodes', () => {
+    expect(body).toMatch(/miniGameRiderCache/);
+  });
+});
