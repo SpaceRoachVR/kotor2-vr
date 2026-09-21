@@ -25,6 +25,7 @@ describe('asset-server CLI parsing', () => {
       distRoot: path.resolve('custom-dist'),
       port: 9000,
       modRoots: [],
+      discoverModLayers: true,
     });
   });
 
@@ -40,6 +41,7 @@ describe('asset-server CLI parsing', () => {
       distRoot: path.resolve('C:\\dist'),
       port: 8479,
       modRoots: [path.resolve('base-visuals'), path.resolve('uco-redux')],
+      discoverModLayers: true,
     });
   });
 

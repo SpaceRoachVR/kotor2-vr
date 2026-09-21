@@ -21,7 +21,9 @@ const ASSET_SERVER = path.join(__dirname, '..', 'asset-http', 'asset-server.js')
  *   emulator-driven session.
  */
 function startAssetService(options = {}) {
-  const extraArgs = options.port ? ['--port', String(options.port)] : [];
+  // --no-mods: the harness is how parity snapshots and the module sweep are
+  // taken, and those have to describe retail rather than the player's layers.
+  const extraArgs = ['--no-mods', ...(options.port ? ['--port', String(options.port)] : [])];
   return new Promise((rawResolve, rawReject) => {
     const child = spawn(process.execPath, [ASSET_SERVER, ...extraArgs], { stdio: ['ignore', 'pipe', 'pipe'] });
     // Settling clears the no-URL timer. An uncleared timer stays a ref'd handle

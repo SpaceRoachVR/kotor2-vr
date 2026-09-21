@@ -27,6 +27,7 @@ function parseAssetServerArguments(argumentsList, defaults = getDefaultOptions()
     distRoot: defaults.distRoot,
     port: defaults.port,
     modRoots: [],
+    discoverModLayers: true,
   };
   const optionToProperty = {
     '--game': 'gameRoot',
@@ -38,6 +39,12 @@ function parseAssetServerArguments(argumentsList, defaults = getDefaultOptions()
 
   for (let index = 0; index < argumentsList.length; index += 1) {
     const option = argumentsList[index];
+    if (option === '--no-mods') {
+      // Measurement runs (the parity tooling, vr:sweep) pass this so results
+      // describe retail rather than whatever the player has layered on.
+      values.discoverModLayers = false;
+      continue;
+    }
     if (option === '--mod') {
       const value = argumentsList[index + 1];
       if (!value || value.startsWith('--')) throw new Error('--mod requires a value');
@@ -61,7 +68,40 @@ function parseAssetServerArguments(argumentsList, defaults = getDefaultOptions()
     distRoot: path.resolve(values.distRoot),
     port: parsePort(String(values.port)),
     modRoots: values.modRoots,
+    discoverModLayers: values.discoverModLayers,
   };
+}
+
+/**
+ * Standing mod layers: every directory in <userRoot>/mods, in name order, which
+ * is why they are numbered (01-, 02-, 03-). Later layers win, so a higher
+ * number overrides a lower one, and all of them override retail.
+ *
+ * Explicit --mod roots are applied first so an ad-hoc layer stays below the
+ * standing ones rather than silently outranking them.
+ */
+function discoverModLayers(userRoot) {
+  const modsDirectory = path.join(userRoot, 'mods');
+  let entries;
+  try {
+    entries = fs.readdirSync(modsDirectory, { withFileTypes: true });
+  } catch (error) {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right))
+    .map((name) => path.join(modsDirectory, name))
+    .filter((candidate) => {
+      try {
+        return fs.statSync(candidate).isDirectory();
+      } catch (error) {
+        // A junction to a Steam Workshop item disappears when it is
+        // unsubscribed; skip it rather than failing the whole launch.
+        return false;
+      }
+    });
 }
 
 function getDefaultOptions() {
@@ -83,13 +123,16 @@ function validateRetailInstallation(gameRoot) {
 }
 
 async function main() {
-  const { gameRoot, userRoot, distRoot, port, modRoots } = parseAssetServerArguments(process.argv.slice(2));
+  const { gameRoot, userRoot, distRoot, port, modRoots, discoverModLayers: discover } =
+    parseAssetServerArguments(process.argv.slice(2));
+  const layers = discover ? [...modRoots, ...discoverModLayers(userRoot)] : modRoots;
   const token = crypto.randomBytes(32).toString('base64url');
   validateRetailInstallation(gameRoot);
   fs.mkdirSync(userRoot, { recursive: true });
+  for (const layer of layers) console.log(`Mod layer: ${layer}`);
   const service = createAssetService({
     assetRoot: gameRoot,
-    modRoots,
+    modRoots: layers,
     userRoot,
     distRoot,
     token,
@@ -123,4 +166,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseAssetServerArguments };
+module.exports = { parseAssetServerArguments, discoverModLayers };
