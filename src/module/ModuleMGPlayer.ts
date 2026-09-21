@@ -81,6 +81,9 @@ export class ModuleMGPlayer extends ModuleObject {
 
   /** How long a request stands without renewal. A couple of frames at 30fps. */
   static readonly ACCELERATION_REQUEST_TTL_MS = 120;
+
+  /** Scratch for the obstacle sweep, which runs every frame. */
+  private static obstacleProbePosition = new THREE.Vector3();
   sphere_radius: number;
   invince_period: number;
   bump_damage: any;
@@ -272,6 +275,7 @@ export class ModuleMGPlayer extends ModuleObject {
         //this.updateCollision(delta);
         this.track.position.add(this.forceVector);
         this.clampToTunnel();
+        this.checkObstacleCollisions();
         //this.model.box.setFromObject(this.model);
 
         const enemies = GameState.module.area.miniGame.enemies;
@@ -357,6 +361,42 @@ export class ModuleMGPlayer extends ModuleObject {
       case MiniGameType.TURRET:
         this.fire();
       break;
+    }
+  }
+
+  /**
+   * Runs the rider into the track's obstacles.
+   *
+   * Obstacles were inert: the area built them from the LYT and then nothing
+   * touched them again - no model, no collider, no scripts, only an
+   * invulnerability timer counting down against nothing. A rider passed
+   * straight through every hazard on the track.
+   *
+   * Compared in world space, which is where the LYT places them. The player's
+   * own `track.position` is a local offset on the track node - it reads (0,0,0)
+   * while the bike sits at world y -183 - so testing against that matches
+   * almost nothing. The bike's world position comes from its container, the
+   * same source the VR rig and the collision sphere already use. 211TEL places
+   * 105 obstacles between y 93 and y 6006.
+   *
+   * The obstacle's own invulnerability window is what stops one hazard firing
+   * every frame while the bike is still inside it.
+   */
+  checkObstacleCollisions(){
+    if(!this.container){ return; }
+    const obstacles = GameState.module?.area?.miniGame?.obstacles;
+    if(!obstacles?.length){ return; }
+    this.container.getWorldPosition(ModuleMGPlayer.obstacleProbePosition);
+    const position = ModuleMGPlayer.obstacleProbePosition;
+    for(let i = 0, len = obstacles.length; i < len; i++){
+      const obstacle = obstacles[i];
+      if(!obstacle || !obstacle.isStruckBy(position)){ continue; }
+      obstacle.startInvulnerability();
+      obstacle.onHitFollower();
+      this.onHitObstacle(obstacle);
+      // One hazard per frame: a rider clipping two at once is struck by the
+      // first, and the second is still there on the next pass.
+      return;
     }
   }
 

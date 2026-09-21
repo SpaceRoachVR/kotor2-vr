@@ -39,6 +39,8 @@ export class ModuleMiniGame {
 
   enemies: ModuleMGEnemy[] = [];
   obstacles: ModuleMGObstacle[] = [];
+  /** ARE obstacle templates by lowercase name; the LYT places them. */
+  obstacleTemplates: Map<string, GFFObject> = new Map();
   tracks: ModuleMGTrack[] = [];
 
   constructor(struct: GFFStruct){
@@ -65,6 +67,35 @@ export class ModuleMiniGame {
           GFFObject.FromStruct(enemies[i])
         )
       );
+    }
+
+    // Obstacle templates, keyed by name. The obstacles themselves are placed by
+    // the LYT, which carries only a name and a position; the ARE carries the
+    // scripts for the same names. This list was never read at all, so every
+    // obstacle reached the track with no scripts - and 211TEL's six scripted
+    // obstacles (OnHitFollower: spec_obst_hit) did nothing when struck.
+    const obstacles = struct.getFieldByLabel('Obstacles')?.getChildStructs() ?? [];
+    for(let i = 0; i < obstacles.length; i++){
+      const template = GFFObject.FromStruct(obstacles[i]);
+      const name = template.getFieldByLabel('Name')?.getValue();
+      if(!name){ continue; }
+      this.obstacleTemplates.set(String(name).toLowerCase(), template);
+    }
+  }
+
+  /**
+   * Attaches each placed obstacle's template, matched to the LYT by name. The
+   * area builds the obstacles from the layout, so this runs once they exist.
+   * All 105 of 211TEL's placed obstacles match an ARE entry exactly.
+   */
+  applyObstacleTemplates(){
+    for(let i = 0; i < this.obstacles.length; i++){
+      const obstacle = this.obstacles[i];
+      const name = obstacle?.layout?.name;
+      if(!obstacle || !name){ continue; }
+      const template = this.obstacleTemplates.get(String(name).toLowerCase());
+      if(!template){ continue; }
+      obstacle.setTemplate(template);
     }
   }
 

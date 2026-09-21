@@ -1293,6 +1293,8 @@ export class ModuleArea extends ModuleObject {
         for(let i = 0; i < this.layout.obstacles.length; i++){
           this.miniGame.obstacles.push(new ModuleMGObstacle(undefined, this.layout.obstacles[i]));
         }
+        // The LYT places them; the ARE names their scripts.
+        this.miniGame.applyObstacleTemplates();
       }
     }catch(e){
       console.error(e);
