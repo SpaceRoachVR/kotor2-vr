@@ -506,7 +506,8 @@ describe('asset service', () => {
   test.each([
     '<script src="../KotOR.js"></script><script src = "../KotOR.js"></script>',
     '<script src="../KotOR.js"></script><script src="../%4botOR.js"></script>',
-    '<script src="../KotOR.js"></script><script type="text/javascript; charset=utf-8" src="../KotOR.js"></script>',
+    '<script type="text/javascript; charset=utf-8" src="../KotOR.js"></script>',
+    '<script type=" APPLICATION/JAVASCRIPT ; charset=UTF-8 " src="../KotOR.js"></script>',
     '<!-- <script src="../KotOR.js"></script> -->',
     '<script data-src="../KotOR.js"></script>',
     '<script type="application/json" src="../KotOR.js"></script>',
@@ -541,8 +542,8 @@ describe('asset service', () => {
   });
 
   test.each([
-    '<script type="text/javascript; charset=utf-8" src="../KotOR.js"></script>',
-    '<script type=" APPLICATION/JAVASCRIPT ; charset=UTF-8 " src="../KotOR.js"></script>',
+    '<script type="text/javascript" src="../KotOR.js"></script>',
+    '<script type=" APPLICATION/JAVASCRIPT " src="../KotOR.js"></script>',
     '<script type="module" nomodule src="../KotOR.js"></script>',
     '<script src="../KotOR.js"></script><base href="https://foreign.invalid/">',
     '<script src="../KotOR.js"></script><base href="http://[">',
@@ -561,9 +562,9 @@ describe('asset service', () => {
     expect(await response.text()).toMatch(/src="\/bundles\/[a-f0-9]{64}\/KotOR\.js"/);
   });
 
-  test('preserves a parameterized inert script beside the single executable runtime', async () => {
+  test.each(['application/json; charset=utf-8', 'text/javascript; charset=utf-8', ' APPLICATION/JAVASCRIPT ; charset=UTF-8 '])('preserves a parameterized inert script beside the single executable runtime: %s', async (type) => {
     await start();
-    const inert = '<script type="application/json; charset=utf-8" src="../KotOR.js"></script>';
+    const inert = `<script type="${type}" src="../KotOR.js"></script>`;
     fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), `${inert}<script src="../KotOR.js"></script>`);
     const response = await request('/game/index.html');
     const html = await response.text();

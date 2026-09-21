@@ -45,8 +45,9 @@ function rewriteRuntimeDocument(document, documentUrl, bundle) {
     }
     if (node.tagName !== 'script') continue;
     const type = asciiLowercase(attrs.type === undefined && attrs.language ? `text/${attrs.language}` : trimAsciiWhitespace(attrs.type || ''));
-    const mimeEssence = trimAsciiWhitespace(type.split(';', 1)[0]);
-    const executable = type === '' || type === 'module' || JAVASCRIPT_TYPES.has(mimeEssence);
+    // HTML requires a JavaScript MIME type essence match of the entire type
+    // string. MIME parameters make this a data block, not an executable script.
+    const executable = type === '' || type === 'module' || JAVASCRIPT_TYPES.has(type);
     if (!executable || (type !== 'module' && Object.hasOwn(attrs, 'nomodule')) || !Object.hasOwn(attrs, 'src')) continue;
     // HTML's legacy event handler suppression applies only when both
     // attributes are present on a classic script (prepare-the-script-element).

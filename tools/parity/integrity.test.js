@@ -55,7 +55,20 @@ test('authored creature bind pose requires the loaded retail model identity', ()
 test('classic script eligibility applies legacy for/event and ASCII normalization', () => {
   const rewrite = (attributes) => rewriteRuntimeDocument(`<script ${attributes} src="/KotOR.js"></script>`, 'http://localhost/game/index.html', { sha256: 'a'.repeat(64), integrity: 'sha256-fixture' });
   for (const attributes of ['for="document" event="onload"', 'for="window" event="onclick"', 'for="" event=""', 'for="\u00a0window" event="onload"', 'for="window" event="\ufeffonload"', 'type="\u00a0text/javascript"', 'type="text/javascript\ufeff"', 'type="\ufeffmodule"', 'language="javaſcript"']) assert.equal(rewrite(attributes), null, attributes);
-  for (const attributes of ['for="window" event="onload"', 'for=" WINDOW " event=" ONLOAD() "', 'for="document"', 'event="onclick"', 'type="module" for="document" event="onclick"', 'type="text/javascript; charset=utf-8"', 'type=" \tTEXT/JAVASCRIPT\n"']) assert.match(rewrite(attributes), /\/bundles\//, attributes);
+  for (const attributes of ['for="window" event="onload"', 'for=" WINDOW " event=" ONLOAD() "', 'for="document"', 'event="onclick"', 'type="module" for="document" event="onclick"', 'type="text/javascript"', 'type=" \tTEXT/JAVASCRIPT\n"']) assert.match(rewrite(attributes), /\/bundles\//, attributes);
+});
+
+test('JavaScript essence matching does not parse MIME parameters from script type', () => {
+  const bundle = { sha256: 'a'.repeat(64), integrity: 'sha256-fixture' };
+  for (const type of ['text/javascript; charset=utf-8', ' APPLICATION/JAVASCRIPT ; charset=UTF-8 ']) {
+    const inert = `<script type="${type}" src="/KotOR.js"></script>`;
+    assert.equal(rewriteRuntimeDocument(inert, 'http://localhost/game/index.html', bundle), null);
+    for (const document of [inert + '<script src="/KotOR.js"></script>', '<script src="/KotOR.js"></script>' + inert]) {
+      const rewritten = rewriteRuntimeDocument(document, 'http://localhost/game/index.html', bundle);
+      assert.ok(rewritten.includes(inert));
+      assert.equal(rewritten.match(/src="\/bundles\//g).length, 1);
+    }
+  }
 });
 
 test('a refresh after comparison cannot replace bytes retained with MusicDay findings', () => {
