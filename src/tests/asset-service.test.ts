@@ -503,6 +503,36 @@ describe('asset service', () => {
     expect(await duplicate.text()).not.toContain('../KotOR.js');
   });
 
+  test.each([
+    '<script src="../KotOR.js"></script><script src = "../KotOR.js"></script>',
+    '<script src="../KotOR.js"></script><script src="../%4botOR.js"></script>',
+    '<!-- <script src="../KotOR.js"></script> -->',
+    '<script data-src="../KotOR.js"></script>',
+    '<script type="application/json" src="../KotOR.js"></script>',
+    '<script nomodule src="../KotOR.js"></script>',
+    '<template><script src="../KotOR.js"></script></template>',
+    '<base href="https://foreign.invalid/"><script src="../KotOR.js"></script>',
+  ])('rejects documents without exactly one executable local runtime: %s', async (html) => {
+    await start();
+    fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), html);
+    const response = await request('/game/index.html');
+    expect(response.status).toBe(409);
+    expect(await response.text()).not.toContain('<script');
+  });
+
+  test('rewrites precisely the executable script while preserving comments and inert attributes', async () => {
+    await start();
+    const comment = '<!-- <script src="../KotOR.js"></script> -->';
+    const inert = '<div data-src="../KotOR.js">unchanged</div>';
+    fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), `${comment}${inert}<script src = ../KotOR.js></script>`);
+    const response = await request('/game/index.html');
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain(comment);
+    expect(html).toContain(inert);
+    expect(html).toMatch(/src="\/bundles\/[a-f0-9]{64}\/KotOR\.js"/);
+  });
+
   test('supports idempotent start and close, then restarts on the same service instance', async () => {
     const reusableService: RunningService = createAssetService({
       assetRoot,

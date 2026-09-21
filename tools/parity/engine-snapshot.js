@@ -409,6 +409,7 @@ async function main() {
   const log = (line) => console.log(line);
   try {
     await harness.launch(url);
+    harness.beginTrustedCapture();
     await bootstrapFreshNewGame(harness, log);
     log(`loading ${args.module}...`);
     const snapshot = await harness.evaluate(buildSnapshotSource(args.module), { timeoutMs: LOAD_TIMEOUT_MS + 60_000 });

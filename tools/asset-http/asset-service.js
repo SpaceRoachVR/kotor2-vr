@@ -3,6 +3,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { URL } = require('url');
+const { rewriteRuntimeDocument } = require('./runtime-document');
 
 const SESSION_COOKIE_NAME = 'kotor2vr_session';
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
@@ -183,14 +184,10 @@ class AssetService {
     const afterRead = fs.statSync(resolved.path);
     if (!sameFileIdentity(resolved.stats, afterRead)) throw new HttpError(409, 'game document changed during read');
     const bundle = this.readRuntimeBundle();
-    const runtimeScriptPattern = /<script\b[^>]*\bsrc=(['"])\.\.\/KotOR\.js\1[^>]*>\s*<\/script>/gi;
-    if ([...document.matchAll(runtimeScriptPattern)].length !== 1) {
+    const html = rewriteRuntimeDocument(document, new URL('/game/index.html', this.baseUrl).href, bundle);
+    if (html === null) {
       return sendError(response, 409, 'runtime document does not contain exactly one KotOR.js script');
     }
-    const html = document.replace(
-      runtimeScriptPattern,
-      `<script type="text/javascript" src="/bundles/${bundle.sha256}/KotOR.js" integrity="${bundle.integrity}" crossorigin="anonymous"></script>`,
-    );
     return sendBuffer(request, response, Buffer.from(html, 'utf8'), '.html', 'no-store');
   }
 

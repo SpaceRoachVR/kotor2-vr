@@ -148,6 +148,7 @@ class VrHarness {
     this.observeServingBundle = options.observeServingBundle === true;
     this.servingBundleObserver = null;
     this.mainFrameId = null;
+    this.captureContext = null;
     this.chrome = null;
     this.cdp = null;
   }
@@ -230,8 +231,9 @@ class VrHarness {
     const deadline = Date.now() + timeoutMs;
     let last = null;
     while (Date.now() < deadline) {
+      if (this.captureContext) this.servingBundleObserver.assertActive(this.captureContext);
       try {
-        const value = await this.cdp.evaluate(`!!(${expression})`);
+        const value = await this.evaluate(`!!(${expression})`);
         if (value === true) return true;
         last = value;
       } catch (error) {
@@ -243,7 +245,13 @@ class VrHarness {
   }
 
   evaluate(expression, options) {
+    if (this.captureContext) return this.servingBundleObserver.evaluate(this.captureContext, expression, options);
     return this.cdp.evaluate(expression, options);
+  }
+
+  beginTrustedCapture() {
+    if (!this.servingBundleObserver) throw new Error('Serving bundle observation was not enabled before navigation');
+    this.captureContext = this.servingBundleObserver.bindContext(this.mainFrameId);
   }
 
   /**
@@ -253,7 +261,7 @@ class VrHarness {
    */
   async getTrustedServingBundle() {
     if (!this.servingBundleObserver) throw new Error('Serving bundle observation was not enabled before navigation');
-    return this.servingBundleObserver.identify(this.mainFrameId);
+    return this.servingBundleObserver.identify(this.mainFrameId, this.captureContext);
   }
 
   /**
@@ -261,7 +269,7 @@ class VrHarness {
    * as a user activation — `requestSession('immersive-vr')` is gated on one.
    */
   async clickSelector(selector) {
-    const box = await this.cdp.evaluate(`(() => {
+    const box = await this.evaluate(`(() => {
       const el = document.querySelector(${JSON.stringify(selector)});
       if (!el) return null;
       const r = el.getBoundingClientRect();

@@ -15,6 +15,9 @@ completed network response and Chrome's parsed main-frame script source must
 have the same SHA-256 and match the content-addressed URL. DOM and performance
 APIs cannot supply this identity. Missing, duplicate, failed, or uncorrelated
 runtime observations fail closed, including captures requested through `--url`.
+The response loader and live default execution context must belong to the active
+main-frame document. Bootstrap and snapshot evaluations use that context's unique
+CDP identifier; document navigation or context destruction invalidates the capture.
 `--url` is hashed from that URL and records neither local commit nor mtime, so
 it never borrows the local checkout's bundle identity. Evidence records must name their
 module-scoped, typed resource identity, hash, and authority. The available finding classifications are deliberately

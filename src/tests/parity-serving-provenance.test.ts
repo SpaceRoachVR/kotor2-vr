@@ -17,10 +17,11 @@ function fixture(body = 'globalThis.KotOR = {};') {
     send: async (name: string) => { commands.push(name); return replies[name] || {}; },
     evaluate: async () => { throw new Error('Page-owned evaluation must never establish provenance'); },
   });
-  const emit = (name: string, event: unknown) => listeners.get(name)!(event);
+  const emit = (name: string, event: unknown) => listeners.get(name)?.(event);
   const record = () => {
-    emit('Runtime.executionContextCreated', { context: { id: 1, auxData: { frameId: 'main', isDefault: true } } });
-    emit('Network.responseReceived', { requestId: 'request', frameId: 'main', type: 'Script', response: { url, status: 200 } });
+    emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'document-1' } });
+    emit('Runtime.executionContextCreated', { context: { id: 1, uniqueId: 'context-1', auxData: { frameId: 'main', isDefault: true } } });
+    emit('Network.responseReceived', { requestId: 'request', loaderId: 'document-1', frameId: 'main', type: 'Script', response: { url, status: 200 } });
     emit('Network.loadingFinished', { requestId: 'request' });
     emit('Debugger.scriptParsed', { scriptId: 'script', url, executionContextId: 1 });
   };
@@ -48,14 +49,16 @@ describe('trusted parity serving provenance', () => {
     f.record();
     await expect(f.observer.identify('other-frame')).rejects.toThrow(/main frame/i);
     await expect(f.observer.identify('main')).rejects.toThrow(/parsed script/i);
-    f.emit('Network.responseReceived', { requestId: 'duplicate', frameId: 'main', type: 'Script', response: { url: f.url, status: 200 } });
+    f.emit('Network.responseReceived', { requestId: 'duplicate', loaderId: 'document-1', frameId: 'main', type: 'Script', response: { url: f.url, status: 200 } });
     await expect(f.observer.identify('main')).rejects.toThrow(/exactly one/i);
   });
 
   test('a downloaded decoy that Chrome never parsed cannot establish executed provenance', async () => {
     const f = fixture();
     await f.observer.start();
-    f.emit('Network.responseReceived', { requestId: 'request', frameId: 'main', type: 'Script', response: { url: f.url, status: 200 } });
+    f.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'document-1' } });
+    f.emit('Runtime.executionContextCreated', { context: { id: 1, uniqueId: 'context-1', auxData: { frameId: 'main', isDefault: true } } });
+    f.emit('Network.responseReceived', { requestId: 'request', loaderId: 'document-1', frameId: 'main', type: 'Script', response: { url: f.url, status: 200 } });
     f.emit('Network.loadingFinished', { requestId: 'request' });
     await expect(f.observer.identify('main')).rejects.toThrow(/parsed script/i);
   });
@@ -81,5 +84,73 @@ describe('trusted parity serving provenance', () => {
     f.replies['Network.getResponseBody'] = {};
     f.replies['Debugger.getScriptSource'] = {};
     await expect(f.observer.identify('main')).resolves.toEqual({ url: f.url, sha256: f.sha256 });
+  });
+
+  test.each(['Runtime.executionContextDestroyed', 'Runtime.executionContextsCleared', 'Page.frameNavigated'])(
+    'invalidates previously identified provenance on %s', async (eventName) => {
+      const f = fixture();
+      await f.observer.start();
+      f.record();
+      await expect(f.observer.identify('main')).resolves.toEqual({ url: f.url, sha256: f.sha256 });
+      f.emit(eventName, eventName === 'Page.frameNavigated'
+        ? { frame: { id: 'main', loaderId: 'document-2' } } : { executionContextId: 1 });
+      f.emit('Runtime.executionContextCreated', { context: { id: 1, uniqueId: 'context-2', auxData: { frameId: 'main', isDefault: true } } });
+      await expect(f.observer.identify('main')).rejects.toThrow();
+    },
+  );
+
+  test('binds capture evaluations to a live unique context and rejects navigation during collection', async () => {
+    const f = fixture();
+    await f.observer.start();
+    f.record();
+    const binding = f.observer.bindContext('main');
+    f.observer.cdp.evaluate = async (_expression: string, options: { uniqueContextId: string }) => {
+      expect(options.uniqueContextId).toBe('context-1');
+      f.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'document-2' } });
+      return { fromOldDocument: true };
+    };
+    await expect(f.observer.evaluate(binding, 'snapshot()')).rejects.toThrow(/active document|live context/i);
+    await expect(f.observer.identify('main', binding)).rejects.toThrow();
+  });
+
+  test('does not correlate a previous loader response with the new document context', async () => {
+    const f = fixture();
+    await f.observer.start();
+    f.record();
+    const oldBinding = f.observer.bindContext('main');
+    f.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'document-2' } });
+    f.emit('Runtime.executionContextCreated', { context: { id: 1, uniqueId: 'context-2', auxData: { frameId: 'main', isDefault: true } } });
+    f.emit('Network.responseReceived', { requestId: 'old-loader', loaderId: 'document-1', frameId: 'main', type: 'Script', response: { url: f.url, status: 200 } });
+    f.emit('Network.loadingFinished', { requestId: 'old-loader' });
+    f.emit('Debugger.scriptParsed', { scriptId: 'new-script', url: f.url, executionContextId: 1 });
+    await expect(f.observer.identify('main')).rejects.toThrow(/exactly one/i);
+    f.emit('Network.responseReceived', { requestId: 'new-loader', loaderId: 'document-2', frameId: 'main', type: 'Script', response: { url: f.url, status: 200 } });
+    f.emit('Network.loadingFinished', { requestId: 'new-loader' });
+    await expect(f.observer.identify('main')).resolves.toEqual({ url: f.url, sha256: f.sha256 });
+    await expect(f.observer.identify('main', oldBinding)).rejects.toThrow(/active document|live context/i);
+  });
+
+  test('rechecks document identity after asynchronous response hashing', async () => {
+    const f = fixture();
+    let completeBody!: (value: unknown) => void;
+    f.replies['Network.getResponseBody'] = new Promise((resolve) => { completeBody = resolve; });
+    await f.observer.start();
+    f.record();
+    const result = f.observer.identify('main');
+    f.emit('Page.frameNavigated', { frame: { id: 'main', loaderId: 'document-2' } });
+    completeBody({ body: 'globalThis.KotOR = {};', base64Encoded: false });
+    await expect(result).rejects.toThrow(/active document|live context/i);
+  });
+
+  test('sends the unique execution context selector through the CDP evaluation adapter', async () => {
+    const { CdpSession } = require('../../tools/vr-emulator/cdp');
+    const session = Object.create(CdpSession.prototype);
+    session.send = async (method: string, params: Record<string, unknown>) => {
+      expect(method).toBe('Runtime.evaluate');
+      expect(params.uniqueContextId).toBe('context-1');
+      return { result: { value: 'captured' } };
+    };
+    await expect(session.evaluate('snapshot()', { uniqueContextId: 'context-1' })).resolves.toBe('captured');
+    await expect(session.evaluate('snapshot()', { uniqueContextId: '' })).rejects.toThrow(/context/i);
   });
 });

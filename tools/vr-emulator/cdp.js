@@ -106,7 +106,10 @@ class CdpSession {
    * Rejects on a thrown exception rather than resolving with the error object,
    * so a failed step stops the scenario instead of silently continuing.
    */
-  async evaluate(expression, { awaitPromise = true, timeoutMs = 60000 } = {}) {
+  async evaluate(expression, { awaitPromise = true, timeoutMs = 60000, uniqueContextId } = {}) {
+    if (uniqueContextId !== undefined && (typeof uniqueContextId !== 'string' || !uniqueContextId)) {
+      throw new TypeError('Evaluation requires a non-empty unique execution context ID');
+    }
     // The loser of this race must be cleared. An uncleared timer stays a ref'd
     // handle for its full duration, and Node will not exit while one is
     // pending — so a tool whose work is finished sits there doing nothing until
@@ -121,6 +124,7 @@ class CdpSession {
           awaitPromise,
           returnByValue: true,
           userGesture: true,
+          ...(uniqueContextId === undefined ? {} : { uniqueContextId }),
         }),
         new Promise((_, reject) => {
           timer = setTimeout(
