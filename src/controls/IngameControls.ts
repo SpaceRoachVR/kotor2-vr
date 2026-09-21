@@ -629,6 +629,7 @@ export class IngameControls {
           // reached, and sets the new min/max speed, acceleration and tunnel.
           // This case was empty, so the bike had no throttle on any input path
           // and every race sat on the line at gear 0.
+          GameState.module.area.miniGame.player.requestAcceleration();
           GameState.module.area.miniGame.player.onAccelerate();
         break;
         case MiniGameType.TURRET:

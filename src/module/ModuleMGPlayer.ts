@@ -63,6 +63,24 @@ export class ModuleMGPlayer extends ModuleObject {
   hit_points: any;
   max_hps: any;
   onCreateRun: boolean;
+
+  /**
+   * When acceleration was last asked for, in milliseconds.
+   *
+   * The swoop used to accelerate every frame for as long as a gear was engaged,
+   * so the throttle could never be let off: once the rider shifted, the bike
+   * climbed to the gear's ceiling and stayed there whatever they did. Nothing in
+   * the engine read whether accelerate was still being held.
+   *
+   * A timestamp rather than a boolean because neither input path has a release
+   * event: the flatscreen KeyMapper only runs its processor while the key is
+   * down, and the VR controller only reports a held trigger. Both simply say
+   * "still accelerating" each frame, and the request goes stale on its own.
+   */
+  accelerationRequestedAt: number = -Infinity;
+
+  /** How long a request stands without renewal. A couple of frames at 30fps. */
+  static readonly ACCELERATION_REQUEST_TTL_MS = 120;
   sphere_radius: number;
   invince_period: number;
   bump_damage: any;
@@ -226,7 +244,17 @@ export class ModuleMGPlayer extends ModuleObject {
             this.speed = this.speed_min;
           }
 
-          this.speed += (this.accel_secs * delta);
+          // Accelerate only while the rider is asking for it. Letting off drops
+          // back towards the gear's floor rather than holding the ceiling; the
+          // gear's own minimum is what keeps a shifted-up bike quick.
+          if(this.isAccelerating()){
+            this.speed += (this.accel_secs * delta);
+          }else{
+            this.speed -= (this.accel_secs * delta);
+            if(this.speed < this.speed_min){
+              this.speed = this.speed_min;
+            }
+          }
 
           if(this.speed_max && (this.speed >= this.speed_max)){
             this.speed = this.speed_max;
@@ -243,6 +271,7 @@ export class ModuleMGPlayer extends ModuleObject {
         this.track.updateMatrixWorld();
         //this.updateCollision(delta);
         this.track.position.add(this.forceVector);
+        this.clampToTunnel();
         //this.model.box.setFromObject(this.model);
 
         const enemies = GameState.module.area.miniGame.enemies;
@@ -328,6 +357,45 @@ export class ModuleMGPlayer extends ModuleObject {
       case MiniGameType.TURRET:
         this.fire();
       break;
+    }
+  }
+
+  /** Whether an acceleration request is still standing. */
+  isAccelerating(): boolean {
+    return (Date.now() - this.accelerationRequestedAt)
+      < ModuleMGPlayer.ACCELERATION_REQUEST_TTL_MS;
+  }
+
+  /** Called every frame the rider holds the throttle, by whichever input path. */
+  requestAcceleration(){
+    this.accelerationRequestedAt = Date.now();
+  }
+
+  /**
+   * Keeps the bike inside the track's tunnel.
+   *
+   * The scripts set the bounds and the engine stored them, but only the turret
+   * ever read them - it clamps its rotation. Nothing clamped the swoop's
+   * lateral offset, so a rider who kept steering simply left the track and
+   * drove through the scenery. 211TEL's OnAccelerate sets the bounds the moment
+   * the first gear engages: SWMG_SetPlayerTunnelPos([20,3,10]) and
+   * SWMG_SetPlayerTunnelNeg([-20,3,0]).
+   *
+   * x is the lateral offset and z the hop height; both are meaningful here. The
+   * y bound is the along-track axis the bike advances on, so it is deliberately
+   * not clamped - doing so would stop the race dead.
+   */
+  clampToTunnel(){
+    if(!this.track){ return; }
+    const pos = this.tunnel?.pos, neg = this.tunnel?.neg;
+    if(!pos || !neg){ return; }
+    if(pos.x || neg.x){
+      if(this.track.position.x > pos.x) this.track.position.x = pos.x;
+      if(this.track.position.x < neg.x) this.track.position.x = neg.x;
+    }
+    if(pos.z || neg.z){
+      if(this.track.position.z > pos.z) this.track.position.z = pos.z;
+      if(this.track.position.z < neg.z) this.track.position.z = neg.z;
     }
   }
 

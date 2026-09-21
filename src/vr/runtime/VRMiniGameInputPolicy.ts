@@ -91,8 +91,13 @@ const clamp = (value: number, min: number, max: number): number =>
  */
 const XR_STANDARD_TRIGGER = '0';
 const XR_STANDARD_SQUEEZE = '1';
-/** A/X on the Touch profiles. The swoop's second jump control. */
+/**
+ * The face buttons: A/X at 4 and B/Y at 5 on the Touch profiles. Both jump, on
+ * either hand, because a rider who cannot jump cannot clear an obstacle and the
+ * left controller drops out of the frame often enough to matter.
+ */
 const XR_STANDARD_FACE_PRIMARY = '4';
+const XR_STANDARD_FACE_SECONDARY = '5';
 
 function buttonValue(hand: XRHandInputFrame | undefined, indices: readonly string[]): number {
   if (!hand) return 0;
@@ -125,13 +130,15 @@ function stickPush(hand: XRHandInputFrame | undefined): number {
 
 const SQUEEZE_BUTTONS = [XR_STANDARD_SQUEEZE] as const;
 const TRIGGER_BUTTONS = [XR_STANDARD_TRIGGER] as const;
-const FACE_BUTTONS = [XR_STANDARD_FACE_PRIMARY] as const;
+const FACE_BUTTONS = [XR_STANDARD_FACE_PRIMARY, XR_STANDARD_FACE_SECONDARY] as const;
 
 export function isFaceButtonPressed(
   hand: XRHandInputFrame | undefined, config: VRMiniGameInputConfiguration,
 ): boolean {
   if (!hand) return false;
-  return buttonValue(hand, FACE_BUTTONS) >= config.triggerThreshold;
+  // Any face button, not the first one that happens to exist: buttonValue stops
+  // at the first index present, which would ignore B/Y whenever A/X is reported.
+  return FACE_BUTTONS.some((index) => buttonValue(hand, [index]) >= config.triggerThreshold);
 }
 
 export function isGripping(

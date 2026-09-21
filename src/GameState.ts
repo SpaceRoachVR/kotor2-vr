@@ -2206,7 +2206,10 @@ export class GameState implements EngineContext {
         // TSL's swoop keeps its jump script in the OnBrake slot; onBrake()
         // falls back to the engine's own jump when a module ships none.
         jump: () => (player.onBrake ? player.onBrake() : player.jump?.()),
-        accelerate: () => player.onAccelerate?.(),
+        accelerate: () => {
+          player.requestAcceleration?.();
+          player.onAccelerate?.();
+        },
         fire: () => player.fire?.(),
         get pitch(){ return player.rotation?.x ?? 0; },
         get yaw(){ return player.rotation?.z ?? 0; },
@@ -3234,7 +3237,7 @@ export class GameState implements EngineContext {
       let rider: THREE.Object3D | null = null;
       model.traverse((node: THREE.Object3D) => {
         if(rider){ return; }
-        if(String(node.name || '').replace(/ [\s\S]*$/, '') === 'trider'){ rider = node; }
+        if(String(node.name || '').replace(/\0[\s\S]*$/, '') === 'trider'){ rider = node; }
       });
       GameState.miniGameRiderCache.set(model, rider);
       if(rider){ return rider; }

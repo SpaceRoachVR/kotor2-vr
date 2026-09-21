@@ -157,13 +157,23 @@ export const CALL_ACTION = function( this: NWScriptInstance, instruction: NWScri
       case NWScriptDataType.ACTION:
         args.push( this.state.pop() );
       break;
-      case NWScriptDataType.VECTOR:
-        args.push(new THREE.Vector3(
-          this.stack.pop()?.value,
-          this.stack.pop()?.value,
-          this.stack.pop()?.value
-        ))
-      break;
+      case NWScriptDataType.VECTOR: {
+        // A vector arrives z first. The compiler pushes x, then y, then z, so z
+        // is on top and the first pop is z - not x. Building Vector3 straight
+        // from three pops therefore handed every routine its vector reversed.
+        //
+        // Measured on 211TEL: onaccelerate assigns struct1.x = -20, .y = 3,
+        // .z = 0 and calls SWMG_SetPlayerTunnelNeg(struct1); the engine stored
+        // tunnel.neg.x = 0. The swoop's tunnel came out 0..10 across instead of
+        // -20..20, which pins the bike at centre and makes a left turn
+        // impossible. Every routine taking a vector was affected the same way:
+        // positions, facings, effect vectors.
+        const z = this.stack.pop()?.value;
+        const y = this.stack.pop()?.value;
+        const x = this.stack.pop()?.value;
+        args.push(new THREE.Vector3(x, y, z));
+        break;
+      }
       default:
         //Pop the function variables off the stack after we are done with them
         args.push(this.stack.pop()?.value);

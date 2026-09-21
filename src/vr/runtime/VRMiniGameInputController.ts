@@ -56,9 +56,23 @@ export type VRMiniGameProvider = () => VRMiniGameTarget | null;
  */
 export class VRMiniGameInputController {
   private static previousJumpHeld = false;
-  /** The rider's straight-ahead, captured the first frame they are riding. */
+  /**
+   * The rider's straight-ahead.
+   *
+   * Captured the first frame they hold the throttle, not the first frame a hand
+   * is tracked. Hands are tracked long before anyone is in position - reaching
+   * for the grips, or resting between races - and a neutral taken then is a
+   * posture the rider never returns to, which reads as a permanent pull to
+   * whichever side that sample leaned. Opening the throttle is the one moment
+   * they are certainly holding on and pointed down the track.
+   *
+   * The two modes are captured separately: a one-handed sample says nothing
+   * about the height difference between two hands, so letting it stand as the
+   * two-handed neutral would leave that mode uncentred.
+   */
   private static neutral: VRSwoopNeutral = LEVEL_NEUTRAL;
-  private static neutralCaptured = false;
+  private static twoHandedNeutralCaptured = false;
+  private static oneHandedNeutralCaptured = false;
   /** Steering held across a brief hand dropout, and when it was last two-handed. */
   private static lastTwoHandedSteer = 0;
   private static lastTwoHandedAt = 0;
@@ -91,15 +105,7 @@ export class VRMiniGameInputController {
 
     const config = VRMiniGameInputController.configuration;
     if (target.type === 1) {
-      // Capture straight-ahead from how the rider is actually holding their
-      // hands, rather than assuming dead level.
-      if (!VRMiniGameInputController.neutralCaptured) {
-        const sampled = sampleSwoopNeutral(inputFrame);
-        if (sampled) {
-          VRMiniGameInputController.neutral = sampled;
-          VRMiniGameInputController.neutralCaptured = true;
-        }
-      }
+      VRMiniGameInputController.captureNeutral(inputFrame, config);
 
       const intent = resolveSwoopIntent(
         inputFrame, VRMiniGameInputController.previousJumpHeld, config,
@@ -148,7 +154,8 @@ export class VRMiniGameInputController {
   static reset(): void {
     VRMiniGameInputController.previousJumpHeld = false;
     VRMiniGameInputController.neutral = LEVEL_NEUTRAL;
-    VRMiniGameInputController.neutralCaptured = false;
+    VRMiniGameInputController.twoHandedNeutralCaptured = false;
+    VRMiniGameInputController.oneHandedNeutralCaptured = false;
     VRMiniGameInputController.lastTwoHandedSteer = 0;
     VRMiniGameInputController.lastTwoHandedAt = 0;
   }
@@ -158,6 +165,44 @@ export class VRMiniGameInputController {
    * same intent as a recenter: whatever they are holding now means straight.
    */
   static recentreSteering(): void {
-    VRMiniGameInputController.neutralCaptured = false;
+    VRMiniGameInputController.twoHandedNeutralCaptured = false;
+    VRMiniGameInputController.oneHandedNeutralCaptured = false;
+  }
+
+  /**
+   * Records straight-ahead the first time the rider opens the throttle in each
+   * hand mode. Until then steering stays uncentred, which costs nothing: the
+   * bike does not move until the throttle is opened either.
+   */
+  private static captureNeutral(
+    inputFrame: XRInputFrame, config: VRMiniGameInputConfiguration,
+  ): void {
+    const twoHanded = !!(inputFrame.hands['left'] && inputFrame.hands['right']);
+    if (twoHanded
+      ? VRMiniGameInputController.twoHandedNeutralCaptured
+      : VRMiniGameInputController.oneHandedNeutralCaptured) {
+      return;
+    }
+    // Only while the throttle is open, which is when they are certainly holding
+    // on. resolveSwoopIntent is not consulted here because its steer value is
+    // the thing being calibrated.
+    const throttling = resolveSwoopIntent(inputFrame, true, config, LEVEL_NEUTRAL).throttle;
+    if (!throttling) return;
+
+    const sampled = sampleSwoopNeutral(inputFrame);
+    if (!sampled) return;
+    if (twoHanded) {
+      VRMiniGameInputController.neutral = {
+        heightDifference: sampled.heightDifference,
+        lateralOffset: VRMiniGameInputController.neutral.lateralOffset,
+      };
+      VRMiniGameInputController.twoHandedNeutralCaptured = true;
+      return;
+    }
+    VRMiniGameInputController.neutral = {
+      heightDifference: VRMiniGameInputController.neutral.heightDifference,
+      lateralOffset: sampled.lateralOffset,
+    };
+    VRMiniGameInputController.oneHandedNeutralCaptured = true;
   }
 }
