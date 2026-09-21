@@ -112,8 +112,11 @@ export class ModuleMGEnemy extends ModuleObject {
     if(this.invince < 0) this.invince = 0;
 
     this.sphere.radius = this.sphere_radius;
-    // this.model.getWorldPosition(this.position);
-    this.sphere.center.copy(this.position);
+    // The collision sphere has to follow the object through the world, not sit
+    // at its local offset: every minigame object hangs off a track node that
+    // moves, so copying the local position left all 47 course objects on
+    // 211TEL sharing a sphere at the origin and colliding at once.
+    this.container.getWorldPosition(this.sphere.center);
 
     this.sphere_geom.scale.setScalar(this.sphere_radius);
     this.sphere_geom.position.copy(this.sphere.center);

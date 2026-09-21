@@ -190,8 +190,9 @@ export class ModuleMGPlayer extends ModuleObject {
     }
 
     this.sphere.radius = this.sphere_radius;
-    // this.model.parent.getWorldPosition(this.position);
-    this.sphere.center.copy(this.position);
+    // World space, for the same reason as ModuleMGEnemy: the player rides a
+    // track node, so its local position is not where it is.
+    this.container.getWorldPosition(this.sphere.center);
 
     this.sphere_geom.scale.setScalar(this.sphere_radius);
     this.sphere_geom.position.copy(this.sphere.center);
@@ -277,9 +278,7 @@ export class ModuleMGPlayer extends ModuleObject {
       this.gunBanks[i].update(delta);
     }
     
-    // this.model.parent.getWorldPosition(this.position);
-
-    this.sphere.center.copy(this.position);
+    this.container.getWorldPosition(this.sphere.center);
     this.sphere_geom.position.copy(this.sphere.center);
 
     if(this.camera instanceof OdysseyModel3D && this.camera.bonesInitialized && this.camera.visible){
