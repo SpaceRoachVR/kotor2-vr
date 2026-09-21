@@ -12,7 +12,7 @@ const { deriveCaptureId } = require('../../tools/parity/parity-contract');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { normalizeFindingForReport } = require('../../tools/parity/compare');
 
-const engineArtifact = JSON.stringify({ module: '101per', engineIdentity: {
+const engineArtifact = JSON.stringify({ module: '101per', loadedFromSave: false, bootstrap: 'new-game-ui', playerName: 'T3-M4', partySize: 1, engineIdentity: {
   module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64),
 } });
 const retailArtifact = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });

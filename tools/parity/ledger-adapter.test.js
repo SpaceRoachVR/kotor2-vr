@@ -5,7 +5,7 @@ const { toParityDefectRecords: promote } = require('./ledger-adapter');
 const { deriveCaptureId } = require('./parity-contract');
 const crypto = require('crypto');
 
-const fixtureEngine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
+const fixtureEngine = JSON.stringify({ module: '101per', loadedFromSave: false, bootstrap: 'new-game-ui', playerName: 'T3-M4', partySize: 1, engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
 const fixtureRetail = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
 const fixtureSidecar = JSON.stringify({ module: '101PER', records: [] });
 const fixtureHash = (contents) => crypto.createHash('sha256').update(contents).digest('hex');

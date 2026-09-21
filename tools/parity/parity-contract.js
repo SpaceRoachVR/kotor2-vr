@@ -5,6 +5,7 @@ const CLASSIFICATIONS = Object.freeze([
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { assertCanonicalEngineState } = require('./canonical-state');
 const SHA256 = /^[a-f0-9]{64}$/i;
 const EVIDENCE_AUTHORITIES = Object.freeze({ kotormcp: 'parsed-retail', holocron: 'human-review', dencs: 'hypothesis' });
 const CAPTURE_ARTIFACT_NAMES = Object.freeze(['engine', 'retail', 'comparison', 'sidecar']);
@@ -167,6 +168,12 @@ function validateCanonicalCaptureManifest(manifest, artifacts) {
   const identity = engine.engineIdentity;
   if (!identity || identity.freshState !== true || identity.loadedFromSave !== false) {
     throw new TypeError('Canonical capture manifest rejects save-derived or unverified engine provenance');
+  }
+  assertCanonicalEngineState(engine, module);
+  for (const field of ['loadedFromSave', 'bootstrap', 'playerName', 'partySize']) {
+    if (Object.hasOwn(identity, field) && identity[field] !== engine[field]) {
+      throw new TypeError(`Canonical capture engine identity ${field} disagrees with retained state`);
+    }
   }
   if (String(identity.module || '').toUpperCase() !== module) throw new TypeError('Canonical capture engine identity module mismatch');
   requireSha256(identity.servingBundleSha256, 'Canonical capture serving bundle');

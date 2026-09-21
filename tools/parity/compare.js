@@ -108,12 +108,17 @@ function linkEvidence(finding, evidenceRecords, evidencePath) {
 
 function loadEvidenceSidecar(module, retailSnapshot) {
   const sidecarPath = path.join(OUT_DIR, `${module}.evidence.json`);
-  if (!fs.existsSync(sidecarPath)) return { records: [], path: null };
-  const document = JSON.parse(fs.readFileSync(sidecarPath, 'utf8'));
+  let bytes;
+  try { bytes = fs.readFileSync(sidecarPath); } catch (error) {
+    if (error.code === 'ENOENT') return { records: [], path: null };
+    throw error;
+  }
+  const document = JSON.parse(bytes.toString('utf8'));
   if (!document || !Array.isArray(document.records)) {
     throw new TypeError(`Evidence sidecar requires records: ${sidecarPath}`);
   }
-  return { records: validateEvidenceSidecar(document, retailSnapshot, module), path: path.relative(process.cwd(), sidecarPath).replace(/\\/g, '/') };
+  return { records: validateEvidenceSidecar(document, retailSnapshot, module), bytes,
+    path: `tools/parity/out/${module}.evidence.json` };
 }
 
 /**
@@ -305,12 +310,18 @@ function describeAudioSemanticEvidence(retail, playStyleMapping, engine) {
  * evidence, not an animation-runtime defect.
  */
 function classifyModelPresentation(retail, engine) {
-  if (!engine || engine.modelStatus !== 'loaded') return 'missing-evidence';
+  if (!engine || engine.modelStatus !== 'loaded' || !matchingModelIdentity(retail, engine)) return 'missing-evidence';
   if (retail && retail.objectType === 'placeable' && retail.modelKind === 'creature'
       && engine && engine.animationApplied === false) {
     return 'authored-retail-behavior';
   }
   return engine && engine.animationApplied === true ? 'authored-retail-behavior' : 'missing-evidence';
+}
+
+function matchingModelIdentity(retail, engine) {
+  const normalize = (name) => typeof name === 'string' ? name.trim().toLowerCase() : '';
+  const expected = normalize(retail && retail.modelName);
+  return Boolean(expected && expected === normalize(engine && engine.modelName));
 }
 
 function compareAudio(retailSnap, engineSnap, add) {
@@ -405,6 +416,12 @@ function compareModelPresentation(retailSnap, engineSnap, add) {
       add({ area: 'model', code: 'model:missing', confidence: 'coverage', classification: 'missing-evidence',
         object: `${record.template}#${record.gitIndex}`, retail: record.modelName ?? null, engine: observed.modelStatus ?? null,
         detail: 'engine model presence/load status is absent, missing, or unresolved' });
+      continue;
+    }
+    if (!matchingModelIdentity(record, observed)) {
+      add({ area: 'model', code: 'model:identity', confidence: 'coverage', classification: 'missing-evidence',
+        object: `${record.template}#${record.gitIndex}`, retail: record.modelName ?? null, engine: observed.modelName ?? null,
+        detail: 'loaded engine model identity is missing or differs from the captured retail model' });
       continue;
     }
     const classification = classifyModelPresentation(record, observed);
@@ -510,29 +527,22 @@ function sha256File(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
-function assertCaptureSource(root, fileName) {
-  if (typeof fileName !== 'string' || !fileName.trim()) throw new TypeError('Capture artifact requires a source file name');
-  const source = path.resolve(root, fileName);
-  const resolvedRoot = path.resolve(root);
-  if (source !== resolvedRoot && !source.startsWith(`${resolvedRoot}${path.sep}`)) throw new TypeError('Capture artifact source escaped its output root');
-  if (!fs.statSync(source).isFile()) throw new TypeError(`Capture artifact is not a file: ${fileName}`);
-  return source;
-}
-
 /**
  * Freeze a comparison's evidence under a content-addressed capture directory.
  * The mutable per-module files remain convenience pointers only; promotions use
  * the returned manifest and its exact retained copies.
  */
-function retainCaptureArtifacts({ module, root = OUT_DIR, files }) {
+function retainCaptureArtifacts({ module, root = OUT_DIR, contents }) {
   if (path.resolve(root) !== OUT_DIR) throw new TypeError('Retention requires this workspace capture root');
   const normalizedModule = String(module || '').trim().toLowerCase();
   if (!/^[a-z0-9_]{1,16}$/.test(normalizedModule)) throw new TypeError('Capture manifest requires a module identifier');
-  if (!files || typeof files !== 'object') throw new TypeError('Capture manifest requires artifact files');
+  if (!contents || typeof contents !== 'object') throw new TypeError('Capture manifest requires captured artifact bytes');
   const sources = {};
-  for (const key of ['engine', 'retail', 'comparison']) sources[key] = assertCaptureSource(root, files[key]);
-  if (files.sidecar) sources.sidecar = assertCaptureSource(root, files.sidecar);
-  const sourceHashes = Object.fromEntries(Object.entries(sources).map(([key, source]) => [key, sha256File(source)]));
+  for (const key of ['engine', 'retail', 'comparison', ...(contents.sidecar === undefined ? [] : ['sidecar'])]) {
+    if (!Buffer.isBuffer(contents[key]) && typeof contents[key] !== 'string') throw new TypeError(`Capture ${key} requires captured bytes`);
+    sources[key] = Buffer.from(contents[key]);
+  }
+  const sourceHashes = Object.fromEntries(Object.entries(sources).map(([key, bytes]) => [key, crypto.createHash('sha256').update(bytes).digest('hex')]));
   const captureId = deriveCaptureId(normalizedModule, Object.fromEntries(
     Object.entries(sourceHashes).map(([key, sha256]) => [key, { sha256 }]),
   ));
@@ -548,7 +558,7 @@ function retainCaptureArtifacts({ module, root = OUT_DIR, files }) {
   for (const [key, source] of Object.entries(sources)) {
     const artifactPath = path.join(destination, `${key}.json`);
     const reference = path.posix.join('tools', 'parity', 'out', 'captures', normalizedModule, captureId, `${key}.json`);
-    if (!fs.existsSync(artifactPath)) fs.copyFileSync(source, artifactPath, fs.constants.COPYFILE_EXCL);
+    if (!fs.existsSync(artifactPath)) fs.writeFileSync(artifactPath, source, { flag: 'wx' });
     resolveRetainedArtifactPath(reference);
     if (sha256File(artifactPath) !== sourceHashes[key]) throw new Error(`Retained ${key} artifact hash mismatch`);
     artifacts[key] = {
@@ -596,12 +606,15 @@ function toMarkdown(report) {
   return lines.join('\n');
 }
 
-function main() {
-  const i = process.argv.indexOf('--module');
+function main(argv = process.argv) {
+  const i = argv.indexOf('--module');
   if (i < 0) throw new Error('usage: node tools/parity/compare.js --module 101PER');
-  const mod = process.argv[i + 1].toLowerCase();
-  const engine = JSON.parse(fs.readFileSync(path.join(OUT_DIR, `${mod}.engine.json`), 'utf8'));
-  const retail = JSON.parse(fs.readFileSync(path.join(OUT_DIR, `${mod}.retail.json`), 'utf8'));
+  const mod = argv[i + 1].toLowerCase();
+  if (!/^[a-z0-9_]{1,16}$/.test(mod)) throw new TypeError('Comparison requires a valid module identifier');
+  const engineBytes = fs.readFileSync(path.join(OUT_DIR, `${mod}.engine.json`));
+  const retailBytes = fs.readFileSync(path.join(OUT_DIR, `${mod}.retail.json`));
+  const engine = JSON.parse(engineBytes.toString('utf8'));
+  const retail = JSON.parse(retailBytes.toString('utf8'));
   const evidence = loadEvidenceSidecar(mod, retail);
 
   const findings = [];
@@ -626,11 +639,12 @@ function main() {
     findings,
   };
   const parityJsonPath = path.join(OUT_DIR, `${mod}.parity.json`);
-  fs.writeFileSync(parityJsonPath, JSON.stringify(report, null, 2));
+  const comparisonBytes = Buffer.from(JSON.stringify(report, null, 2));
+  fs.writeFileSync(parityJsonPath, comparisonBytes);
   fs.writeFileSync(path.join(OUT_DIR, `${mod}.parity.md`), toMarkdown(report));
-  const retained = retainCaptureArtifacts({ module: mod, root: OUT_DIR, files: {
-    engine: `${mod}.engine.json`, retail: `${mod}.retail.json`, comparison: `${mod}.parity.json`,
-    ...(evidence.path ? { sidecar: `${mod}.evidence.json` } : {}),
+  const retained = retainCaptureArtifacts({ module: mod, root: OUT_DIR, contents: {
+    engine: engineBytes, retail: retailBytes, comparison: comparisonBytes,
+    ...(evidence.path ? { sidecar: evidence.bytes } : {}),
   } });
   report.captureManifestPath = retained.path;
   report.captureManifest = retained.manifest;
@@ -648,5 +662,5 @@ module.exports = {
   classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
   compareBehaviorChain,
   describeAudioSemanticEvidence, selectedRetailPlayStyle, classificationForFinding, normalizeFindingForReport,
-  reportEvidenceRefs, retainCaptureArtifacts,
+  reportEvidenceRefs, retainCaptureArtifacts, main,
 };

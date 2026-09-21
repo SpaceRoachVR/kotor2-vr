@@ -14,6 +14,7 @@ const {
   identifyServingBundle,
   createSnapshotArtifact,
 } = require('./engine-snapshot');
+const freshState = { module: '101per', loadedFromSave: false, bootstrap: 'new-game-ui', playerName: 'T3-M4', partySize: 1 };
 
 test('capture identity rejects save-derived canonical evidence', () => {
   assert.throws(() => createCaptureIdentity({
@@ -73,7 +74,7 @@ test('canonical snapshot rejects a load failure before state validation', () => 
 });
 
 test('engine identity remains explicitly staged until retail inputs are hashed', () => {
-  const identity = createEngineIdentity({ module: '101per', loadedFromSave: false }, {
+  const identity = createEngineIdentity(freshState, {
     engineCommit: 'abc',
     bundleMtime: '2026-09-19T00:00:00.000Z',
     servingBundleSha256: 'a'.repeat(64),
@@ -96,7 +97,7 @@ test('engine identity rejects an unverified serving bundle hash', () => {
 });
 
 test('a remote serving bundle does not inherit checkout commit or mtime identity', () => {
-  const identity = createEngineIdentity({ module: '101per' }, {
+  const identity = createEngineIdentity(freshState, {
     engineCommit: null, bundleMtime: null, servingBundleSha256: 'a'.repeat(64),
   });
   assert.equal(identity.engineCommit, null);
@@ -168,7 +169,7 @@ test('canonical manifest rejects a save-derived engine artifact even when its mo
 
 test('canonical manifest rejects a foreign or stale DeNCS sidecar', () => {
   const hash = (contents) => require('crypto').createHash('sha256').update(contents).digest('hex');
-  const engine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
+  const engine = JSON.stringify({ ...freshState, engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
   const retail = JSON.stringify({ module: '101per', retailInputs: [{ resref: 'a_script', restype: 'NCS', sha256: 'b'.repeat(64) }] });
   const comparison = JSON.stringify({ module: '101per', findings: [] });
   const sidecar = JSON.stringify({ module: '102PER', records: [{ kind: 'dencs', resref: 'a_script', restype: 'NCS', sha256: 'c'.repeat(64), authority: 'hypothesis', path: 'a_script.nss' }] });
@@ -184,7 +185,7 @@ test('canonical manifest rejects a foreign or stale DeNCS sidecar', () => {
 
 test('canonical manifest rejects numeric sidecar resource identities', () => {
   const hash = (contents) => require('crypto').createHash('sha256').update(contents).digest('hex');
-  const engine = JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
+  const engine = JSON.stringify({ ...freshState, engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
   const retail = JSON.stringify({ module: '101per', retailInputs: [{ resref: 'a_script', restype: 'NCS', sha256: 'b'.repeat(64) }] });
   const comparison = JSON.stringify({ module: '101per', findings: [] });
   const sidecar = JSON.stringify({ module: '101PER', records: [{ kind: 'dencs', resref: 123, restype: 456, sha256: 'b'.repeat(64), authority: 'hypothesis' }] });

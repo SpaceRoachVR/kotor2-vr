@@ -117,6 +117,18 @@ order with a canonical code title. Every source finding must explicitly contain
 expected and observed values before grouping. Arrays and `null` values are
 serialized explicitly as JSON.
 
+Comparison reads each engine, retail, and optional sidecar input once and retains
+those exact bytes with the generated findings. Refreshing a latest capture during
+comparison cannot replace its retained evidence. Promotion reapplies the canonical
+state checks to the retained snapshot itself: explicit unsaved origin, the fresh
+new-game bootstrap, T3-M4, one party member, and the expected module. A nested
+identity label cannot override contradictory or missing observations. Older
+captures without those observed fields require a new capture before promotion.
+
+Authored creature-model bind poses require the loaded engine model name to match
+the normalized captured retail model name. Absent or different model identities
+remain `missing-evidence` even when a model is present and no animation is applied.
+
 The automated parity tools establish data and engine-observation evidence only.
 They do not accept headset presentation, comfort, haptics, stereo, or compositor
 behavior; any such question remains a manual headset-review gate.

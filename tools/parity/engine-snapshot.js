@@ -24,6 +24,7 @@ const path = require('path');
 const { VrHarness } = require('../vr-emulator/harness');
 const { startAssetService } = require('../vr-emulator/asset-service');
 const { waitForMenu, newGameThroughCharacterCreation } = require('../vr-emulator/playthrough-steps');
+const { assertCanonicalEngineState } = require('./canonical-state');
 
 const OUT_DIR = path.join(__dirname, 'out');
 const LOAD_TIMEOUT_MS = 300_000;
@@ -39,31 +40,6 @@ function parseArgs(argv) {
   }
   if (!args.module) throw new Error('usage: node tools/parity/engine-snapshot.js --module 101PER [--url <url>]');
   return args;
-}
-
-/**
- * Rejects a state that cannot represent the authored fresh-game 101PER
- * baseline. This deliberately fails closed: an unknown player or party is not
- * interchangeable with the T3-M4 bootstrap state.
- *
- * @param {{ loadedFromSave?: unknown, bootstrap?: unknown, playerName?: unknown, partySize?: unknown }} state
- */
-function assertCanonicalEngineState(state) {
-  if (!state || typeof state !== 'object') {
-    throw new TypeError('Canonical parity capture rejected: engine state is unavailable');
-  }
-  if (state.loadedFromSave === true) {
-    throw new Error('Canonical parity capture rejected: module is save-derived');
-  }
-  if (state.loadedFromSave !== false) {
-    throw new Error('Canonical parity capture rejected: save origin could not be verified');
-  }
-  if (state.bootstrap !== 'new-game-ui') {
-    throw new Error('Canonical parity capture rejected: expected fresh new-game bootstrap');
-  }
-  if (state.playerName !== 'T3-M4' || state.partySize !== 1) {
-    throw new Error('Canonical parity capture rejected: expected fresh T3-M4 single-member party');
-  }
 }
 
 function normalizeModuleName(moduleName, fieldName) {
@@ -108,10 +84,11 @@ function createEngineIdentity(state, metadata) {
   if (!/^[a-f0-9]{64}$/i.test(metadata.servingBundleSha256)) {
     throw new TypeError('Engine identity requires a verified serving bundle SHA-256');
   }
+  assertCanonicalEngineState(state, metadata.requestedModule);
   return Object.freeze({
     module: normalizeModuleName(state && state.module, 'Loaded module'),
     freshState: true,
-    loadedFromSave: false,
+    loadedFromSave: state.loadedFromSave,
     engineCommit: metadata.engineCommit,
     bundleMtime: metadata.bundleMtime,
     servingBundleSha256: metadata.servingBundleSha256.toLowerCase(),
@@ -350,7 +327,7 @@ function buildSnapshotSource(moduleName) {
         ? null : placeable.animationConstantToAnimation(state);
       return animation && animation.name ? animation.name : null;
     }, null);
-    const modelName = attempt(() => placeable.placeableAppearance && placeable.placeableAppearance.modelname, null);
+    const modelName = attempt(() => model && model.name, null);
     return {
       areaIndex: i,
       template: String(attempt(() => placeable.templateResRef, '') || attempt(() => placeable.getTemplateResRef(), '') || '').toLowerCase(),

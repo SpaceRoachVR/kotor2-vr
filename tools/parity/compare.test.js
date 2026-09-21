@@ -44,8 +44,8 @@ test('continuous audio is not an engine defect without a captured play-style map
 test('a placeable creature model is authored bind-pose evidence, not an animation defect', () => {
   assert.strictEqual(
     classifyModelPresentation(
-      { objectType: 'placeable', modelKind: 'creature' },
-      { modelStatus: 'loaded', animationApplied: false },
+      { objectType: 'placeable', modelKind: 'creature', modelName: 'p_kreia' },
+      { modelStatus: 'loaded', modelName: 'p_kreia', animationApplied: false },
     ),
     'authored-retail-behavior',
   );
@@ -123,9 +123,9 @@ test('matching audio semantic mapping retains scalar and sound-file mismatches',
 test('snapshot comparator records an ordinary requested but unapplied placeable animation as missing evidence', () => {
   const findings = [];
   compareModelPresentation({
-    modelPresentation: [{ status: 'ok', template: 'plc_console', gitIndex: 0, objectType: 'placeable', modelKind: 'placeable' }],
+    modelPresentation: [{ status: 'ok', template: 'plc_console', gitIndex: 0, objectType: 'placeable', modelKind: 'placeable', modelName: 'plc_console' }],
   }, {
-    modelPresentation: [{ template: 'plc_console', modelStatus: 'loaded', requestedAnimation: 'open', currentAnimation: null, animationApplied: false }],
+    modelPresentation: [{ template: 'plc_console', modelName: 'plc_console', modelStatus: 'loaded', requestedAnimation: 'open', currentAnimation: null, animationApplied: false }],
   }, (finding) => findings.push(finding));
   assert.deepStrictEqual(findings, [{
     area: 'model',
@@ -222,12 +222,13 @@ test('retains immutable capture-specific copies instead of treating latest modul
   const sourceRoot = fs.mkdtempSync(path.join(root, 'parity-capture-test-'));
   let retainedDirectory;
   try {
-    fs.writeFileSync(path.join(sourceRoot, 'engine.json'), JSON.stringify({ module: '101per', fixture: path.basename(sourceRoot), engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } }));
+    fs.writeFileSync(path.join(sourceRoot, 'engine.json'), JSON.stringify({ module: '101per', loadedFromSave: false, bootstrap: 'new-game-ui', playerName: 'T3-M4', partySize: 1, fixture: path.basename(sourceRoot), engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } }));
     fs.writeFileSync(path.join(sourceRoot, 'retail.json'), JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] }));
     fs.writeFileSync(path.join(sourceRoot, 'report.json'), JSON.stringify({ module: '101per', findings: [{ classification: 'engine-defect', code: 'fixture:parity', expected: 1, observed: 2 }] }));
     const files = { engine: path.relative(root, path.join(sourceRoot, 'engine.json')), retail: path.relative(root, path.join(sourceRoot, 'retail.json')), comparison: path.relative(root, path.join(sourceRoot, 'report.json')) };
-    assert.throws(() => retainCaptureArtifacts({ module: '101PER', root: sourceRoot, files }), /workspace capture root/i);
-    const manifest = retainCaptureArtifacts({ module: '101PER', root, files });
+    const contents = Object.fromEntries(Object.entries(files).map(([name, source]) => [name, fs.readFileSync(path.join(root, source))]));
+    assert.throws(() => retainCaptureArtifacts({ module: '101PER', root: sourceRoot, contents }), /workspace capture root/i);
+    const manifest = retainCaptureArtifacts({ module: '101PER', root, contents });
     retainedDirectory = path.dirname(manifest.path);
     assert.match(manifest.path, /captures[\\/]101per[\\/][a-f0-9]{64}[\\/]capture\.json$/);
     assert.ok(fs.existsSync(manifest.path));

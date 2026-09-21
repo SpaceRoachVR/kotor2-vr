@@ -1,6 +1,8 @@
 const { parse, serializeOuter } = require('parse5');
 
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
+const trimAsciiWhitespace = (value) => value.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
+const asciiLowercase = (value) => value.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 const JAVASCRIPT_TYPES = new Set([
   'application/ecmascript', 'application/javascript',
   'application/x-ecmascript', 'application/x-javascript', 'text/ecmascript',
@@ -42,10 +44,17 @@ function rewriteRuntimeDocument(document, documentUrl, bundle) {
       } catch { baseUrl = pageUrl; }
     }
     if (node.tagName !== 'script') continue;
-    const type = (attrs.type === undefined && attrs.language ? `text/${attrs.language}` : attrs.type || '').trim().toLowerCase();
-    const mimeEssence = type.split(';', 1)[0].trim();
+    const type = asciiLowercase(attrs.type === undefined && attrs.language ? `text/${attrs.language}` : trimAsciiWhitespace(attrs.type || ''));
+    const mimeEssence = trimAsciiWhitespace(type.split(';', 1)[0]);
     const executable = type === '' || type === 'module' || JAVASCRIPT_TYPES.has(mimeEssence);
     if (!executable || (type !== 'module' && Object.hasOwn(attrs, 'nomodule')) || !Object.hasOwn(attrs, 'src')) continue;
+    // HTML's legacy event handler suppression applies only when both
+    // attributes are present on a classic script (prepare-the-script-element).
+    if (type !== 'module' && Object.hasOwn(attrs, 'for') && Object.hasOwn(attrs, 'event')) {
+      const target = asciiLowercase(trimAsciiWhitespace(attrs.for));
+      const event = asciiLowercase(trimAsciiWhitespace(attrs.event));
+      if (target !== 'window' || !['onload', 'onload()'].includes(event)) continue;
+    }
     let source;
     try { source = new URL(attrs.src, baseUrl); } catch { continue; }
     let pathname;
