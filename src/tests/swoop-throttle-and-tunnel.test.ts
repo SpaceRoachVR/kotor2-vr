@@ -68,22 +68,25 @@ describe('the tunnel keeps the bike on the track', () => {
   const player = read('module/ModuleMGPlayer.ts');
   const clamp = bodyOf(player, '  clampToTunnel()');
 
+  // The clamp moved from the track node to the rider's offset from the hook
+  // once the course animation took over forward motion: the track node is no
+  // longer translated at all, so clamping it would confine nothing.
   test('the lateral offset is clamped to the tunnel', () => {
-    expect(clamp).toMatch(/this\.track\.position\.x > pos\.x/);
-    expect(clamp).toMatch(/this\.track\.position\.x < neg\.x/);
+    expect(clamp).toMatch(/this\.container\.position\.x > pos\.x/);
+    expect(clamp).toMatch(/this\.container\.position\.x < neg\.x/);
   });
 
   test('hop height is clamped too', () => {
-    expect(clamp).toMatch(/this\.track\.position\.z/);
+    expect(clamp).toMatch(/this\.container\.position\.z/);
   });
 
   test('the along-track axis is deliberately left alone', () => {
-    expect(clamp).not.toMatch(/this\.track\.position\.y/);
+    expect(clamp).not.toMatch(/position\.y/);
   });
 
   test('it runs after the frame movement is applied', () => {
     const update = player.slice(player.indexOf('  update(delta'), player.indexOf('  updatePaused('));
-    const add = update.indexOf('this.track.position.add(this.forceVector)');
+    const add = update.indexOf('this.container.position.add(this.forceVector)');
     const call = update.indexOf('this.clampToTunnel()');
     expect(add).toBeGreaterThan(-1);
     expect(call).toBeGreaterThan(add);

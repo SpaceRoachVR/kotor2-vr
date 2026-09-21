@@ -84,6 +84,12 @@ export class ModuleMGPlayer extends ModuleObject {
 
   /** Scratch for the obstacle sweep, which runs every frame. */
   private static obstacleProbePosition = new THREE.Vector3();
+
+  /** The course animation every swoop track model carries. */
+  static readonly TRACK_ANIMATION_NAME = 'track';
+
+  /** Whether the course animation has been started on the current track. */
+  trackAnimationPlaying: boolean = false;
   sphere_radius: number;
   invince_period: number;
   bump_damage: any;
@@ -194,6 +200,7 @@ export class ModuleMGPlayer extends ModuleObject {
     }
 
     this.onCreateRun = false;
+    this.trackAnimationPlaying = false;
 
     this._heartbeatTimeout = 0;
 
@@ -263,17 +270,28 @@ export class ModuleMGPlayer extends ModuleObject {
             this.speed = this.speed_max;
           }
 
-          this.forceVector.set( this.lateralForce * delta, this.speed * delta, 0 );
-
-          //this.track.position.y += ;
-          //this.model.position.z = this.jumpVelcolity;
+          this.forceVector.set( this.lateralForce * delta, 0, 0 );
 
         }
 
+        // Ride the authored course. The track model carries an animation named
+        // `track` that sweeps `modelhook` - which the rider is attached to -
+        // along the whole course, and the minigame's MovementPerSec is the
+        // speed that animation was authored at. Advancing it in proportion to
+        // the rider's speed is what makes the bike follow the track.
+        //
+        // Nothing advanced it before: the engine translated the track model in
+        // a straight line along +Y instead, from the world origin, so the bike
+        // left the authored canyon almost immediately. That is why obstacles
+        // (placed in world space along the real course) were never struck, and
+        // why the world ahead turned black - the rider was flying through
+        // unmodelled space beside the level, not running out of draw distance.
+        this.advanceTrackAnimation(delta);
 
         this.track.updateMatrixWorld();
         //this.updateCollision(delta);
-        this.track.position.add(this.forceVector);
+        // Steering is an offset from the hook, not a push on the track itself.
+        this.container.position.add(this.forceVector);
         this.clampToTunnel();
         this.checkObstacleCollisions();
         //this.model.box.setFromObject(this.model);
@@ -400,6 +418,33 @@ export class ModuleMGPlayer extends ModuleObject {
     }
   }
 
+  /**
+   * Advances the track animation by the distance the rider covered.
+   *
+   * `MovementPerSec` is the speed the course animation was authored at, so a
+   * rider travelling at exactly that speed advances it in real time, and one at
+   * twice that covers it in half. The animation loops, which is what
+   * `Num_Loops = -1` on the player asks for and what fires OnTrackLoop.
+   */
+  advanceTrackAnimation(delta: number){
+    const track: any = this.track;
+    if(!track || typeof track.playAnimation !== 'function'){ return; }
+
+    if(!this.trackAnimationPlaying){
+      // The course animation is named for what it is. Absent it, there is
+      // nothing to ride and the bike stays where the hook put it.
+      const started = track.playAnimation(ModuleMGPlayer.TRACK_ANIMATION_NAME, true);
+      if(!started){ return; }
+      this.trackAnimationPlaying = true;
+    }
+
+    const perSecond = GameState.module?.area?.miniGame?.movementPerSec || 0;
+    if(perSecond <= 0){ return; }
+    const scaled = delta * (this.speed / perSecond);
+    if(!(scaled > 0)){ return; }
+    track.update(scaled);
+  }
+
   /** Whether an acceleration request is still standing. */
   isAccelerating(): boolean {
     return (Date.now() - this.accelerationRequestedAt)
@@ -426,16 +471,17 @@ export class ModuleMGPlayer extends ModuleObject {
    * not clamped - doing so would stop the race dead.
    */
   clampToTunnel(){
-    if(!this.track){ return; }
+    if(!this.container){ return; }
     const pos = this.tunnel?.pos, neg = this.tunnel?.neg;
     if(!pos || !neg){ return; }
+    // The rider's offset from the hook, which is what steering moves.
     if(pos.x || neg.x){
-      if(this.track.position.x > pos.x) this.track.position.x = pos.x;
-      if(this.track.position.x < neg.x) this.track.position.x = neg.x;
+      if(this.container.position.x > pos.x) this.container.position.x = pos.x;
+      if(this.container.position.x < neg.x) this.container.position.x = neg.x;
     }
     if(pos.z || neg.z){
-      if(this.track.position.z > pos.z) this.track.position.z = pos.z;
-      if(this.track.position.z < neg.z) this.track.position.z = neg.z;
+      if(this.container.position.z > pos.z) this.container.position.z = pos.z;
+      if(this.container.position.z < neg.z) this.container.position.z = neg.z;
     }
   }
 
