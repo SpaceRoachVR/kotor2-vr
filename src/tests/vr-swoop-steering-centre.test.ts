@@ -14,12 +14,17 @@ const XR_SQUEEZE = '1';
 const XR_FACE = '4';
 const button = (value: number) => ({ pressed: value >= 0.5, touched: value > 0, value });
 
+const DEFAULT_HAND_X = 0.25;
+
 function hand(options: {
   hand: 'left' | 'right'; x?: number; y?: number;
   trigger?: number; squeeze?: number; face?: number; stickY?: number;
 }): XRHandInputFrame {
   const pose: XRWorldPose = {
-    position: new THREE.Vector3(options.x ?? 0, options.y ?? 1.2, -0.3),
+    position: new THREE.Vector3(
+      options.x ?? (options.hand === 'left' ? -DEFAULT_HAND_X : DEFAULT_HAND_X),
+      options.y ?? 1.2, -0.3,
+    ),
     orientation: new THREE.Quaternion(),
     linearVelocity: null, angularVelocity: null, trackingState: 'tracked',
   };
@@ -61,26 +66,50 @@ describe('straight ahead is where the rider is holding, not dead level', () => {
     const resting = frame([
       hand({ hand: 'left', squeeze: 1, y: 1.15 }), hand({ hand: 'right', squeeze: 1, y: 1.27 }),
     ]);
-    // Against dead level that 12cm bias is a hard pull.
-    expect(Math.abs(resolveSteering(resting, config, LEVEL_NEUTRAL).steer)).toBeGreaterThan(0.4);
+    // Against dead level that 12cm bias is a third of full lock before the
+    // rider has moved - a standing pull they would have to fight all race.
+    expect(Math.abs(resolveSteering(resting, config, LEVEL_NEUTRAL).steer)).toBeGreaterThan(0.3);
 
     const neutral = sampleSwoopNeutral(resting);
     expect(neutral).not.toBeNull();
     expect(resolveSteering(resting, config, neutral!).steer).toBe(0);
   });
 
-  test('from that neutral, both directions are reachable and symmetric', () => {
-    const resting = frame([hand({ hand: 'left', squeeze: 1, y: 1.15 }), hand({ hand: 'right', squeeze: 1, y: 1.27 })]);
-    const neutral = sampleSwoopNeutral(resting)!;
+  test('from a level neutral, both directions are reachable and symmetric', () => {
+    const level = sampleSwoopNeutral(frame([
+      hand({ hand: 'left', squeeze: 1, y: 1.2 }), hand({ hand: 'right', squeeze: 1, y: 1.2 }),
+    ]))!;
     const right = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.05 }), hand({ hand: 'right', squeeze: 1, y: 1.37 }),
-    ]), config, neutral).steer;
+      hand({ hand: 'left', squeeze: 1, y: 1.10 }), hand({ hand: 'right', squeeze: 1, y: 1.30 }),
+    ]), config, level).steer;
     const left = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.25 }), hand({ hand: 'right', squeeze: 1, y: 1.17 }),
-    ]), config, neutral).steer;
+      hand({ hand: 'left', squeeze: 1, y: 1.30 }), hand({ hand: 'right', squeeze: 1, y: 1.10 }),
+    ]), config, level).steer;
     expect(right).toBeGreaterThan(0);
     expect(left).toBeLessThan(0);
     expect(right).toBeCloseTo(-left, 5);
+  });
+
+  /**
+   * The angle is taken against how far apart the hands are, so the same gesture
+   * means the same thing whether the rider holds wide or narrow. Measuring raw
+   * height instead is what made the bike jerk whenever the hands moved at all.
+   */
+  test('a gesture means the same thing wide or narrow, in kind if not degree', () => {
+    const level = sampleSwoopNeutral(frame([
+      hand({ hand: 'left', squeeze: 1, y: 1.2 }), hand({ hand: 'right', squeeze: 1, y: 1.2 }),
+    ]))!;
+    const wide = resolveSteering(frame([
+      hand({ hand: 'left', squeeze: 1, x: -0.35, y: 1.15 }),
+      hand({ hand: 'right', squeeze: 1, x: 0.35, y: 1.25 }),
+    ]), config, level).steer;
+    const narrow = resolveSteering(frame([
+      hand({ hand: 'left', squeeze: 1, x: -0.12, y: 1.15 }),
+      hand({ hand: 'right', squeeze: 1, x: 0.12, y: 1.25 }),
+    ]), config, level).steer;
+    expect(wide).toBeGreaterThan(0);
+    expect(narrow).toBeGreaterThan(wide);
+    expect(narrow).toBeLessThanOrEqual(1);
   });
 
   test('one-handed neutral is that hand\u2019s own resting offset from the head', () => {

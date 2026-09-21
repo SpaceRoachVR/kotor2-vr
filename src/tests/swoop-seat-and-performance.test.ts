@@ -108,18 +108,20 @@ describe('the rider faces the way the bike travels', () => {
  * own hand span, which sits low and close — short of the bars, out of reach.
  */
 describe('the grips sit on the handlebars', () => {
-  test('they sit inboard, on the bars the rider reaches', () => {
+  // Measured from the bike's own rider, `trider`, which is posed holding the
+  // bars: the centroid of its forward-most vertices either side of centre.
+  test('they sit where the authored rider holds', () => {
     const [left, right] = SWOOP_GRIP_OFFSETS;
-    expect(Math.abs(left[0])).toBeCloseTo(0.26, 5);
+    expect(Math.abs(left[0])).toBeCloseTo(0.103, 3);
     expect(left[0]).toBeCloseTo(-right[0], 5);
-    expect(left[1]).toBeCloseTo(1.6, 5);
-    expect(left[2]).toBeCloseTo(0.95, 5);
+    expect(left[1]).toBeCloseTo(1.45, 3);
+    expect(left[2]).toBeCloseTo(0.813, 3);
   });
 
   test('they are reachable from the saddle rather than behind it', () => {
     const forwardOfSeat = SWOOP_GRIP_OFFSETS[0][1] - 0.7;
-    expect(forwardOfSeat).toBeGreaterThan(0.5);
-    expect(forwardOfSeat).toBeLessThan(1.2);
+    expect(forwardOfSeat).toBeGreaterThan(0.4);
+    expect(forwardOfSeat).toBeLessThan(1.0);
   });
 });
 
@@ -152,7 +154,7 @@ describe('lean is where the rider is, not how fast they drift', () => {
   });
 
   test('it eases rather than snapping, so tracking jitter cannot buzz the bike', () => {
-    expect(controller).toMatch(/LATERAL_EASING = 0\.25;/);
+    expect(controller).toMatch(/LATERAL_EASING = 0\.12;/);
     expect(update).toMatch(/\(wanted - current\) \* VRMiniGameInputController\.LATERAL_EASING/);
   });
 

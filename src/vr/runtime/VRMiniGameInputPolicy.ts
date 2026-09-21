@@ -31,17 +31,29 @@ export interface VRMiniGameInputConfiguration {
   /** Trigger value at or above which fire/jump is pressed. */
   readonly triggerThreshold: number;
   /**
-   * Hand-height difference, in metres, that reads as full lock. Tilting the
-   * handlebars this far either way gives full steering; less is proportional.
+   * The roll angle, in radians, that reads as full lock - how far the rider
+   * turns the bars, as an angle rather than a height.
+   *
+   * Height alone was wrong: the same few centimetres means a gentle turn with
+   * hands wide apart and a violent one with hands together, so the bike jerked
+   * whenever the hands moved at all. An angle is what the rider is actually
+   * doing with the bars and does not change meaning as their hands drift.
+   * 0.6 rad is about 35 degrees, roughly a comfortable handlebar throw.
    */
-  readonly steeringFullLockHeightMetres: number;
+  readonly steeringFullLockAngleRadians: number;
   /**
    * One-handed steering instead reads sideways offset from the head, in
    * metres, since there is no second hand to tilt against.
    */
   readonly oneHandedFullLockOffsetMetres: number;
-  /** Below this, steering is treated as centred, so a still hand does not creep. */
+  /** Below this fraction of full lock, steering reads as centred. */
   readonly steeringDeadzone: number;
+  /**
+   * Seconds over which the measured roll is smoothed. Hand tracking is noisy
+   * at the centimetre scale and the bike sits where the roll says, so without
+   * this the jitter is visible as the bike twitching under the rider.
+   */
+  readonly steeringSmoothingSeconds: number;
   /**
    * One-handed only: thumbstick push away from the player, past which that
    * hand's stick counts as a jump. Two-handed, jump is the left trigger.
@@ -52,9 +64,10 @@ export interface VRMiniGameInputConfiguration {
 export const DEFAULT_MINIGAME_INPUT_CONFIGURATION: VRMiniGameInputConfiguration = {
   gripThreshold: 0.5,
   triggerThreshold: 0.5,
-  steeringFullLockHeightMetres: 0.18,
+  steeringFullLockAngleRadians: 0.6,
   oneHandedFullLockOffsetMetres: 0.25,
-  steeringDeadzone: 0.08,
+  steeringDeadzone: 0.06,
+  steeringSmoothingSeconds: 0.12,
   throttleThreshold: 0.6,
 };
 
@@ -224,13 +237,32 @@ function applyDeadzone(value: number, deadzone: number): number {
  * fought to turn the other way.
  */
 export interface VRSwoopNeutral {
-  /** Two-handed: the hand-height difference that means straight ahead. */
-  readonly heightDifference: number;
+  /** Two-handed: the roll angle of the bars, in radians, that means straight. */
+  readonly rollAngle: number;
   /** One-handed: the hand's sideways offset from the head that means straight. */
   readonly lateralOffset: number;
 }
 
-export const LEVEL_NEUTRAL: VRSwoopNeutral = { heightDifference: 0, lateralOffset: 0 };
+export const LEVEL_NEUTRAL: VRSwoopNeutral = { rollAngle: 0, lateralOffset: 0 };
+
+/**
+ * The roll of the bars: the angle of the line between the hands, positive when
+ * the right hand is higher. Measured against how far apart the hands are, so a
+ * rider holding wide and a rider holding narrow both get the same answer for
+ * the same gesture.
+ */
+export function handRollAngle(
+  left: XRHandInputFrame, right: XRHandInputFrame,
+): number {
+  const rise = right.pose.position.y - left.pose.position.y;
+  const run = Math.hypot(
+    right.pose.position.x - left.pose.position.x,
+    right.pose.position.z - left.pose.position.z,
+  );
+  // A floor on the run: hands brought together would otherwise make any small
+  // height difference read as full lock.
+  return Math.atan2(rise, Math.max(0.12, run));
+}
 
 /** The neutral a frame would define if the player were holding straight ahead now. */
 export function sampleSwoopNeutral(
@@ -243,13 +275,10 @@ export function sampleSwoopNeutral(
     const left = frame.hands['left'];
     const right = frame.hands['right'];
     if (!left || !right) return null;
-    return {
-      heightDifference: right.pose.position.y - left.pose.position.y,
-      lateralOffset: 0,
-    };
+    return { rollAngle: handRollAngle(left, right), lateralOffset: 0 };
   }
   return {
-    heightDifference: 0,
+    rollAngle: 0,
     lateralOffset: hands[0].pose.position.x - frame.head.position.x,
   };
 }
@@ -266,10 +295,9 @@ export function resolveSteering(
     const left = frame.hands['left'];
     const right = frame.hands['right'];
     if (!left || !right) return { grip: state, steer: 0 };
-    // Positive when the right hand is higher, i.e. the bars rolled left.
-    const heightDifference =
-      (right.pose.position.y - left.pose.position.y) - neutral.heightDifference;
-    const normalised = heightDifference / Math.max(1e-4, config.steeringFullLockHeightMetres);
+    // Positive when the right hand is higher, i.e. the bars rolled right.
+    const roll = handRollAngle(left, right) - neutral.rollAngle;
+    const normalised = roll / Math.max(1e-4, config.steeringFullLockAngleRadians);
     return { grip: state, steer: applyDeadzone(clamp(normalised, -1, 1), config.steeringDeadzone) };
   }
 

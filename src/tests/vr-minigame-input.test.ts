@@ -26,6 +26,11 @@ const XR_TRIGGER = '0';
 const XR_SQUEEZE = '1';
 const button = (value: number) => ({ pressed: value >= 0.5, touched: value > 0, value });
 
+// Hands default to a normal shoulder-width apart: steering is the angle of the
+// line between them, so a pair sharing one x would read every gesture as full
+// lock. Tests that care about width set x explicitly.
+const DEFAULT_HAND_X = 0.25;
+
 function hand(options: {
   hand: 'left' | 'right'; x?: number; y?: number; z?: number;
   squeeze?: number; trigger?: number; orientation?: THREE.Quaternion;
@@ -33,7 +38,10 @@ function hand(options: {
   stickY?: number;
 }): XRHandInputFrame {
   const pose: XRWorldPose = {
-    position: new THREE.Vector3(options.x ?? 0, options.y ?? 1.2, options.z ?? -0.3),
+    position: new THREE.Vector3(
+      options.x ?? (options.hand === 'left' ? -DEFAULT_HAND_X : DEFAULT_HAND_X),
+      options.y ?? 1.2, options.z ?? -0.3,
+    ),
     orientation: options.orientation ?? new THREE.Quaternion(),
     linearVelocity: null, angularVelocity: null, trackingState: 'tracked',
   };

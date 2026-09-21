@@ -23,16 +23,24 @@ import * as THREE from 'three';
 /**
  * Grip placement relative to the bike origin, in game units (Z up).
  *
- * On the handlebars the bike actually has. The first attempt put these at the
- * authored rider's own hand span, which is a different thing: seen from the
- * saddle they sat low and close, well short of the bars, and the rider could
- * not reach them. These sit on the cockpit bars themselves - just ahead of and
- * below the windshield node (0, 1.58, 1.07), at the width the bars run.
+ * Measured, not guessed. The bike carries an authored rider - `trider`, 994
+ * vertices - posed holding the bars, so its hands say exactly where the bars
+ * are. Taking the centroid of the forward-most vertices either side of centre
+ * gives (+/-0.103, 1.45, 0.813), with the outermost hand vertex at +/-0.165.
+ *
+ * Two earlier attempts were placed by eye and both were wrong: 1.2 forward was
+ * short of the bars, and 0.45 wide put them outboard of the cockpit past the
+ * orange struts, where they could not be reached at all. The rider's own hands
+ * were the answer the whole time.
  */
 export const SWOOP_GRIP_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
-  [-0.26, 1.6, 0.95],
-  [0.26, 1.6, 0.95],
+  [-0.103, 1.45, 0.813],
+  [0.103, 1.45, 0.813],
 ];
+
+/** Matching the hand span the rider's own grip covers. */
+export const SWOOP_GRIP_LENGTH = 0.12;
+export const SWOOP_GRIP_RADIUS = 0.025;
 
 export const SWOOP_GRIP_GROUP_NAME = 'vr-swoop-grips';
 
@@ -48,8 +56,8 @@ export interface VRMiniGameGripOptions {
  * unit-tested without a scene.
  */
 export function buildSwoopGrips(options: VRMiniGameGripOptions = {}): THREE.Object3D {
-  const length = options.length ?? 0.22;
-  const radius = options.radius ?? 0.035;
+  const length = options.length ?? SWOOP_GRIP_LENGTH;
+  const radius = options.radius ?? SWOOP_GRIP_RADIUS;
   const group = new THREE.Group();
   group.name = SWOOP_GRIP_GROUP_NAME;
 

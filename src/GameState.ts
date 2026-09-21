@@ -2250,10 +2250,14 @@ export class GameState implements EngineContext {
         setLateralForce: (force: number) => { player.lateralForce = force; },
         // The track's own tunnel is the width of the lane the rider may use.
         get lateralLimit(){ return Math.abs(player.tunnel?.pos?.x ?? 0); },
-        get lateralPosition(){ return player.container?.position?.x ?? 0; },
+        // Both sides of this are measured from the middle of the road, which is
+        // not the line the hook drops the rider on.
+        get lateralPosition(){
+          return (player.container?.position?.x ?? 0) - (player.measureLaneCentre?.() ?? 0);
+        },
         setLateralPosition: (position: number) => {
           if(!player.container){ return; }
-          player.container.position.x = position;
+          player.container.position.x = (player.measureLaneCentre?.() ?? 0) + position;
           player.clampToTunnel?.();
         },
         get gripPoses(){ return readSwoopGripPoses(player.container); },

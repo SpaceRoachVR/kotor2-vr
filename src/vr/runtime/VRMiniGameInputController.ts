@@ -90,8 +90,15 @@ export class VRMiniGameInputController {
    * that a deliberate turn survives it, short enough that a bad posture cannot
    * strand the rider at the tunnel wall.
    */
-  /** How much of the remaining distance to the wanted lane is taken per frame. */
-  private static readonly LATERAL_EASING = 0.25;
+  /**
+   * How much of the remaining distance to the wanted lane is taken per frame.
+   * Gentle: the bike should settle into a lane rather than snap to it, and at
+   * 90fps this still arrives in about a fifth of a second.
+   */
+  private static readonly LATERAL_EASING = 0.12;
+  /** The smoothed roll, and when it was last advanced. */
+  private static smoothedSteer = 0;
+  private static lastSteerAt = 0;
   /** Which grip pose each hand is currently drawn at. */
   private static pinnedHands: Record<string, XRWorldPose | null> = { left: null, right: null };
   /** Set by the host so the policy can pin a hand without importing VRSpike. */
@@ -148,6 +155,8 @@ export class VRMiniGameInputController {
         steer = VRMiniGameInputController.lastTwoHandedSteer;
       }
 
+      steer = VRMiniGameInputController.smoothSteer(steer, inputFrame.timestamp, config);
+
       // Lean is *where across the track the rider is*, not how fast they drift.
       // As a rate it could only be undone by counter-steering, so the bike kept
       // going whichever way it was first pushed and a held lean quietly became
@@ -196,6 +205,8 @@ export class VRMiniGameInputController {
     VRMiniGameInputController.oneHandedNeutralCaptured = false;
     VRMiniGameInputController.lastTwoHandedSteer = 0;
     VRMiniGameInputController.lastTwoHandedAt = 0;
+    VRMiniGameInputController.smoothedSteer = 0;
+    VRMiniGameInputController.lastSteerAt = 0;
   }
 
   /**
@@ -205,6 +216,29 @@ export class VRMiniGameInputController {
   static recentreSteering(): void {
     VRMiniGameInputController.twoHandedNeutralCaptured = false;
     VRMiniGameInputController.oneHandedNeutralCaptured = false;
+  }
+
+  /**
+   * Low-passes the roll before it becomes a lane.
+   *
+   * Hand tracking is noisy at the centimetre scale, and with lean mapped to
+   * position that noise is a bike twitching under the rider. Smoothing is on
+   * the input rather than the output so a deliberate movement still arrives
+   * promptly and only the jitter is taken off.
+   */
+  private static smoothSteer(
+    steer: number, timestamp: number, config: VRMiniGameInputConfiguration,
+  ): number {
+    const previous = VRMiniGameInputController.lastSteerAt;
+    VRMiniGameInputController.lastSteerAt = timestamp;
+    const seconds = previous && timestamp > previous
+      ? Math.min(0.1, (timestamp - previous) / 1000)
+      : 0;
+    const tau = Math.max(1e-3, config.steeringSmoothingSeconds);
+    const rate = seconds > 0 ? Math.min(1, seconds / tau) : 1;
+    VRMiniGameInputController.smoothedSteer +=
+      (steer - VRMiniGameInputController.smoothedSteer) * rate;
+    return VRMiniGameInputController.smoothedSteer;
   }
 
   /**
@@ -260,14 +294,14 @@ export class VRMiniGameInputController {
     if (!sampled) return;
     if (twoHanded) {
       VRMiniGameInputController.neutral = {
-        heightDifference: sampled.heightDifference,
+        rollAngle: sampled.rollAngle,
         lateralOffset: VRMiniGameInputController.neutral.lateralOffset,
       };
       VRMiniGameInputController.twoHandedNeutralCaptured = true;
       return;
     }
     VRMiniGameInputController.neutral = {
-      heightDifference: VRMiniGameInputController.neutral.heightDifference,
+      rollAngle: VRMiniGameInputController.neutral.rollAngle,
       lateralOffset: sampled.lateralOffset,
     };
     VRMiniGameInputController.oneHandedNeutralCaptured = true;

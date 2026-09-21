@@ -85,6 +85,23 @@ export class ModuleMGPlayer extends ModuleObject {
   /** Scratch for the obstacle sweep, which runs every frame. */
   private static obstacleProbePosition = new THREE.Vector3();
 
+  /**
+   * How fast a hop bleeds away, in units per second per second. 211TEL's jump
+   * script sets a jump speed of 30 through SWMG_SetJumpSpeed, and the tunnel
+   * allows 10 units of height, so this brings that hop back inside the bound.
+   */
+  static readonly JUMP_GRAVITY = 45;
+  static readonly DEFAULT_JUMP_SPEED = 24;
+
+  /** How far either side of the rider to look for the edge of the road. */
+  static readonly LANE_SCAN_REACH = 200;
+  static readonly LANE_SCAN_STEP = 5;
+  static readonly LANE_SCAN_HEIGHT = 60;
+
+  /** The middle of the road, once measured. */
+  laneCentre: number = 0;
+  private laneCentreMeasured: boolean = false;
+
   /** The course animation every swoop track model carries. */
   static readonly TRACK_ANIMATION_NAME = 'track';
 
@@ -307,10 +324,25 @@ export class ModuleMGPlayer extends ModuleObject {
           }
         }
 
+        // Actually leave the ground. jumpVelcolity was set by the jump script
+        // and then only counted down - nothing ever moved the bike with it, so
+        // every jump was silent whatever button reached it. It is a speed, so
+        // it lifts the rider while it lasts and gravity brings them back; the
+        // tunnel's own z bound is the ceiling on a hop.
         if(this.jumpVelcolity > 0){
-          this.jumpVelcolity -= (2 *delta);
+          this.container.position.z += this.jumpVelcolity * delta;
+          this.jumpVelcolity -= (ModuleMGPlayer.JUMP_GRAVITY * delta);
+          this.falling = false;
         }else{
           this.jumpVelcolity = 0;
+          if(this.container.position.z > 0){
+            this.container.position.z -= ModuleMGPlayer.JUMP_GRAVITY * delta;
+            this.falling = true;
+            if(this.container.position.z < 0){ this.container.position.z = 0; }
+          }else{
+            this.container.position.z = 0;
+            this.falling = false;
+          }
         }
 
         if(this.boostVelocity > 0){
@@ -463,6 +495,64 @@ export class ModuleMGPlayer extends ModuleObject {
   }
 
   /**
+   * The middle of the road, measured rather than assumed.
+   *
+   * The hook drops the rider at world x 0, but that is not the middle of the
+   * track: raycasting the floor across the start line finds surface from about
+   * x -20 to +50, so riding "centred" actually hugs the left edge. The
+   * obstacles bear that out - 211TEL lines them up in rows near x +20 and -30,
+   * which is symmetric about the road rather than about the rider. With the
+   * lane centred on the rider, the right-hand row sat at the very limit of a
+   * +/-20 tunnel and the left-hand row was unreachable, so a rider could ride a
+   * whole course without meeting one.
+   *
+   * Sampled once, from the floor under the start line. A track whose floor
+   * cannot be found keeps the rider's own position as the centre, which is the
+   * behaviour this replaces.
+   */
+  measureLaneCentre(): number {
+    if(this.laneCentreMeasured){ return this.laneCentre; }
+    this.laneCentreMeasured = true;
+    try{
+      const rooms = GameState.module?.area?.rooms || [];
+      const meshes: THREE.Object3D[] = [];
+      for(const room of rooms){
+        if((room as any).model) (room as any).model.traverse((o: THREE.Object3D) => {
+          if((o as THREE.Mesh).isMesh) meshes.push(o);
+        });
+      }
+      if(!meshes.length){ return this.laneCentre; }
+
+      this.container.updateMatrixWorld(true);
+      const origin = new THREE.Vector3();
+      this.container.getWorldPosition(origin);
+      const raycaster = new THREE.Raycaster();
+      const down = new THREE.Vector3(0, 0, -1);
+      let min: number | null = null, max: number | null = null;
+      for(let offset = -ModuleMGPlayer.LANE_SCAN_REACH; offset <= ModuleMGPlayer.LANE_SCAN_REACH; offset += ModuleMGPlayer.LANE_SCAN_STEP){
+        raycaster.set(
+          new THREE.Vector3(origin.x + offset, origin.y, origin.z + ModuleMGPlayer.LANE_SCAN_HEIGHT),
+          down,
+        );
+        raycaster.far = ModuleMGPlayer.LANE_SCAN_HEIGHT * 2;
+        if(!raycaster.intersectObjects(meshes, false).length){
+          // Past the edge of the road. Keep only the stretch touching the rider.
+          if(min !== null && max !== null && offset > 0){ break; }
+          min = null; max = null;
+          continue;
+        }
+        if(min === null){ min = offset; }
+        max = offset;
+      }
+      if(min === null || max === null){ return this.laneCentre; }
+      this.laneCentre = (min + max) / 2;
+    }catch(e){
+      console.warn('ModuleMGPlayer.measureLaneCentre: falling back to the rider position', e);
+    }
+    return this.laneCentre;
+  }
+
+  /**
    * Keeps the bike inside the track's tunnel.
    *
    * The scripts set the bounds and the engine stored them, but only the turret
@@ -480,10 +570,12 @@ export class ModuleMGPlayer extends ModuleObject {
     if(!this.container){ return; }
     const pos = this.tunnel?.pos, neg = this.tunnel?.neg;
     if(!pos || !neg){ return; }
-    // The rider's offset from the hook, which is what steering moves.
+    // The rider's offset from the hook, which is what steering moves, about
+    // the middle of the road rather than the hook's own line.
+    const centre = this.measureLaneCentre();
     if(pos.x || neg.x){
-      if(this.container.position.x > pos.x) this.container.position.x = pos.x;
-      if(this.container.position.x < neg.x) this.container.position.x = neg.x;
+      if(this.container.position.x > centre + pos.x) this.container.position.x = centre + pos.x;
+      if(this.container.position.x < centre + neg.x) this.container.position.x = centre + neg.x;
     }
     if(pos.z || neg.z){
       if(this.container.position.z > pos.z) this.container.position.z = pos.z;
@@ -491,13 +583,18 @@ export class ModuleMGPlayer extends ModuleObject {
     }
   }
 
+  /**
+   * The engine's own hop, for a track that does not script one.
+   *
+   * The old 0.4 was a placeholder from when nothing read this value at all -
+   * against any gravity that brings a rider back down in a reasonable time it
+   * is invisible, a centimetre of lift. 211TEL's own jump script asks for 30
+   * through SWMG_SetJumpSpeed, so the default is in that neighbourhood, and
+   * with JUMP_GRAVITY it clears about 6 units and lands in a second - inside
+   * the 10 units of height the track's tunnel allows.
+   */
   jump(){
-    this.jumpVelcolity = 0.4;
-    /*if(this.gear > -1 && !this.falling){
-      this.jumpVelcolity = 0.4;
-    }else{
-      this.jumpVelcolity = 0;
-    }*/
+    this.jumpVelcolity = ModuleMGPlayer.DEFAULT_JUMP_SPEED;
   }
 
   fire(){

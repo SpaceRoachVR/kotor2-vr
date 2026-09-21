@@ -71,9 +71,11 @@ describe('the tunnel keeps the bike on the track', () => {
   // The clamp moved from the track node to the rider's offset from the hook
   // once the course animation took over forward motion: the track node is no
   // longer translated at all, so clamping it would confine nothing.
+  // Clamped about the measured middle of the road, not the line the hook
+  // happens to drop the rider on.
   test('the lateral offset is clamped to the tunnel', () => {
-    expect(clamp).toMatch(/this\.container\.position\.x > pos\.x/);
-    expect(clamp).toMatch(/this\.container\.position\.x < neg\.x/);
+    expect(clamp).toMatch(/this\.container\.position\.x > centre \+ pos\.x/);
+    expect(clamp).toMatch(/this\.container\.position\.x < centre \+ neg\.x/);
   });
 
   test('hop height is clamped too', () => {
