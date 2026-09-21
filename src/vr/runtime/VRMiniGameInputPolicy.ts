@@ -91,6 +91,8 @@ const clamp = (value: number, min: number, max: number): number =>
  */
 const XR_STANDARD_TRIGGER = '0';
 const XR_STANDARD_SQUEEZE = '1';
+/** A/X on the Touch profiles. The swoop's second jump control. */
+const XR_STANDARD_FACE_PRIMARY = '4';
 
 function buttonValue(hand: XRHandInputFrame | undefined, indices: readonly string[]): number {
   if (!hand) return 0;
@@ -123,6 +125,14 @@ function stickPush(hand: XRHandInputFrame | undefined): number {
 
 const SQUEEZE_BUTTONS = [XR_STANDARD_SQUEEZE] as const;
 const TRIGGER_BUTTONS = [XR_STANDARD_TRIGGER] as const;
+const FACE_BUTTONS = [XR_STANDARD_FACE_PRIMARY] as const;
+
+export function isFaceButtonPressed(
+  hand: XRHandInputFrame | undefined, config: VRMiniGameInputConfiguration,
+): boolean {
+  if (!hand) return false;
+  return buttonValue(hand, FACE_BUTTONS) >= config.triggerThreshold;
+}
 
 export function isGripping(
   hand: XRHandInputFrame | undefined, config: VRMiniGameInputConfiguration,
@@ -182,8 +192,47 @@ function applyDeadzone(value: number, deadzone: number): number {
  * Handlebar steering: the roll of the line between the hands. Dropping the
  * left hand below the right steers left, which is how leaning a bike reads.
  */
+/**
+ * The rider's own straight-ahead, captured while riding rather than assumed.
+ *
+ * Steering used to measure against dead level, which silently assumed the
+ * player holds both hands at exactly the same height and their one hand exactly
+ * in line with their head. Neither is true: a hand rests where it rests, and in
+ * the headset that bias read as a permanent pull to one side that had to be
+ * fought to turn the other way.
+ */
+export interface VRSwoopNeutral {
+  /** Two-handed: the hand-height difference that means straight ahead. */
+  readonly heightDifference: number;
+  /** One-handed: the hand's sideways offset from the head that means straight. */
+  readonly lateralOffset: number;
+}
+
+export const LEVEL_NEUTRAL: VRSwoopNeutral = { heightDifference: 0, lateralOffset: 0 };
+
+/** The neutral a frame would define if the player were holding straight ahead now. */
+export function sampleSwoopNeutral(frame: XRInputFrame): VRSwoopNeutral | null {
+  const { state, hands } = resolveRidingState(frame);
+  if (state === MiniGameGripState.NONE) return null;
+  if (state === MiniGameGripState.TWO_HANDED) {
+    const left = frame.hands['left'];
+    const right = frame.hands['right'];
+    if (!left || !right) return null;
+    return {
+      heightDifference: right.pose.position.y - left.pose.position.y,
+      lateralOffset: 0,
+    };
+  }
+  return {
+    heightDifference: 0,
+    lateralOffset: hands[0].pose.position.x - frame.head.position.x,
+  };
+}
+
 export function resolveSteering(
-  frame: XRInputFrame, config: VRMiniGameInputConfiguration,
+  frame: XRInputFrame,
+  config: VRMiniGameInputConfiguration,
+  neutral: VRSwoopNeutral = LEVEL_NEUTRAL,
 ): { grip: MiniGameGripState; steer: number } {
   const { state, hands } = resolveRidingState(frame);
   if (state === MiniGameGripState.NONE) return { grip: state, steer: 0 };
@@ -193,14 +242,15 @@ export function resolveSteering(
     const right = frame.hands['right'];
     if (!left || !right) return { grip: state, steer: 0 };
     // Positive when the right hand is higher, i.e. the bars rolled left.
-    const heightDifference = right.pose.position.y - left.pose.position.y;
+    const heightDifference =
+      (right.pose.position.y - left.pose.position.y) - neutral.heightDifference;
     const normalised = heightDifference / Math.max(1e-4, config.steeringFullLockHeightMetres);
     return { grip: state, steer: applyDeadzone(clamp(normalised, -1, 1), config.steeringDeadzone) };
   }
 
-  // One hand: how far it sits to either side of the head.
+  // One hand: how far it sits to either side of its own resting place.
   const hand = hands[0];
-  const offset = hand.pose.position.x - frame.head.position.x;
+  const offset = (hand.pose.position.x - frame.head.position.x) - neutral.lateralOffset;
   const normalised = offset / Math.max(1e-4, config.oneHandedFullLockOffsetMetres);
   return { grip: state, steer: applyDeadzone(clamp(normalised, -1, 1), config.steeringDeadzone) };
 }
@@ -214,6 +264,13 @@ export function swoopJumpControlHeld(
   frame: XRInputFrame, config: VRMiniGameInputConfiguration,
 ): boolean {
   const { state, hands } = resolveRidingState(frame);
+  if (state === MiniGameGripState.NONE) return false;
+  // A face button on either hand always jumps. The left trigger is the natural
+  // pairing with a right-trigger throttle, but the left controller drops out of
+  // the input frame whenever its grip pose is briefly untracked - and a rider
+  // with no jump cannot clear an obstacle. The one-handed stick push stays as a
+  // third route for whichever hand is left.
+  if (hands.some((hand) => isFaceButtonPressed(hand, config))) return true;
   if (state === MiniGameGripState.ONE_HANDED) {
     return stickPush(hands[0]) >= config.throttleThreshold;
   }
@@ -235,8 +292,9 @@ export function resolveSwoopIntent(
   frame: XRInputFrame,
   previousJumpHeld: boolean,
   config: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION,
+  neutral: VRSwoopNeutral = LEVEL_NEUTRAL,
 ): VRSwoopIntent {
-  const { grip, steer } = resolveSteering(frame, config);
+  const { grip, steer } = resolveSteering(frame, config, neutral);
   const { state, hands } = resolveRidingState(frame);
 
   // No tracked hand is not riding, so nothing the triggers do counts.

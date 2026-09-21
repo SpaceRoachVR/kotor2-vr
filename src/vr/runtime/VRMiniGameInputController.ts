@@ -2,11 +2,14 @@ import { XRInputFrame } from '@/vr/runtime/XRTypes';
 import {
   aimDirectionToPitchYaw,
   DEFAULT_MINIGAME_INPUT_CONFIGURATION,
+  LEVEL_NEUTRAL,
   MiniGameGripState,
   resolveSwoopIntent,
   resolveTurretIntent,
+  sampleSwoopNeutral,
   swoopJumpControlHeld,
   VRMiniGameInputConfiguration,
+  VRSwoopNeutral,
 } from '@/vr/runtime/VRMiniGameInputPolicy';
 
 /** What the controller needs of a live minigame, so VR never imports engine state. */
@@ -53,6 +56,21 @@ export type VRMiniGameProvider = () => VRMiniGameTarget | null;
  */
 export class VRMiniGameInputController {
   private static previousJumpHeld = false;
+  /** The rider's straight-ahead, captured the first frame they are riding. */
+  private static neutral: VRSwoopNeutral = LEVEL_NEUTRAL;
+  private static neutralCaptured = false;
+  /** Steering held across a brief hand dropout, and when it was last two-handed. */
+  private static lastTwoHandedSteer = 0;
+  private static lastTwoHandedAt = 0;
+  /**
+   * How long a lost hand is treated as still there. The left controller drops
+   * out of the input frame whenever its grip pose goes briefly untracked, and
+   * falling straight to one-handed steering reads the remaining hand's offset
+   * from the head - which for a right hand at rest is a standing pull to the
+   * right that the rider has to fight. Holding the last two-handed steer across
+   * the gap keeps the bike going where it was pointed.
+   */
+  private static readonly HAND_DROPOUT_GRACE_MS = 500;
   private static configuration: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION;
   private static provider: VRMiniGameProvider | null = null;
 
@@ -73,12 +91,38 @@ export class VRMiniGameInputController {
 
     const config = VRMiniGameInputController.configuration;
     if (target.type === 1) {
-      const intent = resolveSwoopIntent(inputFrame, VRMiniGameInputController.previousJumpHeld, config);
+      // Capture straight-ahead from how the rider is actually holding their
+      // hands, rather than assuming dead level.
+      if (!VRMiniGameInputController.neutralCaptured) {
+        const sampled = sampleSwoopNeutral(inputFrame);
+        if (sampled) {
+          VRMiniGameInputController.neutral = sampled;
+          VRMiniGameInputController.neutralCaptured = true;
+        }
+      }
+
+      const intent = resolveSwoopIntent(
+        inputFrame, VRMiniGameInputController.previousJumpHeld, config,
+        VRMiniGameInputController.neutral,
+      );
       VRMiniGameInputController.previousJumpHeld = swoopJumpControlHeld(inputFrame, config);
       if (intent.grip === MiniGameGripState.NONE) return;
 
+      const now = inputFrame.timestamp;
+      let steer = intent.steer;
+      if (intent.grip === MiniGameGripState.TWO_HANDED) {
+        VRMiniGameInputController.lastTwoHandedSteer = steer;
+        VRMiniGameInputController.lastTwoHandedAt = now;
+      } else if (
+        VRMiniGameInputController.lastTwoHandedAt > 0 &&
+        now - VRMiniGameInputController.lastTwoHandedAt < VRMiniGameInputController.HAND_DROPOUT_GRACE_MS
+      ) {
+        // A hand just vanished; hold the line rather than lurching.
+        steer = VRMiniGameInputController.lastTwoHandedSteer;
+      }
+
       const lateral = Number.isFinite(target.lateralAcceleration) ? target.lateralAcceleration : 0;
-      target.setLateralForce(intent.steer * lateral);
+      target.setLateralForce(steer * lateral);
       // The throttle is a gear shift the script guards by speed, so holding the
       // stick forward is how the bike climbs through the gears - the same thing
       // holding the accelerate key does on flatscreen.
@@ -103,5 +147,17 @@ export class VRMiniGameInputController {
   /** Clears edge state when a session ends, so a stale press cannot carry over. */
   static reset(): void {
     VRMiniGameInputController.previousJumpHeld = false;
+    VRMiniGameInputController.neutral = LEVEL_NEUTRAL;
+    VRMiniGameInputController.neutralCaptured = false;
+    VRMiniGameInputController.lastTwoHandedSteer = 0;
+    VRMiniGameInputController.lastTwoHandedAt = 0;
+  }
+
+  /**
+   * Take the rider's current hand pose as straight-ahead again. Bound to the
+   * same intent as a recenter: whatever they are holding now means straight.
+   */
+  static recentreSteering(): void {
+    VRMiniGameInputController.neutralCaptured = false;
   }
 }

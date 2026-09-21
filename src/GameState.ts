@@ -79,6 +79,7 @@ import {
 } from "@/vr/runtime/VRCombatIntentQueue";
 import { VRCombatIntentDispatcher } from "@/vr/runtime/VRCombatIntentDispatcher";
 import { VRMiniGameInputController } from "@/vr/runtime/VRMiniGameInputController";
+import { attachSwoopGrips, detachSwoopGrips } from "@/vr/runtime/VRMiniGameGripHost";
 import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
@@ -2191,6 +2192,13 @@ export class GameState implements EngineContext {
       const miniGame: any = GameState.module?.area?.miniGame;
       const player: any = miniGame?.player;
       if (!miniGame || !player) return null;
+      // Visible grips for the swoop, so steering has a fixed centre to hold to.
+      // The bike ships no handle of its own; these sit where its rider holds.
+      if (miniGame.type === 1 && VRSpike.isPresenting) {
+        attachSwoopGrips(player.container);
+      } else if (miniGame.type !== 1) {
+        detachSwoopGrips(player.container);
+      }
       return {
         type: miniGame.type,
         lateralAcceleration: player.accel_lateral_secs,
