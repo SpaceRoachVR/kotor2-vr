@@ -409,6 +409,15 @@ export class VRSpike {
   private static turnYaw = 0;
   private static readonly turnOriginOffset = new THREE.Vector3();
   private static controllerAnchorHost: XRControllerAnchorHost | null = null;
+
+  /**
+   * Draws a hand at a fixed world pose until cleared - a hand that has taken
+   * hold of something the world owns, such as a swoop's handlebar. Input still
+   * comes from the real controller; only the visual is pinned.
+   */
+  static setPinnedHandPose(hand: XRHandRole, pose: XRWorldPose | null): void {
+    VRSpike.controllerAnchorHost?.setPinnedPose(hand, pose);
+  }
   private static latestInputFrame: XRInputFrame | null = null;
   private static latestXRFrame: XRFrame | null = null;
   private static latestXRFrameTimestamp = 0;

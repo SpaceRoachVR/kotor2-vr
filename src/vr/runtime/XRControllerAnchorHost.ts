@@ -83,6 +83,8 @@ export class XRControllerAnchorHost {
   private readonly rayAnchors: Readonly<Record<XRHandRole, THREE.Group>>;
   private readonly humanoidHandVisuals: Record<XRHandRole, THREE.Group | null> = { left: null, right: null };
   private readonly handModels: Record<XRHandRole, VRHandModel | null> = { left: null, right: null };
+  /** Where each hand is drawn instead of its tracked pose, when it is holding on. */
+  private readonly pinnedPoses: Record<XRHandRole, XRWorldPose | null> = { left: null, right: null };
   private readonly handModelLoadState: Record<XRHandRole, HandModelLoadState> = { left: 'idle', right: 'idle' };
   private readonly loadHandModel: VRHandModelLoader | null;
   private lastHandPoseTimestamp: number | null = null;
@@ -217,7 +219,10 @@ export class XRControllerAnchorHost {
       .invert();
 
     for (const hand of ['left', 'right'] as const) {
-      const pose = inputFrame?.hands[hand]?.pose;
+      // A pinned pose wins: while the rider is holding a handlebar, the hand is
+      // drawn on the bar rather than wherever their real hand has drifted to.
+      // Input still comes from the real pose - only the visual is pinned.
+      const pose = this.pinnedPoses[hand] ?? inputFrame?.hands[hand]?.pose;
       const targetRayPose = inputFrame?.hands[hand]?.targetRayPose;
       const anchor = this.anchors[hand];
       const rayAnchor = this.rayAnchors[hand];
@@ -232,6 +237,14 @@ export class XRControllerAnchorHost {
       rayAnchor.visible = targetRayPose.trackingState !== 'unavailable' && this.heldVisuals[hand] === null;
     }
     this.updateHandPoses(inputFrame);
+  }
+
+  /**
+   * Draws this hand at a fixed world pose until cleared, for a hand that has
+   * taken hold of something the world owns - a handlebar the bike carries.
+   */
+  setPinnedPose(hand: XRHandRole, pose: XRWorldPose | null): void {
+    this.pinnedPoses[hand] = pose;
   }
 
   /** Attaches a flattened presentation-only engine model to the tracked hand. */

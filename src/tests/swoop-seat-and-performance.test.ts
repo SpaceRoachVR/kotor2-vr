@@ -108,9 +108,9 @@ describe('the rider faces the way the bike travels', () => {
  * own hand span, which sits low and close — short of the bars, out of reach.
  */
 describe('the grips sit on the handlebars', () => {
-  test('they are further forward and wider than the first attempt', () => {
+  test('they sit inboard, on the bars the rider reaches', () => {
     const [left, right] = SWOOP_GRIP_OFFSETS;
-    expect(Math.abs(left[0])).toBeCloseTo(0.45, 5);
+    expect(Math.abs(left[0])).toBeCloseTo(0.26, 5);
     expect(left[0]).toBeCloseTo(-right[0], 5);
     expect(left[1]).toBeCloseTo(1.6, 5);
     expect(left[2]).toBeCloseTo(0.95, 5);
@@ -124,30 +124,94 @@ describe('the grips sit on the handlebars', () => {
 });
 
 /**
- * "Steering didn't seem to work at all." It did — the rider was pinned against
- * the tunnel wall at full lock, measured at container x = 20 of a +/-20 tunnel,
- * because a captured neutral had gone stale against their real posture. At the
- * stop, nothing they do moves it back, which reads exactly like dead controls.
+ * "Steering didn't seem to work at all... tended to veer in whichever direction
+ * was used first. Lifting one hand and dropping the other did nothing."
+ *
+ * Two causes, both from treating lean as a *rate*. A rate can only be undone by
+ * counter-steering, so the bike kept going whichever way it was first pushed
+ * and ended pinned against the tunnel wall - measured at container x = 20 of a
+ * +/-20 tunnel, where nothing the rider does moves it back. And the neutral
+ * relaxed towards whatever they held, so a lean held for a few seconds quietly
+ * became the new straight-ahead and stopped doing anything at all.
+ *
+ * Lean is now a *position*: level is the centre lane, half a lean is half way
+ * across, letting go returns to centre. It cannot run away and a held lean
+ * keeps working. Chosen with Allen over the retail rate model.
  */
-describe('steering cannot strand the rider at the wall', () => {
+describe('lean is where the rider is, not how fast they drift', () => {
   const controller = read('vr/runtime/VRMiniGameInputController.ts');
-  const relax = bodyOf(controller, '  private static relaxNeutral(inputFrame: XRInputFrame): void');
+  const update = bodyOf(controller, '  static update(inputFrame: XRInputFrame | null): void');
 
-  test('straight-ahead relaxes towards how the rider is actually holding', () => {
-    expect(relax).toMatch(/sampleSwoopNeutral\(inputFrame\)/);
-    expect(relax).toMatch(/NEUTRAL_RELAX_SECONDS/);
+  test('the wanted lane comes from the lean and the tunnel width', () => {
+    expect(update).toMatch(/const wanted = steer \* limit;/);
+    expect(update).toMatch(/target\.setLateralPosition\(/);
   });
 
-  test('the time constant is long enough for a deliberate turn to survive', () => {
-    expect(controller).toMatch(/NEUTRAL_RELAX_SECONDS = 4;/);
+  test('the rate path is not also driving it', () => {
+    expect(update).toMatch(/target\.setLateralForce\(0\)/);
   });
 
-  test('it is driven from frame timestamps, and a large gap cannot jump it', () => {
-    expect(relax).toMatch(/inputFrame\.timestamp/);
-    expect(relax).toMatch(/Math\.min\(0\.1,/);
+  test('it eases rather than snapping, so tracking jitter cannot buzz the bike', () => {
+    expect(controller).toMatch(/LATERAL_EASING = 0\.25;/);
+    expect(update).toMatch(/\(wanted - current\) \* VRMiniGameInputController\.LATERAL_EASING/);
   });
 
-  test('losing the hands resets the clock rather than integrating a stale gap', () => {
-    expect(relax).toMatch(/if \(!sampled\)[\s\S]{0,120}lastNeutralRelaxAt = 0;/);
+  test('the drifting neutral that ate held input is gone', () => {
+    expect(controller).not.toMatch(/relaxNeutral/);
+    expect(controller).not.toMatch(/NEUTRAL_RELAX_SECONDS/);
+  });
+
+  test('a track with no tunnel falls back to the rate model rather than freezing', () => {
+    expect(update).toMatch(/if \(limit > 0\)[\s\S]*?\} else \{[\s\S]*?setLateralForce\(steer \* lateral\)/);
+  });
+});
+
+/**
+ * "These need to be grip-able with the hands also." Squeeze takes hold of a
+ * bar and the hand is drawn on it; steering only counts while held.
+ */
+describe('the bars can be taken hold of', () => {
+  const controller = read('vr/runtime/VRMiniGameInputController.ts');
+  const pin = bodyOf(controller, '  private static pinHeldHands(');
+
+  test('a holding hand is pinned to its grip, and a free hand released', () => {
+    expect(pin).toMatch(/isGripping\(hand, config\)/);
+    expect(pin).toMatch(/holding \? \(poses\?\.\[role\] \?\? null\) : null/);
+  });
+
+  test('the pin is only the visual: input still reads the real pose', () => {
+    const host = read('vr/runtime/XRControllerAnchorHost.ts');
+    expect(host).toMatch(/this\.pinnedPoses\[hand\] \?\? inputFrame\?\.hands\[hand\]\?\.pose/);
+  });
+
+  test('leaving a minigame never leaves a hand stuck to a bar', () => {
+    expect(controller).toMatch(/releaseHands\(\)/);
+    expect(bodyOf(controller, '  static reset(): void')).toMatch(/releaseHands\(\)/);
+  });
+
+  test('riding requires holding on', () => {
+    const policy = read('vr/runtime/VRMiniGameInputPolicy.ts');
+    const riding = policy.slice(
+      policy.indexOf('export function resolveRidingState('),
+      policy.indexOf('export function sampleSwoopNeutral('),
+    );
+    expect(riding).toMatch(/isGripping\(hand, config\)/);
+  });
+});
+
+/**
+ * A/X did not jump, twice, having been bound by index each time. Index order
+ * past the trigger and squeeze is not consistent across profiles, so every
+ * other button jumps - there is nothing else for them to do while riding.
+ */
+describe('every spare button jumps', () => {
+  const policy = read('vr/runtime/VRMiniGameInputPolicy.ts');
+
+  test('the throttle and the grip are excluded, everything else included', () => {
+    expect(policy).toMatch(/JUMP_BUTTON_INDICES = \['2', '3', '4', '5', '6', '7'\]/);
+  });
+
+  test('any of them counts, not just the first one present', () => {
+    expect(policy).toMatch(/JUMP_BUTTON_INDICES\.some\(/);
   });
 });

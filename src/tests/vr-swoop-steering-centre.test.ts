@@ -59,7 +59,7 @@ const config = DEFAULT_MINIGAME_INPUT_CONFIGURATION;
 describe('straight ahead is where the rider is holding, not dead level', () => {
   test('a rider whose right hand rests higher is not steering', () => {
     const resting = frame([
-      hand({ hand: 'left', y: 1.15 }), hand({ hand: 'right', y: 1.27 }),
+      hand({ hand: 'left', squeeze: 1, y: 1.15 }), hand({ hand: 'right', squeeze: 1, y: 1.27 }),
     ]);
     // Against dead level that 12cm bias is a hard pull.
     expect(Math.abs(resolveSteering(resting, config, LEVEL_NEUTRAL).steer)).toBeGreaterThan(0.4);
@@ -70,13 +70,13 @@ describe('straight ahead is where the rider is holding, not dead level', () => {
   });
 
   test('from that neutral, both directions are reachable and symmetric', () => {
-    const resting = frame([hand({ hand: 'left', y: 1.15 }), hand({ hand: 'right', y: 1.27 })]);
+    const resting = frame([hand({ hand: 'left', squeeze: 1, y: 1.15 }), hand({ hand: 'right', squeeze: 1, y: 1.27 })]);
     const neutral = sampleSwoopNeutral(resting)!;
     const right = resolveSteering(frame([
-      hand({ hand: 'left', y: 1.05 }), hand({ hand: 'right', y: 1.37 }),
+      hand({ hand: 'left', squeeze: 1, y: 1.05 }), hand({ hand: 'right', squeeze: 1, y: 1.37 }),
     ]), config, neutral).steer;
     const left = resolveSteering(frame([
-      hand({ hand: 'left', y: 1.25 }), hand({ hand: 'right', y: 1.17 }),
+      hand({ hand: 'left', squeeze: 1, y: 1.25 }), hand({ hand: 'right', squeeze: 1, y: 1.17 }),
     ]), config, neutral).steer;
     expect(right).toBeGreaterThan(0);
     expect(left).toBeLessThan(0);
@@ -84,7 +84,7 @@ describe('straight ahead is where the rider is holding, not dead level', () => {
   });
 
   test('one-handed neutral is that hand\u2019s own resting offset from the head', () => {
-    const resting = frame([hand({ hand: 'right', x: 0.3 })]);
+    const resting = frame([hand({ hand: 'right', squeeze: 1, x: 0.3 })]);
     expect(Math.abs(resolveSteering(resting, config, LEVEL_NEUTRAL).steer)).toBeGreaterThan(0);
     const neutral = sampleSwoopNeutral(resting)!;
     expect(resolveSteering(resting, config, neutral).steer).toBe(0);
@@ -105,31 +105,31 @@ describe('straight ahead is where the rider is holding, not dead level', () => {
 describe('a jump is always reachable', () => {
   test('a face button jumps from either hand', () => {
     for (const role of ['left', 'right'] as const) {
-      expect(swoopJumpControlHeld(frame([hand({ hand: role, face: 1 })]), config)).toBe(true);
+      expect(swoopJumpControlHeld(frame([hand({ hand: role, squeeze: 1, face: 1 })]), config)).toBe(true);
     }
   });
 
   test('the left trigger still jumps when both hands are present', () => {
     expect(swoopJumpControlHeld(frame([
-      hand({ hand: 'left', trigger: 1 }), hand({ hand: 'right' }),
+      hand({ hand: 'left', squeeze: 1, trigger: 1 }), hand({ hand: 'right', squeeze: 1 }),
     ]), config)).toBe(true);
   });
 
   test('the right hand alone can still jump, which the left trigger could not', () => {
-    const rightOnly = frame([hand({ hand: 'right', face: 1 })]);
+    const rightOnly = frame([hand({ hand: 'right', squeeze: 1, face: 1 })]);
     expect(swoopJumpControlHeld(rightOnly, config)).toBe(true);
     expect(resolveSwoopIntent(rightOnly, false, config).jump).toBe(true);
   });
 
   test('throttle and jump are independent controls', () => {
-    const both = frame([hand({ hand: 'right', trigger: 1, face: 1 })]);
+    const both = frame([hand({ hand: 'right', squeeze: 1, trigger: 1, face: 1 })]);
     const intent = resolveSwoopIntent(both, false, config);
     expect(intent.throttle).toBe(true);
     expect(intent.jump).toBe(true);
   });
 
-  test('no tracked hand jumps nothing', () => {
-    expect(swoopJumpControlHeld(frame([]), config)).toBe(false);
+  test('a hand that is not holding on jumps nothing', () => {
+    expect(swoopJumpControlHeld(frame([hand({ hand: 'right', face: 1 })]), config)).toBe(false);
   });
 });
 

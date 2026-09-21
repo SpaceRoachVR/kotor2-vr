@@ -30,8 +30,8 @@ import * as THREE from 'three';
  * below the windshield node (0, 1.58, 1.07), at the width the bars run.
  */
 export const SWOOP_GRIP_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
-  [-0.45, 1.6, 0.95],
-  [0.45, 1.6, 0.95],
+  [-0.26, 1.6, 0.95],
+  [0.26, 1.6, 0.95],
 ];
 
 export const SWOOP_GRIP_GROUP_NAME = 'vr-swoop-grips';

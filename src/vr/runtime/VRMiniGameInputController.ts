@@ -1,6 +1,7 @@
-import { XRInputFrame } from '@/vr/runtime/XRTypes';
+import { XRHandRole, XRInputFrame, XRWorldPose } from '@/vr/runtime/XRTypes';
 import {
   aimDirectionToPitchYaw,
+  isGripping,
   DEFAULT_MINIGAME_INPUT_CONFIGURATION,
   LEVEL_NEUTRAL,
   MiniGameGripState,
@@ -20,6 +21,14 @@ export interface VRMiniGameTarget {
   lateralAcceleration: number;
   /** Steering, in the same units the flatscreen arrow keys set. */
   setLateralForce: (force: number) => void;
+  /** How far the rider may sit either side of centre, from the track's tunnel. */
+  readonly lateralLimit: number;
+  /** Where the rider currently sits across the track. */
+  readonly lateralPosition: number;
+  /** Put the rider here across the track; the minigame clamps to its tunnel. */
+  setLateralPosition: (position: number) => void;
+  /** World poses of the handlebar grips, so held hands can be drawn on them. */
+  readonly gripPoses: Readonly<Record<'left' | 'right', XRWorldPose | null>> | null;
   /** Swoop hop. Routed through the module's brake script, which is where TSL keeps it. */
   jump: () => void;
   /** Swoop throttle: one shift up through the gears. */
@@ -76,14 +85,17 @@ export class VRMiniGameInputController {
   /** Steering held across a brief hand dropout, and when it was last two-handed. */
   private static lastTwoHandedSteer = 0;
   private static lastTwoHandedAt = 0;
-  /** When the neutral last relaxed, for the elapsed time between frames. */
-  private static lastNeutralRelaxAt = 0;
   /**
    * How long a held offset takes to become the new straight-ahead. Long enough
    * that a deliberate turn survives it, short enough that a bad posture cannot
    * strand the rider at the tunnel wall.
    */
-  private static readonly NEUTRAL_RELAX_SECONDS = 4;
+  /** How much of the remaining distance to the wanted lane is taken per frame. */
+  private static readonly LATERAL_EASING = 0.25;
+  /** Which grip pose each hand is currently drawn at. */
+  private static pinnedHands: Record<string, XRWorldPose | null> = { left: null, right: null };
+  /** Set by the host so the policy can pin a hand without importing VRSpike. */
+  static pinHand: ((hand: XRHandRole, pose: XRWorldPose | null) => void) | null = null;
   /**
    * How long a lost hand is treated as still there. The left controller drops
    * out of the input frame whenever its grip pose goes briefly untracked, and
@@ -108,13 +120,13 @@ export class VRMiniGameInputController {
     const target = VRMiniGameInputController.provider?.() ?? null;
     if (!target || !inputFrame) {
       VRMiniGameInputController.previousJumpHeld = false;
+      VRMiniGameInputController.releaseHands();
       return;
     }
 
     const config = VRMiniGameInputController.configuration;
     if (target.type === 1) {
       VRMiniGameInputController.captureNeutral(inputFrame, config);
-      VRMiniGameInputController.relaxNeutral(inputFrame);
 
       const intent = resolveSwoopIntent(
         inputFrame, VRMiniGameInputController.previousJumpHeld, config,
@@ -136,8 +148,24 @@ export class VRMiniGameInputController {
         steer = VRMiniGameInputController.lastTwoHandedSteer;
       }
 
-      const lateral = Number.isFinite(target.lateralAcceleration) ? target.lateralAcceleration : 0;
-      target.setLateralForce(steer * lateral);
+      // Lean is *where across the track the rider is*, not how fast they drift.
+      // As a rate it could only be undone by counter-steering, so the bike kept
+      // going whichever way it was first pushed and a held lean quietly became
+      // the new centre. As a position, level is the middle lane, half a lean is
+      // half way across, and letting go comes back - it cannot run away.
+      const limit = Number.isFinite(target.lateralLimit) ? Math.abs(target.lateralLimit) : 0;
+      if (limit > 0) {
+        target.setLateralForce(0);
+        const wanted = steer * limit;
+        const current = Number.isFinite(target.lateralPosition) ? target.lateralPosition : 0;
+        // Eased rather than snapped, so tracking jitter does not buzz the bike.
+        target.setLateralPosition(current + (wanted - current) * VRMiniGameInputController.LATERAL_EASING);
+      } else {
+        const lateral = Number.isFinite(target.lateralAcceleration) ? target.lateralAcceleration : 0;
+        target.setLateralForce(steer * lateral);
+      }
+
+      VRMiniGameInputController.pinHeldHands(inputFrame, target, config);
       // The throttle is a gear shift the script guards by speed, so holding the
       // stick forward is how the bike climbs through the gears - the same thing
       // holding the accelerate key does on flatscreen.
@@ -161,13 +189,13 @@ export class VRMiniGameInputController {
 
   /** Clears edge state when a session ends, so a stale press cannot carry over. */
   static reset(): void {
+    VRMiniGameInputController.releaseHands();
     VRMiniGameInputController.previousJumpHeld = false;
     VRMiniGameInputController.neutral = LEVEL_NEUTRAL;
     VRMiniGameInputController.twoHandedNeutralCaptured = false;
     VRMiniGameInputController.oneHandedNeutralCaptured = false;
     VRMiniGameInputController.lastTwoHandedSteer = 0;
     VRMiniGameInputController.lastTwoHandedAt = 0;
-    VRMiniGameInputController.lastNeutralRelaxAt = 0;
   }
 
   /**
@@ -180,38 +208,32 @@ export class VRMiniGameInputController {
   }
 
   /**
-   * Lets straight-ahead drift towards however the rider is actually holding.
+   * Draws each holding hand on the bar it has taken, and releases it otherwise.
    *
-   * A single capture is one sample of a moving target: hands settle, drop, get
-   * re-gripped. Measured in the headset after a captured neutral went stale,
-   * the rider was steering hard enough to sit pinned against the tunnel wall at
-   * full lock - which reads as steering being broken, because it is at the stop
-   * and nothing they do moves it back.
-   *
-   * The neutral therefore relaxes towards the current pose with a long time
-   * constant. A deliberate turn lasts a second or two and survives; a posture
-   * bias held for many seconds washes out. It cannot pin.
+   * Only the visual is pinned; steering still reads the real controller pose,
+   * so a rider whose hands drift off the bars still steers by how they lean.
    */
-  private static relaxNeutral(inputFrame: XRInputFrame): void {
-    const sampled = sampleSwoopNeutral(inputFrame);
-    if (!sampled) {
-      VRMiniGameInputController.lastNeutralRelaxAt = 0;
-      return;
+  private static pinHeldHands(
+    inputFrame: XRInputFrame, target: VRMiniGameTarget, config: VRMiniGameInputConfiguration,
+  ): void {
+    const poses = target.gripPoses;
+    for (const role of ['left', 'right'] as XRHandRole[]) {
+      const hand = inputFrame.hands[role];
+      const holding = !!hand && isGripping(hand, config);
+      const pinned = holding ? (poses?.[role] ?? null) : null;
+      if (VRMiniGameInputController.pinnedHands[role] === pinned) continue;
+      VRMiniGameInputController.pinnedHands[role] = pinned;
+      VRMiniGameInputController.pinHand?.(role, pinned);
     }
-    const now = inputFrame.timestamp;
-    const previous = VRMiniGameInputController.lastNeutralRelaxAt;
-    VRMiniGameInputController.lastNeutralRelaxAt = now;
-    if (!previous || now <= previous) return;
+  }
 
-    const seconds = Math.min(0.1, (now - previous) / 1000);
-    const rate = Math.min(1, seconds / VRMiniGameInputController.NEUTRAL_RELAX_SECONDS);
-    const current = VRMiniGameInputController.neutral;
-    VRMiniGameInputController.neutral = {
-      heightDifference: current.heightDifference
-        + (sampled.heightDifference - current.heightDifference) * rate,
-      lateralOffset: current.lateralOffset
-        + (sampled.lateralOffset - current.lateralOffset) * rate,
-    };
+  /** Releases both hands, so leaving a minigame never leaves one stuck to a bar. */
+  private static releaseHands(): void {
+    for (const role of ['left', 'right'] as XRHandRole[]) {
+      if (!VRMiniGameInputController.pinnedHands[role]) continue;
+      VRMiniGameInputController.pinnedHands[role] = null;
+      VRMiniGameInputController.pinHand?.(role, null);
+    }
   }
 
   /**

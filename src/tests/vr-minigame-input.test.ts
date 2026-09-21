@@ -67,24 +67,26 @@ const config = DEFAULT_MINIGAME_INPUT_CONFIGURATION;
  * turret keeps its squeeze: that is a deliberate grip on a mounted weapon.
  */
 describe('riding the swoop', () => {
-  test('tracked hands steer with no squeeze at all', () => {
+  test('hands on the bars steer', () => {
     const both = resolveSteering(frame([
-      hand({ hand: 'left', y: 1.0 }), hand({ hand: 'right', y: 1.4 }),
+      hand({ hand: 'left', squeeze: 1, y: 1.0 }), hand({ hand: 'right', squeeze: 1, y: 1.4 }),
     ]), config);
     expect(both.grip).toBe(MiniGameGripState.TWO_HANDED);
     expect(both.steer).toBeGreaterThan(0);
   });
 
-  test('one tracked hand is enough to stay in control', () => {
-    const single = resolveSteering(frame([hand({ hand: 'right', x: 0.4 })]), config);
+  test('one hand on the bars is enough to stay in control', () => {
+    const single = resolveSteering(frame([hand({ hand: 'right', squeeze: 1, x: 0.4 })]), config);
     expect(single.grip).toBe(MiniGameGripState.ONE_HANDED);
     expect(single.steer).toBeGreaterThan(0);
   });
 
-  test('no tracked hands means no control', () => {
-    const none = resolveSteering(frame([]), config);
-    expect(none.grip).toBe(MiniGameGripState.NONE);
-    expect(none.steer).toBe(0);
+  test('hands off the bars means no control', () => {
+    const loose = resolveSteering(frame([
+      hand({ hand: 'left', y: 1.0 }), hand({ hand: 'right', y: 1.4 }),
+    ]), config);
+    expect(loose.grip).toBe(MiniGameGripState.NONE);
+    expect(loose.steer).toBe(0);
   });
 });
 
@@ -159,8 +161,8 @@ describe('swoop steering', () => {
  */
 describe('swoop throttle', () => {
   const bars = (right: number, left = 0) => frame([
-    hand({ hand: 'left', trigger: left }),
-    hand({ hand: 'right', trigger: right }),
+    hand({ hand: 'left', squeeze: 1, trigger: left }),
+    hand({ hand: 'right', squeeze: 1, trigger: right }),
   ]);
 
   test('the right trigger is the throttle, and holding it keeps it on', () => {
@@ -184,8 +186,8 @@ describe('swoop throttle', () => {
     expect(intent.jump).toBe(true);
   });
 
-  test('no tracked hands means no throttle', () => {
-    const intent = resolveSwoopIntent(frame([]), false, config);
+  test('hands off the bars means no throttle', () => {
+    const intent = resolveSwoopIntent(frame([hand({ hand: 'right', trigger: 1 })]), false, config);
     expect(intent.grip).toBe(MiniGameGripState.NONE);
     expect(intent.throttle).toBe(false);
   });

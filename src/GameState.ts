@@ -79,10 +79,46 @@ import {
 } from "@/vr/runtime/VRCombatIntentQueue";
 import { VRCombatIntentDispatcher } from "@/vr/runtime/VRCombatIntentDispatcher";
 import { VRMiniGameInputController } from "@/vr/runtime/VRMiniGameInputController";
-import { attachSwoopGrips, detachSwoopGrips } from "@/vr/runtime/VRMiniGameGripHost";
+import {
+  attachSwoopGrips, detachSwoopGrips, SWOOP_GRIP_GROUP_NAME,
+} from "@/vr/runtime/VRMiniGameGripHost";
 
 /** The bike the swoop grips are currently attached to, so it is done once. */
 let vrSwoopGripsAttachedTo: THREE.Object3D | null = null;
+
+/** Scratch for the grip poses, which are read every frame while riding. */
+const vrSwoopGripPoses: Record<'left' | 'right', {
+  position: THREE.Vector3; orientation: THREE.Quaternion;
+  linearVelocity: null; angularVelocity: null; trackingState: 'tracked';
+}> = {
+  left: {
+    position: new THREE.Vector3(), orientation: new THREE.Quaternion(),
+    linearVelocity: null, angularVelocity: null, trackingState: 'tracked',
+  },
+  right: {
+    position: new THREE.Vector3(), orientation: new THREE.Quaternion(),
+    linearVelocity: null, angularVelocity: null, trackingState: 'tracked',
+  },
+};
+
+/**
+ * World poses of the swoop's handlebar grips, so a hand that has taken hold of
+ * one can be drawn on it. Null until the grips exist.
+ */
+function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
+  if(!container){ return null; }
+  const grips = container.getObjectByName(SWOOP_GRIP_GROUP_NAME);
+  if(!grips || grips.children.length < 2){ return null; }
+  const roles = ['left', 'right'] as const;
+  for(let i = 0; i < roles.length; i++){
+    const grip = grips.children[i];
+    if(!grip){ return null; }
+    grip.updateWorldMatrix(true, false);
+    grip.getWorldPosition(vrSwoopGripPoses[roles[i]].position);
+    grip.getWorldQuaternion(vrSwoopGripPoses[roles[i]].orientation);
+  }
+  return vrSwoopGripPoses;
+}
 import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
@@ -2190,6 +2226,7 @@ export class GameState implements EngineContext {
     // this provider rather than importing engine state, which keeps the VR
     // layer independent of GameState (and its tests free of the engine).
     VRSpike.miniGameInput = VRMiniGameInputController;
+    VRMiniGameInputController.pinHand = (hand, pose) => VRSpike.setPinnedHandPose(hand, pose);
     VRMiniGameInputController.setProvider(() => {
       if (GameState.Mode !== EngineMode.MINIGAME) return null;
       const miniGame: any = GameState.module?.area?.miniGame;
@@ -2211,6 +2248,15 @@ export class GameState implements EngineContext {
         type: miniGame.type,
         lateralAcceleration: player.accel_lateral_secs,
         setLateralForce: (force: number) => { player.lateralForce = force; },
+        // The track's own tunnel is the width of the lane the rider may use.
+        get lateralLimit(){ return Math.abs(player.tunnel?.pos?.x ?? 0); },
+        get lateralPosition(){ return player.container?.position?.x ?? 0; },
+        setLateralPosition: (position: number) => {
+          if(!player.container){ return; }
+          player.container.position.x = position;
+          player.clampToTunnel?.();
+        },
+        get gripPoses(){ return readSwoopGripPoses(player.container); },
         // TSL's swoop keeps its jump script in the OnBrake slot; onBrake()
         // falls back to the engine's own jump when a module ships none.
         jump: () => (player.onBrake ? player.onBrake() : player.jump?.()),

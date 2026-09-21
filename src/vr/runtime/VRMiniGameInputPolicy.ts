@@ -99,6 +99,17 @@ const XR_STANDARD_SQUEEZE = '1';
 const XR_STANDARD_FACE_PRIMARY = '4';
 const XR_STANDARD_FACE_SECONDARY = '5';
 
+/**
+ * Anything that is not the throttle (0) or the grip (1) jumps.
+ *
+ * A/X was bound by index and did not work in the headset, and guessing again
+ * would be the third guess. Index order past the trigger and squeeze is not
+ * consistent across profiles - touchpad, thumbstick press, A/X, B/Y and menu
+ * all land in 2 to 6 depending on the controller - so the swoop treats every
+ * one of them as a jump. There is nothing else for them to do while riding.
+ */
+const JUMP_BUTTON_INDICES = ['2', '3', '4', '5', '6', '7'] as const;
+
 function buttonValue(hand: XRHandInputFrame | undefined, indices: readonly string[]): number {
   if (!hand) return 0;
   for (const index of indices) {
@@ -130,15 +141,16 @@ function stickPush(hand: XRHandInputFrame | undefined): number {
 
 const SQUEEZE_BUTTONS = [XR_STANDARD_SQUEEZE] as const;
 const TRIGGER_BUTTONS = [XR_STANDARD_TRIGGER] as const;
-const FACE_BUTTONS = [XR_STANDARD_FACE_PRIMARY, XR_STANDARD_FACE_SECONDARY] as const;
 
 export function isFaceButtonPressed(
   hand: XRHandInputFrame | undefined, config: VRMiniGameInputConfiguration,
 ): boolean {
   if (!hand) return false;
-  // Any face button, not the first one that happens to exist: buttonValue stops
-  // at the first index present, which would ignore B/Y whenever A/X is reported.
-  return FACE_BUTTONS.some((index) => buttonValue(hand, [index]) >= config.triggerThreshold);
+  // Any of them, not the first index that happens to exist: buttonValue stops
+  // at the first present index, which would ignore every button after it.
+  return JUMP_BUTTON_INDICES.some(
+    (index) => buttonValue(hand, [index]) >= config.triggerThreshold,
+  );
 }
 
 export function isGripping(
@@ -176,10 +188,13 @@ export function resolveGripState(
  */
 export function resolveRidingState(
   frame: XRInputFrame,
+  config: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION,
 ): { state: MiniGameGripState; hands: XRHandInputFrame[] } {
+  // Holding on again, by choice: the rider takes hold of the bars with squeeze
+  // and their hands are drawn on them. Steering only counts while held.
   const hands = HAND_ROLES
     .map((role) => frame.hands[role])
-    .filter((hand): hand is XRHandInputFrame => !!hand);
+    .filter((hand): hand is XRHandInputFrame => isGripping(hand, config));
   if (hands.length >= 2) return { state: MiniGameGripState.TWO_HANDED, hands };
   if (hands.length === 1) return { state: MiniGameGripState.ONE_HANDED, hands };
   return { state: MiniGameGripState.NONE, hands };
@@ -218,8 +233,11 @@ export interface VRSwoopNeutral {
 export const LEVEL_NEUTRAL: VRSwoopNeutral = { heightDifference: 0, lateralOffset: 0 };
 
 /** The neutral a frame would define if the player were holding straight ahead now. */
-export function sampleSwoopNeutral(frame: XRInputFrame): VRSwoopNeutral | null {
-  const { state, hands } = resolveRidingState(frame);
+export function sampleSwoopNeutral(
+  frame: XRInputFrame,
+  config: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION,
+): VRSwoopNeutral | null {
+  const { state, hands } = resolveRidingState(frame, config);
   if (state === MiniGameGripState.NONE) return null;
   if (state === MiniGameGripState.TWO_HANDED) {
     const left = frame.hands['left'];
@@ -241,7 +259,7 @@ export function resolveSteering(
   config: VRMiniGameInputConfiguration,
   neutral: VRSwoopNeutral = LEVEL_NEUTRAL,
 ): { grip: MiniGameGripState; steer: number } {
-  const { state, hands } = resolveRidingState(frame);
+  const { state, hands } = resolveRidingState(frame, config);
   if (state === MiniGameGripState.NONE) return { grip: state, steer: 0 };
 
   if (state === MiniGameGripState.TWO_HANDED) {
@@ -270,7 +288,7 @@ export function resolveSteering(
 export function swoopJumpControlHeld(
   frame: XRInputFrame, config: VRMiniGameInputConfiguration,
 ): boolean {
-  const { state, hands } = resolveRidingState(frame);
+  const { state, hands } = resolveRidingState(frame, config);
   if (state === MiniGameGripState.NONE) return false;
   // A face button on either hand always jumps. The left trigger is the natural
   // pairing with a right-trigger throttle, but the left controller drops out of
@@ -302,7 +320,7 @@ export function resolveSwoopIntent(
   neutral: VRSwoopNeutral = LEVEL_NEUTRAL,
 ): VRSwoopIntent {
   const { grip, steer } = resolveSteering(frame, config, neutral);
-  const { state, hands } = resolveRidingState(frame);
+  const { state, hands } = resolveRidingState(frame, config);
 
   // No tracked hand is not riding, so nothing the triggers do counts.
   const throttle = state === MiniGameGripState.NONE
