@@ -506,12 +506,19 @@ describe('asset service', () => {
   test.each([
     '<script src="../KotOR.js"></script><script src = "../KotOR.js"></script>',
     '<script src="../KotOR.js"></script><script src="../%4botOR.js"></script>',
+    '<script src="../KotOR.js"></script><script type="text/javascript; charset=utf-8" src="../KotOR.js"></script>',
     '<!-- <script src="../KotOR.js"></script> -->',
     '<script data-src="../KotOR.js"></script>',
     '<script type="application/json" src="../KotOR.js"></script>',
     '<script nomodule src="../KotOR.js"></script>',
     '<template><script src="../KotOR.js"></script></template>',
     '<base href="https://foreign.invalid/"><script src="../KotOR.js"></script>',
+    '<base href="https://foreign.invalid/"><base href="http://["><script src="../KotOR.js"></script>',
+    '<base href="https://foreign.invalid/"><base href="/"><script src="../KotOR.js"></script>',
+    '<script src="../KotOR.js"></script><base href="https://foreign.invalid/"><script src="../KotOR.js"></script>',
+    '<script type="application/json; charset=utf-8" src="../KotOR.js"></script>',
+    '<script type="module; charset=utf-8" src="../KotOR.js"></script>',
+    '<script type="text/javascript; charset=utf-8" nomodule src="../KotOR.js"></script>',
   ])('rejects documents without exactly one executable local runtime: %s', async (html) => {
     await start();
     fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), html);
@@ -531,6 +538,38 @@ describe('asset service', () => {
     expect(html).toContain(comment);
     expect(html).toContain(inert);
     expect(html).toMatch(/src="\/bundles\/[a-f0-9]{64}\/KotOR\.js"/);
+  });
+
+  test.each([
+    '<script type="text/javascript; charset=utf-8" src="../KotOR.js"></script>',
+    '<script type=" APPLICATION/JAVASCRIPT ; charset=UTF-8 " src="../KotOR.js"></script>',
+    '<script type="module" nomodule src="../KotOR.js"></script>',
+    '<script src="../KotOR.js"></script><base href="https://foreign.invalid/">',
+    '<script src="../KotOR.js"></script><base href="http://[">',
+    '<base href="http://["><script src="../KotOR.js"></script>',
+    '<base href="http://["><base href="https://foreign.invalid/"><script src="../KotOR.js"></script>',
+    '<base href="data:text/plain,ignored"><script src="../KotOR.js"></script>',
+    '<base href="javascript:void(0)"><base href="https://foreign.invalid/"><script src="../KotOR.js"></script>',
+    '<base target="_blank"><base href="/"><script src="KotOR.js"></script>',
+    '<base href="/"><base href="https://foreign.invalid/"><script src="KotOR.js"></script>',
+    '<template><base href="https://foreign.invalid/"></template><script src="../KotOR.js"></script>',
+  ])('rewrites an executable local runtime using its parse-position base URL: %s', async (html) => {
+    await start();
+    fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), html);
+    const response = await request('/game/index.html');
+    expect(response.status).toBe(200);
+    expect(await response.text()).toMatch(/src="\/bundles\/[a-f0-9]{64}\/KotOR\.js"/);
+  });
+
+  test('preserves a parameterized inert script beside the single executable runtime', async () => {
+    await start();
+    const inert = '<script type="application/json; charset=utf-8" src="../KotOR.js"></script>';
+    fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), `${inert}<script src="../KotOR.js"></script>`);
+    const response = await request('/game/index.html');
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain(inert);
+    expect(html.match(/src="\/bundles\/[a-f0-9]{64}\/KotOR\.js"/g)).toHaveLength(1);
   });
 
   test('supports idempotent start and close, then restarts on the same service instance', async () => {
