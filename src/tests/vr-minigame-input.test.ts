@@ -17,6 +17,8 @@ const button = (value: number) => ({ pressed: value >= 0.5, touched: value > 0, 
 function hand(options: {
   hand: 'left' | 'right'; x?: number; y?: number; z?: number;
   squeeze?: number; trigger?: number; orientation?: THREE.Quaternion;
+  /** Thumbstick Y, in WebXR's sign: forward is negative. */
+  stickY?: number;
 }): XRHandInputFrame {
   const pose: XRWorldPose = {
     position: new THREE.Vector3(options.x ?? 0, options.y ?? 1.2, options.z ?? -0.3),
@@ -26,7 +28,7 @@ function hand(options: {
   return {
     hand: options.hand, pose, targetRayPose: pose,
     buttons: { squeeze: button(options.squeeze ?? 0), trigger: button(options.trigger ?? 0) },
-    axes: [], interactionProfile: null,
+    axes: [0, 0, 0, options.stickY ?? 0], interactionProfile: null,
   };
 }
 
@@ -104,10 +106,83 @@ describe('swoop steering', () => {
     expect(wobble).toBe(0);
   });
 
-  test('jump fires on the press, not while the trigger is held', () => {
-    const held = frame([hand({ hand: 'right', squeeze: 1, trigger: 1 })]);
+  test('the left trigger jumps on the press, not while it is held', () => {
+    const held = frame([
+      hand({ hand: 'left', squeeze: 1, trigger: 1 }), hand({ hand: 'right', squeeze: 1 }),
+    ]);
     expect(resolveSwoopIntent(held, false, config).jump).toBe(true);
     expect(resolveSwoopIntent(held, true, config).jump).toBe(false);
+  });
+});
+
+/**
+ * The throttle is a gear shift the OnAccelerate script guards by speed, so it is
+ * held rather than tapped — holding it is how the bike climbs through its gears,
+ * the same as holding the accelerate key on flatscreen.
+ */
+describe('swoop throttle', () => {
+  const bars = (right: number, left = 0) => frame([
+    hand({ hand: 'left', squeeze: 1, trigger: left }),
+    hand({ hand: 'right', squeeze: 1, trigger: right }),
+  ]);
+
+  test('the right trigger is the throttle, and holding it keeps it on', () => {
+    expect(resolveSwoopIntent(bars(1), false, config).throttle).toBe(true);
+    expect(resolveSwoopIntent(bars(1), true, config).throttle).toBe(true);
+  });
+
+  test('no right trigger, no throttle', () => {
+    expect(resolveSwoopIntent(bars(0), false, config).throttle).toBe(false);
+  });
+
+  test('the left trigger jumps without opening the throttle', () => {
+    const intent = resolveSwoopIntent(bars(0, 1), false, config);
+    expect(intent.jump).toBe(true);
+    expect(intent.throttle).toBe(false);
+  });
+
+  test('both at once: throttle held while jumping', () => {
+    const intent = resolveSwoopIntent(bars(1, 1), false, config);
+    expect(intent.throttle).toBe(true);
+    expect(intent.jump).toBe(true);
+  });
+
+  test('hands off the bars means no throttle', () => {
+    const loose = frame([hand({ hand: 'right', trigger: 1 })]);
+    const intent = resolveSwoopIntent(loose, false, config);
+    expect(intent.grip).toBe(MiniGameGripState.NONE);
+    expect(intent.throttle).toBe(false);
+  });
+});
+
+/**
+ * A rider who cannot accelerate cannot race, so the one hand that is holding on
+ * keeps the throttle; the jump moves to that hand's thumbstick.
+ */
+describe('one-handed swoop', () => {
+  test('the single trigger becomes the throttle, left hand or right', () => {
+    for (const role of ['left', 'right'] as const) {
+      const intent = resolveSwoopIntent(
+        frame([hand({ hand: role, squeeze: 1, trigger: 1 })]), false, config);
+      expect(intent.grip).toBe(MiniGameGripState.ONE_HANDED);
+      expect(intent.throttle).toBe(true);
+    }
+  });
+
+  test('pushing that hand’s stick forward jumps, on the push only', () => {
+    const pushed = frame([hand({ hand: 'left', squeeze: 1, stickY: -1 })]);
+    expect(resolveSwoopIntent(pushed, false, config).jump).toBe(true);
+    expect(resolveSwoopIntent(pushed, true, config).jump).toBe(false);
+  });
+
+  test('a stick at rest does not jump', () => {
+    const resting = frame([hand({ hand: 'left', squeeze: 1, stickY: 0 })]);
+    expect(resolveSwoopIntent(resting, false, config).jump).toBe(false);
+  });
+
+  test('pulling the stick back does not jump', () => {
+    const pulled = frame([hand({ hand: 'left', squeeze: 1, stickY: 1 })]);
+    expect(resolveSwoopIntent(pulled, false, config).jump).toBe(false);
   });
 });
 

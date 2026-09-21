@@ -5,6 +5,7 @@ import {
   MiniGameGripState,
   resolveSwoopIntent,
   resolveTurretIntent,
+  swoopJumpControlHeld,
   VRMiniGameInputConfiguration,
 } from '@/vr/runtime/VRMiniGameInputPolicy';
 
@@ -16,8 +17,10 @@ export interface VRMiniGameTarget {
   lateralAcceleration: number;
   /** Steering, in the same units the flatscreen arrow keys set. */
   setLateralForce: (force: number) => void;
-  /** Swoop hop. */
+  /** Swoop hop. Routed through the module's brake script, which is where TSL keeps it. */
   jump: () => void;
+  /** Swoop throttle: one shift up through the gears. */
+  accelerate: () => void;
   /** Turret gun banks; they rate-limit themselves, so holding the trigger is safe. */
   fire: () => void;
   /** Current turret pitch and yaw, as the player's rotation carries them. */
@@ -36,6 +39,10 @@ export type VRMiniGameProvider = () => VRMiniGameTarget | null;
  * squeeze. One hand alone still steers or aims, so a seated player who cannot
  * hold both is never stranded mid-sequence.
  *
+ * On the swoop the right trigger is the throttle and the left trigger jumps.
+ * One-handed, the single trigger becomes the throttle - a rider who cannot
+ * accelerate cannot race at all - and the jump moves to that hand's thumbstick.
+ *
  * The flatscreen KeyMapper paths stay live; this writes the same fields they do
  * (lateral force, rotation, jump, fire), so whichever input moved last wins
  * rather than the two fighting. Comfort is untouched: the player's existing
@@ -45,7 +52,7 @@ export type VRMiniGameProvider = () => VRMiniGameTarget | null;
  * layer keeps its independence from engine state.
  */
 export class VRMiniGameInputController {
-  private static previousTriggerHeld = false;
+  private static previousJumpHeld = false;
   private static configuration: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION;
   private static provider: VRMiniGameProvider | null = null;
 
@@ -60,25 +67,29 @@ export class VRMiniGameInputController {
   static update(inputFrame: XRInputFrame | null): void {
     const target = VRMiniGameInputController.provider?.() ?? null;
     if (!target || !inputFrame) {
-      VRMiniGameInputController.previousTriggerHeld = false;
+      VRMiniGameInputController.previousJumpHeld = false;
       return;
     }
 
     const config = VRMiniGameInputController.configuration;
     if (target.type === 1) {
-      const intent = resolveSwoopIntent(inputFrame, VRMiniGameInputController.previousTriggerHeld, config);
-      VRMiniGameInputController.previousTriggerHeld = VRMiniGameInputController.triggerHeld(inputFrame, config);
+      const intent = resolveSwoopIntent(inputFrame, VRMiniGameInputController.previousJumpHeld, config);
+      VRMiniGameInputController.previousJumpHeld = swoopJumpControlHeld(inputFrame, config);
       if (intent.grip === MiniGameGripState.NONE) return;
 
       const lateral = Number.isFinite(target.lateralAcceleration) ? target.lateralAcceleration : 0;
       target.setLateralForce(intent.steer * lateral);
+      // The throttle is a gear shift the script guards by speed, so holding the
+      // stick forward is how the bike climbs through the gears - the same thing
+      // holding the accelerate key does on flatscreen.
+      if (intent.throttle) target.accelerate();
       if (intent.jump) target.jump();
       return;
     }
 
     if (target.type === 2) {
       const intent = resolveTurretIntent(inputFrame, config);
-      VRMiniGameInputController.previousTriggerHeld = VRMiniGameInputController.triggerHeld(inputFrame, config);
+      VRMiniGameInputController.previousJumpHeld = false;
       if (intent.grip === MiniGameGripState.NONE || !intent.aimDirection) return;
 
       // Steer towards the aim rather than assigning it, so the minigame's own
@@ -89,24 +100,8 @@ export class VRMiniGameInputController {
     }
   }
 
-  private static triggerHeld(inputFrame: XRInputFrame, config: VRMiniGameInputConfiguration): boolean {
-    return [inputFrame.hands.left, inputFrame.hands.right].some((hand) => {
-      if (!hand) return false;
-      for (const name of ['trigger', 'xr-standard-trigger', 'select']) {
-        const state = hand.buttons[name];
-        if (!state) continue;
-        if (typeof state.value === 'number' && Number.isFinite(state.value)) {
-          if (state.value >= config.triggerThreshold) return true;
-        } else if (state.pressed) {
-          return true;
-        }
-      }
-      return false;
-    });
-  }
-
   /** Clears edge state when a session ends, so a stale press cannot carry over. */
   static reset(): void {
-    VRMiniGameInputController.previousTriggerHeld = false;
+    VRMiniGameInputController.previousJumpHeld = false;
   }
 }

@@ -624,7 +624,12 @@ export class IngameControls {
       if(GameState.State != EngineState.RUNNING) return;
       switch(GameState.module.area.miniGame.type){
         case MiniGameType.SWOOPRACE:
-
+          // The swoop's throttle is a gear shift, not a held accelerator: the
+          // OnAccelerate script upshifts when the current gear's speed has been
+          // reached, and sets the new min/max speed, acceleration and tunnel.
+          // This case was empty, so the bike had no throttle on any input path
+          // and every race sat on the line at gear 0.
+          GameState.module.area.miniGame.player.onAccelerate();
         break;
         case MiniGameType.TURRET:
           GameState.module.area.miniGame.player.rotate('x', 1 * delta);
@@ -637,7 +642,7 @@ export class IngameControls {
       if(GameState.State != EngineState.RUNNING) return;
       switch(GameState.module.area.miniGame.type){
         case MiniGameType.SWOOPRACE:
-        
+          GameState.module.area.miniGame.player.onBrake();
         break;
         case MiniGameType.TURRET:
           GameState.module.area.miniGame.player.rotate('x', -1 * delta);

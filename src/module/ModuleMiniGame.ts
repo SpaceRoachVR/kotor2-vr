@@ -102,16 +102,26 @@ export class ModuleMiniGame {
     for(let i = 0; i < this.enemies.length; i++){
       if(this.enemies[i]){
         this.enemies[i].onCreate();
+        this.enemies[i].spawned = true;
       }
     }
 
     for(let i = 0; i < this.obstacles.length; i++){
       if(this.obstacles[i]){
         this.obstacles[i].onCreate();
+        this.obstacles[i].spawned = true;
       }
     }
 
-    this.player.onCreate();
+    if(this.player){
+      this.player.onCreate();
+      // `spawned` is the gate on triggerHeartbeat(), and it is only ever set by
+      // onSpawn(), which the area runs for creatures and party members - never
+      // for minigame objects. So no minigame object had a heartbeat, and on the
+      // swoop the heartbeat script *is* the race: the gear countdown, the lap
+      // timer, the engine sound, the finish. This is the minigame's spawn.
+      this.player.spawned = true;
+    }
   }
 
   async loadMGPlayer(): Promise<void> {
@@ -171,10 +181,15 @@ export class ModuleMiniGame {
   }
 
   runMiniGameScripts(){
+    // OnCreate for the player and the obstacles already ran in
+    // initMiniGameObjects(), which runs just before this; only the enemies are
+    // (re)started here.
     for(let i = 0; i < this.enemies.length; i++){
       const enemy = this.enemies[i];
       const onCreate = enemy.scripts[ModuleObjectScript.MGEnemyOnCreate];
-      if(!onCreate){ return; }
+      // `continue`, not `return`: one enemy without an OnCreate used to abort
+      // the loop, so every enemy after it stayed uninitialised too.
+      if(!onCreate){ continue; }
       onCreate.run(enemy, 0);
     }
   }

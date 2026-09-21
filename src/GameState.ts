@@ -2195,7 +2195,10 @@ export class GameState implements EngineContext {
         type: miniGame.type,
         lateralAcceleration: player.accel_lateral_secs,
         setLateralForce: (force: number) => { player.lateralForce = force; },
-        jump: () => player.jump?.(),
+        // TSL's swoop keeps its jump script in the OnBrake slot; onBrake()
+        // falls back to the engine's own jump when a module ships none.
+        jump: () => (player.onBrake ? player.onBrake() : player.jump?.()),
+        accelerate: () => player.onAccelerate?.(),
         fire: () => player.fire?.(),
         get pitch(){ return player.rotation?.x ?? 0; },
         get yaw(){ return player.rotation?.z ?? 0; },
@@ -3134,12 +3137,22 @@ export class GameState implements EngineContext {
 
   /** Shows the PAUSE overlay only while paused with the in-game overlay up. */
   static syncPauseOverlay(){
+    const modeBeforeOverlay = GameState.Mode;
     if(GameState.State == EngineState.PAUSED && GameState.MenuManager.InGameOverlay.isVisible()){
       if(!GameState.MenuManager.InGamePause.isVisible())
         GameState.MenuManager.InGamePause.show();
     }else{
       if(GameState.MenuManager.InGamePause.isVisible())
         GameState.MenuManager.InGamePause.hide();
+    }
+
+    // The pause overlay draws on top of whichever mode owns the frame; it does
+    // not own that mode. GameMenu.show() assigns the menu's own engineMode, and
+    // InGamePause declares INGAME - so pausing inside a minigame ended the race
+    // outright: MINIGAME stopped being the mode, so the minigame stopped
+    // ticking, and nothing ever set it back on unpause.
+    if(GameState.Mode !== modeBeforeOverlay){
+      GameState.SetEngineMode(modeBeforeOverlay);
     }
   }
 
@@ -3691,6 +3704,22 @@ export class GameState implements EngineContext {
     GameState.updateCurrentCameraPosition();
 
     GameState.updateTime(delta);
+
+    // Tick the module, exactly as UpdateInGame does. Without this the swoop and
+    // the turret never ran at all: `ModuleMiniGame.tick()` is only reached from
+    // `ModuleArea.update()`, which is only reached from `Module.tick()`, and the
+    // one engine mode that owns a minigame was the one mode that never called
+    // it. The bike therefore sat on the start line with no heartbeat - and the
+    // heartbeat script is the whole race, from the gear countdown to the lap
+    // timer - while the turret's guns never came alive.
+    if(
+      GameState.State == EngineState.PAUSED || GameState.MenuManager.activeModals.length
+    ){
+      GameState.module.tickPaused(delta);
+    }else{
+      GameState.module.tick(delta);
+    }
+
     GameState.FadeOverlayManager.Update(delta);
     GameState.updateWorldSystems(delta, GameState.getCurrentPlayer());
 

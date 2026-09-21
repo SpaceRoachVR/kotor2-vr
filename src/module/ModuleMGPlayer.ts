@@ -808,6 +808,17 @@ export class ModuleMGPlayer extends ModuleObject {
     instance.run(this, 0);
   }
 
+  /**
+   * The brake slot. On the TSL swoop it is not a brake at all: 211TEL maps
+   * OnBrake to `onjump`, which calls SWMG_SetJumpSpeed. Falls back to the
+   * engine's own jump when a module ships no script for it.
+   */
+  onBrake(){
+    const instance = this.scripts[ModuleObjectScript.MGPlayerOnBrake];
+    if(!instance){ this.jump(); return; }
+    instance.run(this, 0);
+  }
+
   onHitBullet( bullet: ModuleMGGunBullet ){
     const instance = this.scripts[ModuleObjectScript.MGPlayerOnHitBullet];
     if(!instance){ return; }

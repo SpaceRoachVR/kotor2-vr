@@ -42,6 +42,11 @@ export interface VRMiniGameInputConfiguration {
   readonly oneHandedFullLockOffsetMetres: number;
   /** Below this, steering is treated as centred, so a still hand does not creep. */
   readonly steeringDeadzone: number;
+  /**
+   * One-handed only: thumbstick push away from the player, past which that
+   * hand's stick counts as a jump. Two-handed, jump is the left trigger.
+   */
+  readonly throttleThreshold: number;
 }
 
 export const DEFAULT_MINIGAME_INPUT_CONFIGURATION: VRMiniGameInputConfiguration = {
@@ -50,14 +55,17 @@ export const DEFAULT_MINIGAME_INPUT_CONFIGURATION: VRMiniGameInputConfiguration 
   steeringFullLockHeightMetres: 0.18,
   oneHandedFullLockOffsetMetres: 0.25,
   steeringDeadzone: 0.08,
+  throttleThreshold: 0.6,
 };
 
 export interface VRSwoopIntent {
   readonly grip: MiniGameGripState;
   /** -1 hard left to +1 hard right, already deadzoned and clamped. */
   readonly steer: number;
-  /** Trigger pressed this frame (edge), which the swoop reads as a jump. */
+  /** Jump this frame (edge), so holding the control cannot pogo. */
   readonly jump: boolean;
+  /** Throttle held: the swoop shifts up through its gears. */
+  readonly throttle: boolean;
 }
 
 export interface VRTurretIntent {
@@ -80,6 +88,24 @@ function buttonValue(hand: XRHandInputFrame | undefined, names: readonly string[
     if (button.pressed) return 1;
   }
   return 0;
+}
+
+/**
+ * Thumbstick push away from the player, as a positive number, from whichever
+ * hand is pushing hardest.
+ *
+ * The stick sits on axes 2 and 3 on the profiles that have one and on axes 0
+ * and 1 on the touchpad profiles, matching XRInputRouter's per-profile binding;
+ * reading whichever pair the controller reports keeps this working on both
+ * without the policy needing to know the profile. WebXR reports forward as
+ * negative Y.
+ */
+function stickPush(hand: XRHandInputFrame | undefined): number {
+  if (!hand) return 0;
+  const axes = hand.axes || [];
+  const y = Number.isFinite(axes[3]) && axes[3] !== 0 ? axes[3] : axes[1];
+  if (!Number.isFinite(y)) return 0;
+  return -(y as number);
 }
 
 const SQUEEZE_BUTTONS = ['squeeze', 'grip', 'xr-standard-squeeze'] as const;
@@ -147,16 +173,50 @@ export function resolveSteering(
   return { grip: state, steer: applyDeadzone(clamp(normalised, -1, 1), config.steeringDeadzone) };
 }
 
+/**
+ * Whatever the player is currently holding to mean "jump", so the controller can
+ * take the edge off it. Two-handed that is the left trigger; one-handed there is
+ * no spare trigger, so it is a forward push of that hand's thumbstick.
+ */
+export function swoopJumpControlHeld(
+  frame: XRInputFrame, config: VRMiniGameInputConfiguration,
+): boolean {
+  const { state, hands } = resolveGripState(frame, config);
+  if (state === MiniGameGripState.ONE_HANDED) {
+    return stickPush(hands[0]) >= config.throttleThreshold;
+  }
+  return isTriggerPressed(frame.hands['left'], config);
+}
+
+/**
+ * Swoop controls: the bars steer, the right trigger is the throttle and the left
+ * trigger jumps.
+ *
+ * The throttle is held rather than tapped because it is a gear shift the script
+ * guards by speed - holding it is how the bike climbs through the gears, exactly
+ * as holding the accelerate key does on flatscreen.
+ *
+ * One-handed, that hand's trigger becomes the throttle, since a rider with no
+ * throttle is stranded; the jump moves to a forward push of its thumbstick.
+ */
 export function resolveSwoopIntent(
   frame: XRInputFrame,
-  previousTriggerHeld: boolean,
+  previousJumpHeld: boolean,
   config: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION,
 ): VRSwoopIntent {
   const { grip, steer } = resolveSteering(frame, config);
-  const triggerHeld = HAND_ROLES
-    .some((role) => isTriggerPressed(frame.hands[role], config));
-  // A jump is the press, not the hold: holding the trigger must not pogo.
-  return { grip, steer, jump: triggerHeld && !previousTriggerHeld };
+  const { state, hands } = resolveGripState(frame, config);
+
+  // Hands off the bars is not riding, so nothing the triggers do counts.
+  const throttle = state === MiniGameGripState.NONE
+    ? false
+    : state === MiniGameGripState.ONE_HANDED
+      ? isTriggerPressed(hands[0], config)
+      : isTriggerPressed(frame.hands['right'], config);
+
+  // A jump is the press, not the hold: holding the control must not pogo.
+  const jumpHeld = swoopJumpControlHeld(frame, config);
+  return { grip, steer, jump: jumpHeld && !previousJumpHeld, throttle };
 }
 
 /**
