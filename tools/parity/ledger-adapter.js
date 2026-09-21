@@ -2,7 +2,7 @@
 
 const DEFECT_CLASSIFICATION = 'engine-defect';
 const fs = require('fs');
-const { validateCanonicalCaptureManifest } = require('./parity-contract');
+const { validateCanonicalCaptureManifest, validateCaptureManifestPaths, resolveRetainedArtifactPath } = require('./parity-contract');
 const SEVERITIES = new Set(['blocker', 'critical', 'major', 'minor', 'cosmetic']);
 const SEVERITY_ORDER = ['cosmetic', 'minor', 'major', 'critical', 'blocker'];
 
@@ -149,9 +149,10 @@ function toParityDefectRecords(report, reportPath, options = {}) {
   const reportReference = nonEmptyString(reportPath, 'report path');
 
   if (!report.captureManifest) throw new TypeError('Parity ledger adapter requires a verified canonical capture manifest');
+  validateCaptureManifestPaths(report.captureManifest);
   const readArtifact = typeof options.readArtifact === 'function'
     ? options.readArtifact
-    : (artifactPath) => fs.readFileSync(artifactPath, 'utf8');
+    : (artifactPath) => fs.readFileSync(resolveRetainedArtifactPath(artifactPath), 'utf8');
   const artifacts = {};
   for (const artifact of Object.values(report.captureManifest.artifacts || {})) {
     if (artifact && artifact.path) artifacts[artifact.path] = readArtifact(artifact.path);

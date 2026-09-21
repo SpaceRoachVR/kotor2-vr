@@ -490,6 +490,19 @@ describe('asset service', () => {
     expect(swapped.status).toBe(409);
   });
 
+  test('fails closed when the game document has zero or multiple mutable runtime scripts', async () => {
+    await start();
+    fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), '<!doctype html><title>KOTOR II VR</title>');
+    const missing = await request('/game/index.html');
+    fs.writeFileSync(path.join(distRoot, 'game', 'index.html'), '<script src="../KotOR.js"></script><script src="../KotOR.js"></script>');
+    const duplicate = await request('/game/index.html');
+
+    expect(missing.status).toBe(409);
+    expect(duplicate.status).toBe(409);
+    expect(await missing.text()).not.toContain('../KotOR.js');
+    expect(await duplicate.text()).not.toContain('../KotOR.js');
+  });
+
   test('supports idempotent start and close, then restarts on the same service instance', async () => {
     const reusableService: RunningService = createAssetService({
       assetRoot,

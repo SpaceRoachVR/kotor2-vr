@@ -34,6 +34,19 @@ function reportWith(findings) {
   };
 }
 
+test('rejects external-prefix manifest paths before calling any artifact reader', () => {
+  const rawArtifacts = { engine: { sha256: fixtureHash(fixtureEngine) }, retail: { sha256: fixtureHash(fixtureRetail) }, comparison: { sha256: fixtureHash('{}') } };
+  const captureId = deriveCaptureId('101PER', rawArtifacts);
+  const artifacts = Object.fromEntries(Object.entries(rawArtifacts).map(([name, entry]) => [name, {
+    ...entry, path: `C:/untrusted-parent/tools/parity/out/captures/101per/${captureId}/${name}.json`,
+  }]));
+  let readCount = 0;
+  assert.throws(() => promote({ module: '101PER', captureManifest: {
+    schema: 'kotor2-vr/parity-capture@1', module: '101PER', captureId, artifacts,
+  } }, 'report.json', { readArtifact: () => { readCount++; return '{}'; } }), /content-addressed capture directory/i);
+  assert.equal(readCount, 0);
+});
+
 function assertImmutableCaptureReferences(references, expectedFiles) {
   assert.deepEqual(references.map((reference) => reference.split('/').pop()).sort(), [...expectedFiles].sort());
   for (const reference of references) {

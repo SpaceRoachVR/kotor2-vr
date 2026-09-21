@@ -10,6 +10,11 @@ steps. Canonical engine evidence must begin through the visible fresh-new-game
 route (never the sweep's save bootstrap), must not be save-derived, and must
 name the module and SHA-256 of the bundle actually served to the harness.
 Local captures also record checkout commit and bundle modification time.
+Bundle provenance comes from CDP observers installed before navigation: the
+completed network response and Chrome's parsed main-frame script source must
+have the same SHA-256 and match the content-addressed URL. DOM and performance
+APIs cannot supply this identity. Missing, duplicate, failed, or uncorrelated
+runtime observations fail closed, including captures requested through `--url`.
 `--url` is hashed from that URL and records neither local commit nor mtime, so
 it never borrows the local checkout's bundle identity. Evidence records must name their
 module-scoped, typed resource identity, hash, and authority. The available finding classifications are deliberately
@@ -40,7 +45,12 @@ tree after recording these SHA-256 values:
 The fixed `<module>.engine.json`, `<module>.retail.json`, and report files are
 latest-capture convenience pointers only. `compare.js` freezes every compared
 engine, retail, optional sidecar, and report into a content-addressed
-`out/captures/<module>/<sha256>/` manifest. Ledger promotion accepts only that
+`out/captures/<module>/<sha256>/` manifest. Artifacts use workspace-relative
+POSIX paths to the direct `engine.json`, `retail.json`, `comparison.json`, and
+optional `sidecar.json` files. Promotion resolves them against this checkout
+regardless of the process working directory and rejects foreign prefixes,
+traversal, unexpected artifact keys, symlinks, and junctions. Legacy absolute
+artifact manifests must be recaptured. Ledger promotion accepts only that
 verified manifest and emits those immutable artifact paths, so an existing
 ledger record never changes when a later capture refreshes the fixed files. Do
 not commit retail assets, extracted NCS/NSS, GUI exports, or save data there.

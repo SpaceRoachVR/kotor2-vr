@@ -217,17 +217,31 @@ test('an ordinary observed model with no requested animation still reports missi
 
 test('retains immutable capture-specific copies instead of treating latest module files as evidence', () => {
   const fs = require('fs'); const os = require('os'); const path = require('path');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-capture-'));
+  const root = path.join(__dirname, 'out');
+  fs.mkdirSync(root, { recursive: true });
+  const sourceRoot = fs.mkdtempSync(path.join(root, 'parity-capture-test-'));
+  let retainedDirectory;
   try {
-    fs.writeFileSync(path.join(root, 'engine.json'), JSON.stringify({ module: '101per', engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } }));
-    fs.writeFileSync(path.join(root, 'retail.json'), JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] }));
-    fs.writeFileSync(path.join(root, 'report.json'), JSON.stringify({ module: '101per' }));
-    const manifest = retainCaptureArtifacts({ module: '101PER', root, files: { engine: 'engine.json', retail: 'retail.json', comparison: 'report.json' } });
+    fs.writeFileSync(path.join(sourceRoot, 'engine.json'), JSON.stringify({ module: '101per', fixture: path.basename(sourceRoot), engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } }));
+    fs.writeFileSync(path.join(sourceRoot, 'retail.json'), JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] }));
+    fs.writeFileSync(path.join(sourceRoot, 'report.json'), JSON.stringify({ module: '101per', findings: [{ classification: 'engine-defect', code: 'fixture:parity', expected: 1, observed: 2 }] }));
+    const files = { engine: path.relative(root, path.join(sourceRoot, 'engine.json')), retail: path.relative(root, path.join(sourceRoot, 'retail.json')), comparison: path.relative(root, path.join(sourceRoot, 'report.json')) };
+    assert.throws(() => retainCaptureArtifacts({ module: '101PER', root: sourceRoot, files }), /workspace capture root/i);
+    const manifest = retainCaptureArtifacts({ module: '101PER', root, files });
+    retainedDirectory = path.dirname(manifest.path);
     assert.match(manifest.path, /captures[\\/]101per[\\/][a-f0-9]{64}[\\/]capture\.json$/);
     assert.ok(fs.existsSync(manifest.path));
     assert.notEqual(path.dirname(manifest.path), root);
     assert.ok(manifest.manifest.artifacts.comparison.sha256);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    const records = require('./ledger-adapter').toParityDefectRecords({ module: '101PER', captureManifest: manifest.manifest }, 'report.json');
+    assert.equal(records.length, 1);
+    for (const reference of records[0].evidenceRefs) {
+      assert.ok(fs.statSync(require('./parity-contract').resolveRetainedArtifactPath(reference)).isFile());
+    }
+  } finally {
+    fs.rmSync(sourceRoot, { recursive: true, force: true });
+    if (retainedDirectory) fs.rmSync(retainedDirectory, { recursive: true, force: true });
+  }
 });
 
 test('a blocked authored behavior-chain probe is reported as missing evidence instead of inventing a result', () => {

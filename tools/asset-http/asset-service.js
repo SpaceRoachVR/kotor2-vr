@@ -183,8 +183,12 @@ class AssetService {
     const afterRead = fs.statSync(resolved.path);
     if (!sameFileIdentity(resolved.stats, afterRead)) throw new HttpError(409, 'game document changed during read');
     const bundle = this.readRuntimeBundle();
+    const runtimeScriptPattern = /<script\b[^>]*\bsrc=(['"])\.\.\/KotOR\.js\1[^>]*>\s*<\/script>/gi;
+    if ([...document.matchAll(runtimeScriptPattern)].length !== 1) {
+      return sendError(response, 409, 'runtime document does not contain exactly one KotOR.js script');
+    }
     const html = document.replace(
-      /<script\b[^>]*\bsrc=(['"])\.\.\/KotOR\.js\1[^>]*>\s*<\/script>/i,
+      runtimeScriptPattern,
       `<script type="text/javascript" src="/bundles/${bundle.sha256}/KotOR.js" integrity="${bundle.integrity}" crossorigin="anonymous"></script>`,
     );
     return sendBuffer(request, response, Buffer.from(html, 'utf8'), '.html', 'no-store');

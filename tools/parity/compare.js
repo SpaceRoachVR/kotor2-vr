@@ -18,7 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { deriveCaptureId } = require('./parity-contract');
+const { deriveCaptureId, assertUnlinkedWorkspacePath, resolveRetainedArtifactPath } = require('./parity-contract');
 
 const OUT_DIR = path.join(__dirname, 'out');
 
@@ -525,6 +525,7 @@ function assertCaptureSource(root, fileName) {
  * the returned manifest and its exact retained copies.
  */
 function retainCaptureArtifacts({ module, root = OUT_DIR, files }) {
+  if (path.resolve(root) !== OUT_DIR) throw new TypeError('Retention requires this workspace capture root');
   const normalizedModule = String(module || '').trim().toLowerCase();
   if (!/^[a-z0-9_]{1,16}$/.test(normalizedModule)) throw new TypeError('Capture manifest requires a module identifier');
   if (!files || typeof files !== 'object') throw new TypeError('Capture manifest requires artifact files');
@@ -536,18 +537,30 @@ function retainCaptureArtifacts({ module, root = OUT_DIR, files }) {
     Object.entries(sourceHashes).map(([key, sha256]) => [key, { sha256 }]),
   ));
   const destination = path.join(path.resolve(root), 'captures', normalizedModule, captureId);
-  fs.mkdirSync(destination, { recursive: true });
+  assertUnlinkedWorkspacePath(__dirname);
+  let directory = __dirname;
+  for (const segment of ['out', 'captures', normalizedModule, captureId]) {
+    directory = path.join(directory, segment);
+    try { fs.mkdirSync(directory); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    assertUnlinkedWorkspacePath(directory);
+  }
   const artifacts = {};
   for (const [key, source] of Object.entries(sources)) {
-    const artifactPath = path.join(destination, path.basename(source));
+    const artifactPath = path.join(destination, `${key}.json`);
+    const reference = path.posix.join('tools', 'parity', 'out', 'captures', normalizedModule, captureId, `${key}.json`);
     if (!fs.existsSync(artifactPath)) fs.copyFileSync(source, artifactPath, fs.constants.COPYFILE_EXCL);
+    resolveRetainedArtifactPath(reference);
     if (sha256File(artifactPath) !== sourceHashes[key]) throw new Error(`Retained ${key} artifact hash mismatch`);
-    artifacts[key] = { path: artifactPath, sha256: sourceHashes[key] };
+    artifacts[key] = {
+      path: reference,
+      sha256: sourceHashes[key],
+    };
   }
   const manifest = { schema: 'kotor2-vr/parity-capture@1', module: normalizedModule.toUpperCase(), captureId, artifacts };
   const manifestPath = path.join(destination, 'capture.json');
   const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
   if (fs.existsSync(manifestPath)) {
+    assertUnlinkedWorkspacePath(manifestPath, true);
     if (fs.readFileSync(manifestPath, 'utf8') !== serialized) throw new Error(`Capture manifest collision: ${manifestPath}`);
   } else {
     fs.writeFileSync(manifestPath, serialized, { flag: 'wx' });

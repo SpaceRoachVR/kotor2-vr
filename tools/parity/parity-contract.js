@@ -3,8 +3,12 @@ const CLASSIFICATIONS = Object.freeze([
   'missing-evidence', 'variable-runtime-output',
 ]);
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const SHA256 = /^[a-f0-9]{64}$/i;
 const EVIDENCE_AUTHORITIES = Object.freeze({ kotormcp: 'parsed-retail', holocron: 'human-review', dencs: 'hypothesis' });
+const CAPTURE_ARTIFACT_NAMES = Object.freeze(['engine', 'retail', 'comparison', 'sidecar']);
+const WORKSPACE_ROOT = path.resolve(__dirname, '..', '..');
 
 function requireSha256(value, field) {
   if (typeof value !== 'string' || !SHA256.test(value)) throw new TypeError(`${field} requires a SHA-256 hash`);
@@ -26,15 +30,49 @@ function deriveCaptureId(module, artifacts) {
 
 function requireCaptureArtifactPath(artifact, artifactName, module, captureId) {
   if (!artifact || typeof artifact.path !== 'string' || !artifact.path.trim()) throw new TypeError(`Canonical capture requires retained ${artifactName} artifact`);
-  const normalizedPath = artifact.path.replace(/\\/g, '/');
-  const expectedDirectory = `tools/parity/out/captures/${module.toLowerCase()}/${captureId}/`;
-  const directoryIndex = normalizedPath.toLowerCase().lastIndexOf(expectedDirectory);
-  if (directoryIndex < 0 || directoryIndex + expectedDirectory.length >= normalizedPath.length) {
+  const normalizedModule = module.toLowerCase();
+  const expectedDirectory = `tools/parity/out/captures/${normalizedModule}/${captureId}/`;
+  // Manifest paths are deliberately workspace-relative POSIX paths.  Accepting
+  // an absolute suffix (or a path merely containing this directory) lets a
+  // foreign capture masquerade as retained evidence.
+  if (artifact.path.includes('\\') || path.posix.normalize(artifact.path) !== artifact.path
+      || !artifact.path.startsWith(expectedDirectory)) {
     throw new TypeError(`Canonical capture ${artifactName} artifact is not beneath its content-addressed capture directory`);
   }
-  const suffix = normalizedPath.slice(directoryIndex + expectedDirectory.length);
-  if (suffix.includes('/') || suffix === 'capture.json') throw new TypeError(`Canonical capture ${artifactName} artifact path is invalid`);
+  const suffix = artifact.path.slice(expectedDirectory.length);
+  if (suffix !== `${artifactName}.json`) {
+    throw new TypeError(`Canonical capture ${artifactName} artifact path is invalid`);
+  }
   return artifact.path;
+}
+
+/** Resolve retained evidence against this checkout, never the caller's cwd. */
+function resolveRetainedArtifactPath(reference) {
+  if (typeof reference !== 'string'
+      || !/^tools\/parity\/out\/captures\/[a-z0-9_]{1,16}\/[a-f0-9]{64}\/(engine|retail|comparison|sidecar)\.json$/.test(reference)) {
+    throw new TypeError('Canonical capture artifact path is invalid');
+  }
+  return assertUnlinkedWorkspacePath(path.resolve(WORKSPACE_ROOT, reference), true);
+}
+
+/** Also used before retention so a pre-existing junction cannot redirect writes. */
+function assertUnlinkedWorkspacePath(absolutePath, requireFile = false) {
+  const relative = path.relative(WORKSPACE_ROOT, absolutePath);
+  if (!relative || path.isAbsolute(relative) || relative.split(path.sep).includes('..')) {
+    throw new TypeError('Canonical capture path escaped the workspace');
+  }
+  let current = fs.realpathSync(WORKSPACE_ROOT);
+  const segments = relative.split(path.sep);
+  for (let index = 0; index < segments.length; index++) {
+    current = path.join(current, segments[index]);
+    const stats = fs.lstatSync(current);
+    if (stats.isSymbolicLink() || fs.realpathSync(current) !== current) {
+      throw new TypeError('Canonical capture path contains a symlink or reparse point');
+    }
+    const isFile = requireFile && index === segments.length - 1;
+    if (isFile ? !stats.isFile() : !stats.isDirectory()) throw new TypeError('Canonical capture path has an unexpected file type');
+  }
+  return path.resolve(WORKSPACE_ROOT, relative);
 }
 
 function createCaptureIdentity(input) {
@@ -100,7 +138,7 @@ function validateManifestSidecar(sidecar, retail, module) {
   }
 }
 
-function validateCanonicalCaptureManifest(manifest, artifacts) {
+function validateCaptureManifestPaths(manifest) {
   if (!manifest || manifest.schema !== 'kotor2-vr/parity-capture@1') throw new TypeError('Canonical capture manifest has an unsupported schema');
   const module = String(manifest.module || '').trim().toUpperCase();
   if (!module) throw new TypeError('Canonical capture manifest requires module');
@@ -110,6 +148,15 @@ function validateCanonicalCaptureManifest(manifest, artifacts) {
   if (!captureId) throw new TypeError('Canonical capture manifest requires a content-addressed captureId');
   const manifestArtifacts = manifest.artifacts;
   if (deriveCaptureId(module, manifestArtifacts) !== captureId) throw new TypeError('Canonical capture manifest captureId does not match retained artifact hashes');
+  for (const [name, artifact] of Object.entries(manifestArtifacts)) {
+    if (!CAPTURE_ARTIFACT_NAMES.includes(name)) throw new TypeError('Canonical capture manifest contains an unsupported artifact');
+    requireCaptureArtifactPath(artifact, name, module, captureId);
+  }
+  return { module, captureId, manifestArtifacts };
+}
+
+function validateCanonicalCaptureManifest(manifest, artifacts) {
+  const { module, captureId, manifestArtifacts } = validateCaptureManifestPaths(manifest);
   const engine = artifactText(artifacts, manifestArtifacts && manifestArtifacts.engine, 'engine', module, captureId);
   const retail = artifactText(artifacts, manifestArtifacts && manifestArtifacts.retail, 'retail', module, captureId);
   const comparison = artifactText(artifacts, manifestArtifacts && manifestArtifacts.comparison, 'comparison', module, captureId);
@@ -147,4 +194,7 @@ function validateEvidenceRecord(record) {
   return Object.freeze({ ...record });
 }
 
-module.exports = { CLASSIFICATIONS, createCaptureIdentity, validateEvidenceRecord, validateCanonicalCaptureManifest, deriveCaptureId };
+module.exports = {
+  CLASSIFICATIONS, createCaptureIdentity, validateEvidenceRecord, validateCanonicalCaptureManifest, deriveCaptureId,
+  validateCaptureManifestPaths, resolveRetainedArtifactPath, assertUnlinkedWorkspacePath,
+};

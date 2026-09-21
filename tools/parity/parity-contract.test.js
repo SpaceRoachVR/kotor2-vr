@@ -103,38 +103,33 @@ test('a remote serving bundle does not inherit checkout commit or mtime identity
   assert.equal(identity.bundleMtime, null);
 });
 
-test('serving bundle identity follows the loaded script across a launch redirect without exposing tokens', async () => {
-  let source = '';
-  const identity = await identifyServingBundle({ evaluate: async (expression) => {
-    source = expression;
-    // /launch redirects to /game/index.html, whose ../KotOR.js script resolves
-    // to this URL.  The harness returns the loaded script URL, not a guessed
-    // document-relative path.
-    return { url: `http://127.0.0.1:9447/bundles/${'a'.repeat(64)}/KotOR.js`, sha256: 'a'.repeat(64) };
-  } });
+test('serving bundle identity uses trusted CDP observation rather than page-owned APIs', async () => {
+  const identity = await identifyServingBundle({ getTrustedServingBundle: async () => (
+    { url: `http://127.0.0.1:9447/bundles/${'a'.repeat(64)}/KotOR.js`, sha256: 'a'.repeat(64) }
+  ) });
   assert.equal(identity.sha256, 'a'.repeat(64));
-  assert.match(source, /document\.querySelectorAll\('script\[src\]'\)/);
-  assert.match(source, /entry\.initiatorType === 'script'/);
-  assert.match(source, /immutable content-addressed runtime route/);
-  assert.match(source, /script integrity does not bind/);
-  assert.doesNotMatch(source, /fetch\(/);
-  assert.doesNotMatch(source, /new URL\('KotOR\.js', window\.location\.href\)/);
-  assert.doesNotMatch(source, /token|authorization|cookie/i);
 });
 
-test('serving bundle identity rejects a token-bearing URL returned by an untrusted harness adapter', async () => {
+test('serving bundle identity rejects a token-bearing URL returned by trusted observation', async () => {
   await assert.rejects(
-    identifyServingBundle({ evaluate: async () => ({ url: 'http://127.0.0.1:9447/KotOR.js?token=secret', sha256: 'a'.repeat(64) }) }),
+    identifyServingBundle({ getTrustedServingBundle: async () => ({ url: 'http://127.0.0.1:9447/KotOR.js?token=secret', sha256: 'a'.repeat(64) }) }),
     /unsafe serving bundle URL/i,
   );
 });
 
 test('serving bundle identity fails closed when a bundle swap cannot match the executed content-addressed URL', async () => {
   await assert.rejects(
-    identifyServingBundle({ evaluate: async () => ({
+    identifyServingBundle({ getTrustedServingBundle: async () => ({
       url: `http://127.0.0.1:9447/bundles/${'a'.repeat(64)}/KotOR.js`, sha256: 'b'.repeat(64),
     }) }),
     /immutable executed-byte identity/i,
+  );
+});
+
+test('external URLs cannot claim canonical serving provenance through page-provided data', async () => {
+  await assert.rejects(
+    identifyServingBundle({ evaluate: async () => ({ url: `https://remote.invalid/bundles/${'a'.repeat(64)}/KotOR.js`, sha256: 'a'.repeat(64) }) }),
+    /trusted external CDP observation/i,
   );
 });
 
@@ -219,5 +214,44 @@ test('canonical manifest rejects mutable, forged, and cross-capture artifact pat
   const retained = Object.fromEntries(Object.entries(validPaths).map(([name, filePath]) => [filePath, sourceContents[name]]));
   assert.throws(() => validateCanonicalCaptureManifest(makeManifest({ ...validPaths, engine: 'tools/parity/out/101per.engine.json' }), retained), /content-addressed capture directory/i);
   assert.throws(() => validateCanonicalCaptureManifest(makeManifest({ ...validPaths, retail: `tools/parity/out/captures/101per/${'c'.repeat(64)}/retail.json` }), retained), /content-addressed capture directory/i);
+  assert.throws(() => validateCanonicalCaptureManifest(makeManifest({ ...validPaths, engine: `C:/foreign/tools/parity/out/captures/101per/${captureId}/engine.json` }), retained), /content-addressed capture directory/i);
+  assert.throws(() => validateCanonicalCaptureManifest(makeManifest({ ...validPaths, retail: `tools/parity/out/captures/101per/${captureId}/../retail.json` }), retained), /content-addressed capture directory/i);
+  assert.throws(() => validateCanonicalCaptureManifest(makeManifest({ ...validPaths, comparison: `tools/parity/out/captures/101per/${captureId}/nested/comparison.json` }), retained), /artifact path is invalid/i);
+  assert.throws(() => validateCanonicalCaptureManifest(makeManifest({ ...validPaths, comparison: `tools\\parity\\out\\captures\\101per\\${captureId}\\comparison.json` }), retained), /content-addressed capture directory/i);
   assert.throws(() => validateCanonicalCaptureManifest(makeManifest(validPaths, 'd'.repeat(64)), retained), /captureId does not match/i);
+  assert.throws(() => validateCanonicalCaptureManifest(makeManifest({ ...validPaths, engine: `${validPaths.engine}:stream` }), retained), /artifact path is invalid/i);
+  const extra = makeManifest(validPaths);
+  extra.artifacts.unverified = { path: 'C:/untrusted-parent/evidence.json', sha256: 'e'.repeat(64) };
+  assert.throws(() => validateCanonicalCaptureManifest(extra, retained), /unsupported artifact/i);
+});
+
+test('retained artifact filesystem resolution rejects junctions and does not depend on cwd', () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const { resolveRetainedArtifactPath } = require('./parity-contract');
+  const captureId = require('crypto').randomBytes(32).toString('hex');
+  const moduleRoot = path.resolve(__dirname, 'out/captures/path_test');
+  const captureRoot = path.join(moduleRoot, captureId);
+  const foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-path-test-'));
+  const reference = `tools/parity/out/captures/path_test/${captureId}/engine.json`;
+  fs.mkdirSync(moduleRoot, { recursive: true });
+  try {
+    fs.writeFileSync(path.join(foreignRoot, 'engine.json'), '{}');
+    fs.symlinkSync(foreignRoot, captureRoot, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.throws(() => resolveRetainedArtifactPath(reference), /symlink|reparse/i);
+    fs.unlinkSync(captureRoot);
+    fs.mkdirSync(captureRoot);
+    fs.writeFileSync(path.join(captureRoot, 'engine.json'), '{}');
+    assert.equal(resolveRetainedArtifactPath(reference), path.join(captureRoot, 'engine.json'));
+    const fromForeignCwd = require('child_process').execFileSync(process.execPath, [
+      '-e', 'process.stdout.write(require(process.argv[1]).resolveRetainedArtifactPath(process.argv[2]))',
+      path.join(__dirname, 'parity-contract.js'), reference,
+    ], { cwd: foreignRoot, encoding: 'utf8' });
+    assert.equal(fromForeignCwd, path.join(captureRoot, 'engine.json'));
+    assert.throws(() => resolveRetainedArtifactPath(`${reference}:stream`), /artifact path/i);
+    assert.throws(() => resolveRetainedArtifactPath(`C:/untrusted-parent/${reference}`), /artifact path/i);
+  } finally {
+    if (fs.existsSync(captureRoot) && fs.lstatSync(captureRoot).isSymbolicLink()) fs.unlinkSync(captureRoot);
+    else fs.rmSync(captureRoot, { recursive: true, force: true });
+    fs.rmSync(foreignRoot, { recursive: true, force: true });
+  }
 });

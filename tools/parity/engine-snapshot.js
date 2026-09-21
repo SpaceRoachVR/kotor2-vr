@@ -153,30 +153,10 @@ async function bootstrapFreshNewGame(harness, log) {
 }
 
 async function identifyServingBundle(harness) {
-  if (!harness || typeof harness.evaluate !== 'function') throw new TypeError('Cannot identify serving build without an authenticated browser harness');
-  const identity = await harness.evaluate(`(async () => {
-    // Do not infer the bundle from the final document URL.  /launch may redirect
-    // to a nested page whose script intentionally resolves via ../KotOR.js.
-    // The browser has already resolved and loaded the serving script, so bind
-    // provenance to that source URL and its matching resource-timing entry.
-    const candidates = Array.from(document.querySelectorAll('script[src]')).filter((script) => {
-      try { return new URL(script.src).pathname.toLowerCase().endsWith('/kotor.js'); } catch (_) { return false; }
-    });
-    if (candidates.length !== 1) throw new Error('Expected exactly one loaded KotOR.js script');
-    const sourceUrl = new URL(candidates[0].src);
-    if (sourceUrl.origin !== window.location.origin || sourceUrl.username || sourceUrl.password || sourceUrl.search || sourceUrl.hash) {
-      throw new Error('KotOR.js source URL is not safe to retain for canonical provenance');
-    }
-    const url = sourceUrl.toString();
-    const pathMatch = /^\/bundles\/([a-f0-9]{64})\/KotOR\.js$/.exec(sourceUrl.pathname);
-    if (!pathMatch) throw new Error('KotOR.js was not loaded from an immutable content-addressed runtime route');
-    const sha256 = pathMatch[1].toLowerCase();
-    const integrity = 'sha256-' + btoa(sha256.match(/../g).map((hex) => String.fromCharCode(parseInt(hex, 16))).join(''));
-    if (candidates[0].integrity !== integrity) throw new Error('KotOR.js script integrity does not bind the executed runtime bytes');
-    const loaded = performance.getEntriesByType('resource').some((entry) => entry.initiatorType === 'script' && entry.name === url);
-    if (!loaded) throw new Error('KotOR.js source is not associated with a loaded script resource');
-    return { url, sha256 };
-  })()`);
+  if (!harness || typeof harness.getTrustedServingBundle !== 'function') {
+    throw new TypeError('Canonical serving build identification requires trusted external CDP observation');
+  }
+  const identity = await harness.getTrustedServingBundle();
   if (!identity || typeof identity.url !== 'string' || !/^[a-f0-9]{64}$/i.test(identity.sha256 || '')) {
     throw new Error('Cannot identify serving build from authenticated browser response');
   }
@@ -425,16 +405,16 @@ async function main() {
     service = await startAssetService();
     url = service.url;
   }
-  const harness = new VrHarness({ port: args.port });
+  const harness = new VrHarness({ port: args.port, observeServingBundle: true });
   const log = (line) => console.log(line);
   try {
     await harness.launch(url);
-    const servingBundle = await identifyServingBundle(harness);
     await bootstrapFreshNewGame(harness, log);
     log(`loading ${args.module}...`);
     const snapshot = await harness.evaluate(buildSnapshotSource(args.module), { timeoutMs: LOAD_TIMEOUT_MS + 60_000 });
     snapshot.bootstrap = 'new-game-ui';
     const loadedState = assertModuleLoadResult({ state: snapshot, error: snapshot && snapshot.error }, args.module);
+    const servingBundle = await identifyServingBundle(harness);
 
     // Which build was measured: tools/build-stamp.js writes dist/.build-stamp.
     const dist = path.join(__dirname, '..', '..', 'dist');
