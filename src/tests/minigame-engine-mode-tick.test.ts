@@ -133,3 +133,45 @@ describe('the swoop has a throttle', () => {
     expect(body).toMatch(/this\.jump\(\)/);
   });
 });
+
+/**
+ * A minigame player rides a track node: its own `position` stays at the local
+ * origin for the whole race while the container's world matrix is what moves.
+ * The VR rig anchors to getPlayerPosition(), so in a minigame it parked the
+ * rider at the world origin — measured in-headset on 211TEL: rig at y 0.1 with
+ * the bike at y -183 and climbing, no bike in sight and the track streaming
+ * past.
+ */
+describe('the VR rig rides the minigame vehicle', () => {
+  const gameState = read('GameState.ts');
+  // Not bodyOf(): the return type annotation carries braces of its own, which
+  // would close the body before it began.
+  const seatAt = gameState.indexOf('public static getMiniGameSeat()');
+  const seat = gameState.slice(seatAt, gameState.indexOf('public static getCurrentPlayer()', seatAt));
+
+  test('the seat comes from the container world matrix, not the local position', () => {
+    expect(seat).toMatch(/container\.updateMatrixWorld\(true\)/);
+    expect(seat).toMatch(/matrixWorld\.decompose/);
+  });
+
+  test('it only applies inside a minigame', () => {
+    expect(seat).toMatch(/GameState\.Mode != EngineMode\.MINIGAME/);
+  });
+
+  test('facing is the heading of travel, less the 90 degrees VRSpike adds back', () => {
+    expect(seat).toMatch(/set\(0, 1, 0\)/);
+    expect(seat).toMatch(/Math\.atan2\([\s\S]*?\)\s*- Math\.PI \/ 2/);
+  });
+
+  test('the position and facing hooks both consult it', () => {
+    for (const hook of ['getPlayerPosition', 'getFacing']) {
+      const at = gameState.indexOf(`      ${hook}: () =>`);
+      expect(at).toBeGreaterThan(-1);
+      expect(gameState.slice(at, at + 260)).toMatch(/getMiniGameSeat\(\)/);
+    }
+  });
+
+  test('VRSpike still yaws the rig by facing + 90 degrees, which is what that assumes', () => {
+    expect(read('vr/VRSpike.ts')).toMatch(/facing \+ Math\.PI \/ 2 \+ VRSpike\.yawOffset/);
+  });
+});

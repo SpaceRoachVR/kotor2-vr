@@ -2217,8 +2217,16 @@ export class GameState implements EngineContext {
     VRSpike.install(GameState.renderer, GameState.scene, {
 
       update: (timestamp, source) => GameState.Update(timestamp, source),
-      getPlayerPosition: () => GameState.getCurrentPlayer()?.position ?? null,
-      getFacing: () => FollowerCamera.facing,
+      getPlayerPosition: () => {
+        const miniGameSeat = GameState.getMiniGameSeat();
+        if (miniGameSeat) return miniGameSeat.position;
+        return GameState.getCurrentPlayer()?.position ?? null;
+      },
+      getFacing: () => {
+        const miniGameSeat = GameState.getMiniGameSeat();
+        if (miniGameSeat) return miniGameSeat.facing;
+        return FollowerCamera.facing;
+      },
       getPlayerFacing: () => GameState.getCurrentPlayer()?.rotation.z ?? null,
       getHeldVisuals: () => {
         const player = GameState.getCurrentPlayer();
@@ -3154,6 +3162,46 @@ export class GameState implements EngineContext {
     if(GameState.Mode !== modeBeforeOverlay){
       GameState.SetEngineMode(modeBeforeOverlay);
     }
+  }
+
+  /**
+   * Where the rider sits in a minigame, in world space, or null outside one.
+   *
+   * A minigame player rides a track node: its own `position` stays at the local
+   * origin for the whole race while the container's world matrix is what moves.
+   * Anchoring the VR rig to `position` therefore left the rider parked at the
+   * world origin watching the track stream past hundreds of units away, with no
+   * bike anywhere in sight.
+   *
+   * Facing is taken from the container's world +Y axis, which is the direction
+   * of travel (measured on 211TEL: the bike moves +513 on Y with its +Y axis at
+   * yaw pi/2). VRSpike yaws the rig by `facing + pi/2`, matching how KOTOR
+   * renders its camera at bearing + 90 degrees, so the bearing it wants is that
+   * heading minus pi/2.
+   */
+  private static miniGameSeatPosition = new THREE.Vector3();
+  private static miniGameSeatQuaternion = new THREE.Quaternion();
+  private static miniGameSeatScale = new THREE.Vector3();
+  private static miniGameSeatForward = new THREE.Vector3();
+  private static miniGameSeat: { position: THREE.Vector3; facing: number } = {
+    position: GameState.miniGameSeatPosition, facing: 0,
+  };
+
+  public static getMiniGameSeat(): { position: THREE.Vector3; facing: number } | null {
+    if(GameState.Mode != EngineMode.MINIGAME){ return null; }
+    const container = (GameState.module?.area?.miniGame?.player as any)?.container;
+    if(!container){ return null; }
+    container.updateMatrixWorld(true);
+    container.matrixWorld.decompose(
+      GameState.miniGameSeatPosition,
+      GameState.miniGameSeatQuaternion,
+      GameState.miniGameSeatScale,
+    );
+    GameState.miniGameSeatForward.set(0, 1, 0).applyQuaternion(GameState.miniGameSeatQuaternion);
+    GameState.miniGameSeat.facing = Math.atan2(
+      GameState.miniGameSeatForward.y, GameState.miniGameSeatForward.x,
+    ) - Math.PI / 2;
+    return GameState.miniGameSeat;
   }
 
   public static getCurrentPlayer(): ModuleCreature {
