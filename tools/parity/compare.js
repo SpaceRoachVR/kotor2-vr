@@ -106,6 +106,32 @@ function linkEvidence(finding, evidenceRecords, evidencePath) {
   return { ...finding, evidenceRefs: [...new Set([...(finding.evidenceRefs || []), linkedPath])] };
 }
 
+/** Resolve a typed source against captured retail inputs, never a display label. */
+function retailIdentity(snapshot, identity) {
+  if (!identity || typeof identity.resref !== 'string' || typeof identity.restype !== 'string') return null;
+  if (identity.sha256 !== undefined && (typeof identity.sha256 !== 'string' || !SHA256.test(identity.sha256))) return null;
+  const resref = identity.resref.trim().toLowerCase();
+  const restype = identity.restype.trim().toUpperCase();
+  if (!resref || !restype || !Array.isArray(snapshot.retailInputs)) return null;
+  const matches = snapshot.retailInputs.filter((input) => input
+    && typeof input.resref === 'string' && input.resref.toLowerCase() === resref
+    && typeof input.restype === 'string' && input.restype.toUpperCase() === restype
+    && typeof input.sha256 === 'string' && SHA256.test(input.sha256)
+    && (identity.source === undefined || input.source === identity.source)
+    && (identity.sha256 === undefined || input.sha256.toLowerCase() === identity.sha256.toLowerCase()));
+  // Multiple layers with the same resref/type are not interchangeable evidence.
+  return matches.length === 1 ? { ...matches[0], resref, restype } : null;
+}
+
+function findingEmitter(add, snapshot, identity) {
+  const resourceIdentity = retailIdentity(snapshot, identity);
+  return (finding) => add(resourceIdentity ? { ...finding, resourceIdentity } : finding);
+}
+
+function templateIdentity(record, restype) {
+  return { resref: record.template, restype, ...(record.source ? { source: record.source } : {}) };
+}
+
 function loadEvidenceSidecar(module, retailSnapshot) {
   const sidecarPath = path.join(OUT_DIR, `${module}.evidence.json`);
   let bytes;
@@ -142,21 +168,23 @@ function pairCreatures(retail, engine) {
   return { pairs, unmatchedRetail, unmatchedEngine };
 }
 
-function compareCreatures(retailSnap, engineSnap, add) {
+function compareCreatures(retailSnap, engineSnap, emit) {
   const retail = retailSnap.creatures.filter((c) => c.status === 'ok');
   for (const c of retailSnap.creatures.filter((x) => x.status !== 'ok')) {
+    const add = findingEmitter(emit, retailSnap, templateIdentity(c, 'UTC'));
     add({ area: 'creature', code: 'retail-template-missing', confidence: 'coverage', object: c.template,
       detail: 'GIT names a template retail cannot resolve' });
   }
   const { pairs, unmatchedRetail, unmatchedEngine } = pairCreatures(retail, engineSnap.creatures);
 
   for (const r of unmatchedRetail) {
+    const add = findingEmitter(emit, retailSnap, templateIdentity(r, 'UTC'));
     add({ area: 'creature', code: 'creature-not-spawned', confidence: 'coverage', object: r.template,
       detail: `retail GIT spawns ${r.template} (${r.tag}); the engine area has no creature with that template`,
       note: 'a module loaded from a save legitimately differs if the creature died or left' });
   }
   for (const e of unmatchedEngine) {
-    add({ area: 'creature', code: 'creature-not-in-git', confidence: 'coverage', object: e.template || e.tag,
+    emit({ area: 'creature', code: 'creature-not-in-git', confidence: 'coverage', object: e.template || e.tag,
       detail: `engine area holds ${e.template || '(no template)'} (${e.tag}); retail GIT has no such entry`,
       note: 'party members and script-spawned creatures land here by design' });
   }
@@ -164,6 +192,7 @@ function compareCreatures(retailSnap, engineSnap, add) {
   // Saved state (HP, equipment changes, deaths) is not a template defect.
   const saved = engineSnap.loadedFromSave === true;
   for (const [r, e] of pairs) {
+    const add = findingEmitter(emit, retailSnap, templateIdentity(r, 'UTC'));
     const object = `${r.template}#${r.gitIndex}`;
     for (const field of EXACT_FIELDS) {
       if (!same(r[field], e[field])) {
@@ -225,7 +254,7 @@ function compareCreatures(retailSnap, engineSnap, add) {
   return { paired: pairs.length, unmatchedRetail: unmatchedRetail.length, unmatchedEngine: unmatchedEngine.length };
 }
 
-function compareTextures(retailSnap, engineSnap, add) {
+function compareTextures(retailSnap, engineSnap, emit) {
   const retail = new Map(retailSnap.textures.map((t) => [t.resref, t]));
   const engine = new Map();
   for (const t of engineSnap.textures) {
@@ -236,6 +265,7 @@ function compareTextures(retailSnap, engineSnap, add) {
   let checked = 0;
   for (const [name, e] of engine) {
     const r = retail.get(name);
+    const add = findingEmitter(emit, retailSnap, r && r.retail && r.retail.resourceIdentity);
     if (!r) {
       add({ area: 'texture', code: 'texture-not-in-retail-snapshot', confidence: 'coverage', object: name,
         detail: 'rerun retail_snapshot.py with --textures pointing at the engine snapshot' });
@@ -263,6 +293,7 @@ function compareTextures(retailSnap, engineSnap, add) {
     }
   }
   for (const [name, r] of retail) {
+    const add = findingEmitter(emit, retailSnap, r.retail && r.retail.resourceIdentity);
     if (r.namedByRetailModels && !engine.has(name)) {
       add({ area: 'texture', code: 'texture-never-requested', confidence: 'coverage', object: name,
         retail: r.retailSource, engine: null,
@@ -324,9 +355,10 @@ function matchingModelIdentity(retail, engine) {
   return Boolean(expected && expected === normalize(engine && engine.modelName));
 }
 
-function compareAudio(retailSnap, engineSnap, add) {
+function compareAudio(retailSnap, engineSnap, emit) {
   const r = retailSnap.audio; const e = engineSnap.audio;
   if (!r || !e) return { skipped: true };
+  const add = findingEmitter(emit, retailSnap, r.resourceIdentity);
   for (const [label, value] of Object.entries(r.area)) {
     if (!same(value, e.area[label])) {
       add({ area: 'audio', code: `area:${label}`, confidence: engineSnap.loadedFromSave ? 'variable' : 'defect',
@@ -334,6 +366,7 @@ function compareAudio(retailSnap, engineSnap, add) {
     }
   }
   for (const [label, track] of Object.entries(r.tracks || {})) {
+    const add = findingEmitter(emit, retailSnap, track.resourceIdentity);
     if (track.resource && track.retailSource === 'none') {
       add({ area: 'audio', code: 'retail-track-missing', confidence: 'coverage', object: track.resource,
         detail: `${label} names a file retail cannot resolve` });
@@ -348,6 +381,7 @@ function compareAudio(retailSnap, engineSnap, add) {
   }
   let paired = 0;
   for (const rs of r.sounds.filter((x) => x.status === 'ok')) {
+    const add = findingEmitter(emit, retailSnap, templateIdentity(rs, 'UTS'));
     const list = pool.get(rs.template);
     const es = list && list.shift();
     if (!es) {
@@ -387,14 +421,14 @@ function compareAudio(retailSnap, engineSnap, add) {
   }
   for (const leftovers of pool.values()) {
     for (const es of leftovers) {
-      add({ area: 'audio', code: 'sound-not-in-git', confidence: 'coverage', object: es.template || es.tag,
+      emit({ area: 'audio', code: 'sound-not-in-git', confidence: 'coverage', object: es.template || es.tag,
         detail: 'engine area has a sound object the GIT does not place' });
     }
   }
   return { paired };
 }
 
-function compareModelPresentation(retailSnap, engineSnap, add) {
+function compareModelPresentation(retailSnap, engineSnap, emit) {
   const retail = retailSnap.modelPresentation || [];
   const engine = engineSnap.modelPresentation || [];
   const pool = new Map();
@@ -407,11 +441,14 @@ function compareModelPresentation(retailSnap, engineSnap, add) {
     const candidates = pool.get(record.template);
     const observed = candidates && candidates.shift();
     if (!observed) {
+      const add = findingEmitter(emit, retailSnap, templateIdentity(record, 'UTP'));
       add({ area: 'model', code: 'model-not-spawned', confidence: 'coverage', classification: 'missing-evidence',
         object: record.template, detail: 'retail GIT places this model, but the engine area has no matching placeable' });
       continue;
     }
     paired++;
+    const identity = retailIdentity(retailSnap, record.modelResourceIdentity) || templateIdentity(record, 'UTP');
+    const add = findingEmitter(emit, retailSnap, identity);
     if (observed.modelStatus !== 'loaded') {
       add({ area: 'model', code: 'model:missing', confidence: 'coverage', classification: 'missing-evidence',
         object: `${record.template}#${record.gitIndex}`, retail: record.modelName ?? null, engine: observed.modelStatus ?? null,
@@ -658,6 +695,7 @@ function main(argv = process.argv) {
 if (require.main === module) main();
 
 module.exports = {
+  compareCreatures, compareTextures,
   pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar, validateEvidenceSidecar,
   classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
   compareBehaviorChain,

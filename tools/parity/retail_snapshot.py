@@ -204,12 +204,13 @@ def texture_record(inst: Installation, name: str, capsules, retail_inputs: list[
             continue
         if result is None:
             continue
-        record_resource_input(retail_inputs, result)
+        resource_identity = record_resource_input(retail_inputs, result)
         tpc = read_tpc(result.data)
         width, height = tpc.dimensions()
         entry = {
             "source": label,
             "sourcePath": str(result.filepath),
+            "resourceIdentity": resource_identity,
             "width": width,
             "height": height,
         }
@@ -268,6 +269,18 @@ def twoda_cell(inst: Installation, table: str, row: int, column: str, retail_inp
     return None if normalized in ("", "****") else normalized
 
 
+def audio_track_record(inst: Installation, table: str, row: int, retail_inputs: list[dict]) -> dict:
+    """Keep the authored table identity even when its named audio file is absent."""
+    resource = twoda_resource(inst, table, row, retail_inputs)
+    table_inputs = [record for record in retail_inputs
+                    if record["resref"] == table and record["restype"] == ResourceType.TwoDA.name.upper()]
+    return {
+        "resource": resource,
+        "retailSource": sound_location(inst, resource) if resource else None,
+        "resourceIdentity": table_inputs[0] if len(table_inputs) == 1 else None,
+    }
+
+
 def creature_model_names(inst: Installation, retail_inputs: list[dict]) -> set[str]:
     """Return authored creature-model references from appearance.2da."""
     result = inst.resource("appearance", ResourceType.TwoDA, [SearchLocation.OVERRIDE, SearchLocation.CHITIN])
@@ -307,11 +320,19 @@ def model_presentation_snapshot(inst: Installation, git, capsules, retail_inputs
         utp = read_utp(result.data)
         appearance_id = utp.appearance_id
         model_name = twoda_cell(inst, "placeables", appearance_id, "modelname", retail_inputs)
+        model_identity = None
+        if model_name:
+            model_result = inst.resource(model_name, ResourceType.MDL,
+                                         [SearchLocation.OVERRIDE, SearchLocation.CUSTOM_MODULES, SearchLocation.CHITIN],
+                                         capsules=capsules)
+            if model_result is not None:
+                model_identity = record_resource_input(retail_inputs, model_result)
         record.update({
             "status": "ok",
             "source": str(result.filepath),
             "appearance": appearance_id,
             "modelName": model_name,
+            "modelResourceIdentity": model_identity,
             "modelKind": "creature" if model_name in creature_models else "placeable",
             "requestedAnimation": None,
         })
@@ -322,7 +343,11 @@ def model_presentation_snapshot(inst: Installation, git, capsules, retail_inputs
 def audio_snapshot(inst: Installation, module, git, capsules, retail_inputs: list[dict]) -> dict:
     """Area music/ambience from the GIT's AreaProperties, and every placed sound."""
     capsules = require_module_scoped_capsules(capsules)
-    root = read_gff(module.git().data()).root
+    git_resource = module.git()
+    git_data = git_resource.data()
+    git_identity = record_retail_input(retail_inputs, git_resource.resname(), git_resource.restype(),
+                                       git_resource.active(), git_data)
+    root = read_gff(git_data).root
     props = root.get_struct("AreaProperties") if root.exists("AreaProperties") else None
     area = {}
     if props is not None:
@@ -332,11 +357,9 @@ def audio_snapshot(inst: Installation, module, git, capsules, retail_inputs: lis
                 area[label] = props.acquire(label, 0)
     tracks = {}
     for label in ("MusicDay", "MusicNight", "MusicBattle"):
-        res = twoda_resource(inst, "ambientmusic", area.get(label, -1), retail_inputs)
-        tracks[label] = {"resource": res, "retailSource": sound_location(inst, res) if res else None}
+        tracks[label] = audio_track_record(inst, "ambientmusic", area.get(label, -1), retail_inputs)
     for label in ("AmbientSndDay", "AmbientSndNight"):
-        res = twoda_resource(inst, "ambientsound", area.get(label, -1), retail_inputs)
-        tracks[label] = {"resource": res, "retailSource": sound_location(inst, res) if res else None}
+        tracks[label] = audio_track_record(inst, "ambientsound", area.get(label, -1), retail_inputs)
 
     sounds = []
     for i, entry in enumerate(git.sounds if git is not None else []):
@@ -364,7 +387,7 @@ def audio_snapshot(inst: Installation, module, git, capsules, retail_inputs: lis
             "soundSources": {n: sound_location(inst, n) for n in names},
         })
         sounds.append(rec)
-    return {"area": area, "tracks": tracks, "sounds": sounds}
+    return {"resourceIdentity": git_identity, "area": area, "tracks": tracks, "sounds": sounds}
 
 
 def behavior_chain_snapshot() -> dict:
