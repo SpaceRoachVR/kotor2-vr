@@ -44,7 +44,7 @@ for (const kind of ['kotormcp', 'holocron']) {
       engine: { textures: [{ requestedResref: 'shared', status: 'missing', searchedSources: [] }] } })),
   ];
   for (const fixture of cases) {
-    test(`${kind} evidence links actual ${fixture.name} findings by exact resource type`, () => {
+    test(`${kind} evidence links actual ${fixture.name} findings by full resource identity`, () => {
       const retail = { module: '101per', ...fixture.retail, retailInputs: [fixture.identity] };
       const findings = linkedFindings(fixture.producer, retail, fixture.engine, kind, [fixture.identity]);
       assert.ok(findings.length > 0);
@@ -53,14 +53,52 @@ for (const kind of ['kotormcp', 'holocron']) {
         assert.deepEqual(finding.evidenceRefs, [sidecarPath]);
       }
       const wrongType = { ...fixture.identity, restype: fixture.identity.restype === 'TPC' ? 'TGA' : 'TPC' };
-      const unlinked = linkedFindings(fixture.producer, retail, fixture.engine, kind, [wrongType]);
-      assert.deepEqual(unlinked.map(({ evidenceRefs, ...finding }) => finding), findings.map(({ evidenceRefs, ...finding }) => finding));
-      assert.ok(unlinked.every((finding) => finding.evidenceRefs === undefined));
+      for (const mismatchedIdentity of [wrongType,
+        { ...fixture.identity, sha256: 'b'.repeat(64) },
+        { ...fixture.identity, source: 'another-layer' },
+        { ...fixture.identity, source: undefined }]) {
+        const unlinked = linkedFindings(fixture.producer, retail, fixture.engine, kind, [mismatchedIdentity]);
+        assert.deepEqual(unlinked.map(({ evidenceRefs, ...finding }) => finding), findings.map(({ evidenceRefs, ...finding }) => finding));
+        assert.ok(unlinked.every((finding) => finding.evidenceRefs === undefined));
+      }
       if (fixture.name.includes('presentation')) assert.equal(findings[0].classification, 'authored-retail-behavior');
       if (fixture.name.includes('play style')) assert.equal(findings[0].classification, 'missing-evidence');
     });
   }
+  test(`${kind} evidence distinguishes duplicate layers containing identical selected texture bytes`, () => {
+    const selected = input('shared', 'TPC', 'override');
+    const shadowed = input('shared', 'TPC', 'texture-pack');
+    const retail = { retailInputs: [selected, shadowed], textures: [{ resref: 'shared', retailSource: 'override',
+      namedByRetailModels: true, retail: { resourceIdentity: selected },
+      locations: [{ resourceIdentity: selected }, { resourceIdentity: shadowed }] }] };
+    for (const identities of [[shadowed], [{ ...selected, source: undefined }]]) {
+      const findings = linkedFindings(compareTextures, retail, { textures: [] }, kind, identities);
+      assert.equal(findings.length, 1);
+      assert.deepEqual(findings[0].resourceIdentity, selected);
+      assert.equal(findings[0].evidenceRefs, undefined);
+    }
+    const matching = linkedFindings(compareTextures, retail, { textures: [] }, kind, [shadowed, selected]);
+    assert.deepEqual(matching[0].evidenceRefs, [sidecarPath]);
+    // An unqualified captured selection cannot establish which layer was used.
+    retail.textures[0].retail.resourceIdentity = { ...selected, source: undefined };
+    const ambiguous = linkedFindings(compareTextures, retail, { textures: [] }, kind, [selected, shadowed]);
+    assert.equal(ambiguous[0].resourceIdentity, undefined);
+    assert.equal(ambiguous[0].evidenceRefs, undefined);
+  });
 }
+
+test('linking requires a complete valid captured hash and preserves the input finding', () => {
+  const selected = input('shared', 'TPC', 'override');
+  const record = { ...selected, path: sidecarPath };
+  for (const sha256 of [undefined, null, 123, '', 'not-a-hash']) {
+    const finding = Object.freeze({ resourceIdentity: { ...selected, sha256 }, evidenceRefs: ['existing.json'] });
+    assert.equal(linkEvidence(finding, [record], sidecarPath), finding);
+  }
+  const finding = Object.freeze({ resourceIdentity: selected, evidenceRefs: Object.freeze(['existing.json']) });
+  assert.deepEqual(linkEvidence(finding, [{ ...record, sha256: selected.sha256.toUpperCase() }], sidecarPath).evidenceRefs,
+    ['existing.json', sidecarPath]);
+  assert.deepEqual(finding.evidenceRefs, ['existing.json']);
+});
 
 test('area audio uses the captured GIT identity and missing tracks use their authored 2DA', () => {
   const git = input('area_layout', 'GIT');

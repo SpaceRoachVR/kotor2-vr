@@ -75,7 +75,14 @@ const SHA256 = /^[a-f0-9]{64}$/i;
 function evidenceMatchesFinding(record, finding) {
   const identity = finding && finding.resourceIdentity;
   return Boolean(identity && typeof identity.resref === 'string' && typeof identity.restype === 'string'
-    && record.resref === identity.resref.toLowerCase() && record.restype === identity.restype.toUpperCase());
+    && record && record.resref === identity.resref.toLowerCase() && record.restype === identity.restype.toUpperCase()
+    && typeof identity.sha256 === 'string' && SHA256.test(identity.sha256)
+    && typeof record.sha256 === 'string' && SHA256.test(record.sha256)
+    && record.sha256.toLowerCase() === identity.sha256.toLowerCase()
+    // Equal bytes in different captured layers are distinct resource identities.
+    // Do not infer missing provenance from the selected finding's source.
+    && record.source === identity.source
+    && (identity.source === undefined || (typeof identity.source === 'string' && identity.source.trim().length > 0)));
 }
 
 function validateEvidenceSidecar(document, retailSnapshot, requestedModule) {
