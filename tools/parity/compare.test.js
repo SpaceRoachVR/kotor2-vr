@@ -166,9 +166,9 @@ test('arm slots map by bit value: PyKotor RIGHT_ARM is 0x80, which TSL calls LEF
 });
 
 test('links matching typed evidence paths without changing a finding classification', () => {
-  const finding = { object: 'a_script#0', code: 'sound:files', confidence: 'coverage', resourceIdentity: { resref: 'a_script', restype: 'NCS', sha256: 'a'.repeat(64) } };
+  const finding = { object: 'a_script#0', code: 'sound:files', confidence: 'coverage', resourceIdentity: { resref: 'a_script', restype: 'NCS', source: 'module', sha256: 'a'.repeat(64) } };
   const linked = linkEvidence(finding, [{
-    kind: 'dencs', resref: 'a_script', restype: 'NCS', sha256: 'a'.repeat(64),
+    kind: 'dencs', resref: 'a_script', restype: 'NCS', source: 'module', sha256: 'a'.repeat(64),
     authority: 'hypothesis', path: 'tools/parity/out/101per.evidence.json',
   }]);
   assert.deepStrictEqual(linked.evidenceRefs, ['tools/parity/out/101per.evidence.json']);

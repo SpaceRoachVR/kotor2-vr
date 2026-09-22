@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   compareCreatures, compareTextures, compareAudio, compareModelPresentation,
-  validateEvidenceSidecar, linkEvidence, normalizeFindingForReport,
+  validateEvidenceSidecar, evidenceMatchesFinding, linkEvidence, normalizeFindingForReport,
 } = require('./compare');
 
 const sidecarPath = 'tools/parity/out/101per.evidence.json';
@@ -84,6 +84,38 @@ for (const kind of ['kotormcp', 'holocron']) {
     const ambiguous = linkedFindings(compareTextures, retail, { textures: [] }, kind, [selected, shadowed]);
     assert.equal(ambiguous[0].resourceIdentity, undefined);
     assert.equal(ambiguous[0].evidenceRefs, undefined);
+  });
+}
+
+test('full identity requires nonempty exact original source strings on both sides', () => {
+  const selected = input('shared', 'TPC', 'Override/Shared.tpc');
+  const sources = [undefined, null, 123, '', '   ', '\t', 'override/shared.tpc',
+    ' Override/Shared.tpc', 'Override/Shared.tpc '];
+  for (const source of sources) {
+    for (const [recordSource, findingSource] of [[source, selected.source], [selected.source, source],
+      ...([undefined, null, 123, '', '   ', '\t'].includes(source) ? [[source, source]] : [])]) {
+      const finding = Object.freeze({ resourceIdentity: { ...selected, source: findingSource } });
+      const record = { ...selected, source: recordSource };
+      assert.equal(evidenceMatchesFinding(record, finding), false);
+      assert.equal(linkEvidence(finding, [record], sidecarPath), finding);
+    }
+  }
+  for (const source of [selected.source, ' Override/Shared.tpc ']) {
+    assert.equal(evidenceMatchesFinding({ ...selected, source }, { resourceIdentity: { ...selected, source } }), true);
+  }
+});
+
+for (const kind of ['kotormcp', 'holocron']) {
+  test(`${kind} producer/linker refuses missing, blank, or normalized source provenance`, () => {
+    for (const [capturedSource, recordSource] of [[undefined, undefined], ['', ''], ['   ', '   '],
+      ['Override/Shared.tpc', 'override/shared.tpc'], ['Override/Shared.tpc', ' Override/Shared.tpc ']]) {
+      const selected = { ...input('shared', 'TPC'), source: capturedSource };
+      const findings = linkedFindings(compareTextures, { retailInputs: [selected], textures: [{
+        resref: 'shared', namedByRetailModels: true, retailSource: 'override', retail: { resourceIdentity: selected },
+      }] }, { textures: [] }, kind, [{ ...selected, source: recordSource }]);
+      assert.equal(findings.length, 1);
+      assert.equal(findings[0].evidenceRefs, undefined);
+    }
   });
 }
 

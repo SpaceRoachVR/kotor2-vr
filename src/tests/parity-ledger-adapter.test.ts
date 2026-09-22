@@ -16,7 +16,8 @@ const engineArtifact = JSON.stringify({ module: '101per', loadedFromSave: false,
   module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64),
 } });
 const retailArtifact = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
-const sidecarArtifact = JSON.stringify({ module: '101PER', records: [] });
+const sidecarIdentity = { resref: 'metalstrain', restype: 'UTS', source: 'module', sha256: 'a'.repeat(64) };
+const sidecarArtifact = JSON.stringify({ module: '101PER', records: [{ ...sidecarIdentity, kind: 'kotormcp', authority: 'parsed-retail' }] });
 const hash = (contents: string): string => createHash('sha256').update(contents).digest('hex');
 function promoteRetainedReport(report: { module: string; findings: unknown[]; [key: string]: unknown }, reportPath: string) {
   const comparisonArtifact = JSON.stringify({ module: report.module.toLowerCase(), findings: report.findings });
@@ -48,6 +49,7 @@ describe('parity ledger adapter', () => {
         {
           classification: 'engine-defect', code: 'sound:play-style', object: 'metalstrain#0',
           expected: 'loop', observed: 'oneshot',
+          resourceIdentity: sidecarIdentity,
           evidenceRefs: ['tools/parity/out/101per.evidence.json'],
         },
         {

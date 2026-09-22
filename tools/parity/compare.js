@@ -81,8 +81,9 @@ function evidenceMatchesFinding(record, finding) {
     && record.sha256.toLowerCase() === identity.sha256.toLowerCase()
     // Equal bytes in different captured layers are distinct resource identities.
     // Do not infer missing provenance from the selected finding's source.
-    && record.source === identity.source
-    && (identity.source === undefined || (typeof identity.source === 'string' && identity.source.trim().length > 0)));
+    && typeof record.source === 'string' && record.source.trim().length > 0
+    && typeof identity.source === 'string' && identity.source.trim().length > 0
+    && record.source === identity.source);
 }
 
 function validateEvidenceSidecar(document, retailSnapshot, requestedModule) {
@@ -703,7 +704,7 @@ if (require.main === module) main();
 
 module.exports = {
   compareCreatures, compareTextures,
-  pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, linkEvidence, loadEvidenceSidecar, validateEvidenceSidecar,
+  pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, evidenceMatchesFinding, linkEvidence, loadEvidenceSidecar, validateEvidenceSidecar,
   classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
   compareBehaviorChain,
   describeAudioSemanticEvidence, selectedRetailPlayStyle, classificationForFinding, normalizeFindingForReport,

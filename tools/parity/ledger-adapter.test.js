@@ -7,7 +7,8 @@ const crypto = require('crypto');
 
 const fixtureEngine = JSON.stringify({ module: '101per', loadedFromSave: false, bootstrap: 'new-game-ui', playerName: 'T3-M4', partySize: 1, engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
 const fixtureRetail = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
-const fixtureSidecar = JSON.stringify({ module: '101PER', records: [] });
+const fixtureIdentity = { resref: 'resource_a', restype: 'UTS', source: 'module', sha256: 'a'.repeat(64) };
+const fixtureSidecar = JSON.stringify({ module: '101PER', records: [{ ...fixtureIdentity, kind: 'kotormcp', authority: 'parsed-retail' }] });
 const fixtureHash = (contents) => crypto.createHash('sha256').update(contents).digest('hex');
 function toParityDefectRecords(report, reportPath, options = {}) {
   const comparison = JSON.stringify({ module: String(report.module || '').toLowerCase(), findings: report.findings });
@@ -60,6 +61,7 @@ test('only confirmed engine defects become ledger records', () => {
     {
       classification: 'engine-defect', code: 'sound:play-style', object: 'metalstrain#0',
       expected: 'loop', observed: 'oneshot', evidenceRefs: ['tools/parity/out/101per.evidence.json'],
+      resourceIdentity: fixtureIdentity,
     },
     { classification: 'missing-evidence', code: 'sound:continuous', object: 'rumble#1' },
     { classification: 'variable-runtime-output', code: 'stat:hitPoints', object: 't3m4#0' },
@@ -74,6 +76,7 @@ test('maps a mutable latest sidecar reference to its retained immutable artifact
     classification: 'engine-defect', code: 'texture:wrong-layer', object: 'panel_a#3',
     expected: 'module', observed: 'key-bif',
     evidenceRefs: ['tools/parity/out/101per.evidence.json', 'tools/parity/out/101per.evidence.json'],
+    resourceIdentity: fixtureIdentity,
     reproductionSteps: ['Load fresh 101PER.', 'Inspect panel_a.'], room: '101PER_02', severity: 'minor',
   }]), 'tools/parity/out/101per.parity.json');
 
@@ -81,6 +84,27 @@ test('maps a mutable latest sidecar reference to its retained immutable artifact
   assert.deepEqual(records[0].reproductionSteps, ['Load fresh 101PER.', 'Inspect panel_a.']);
   assert.equal(records[0].room, '101PER_02');
   assert.equal(records[0].severity, 'minor');
+});
+
+test('a sidecar linked to resource A is not inherited by promoted resource B', () => {
+  const records = toParityDefectRecords(reportWith([
+    { classification: 'missing-evidence', code: 'resource:a', resourceIdentity: fixtureIdentity,
+      evidenceRefs: ['tools/parity/out/101per.evidence.json'] },
+    { classification: 'engine-defect', code: 'resource:b', expected: 10, observed: 8,
+      resourceIdentity: { ...fixtureIdentity, resref: 'resource_b' } },
+  ]), 'report.json');
+  assert.equal(records.length, 1);
+  assertImmutableCaptureReferences(records[0].evidenceRefs, ['comparison.json', 'engine.json', 'retail.json']);
+});
+
+test('sidecar promotion rejects references without matching full finding identity', () => {
+  for (const resourceIdentity of [undefined, { ...fixtureIdentity, resref: 'resource_b' },
+    ...[undefined, '', '   ', 'Module', ' module'].map((source) => ({ ...fixtureIdentity, source }))]) {
+    assert.throws(() => toParityDefectRecords(reportWith([{
+      classification: 'engine-defect', code: 'resource:b', expected: 10, observed: 8,
+      resourceIdentity, evidenceRefs: ['tools/parity/out/101per.evidence.json'],
+    }]), 'report.json'), /matching full resource identity/);
+  }
 });
 
 test('preserves temporal step order and only deduplicates identical whole procedures', () => {

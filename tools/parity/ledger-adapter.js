@@ -2,6 +2,7 @@
 
 const DEFECT_CLASSIFICATION = 'engine-defect';
 const fs = require('fs');
+const { evidenceMatchesFinding, validateEvidenceSidecar } = require('./compare');
 const { validateCanonicalCaptureManifest, validateCaptureManifestPaths, resolveRetainedArtifactPath } = require('./parity-contract');
 const SEVERITIES = new Set(['blocker', 'critical', 'major', 'minor', 'cosmetic']);
 const SEVERITY_ORDER = ['cosmetic', 'minor', 'major', 'critical', 'blocker'];
@@ -105,9 +106,14 @@ function retainedEvidenceReferences(capture, module, findings) {
   const immutablePaths = new Set(immutableArtifacts);
   const mutableSidecar = `tools/parity/out/${module.toLowerCase()}.evidence.json`;
   const retainedSidecar = capture.manifest.artifacts.sidecar && capture.manifest.artifacts.sidecar.path;
+  const sidecarRecords = capture.sidecar ? validateEvidenceSidecar(capture.sidecar, capture.retail, module) : [];
   const references = [];
   for (const finding of findings) {
     for (const reference of optionalStringArray(finding.evidenceRefs, 'finding evidence references')) {
+      if ((reference === mutableSidecar || reference === retainedSidecar)
+          && !sidecarRecords.some((record) => evidenceMatchesFinding(record, finding))) {
+        throw new TypeError('Promoted parity finding sidecar reference requires matching full resource identity');
+      }
       if (reference === mutableSidecar && typeof retainedSidecar === 'string') {
         references.push(retainedSidecar);
       } else if (immutablePaths.has(reference)) {
@@ -174,7 +180,6 @@ function toParityDefectRecords(report, reportPath, options = {}) {
     capture.manifest.artifacts.comparison.path,
     capture.manifest.artifacts.engine.path,
     capture.manifest.artifacts.retail.path,
-    ...(capture.manifest.artifacts.sidecar ? [capture.manifest.artifacts.sidecar.path] : []),
   ];
   return groupConfirmedFindings(confirmed).map(({ code, findings }) => {
     const ordered = sortedFindings(findings);
