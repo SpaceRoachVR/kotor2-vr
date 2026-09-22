@@ -998,6 +998,12 @@ export class TextureLoader {
     return Object.keys(owner).length ? owner : undefined;
   }
 
+  /**
+   * Below this, a punchthrough texel is discarded: half a step of 8-bit alpha,
+   * so exactly-transparent texels go and every other one is drawn.
+   */
+  static readonly PUNCHTHROUGH_ALPHA_THRESHOLD = 0.5 / 255;
+
   private static applyHeaderMaterialProfile(texture: OdysseyTexture, material: THREE.Material): void {
     if (typeof texture.header !== 'object' || texture.header.alphaTest === 1 || texture.txi.envMapTexture != null) {
       return;
@@ -1009,9 +1015,23 @@ export class TextureLoader {
       (texture.header.alphaTest && texture.header.format !== PixelFormat.DXT5) ||
       texture.txi.blending === TXIBlending.PUNCHTHROUGH
     ) {
-      material.alphaTest = texture.header.alphaTest;
+      // A punchthrough texture discards only what is fully transparent. The
+      // TPC header's float is not a cutout threshold for it: using it punched
+      // out every texel below 0.647 on 211TEL's track grate (tel_stsf), whose
+      // alpha is soft across half its texels - 42.5% of the grate cut away,
+      // against the 16.1% that is genuinely transparent. That is the irregular
+      // black-and-green patchwork seen from the swoop. reone, a clean-room
+      // engine tested against Steam TSL, renders punchthrough through its
+      // opaque path and discards only alpha == 0.
+      //
+      // Textures whose alpha is two-valued (0 or 255) look the same either
+      // way, which is why the start of the course was never affected.
+      const threshold = texture.txi.blending === TXIBlending.PUNCHTHROUGH
+        ? TextureLoader.PUNCHTHROUGH_ALPHA_THRESHOLD
+        : texture.header.alphaTest;
+      material.alphaTest = threshold;
       if ((material as THREE.ShaderMaterial).uniforms?.alphaTest) {
-        (material as THREE.ShaderMaterial).uniforms.alphaTest.value = texture.header.alphaTest;
+        (material as THREE.ShaderMaterial).uniforms.alphaTest.value = threshold;
       }
       material.transparent = false;
     }

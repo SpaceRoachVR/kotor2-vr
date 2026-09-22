@@ -143,12 +143,22 @@ export class TXI {
           this.filter = parseInt(args[1]);
         break;
         case 'blending':
-          switch(args[1]){
+          // Retail writes this both as a word and as its number: 211TEL's
+          // tel_stsf and tel_gr04 both say `blending 2`. Only the words were
+          // recognised, so every numeric value was silently dropped and a
+          // punchthrough grate fell through to the default path.
+          switch(String(args[1]).toLowerCase()){
             case 'punchthrough':
+            case String(TXIBlending.PUNCHTHROUGH):
               this.blending = TXIBlending.PUNCHTHROUGH;
             break;
             case 'additive':
+            case String(TXIBlending.ADDITIVE):
               this.blending = TXIBlending.ADDITIVE;
+            break;
+            case 'default':
+            case String(TXIBlending.NONE):
+              this.blending = TXIBlending.NONE;
             break;
           }
         break;
