@@ -18,7 +18,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { deriveCaptureId, assertUnlinkedWorkspacePath, resolveRetainedArtifactPath } = require('./parity-contract');
+const { deriveCaptureId, assertUnlinkedWorkspacePath, resolveRetainedArtifactPath, sidecarSha256 } = require('./parity-contract');
 
 const OUT_DIR = path.join(__dirname, 'out');
 
@@ -98,7 +98,7 @@ function validateEvidenceSidecar(document, retailSnapshot, requestedModule) {
     const kind = String(record.kind || '').toLowerCase();
     const resref = String(record.resref || '').toLowerCase();
     const restype = String(record.restype || '').toUpperCase();
-    const sha256 = String(record.sha256 || record.hash || '').toLowerCase();
+    const sha256 = sidecarSha256(record);
     if (!AUTHORITY_BY_KIND[kind] || record.authority !== AUTHORITY_BY_KIND[kind]) throw new TypeError('Evidence sidecar authority is invalid for its tool');
     if (!resref || !restype || !SHA256.test(sha256)) throw new TypeError('Evidence sidecar requires typed resource identity and SHA-256 hash');
     if (kind === 'dencs' && (restype !== 'NCS' || retailHashes.get(`${resref}:${restype}`) !== sha256)) throw new TypeError('DeNCS evidence hash does not match current retail NCS');

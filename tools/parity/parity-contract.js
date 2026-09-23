@@ -16,6 +16,16 @@ function requireSha256(value, field) {
   return value.toLowerCase();
 }
 
+function sidecarSha256(record) {
+  if (record.sha256 === undefined && record.hash === undefined) {
+    throw new TypeError('Evidence sidecar record requires a SHA-256 hash');
+  }
+  const sha256 = record.sha256 === undefined ? null : requireSha256(record.sha256, 'Evidence sidecar sha256');
+  const hash = record.hash === undefined ? null : requireSha256(record.hash, 'Evidence sidecar hash');
+  if (sha256 && hash && sha256 !== hash) throw new TypeError('Evidence sidecar hash and sha256 must match');
+  return sha256 || hash;
+}
+
 function deriveCaptureId(module, artifacts) {
   const normalizedModule = String(module || '').trim().toLowerCase();
   if (!/^[a-z0-9_]{1,16}$/.test(normalizedModule)) throw new TypeError('Canonical capture requires a valid module identifier');
@@ -144,7 +154,7 @@ function validateManifestSidecar(sidecar, retail, module) {
     }
     const resref = record.resref.trim().toLowerCase();
     const restype = record.restype.trim().toUpperCase();
-    const sha256 = requireSha256(record.sha256 || record.hash, 'Canonical capture sidecar record');
+    const sha256 = sidecarSha256(record);
     if (!resref || !restype || !EVIDENCE_AUTHORITIES[kind] || record.authority !== EVIDENCE_AUTHORITIES[kind]) {
       throw new TypeError('Canonical capture sidecar has invalid typed authority');
     }
@@ -220,4 +230,5 @@ module.exports = {
   CLASSIFICATIONS, createCaptureIdentity, validateEvidenceRecord, validateCanonicalCaptureManifest, deriveCaptureId,
   validateCaptureManifestPaths, resolveRetainedArtifactPath, assertUnlinkedWorkspacePath,
   matchesRetainedRetailInput,
+  sidecarSha256,
 };

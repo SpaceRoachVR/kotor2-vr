@@ -109,17 +109,12 @@ test('sidecar promotion rejects references without matching full finding identit
   }
 });
 
-test('promotion rejects a self-consistent sidecar and finding absent from retained retail inputs', () => {
-  const invented = { resref: 'resource_b', restype: 'UTS', source: 'other-module', sha256: 'c'.repeat(64) };
-  const finding = {
-    classification: 'engine-defect', code: 'sound:volume', expected: 10, observed: 8,
-    resourceIdentity: invented, evidenceRefs: ['tools/parity/out/101per.evidence.json'],
-  };
+function promoteWithSidecarRecords(finding, records) {
   const contents = {
     engine: fixtureEngine,
     retail: fixtureRetail,
     comparison: JSON.stringify({ module: '101per', findings: [finding] }),
-    sidecar: JSON.stringify({ module: '101PER', records: [{ ...invented, kind: 'holocron', authority: 'human-review' }] }),
+    sidecar: JSON.stringify({ module: '101PER', records }),
   };
   const rawArtifacts = Object.fromEntries(Object.entries(contents).map(([name, value]) => [name, { sha256: fixtureHash(value) }]));
   const captureId = deriveCaptureId('101PER', rawArtifacts);
@@ -129,9 +124,35 @@ test('promotion rejects a self-consistent sidecar and finding absent from retain
   const retainedContents = Object.fromEntries(Object.entries(artifacts).map(([name, artifact]) => [artifact.path, contents[name]]));
   const report = reportWith([finding]);
   report.captureManifest = { schema: 'kotor2-vr/parity-capture@1', module: '101PER', captureId, artifacts };
-  assert.throws(() => toParityDefectRecords(report, 'report.json', {
+  return toParityDefectRecords(report, 'report.json', {
     readArtifact: (artifactPath) => retainedContents[artifactPath],
-  }), /matching full resource identity/);
+  });
+}
+
+test('promotion rejects self-consistent forged evidence even beside a valid retail record', () => {
+  const invented = { resref: 'resource_b', restype: 'UTS', source: 'other-module', sha256: 'c'.repeat(64) };
+  const forgedFinding = {
+    classification: 'engine-defect', code: 'sound:volume', expected: 10, observed: 8,
+    resourceIdentity: invented, evidenceRefs: ['tools/parity/out/101per.evidence.json'],
+  };
+  const forgedRecord = { ...invented, kind: 'holocron', authority: 'human-review' };
+  const validRecord = { ...fixtureIdentity, kind: 'kotormcp', authority: 'parsed-retail' };
+  for (const records of [[forgedRecord], [validRecord, forgedRecord]]) {
+    assert.throws(() => promoteWithSidecarRecords(forgedFinding, records), /matching full resource identity/);
+  }
+  const validFinding = { ...forgedFinding, resourceIdentity: fixtureIdentity };
+  assert.throws(() => promoteWithSidecarRecords(validFinding, [validRecord, forgedRecord]), /matching full resource identity/);
+  assert.equal(promoteWithSidecarRecords(validFinding, [validRecord]).length, 1);
+});
+
+test('promotion rejects contradictory sidecar hash aliases', () => {
+  const finding = {
+    classification: 'engine-defect', code: 'sound:volume', expected: 10, observed: 8,
+    resourceIdentity: fixtureIdentity, evidenceRefs: ['tools/parity/out/101per.evidence.json'],
+  };
+  assert.throws(() => promoteWithSidecarRecords(finding, [{
+    ...fixtureIdentity, hash: 'c'.repeat(64), kind: 'kotormcp', authority: 'parsed-retail',
+  }]), /hash and sha256 must match/);
 });
 
 test('preserves temporal step order and only deduplicates identical whole procedures', () => {

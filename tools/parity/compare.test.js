@@ -188,6 +188,7 @@ test('rejects stale, foreign, and edited DeNCS sidecars at Node ingestion', () =
   assert.throws(() => validateEvidenceSidecar({ module: '102PER', records: [record] }, retail, '101PER'), /module/i);
   assert.throws(() => validateEvidenceSidecar({ module: '101PER', records: [{ ...record, sha256: 'b'.repeat(64) }] }, retail, '101PER'), /hash/i);
   assert.throws(() => validateEvidenceSidecar({ module: '101PER', records: [{ ...record, authority: 'parsed-retail' }] }, retail, '101PER'), /authority/i);
+  assert.throws(() => validateEvidenceSidecar({ module: '101PER', records: [{ ...record, hash: 'b'.repeat(64) }] }, retail, '101PER'), /hash and sha256 must match/i);
 });
 
 test('missing or unresolved engine models are missing evidence, never bind-pose evidence', () => {

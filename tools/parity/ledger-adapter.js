@@ -111,7 +111,9 @@ function retainedEvidenceReferences(capture, module, findings) {
   for (const finding of findings) {
     for (const reference of optionalStringArray(finding.evidenceRefs, 'finding evidence references')) {
       if ((reference === mutableSidecar || reference === retainedSidecar)
-          && (!matchesRetainedRetailInput(finding.resourceIdentity, capture.retail.retailInputs)
+          && (!sidecarRecords.every((record) => record.kind === 'dencs'
+            || matchesRetainedRetailInput(record, capture.retail.retailInputs))
+            || !matchesRetainedRetailInput(finding.resourceIdentity, capture.retail.retailInputs)
             || !sidecarRecords.some((record) => matchesRetainedRetailInput(record, capture.retail.retailInputs)
               && evidenceMatchesFinding(record, finding)))) {
         throw new TypeError('Promoted parity finding sidecar reference requires matching full resource identity');
