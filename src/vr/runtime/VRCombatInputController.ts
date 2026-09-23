@@ -17,6 +17,31 @@ export interface VRCombatInputConfiguration {
    * on one hilt, and should not promote.
    */
   readonly twoHandedGripMaxSeparationMetres: number;
+  /**
+   * ROADMAP 3.16. How far beyond the target's own radius the weapon may pass
+   * and still count as swung *at* it. Deliberately generous: this exists to
+   * stop a swing at empty air counting, not to make hitting harder.
+   */
+  readonly targetContactSlackMetres: number;
+  /** Nominal weapon length from the hand, for the contact test. */
+  readonly bladeLengthMetres: number;
+  /** An unarmed "weapon" is the fist. */
+  readonly fistReachMetres: number;
+  /**
+   * A fast movement arms a swing for this long, so the blade may reach the
+   * target a moment after the hand crossed the speed threshold.
+   */
+  readonly swingWindowMilliseconds: number;
+}
+
+/**
+ * The space a target occupies, for the contact test: a vertical capsule on the
+ * creature's feet. KOTOR world is Z-up.
+ */
+export interface VRCombatTargetVolume {
+  readonly base: THREE.Vector3;
+  readonly heightMetres: number;
+  readonly radiusMetres: number;
 }
 
 export interface VRCombatInputContext {
@@ -32,6 +57,11 @@ export interface VRCombatInputContext {
   readonly offhandHand: XRHandRole;
   /** True only when the head queued intent consumes an aimed trigger. */
   readonly allowDominantTrigger: boolean;
+  /**
+   * ROADMAP 3.16. When present, a melee swing counts only if the weapon passes
+   * through this volume. Absent keeps the old speed-only rule.
+   */
+  readonly nominatedTargetVolume?: VRCombatTargetVolume | null;
 }
 
 export interface VRCombatSwingEvent {
@@ -49,6 +79,17 @@ export interface VRCombatSwingEvent {
    * of `twoHandedGripMaxSeparationMetres`. Absent for one-handed swings.
    */
   readonly gripSeparationMetres?: number;
+  /**
+   * How far the weapon passed from the target volume's surface, when a volume
+   * was given; negative inside it. For on-device tuning of the slack.
+   */
+  readonly targetContactMetres?: number;
+}
+
+/** A fast swing that ended without reaching the target, reported for tuning. */
+export interface VRCombatSwingMiss {
+  readonly closestMetres: number;
+  readonly weaponMode: CombatWeaponMode;
 }
 
 const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
@@ -56,6 +97,10 @@ const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
   visualSwingCooldownMilliseconds: 120,
   bladeSampleDistanceMetres: 0.6,
   twoHandedGripMaxSeparationMetres: 0.35,
+  targetContactSlackMetres: 0.75,
+  bladeLengthMetres: 0.9,
+  fistReachMetres: 0.15,
+  swingWindowMilliseconds: 250,
 };
 
 /**
@@ -70,6 +115,10 @@ export class VRCombatInputController {
   private previousTimestamp: number | null = null;
   private lastVisualSwingAt = Number.NEGATIVE_INFINITY;
   private weaponActionHeld = false;
+  private swingArmedUntil = Number.NEGATIVE_INFINITY;
+  private swingClosestMetres = Number.POSITIVE_INFINITY;
+  private swingContacted = false;
+  private readonly misses: VRCombatSwingMiss[] = [];
 
   constructor(configuration: Partial<VRCombatInputConfiguration> = {}) {
     this.configuration = { ...DEFAULT_CONFIGURATION, ...configuration };
@@ -120,8 +169,37 @@ export class VRCombatInputController {
     this.previousPose = VRCombatInputController.clonePose(dominantPose);
     this.previousSamplePoint = samplePoint.clone();
     this.previousTimestamp = context.timestamp;
-    if (speed < this.configuration.minimumSwingSpeedMetresPerSecond ||
-      context.timestamp - this.lastVisualSwingAt < this.configuration.visualSwingCooldownMilliseconds) {
+
+    const fast = speed >= this.configuration.minimumSwingSpeedMetresPerSecond;
+    const volume = context.nominatedTargetVolume ?? null;
+    let contactMetres: number | undefined;
+    if (volume) {
+      // ROADMAP 3.16. A fast movement arms a short window; the swing counts
+      // when the weapon passes through the target volume inside it.
+      if (fast) {
+        if (context.timestamp > this.swingArmedUntil) {
+          this.swingClosestMetres = Number.POSITIVE_INFINITY;
+          this.swingContacted = false;
+        }
+        this.swingArmedUntil = context.timestamp + this.configuration.swingWindowMilliseconds;
+      } else if (context.timestamp > this.swingArmedUntil) {
+        this.finishSwingWindow(context.weaponMode);
+        return triggerEvents;
+      }
+      contactMetres = this.resolveTargetContact(
+        dominantPose,
+        inputFrame.hands[context.dominantHand]?.targetRayPose ?? null,
+        grip?.offhandPose ?? null,
+        context.weaponMode,
+        volume,
+      );
+      this.swingClosestMetres = Math.min(this.swingClosestMetres, contactMetres);
+      if (contactMetres > this.configuration.targetContactSlackMetres) return triggerEvents;
+      this.swingContacted = true;
+    } else if (!fast) {
+      return triggerEvents;
+    }
+    if (context.timestamp - this.lastVisualSwingAt < this.configuration.visualSwingCooldownMilliseconds) {
       return triggerEvents;
     }
 
@@ -136,7 +214,53 @@ export class VRCombatInputController {
       timestamp: context.timestamp,
       input: 'dominant-swing',
       ...(grip ? { gripSeparationMetres: grip.separationMetres } : {}),
+      ...(contactMetres !== undefined ? { targetContactMetres: contactMetres } : {}),
     }];
+  }
+
+  /**
+   * Fast swings that ended without the weapon reaching the target, oldest
+   * first, since the last call. For tuning the slack from real headset play.
+   */
+  drainMisses(): readonly VRCombatSwingMiss[] {
+    return this.misses.splice(0, this.misses.length);
+  }
+
+  private finishSwingWindow(weaponMode: CombatWeaponMode): void {
+    if (Number.isFinite(this.swingClosestMetres) && !this.swingContacted && this.misses.length < 32) {
+      this.misses.push({ closestMetres: this.swingClosestMetres, weaponMode });
+    }
+    this.swingClosestMetres = Number.POSITIVE_INFINITY;
+    this.swingContacted = false;
+    this.swingArmedUntil = Number.NEGATIVE_INFINITY;
+  }
+
+  /**
+   * Distance from the weapon — hand to tip — to the surface of the target's
+   * capsule; zero or negative when it is inside. The whole segment counts, so
+   * a swing is not lost to a guess about which way the blade leaves the grip.
+   */
+  private resolveTargetContact(
+    dominantPose: XRWorldPose,
+    rayPose: XRWorldPose | null,
+    offhandPose: XRWorldPose | null,
+    weaponMode: CombatWeaponMode,
+    volume: VRCombatTargetVolume,
+  ): number {
+    const length = weaponMode === 'unarmed'
+      ? this.configuration.fistReachMetres
+      : this.configuration.bladeLengthMetres;
+    const along = offhandPose ? offhandPose.position.clone().sub(dominantPose.position) : null;
+    const direction = along && along.lengthSq() > 1e-6
+      ? along.normalize()
+      // One-handed, the weapon points where the controller points: the same
+      // direction the blade-contact sparks (3.13) are drawn along.
+      : new THREE.Vector3(0, 0, -1).applyQuaternion((rayPose ?? dominantPose).orientation);
+    const hand = dominantPose.position;
+    const tip = hand.clone().addScaledVector(direction, length);
+    const axisBottom = volume.base;
+    const axisTop = volume.base.clone().setZ(volume.base.z + Math.max(0, volume.heightMetres));
+    return segmentDistance(hand, tip, axisBottom, axisTop) - Math.max(0, volume.radiusMetres);
   }
 
   /**
@@ -206,6 +330,9 @@ export class VRCombatInputController {
     this.resetMeleeSample();
     this.lastVisualSwingAt = Number.NEGATIVE_INFINITY;
     this.weaponActionHeld = false;
+    this.swingArmedUntil = Number.NEGATIVE_INFINITY;
+    this.swingClosestMetres = Number.POSITIVE_INFINITY;
+    this.swingContacted = false;
   }
 
   private processDominantTrigger(
@@ -282,4 +409,42 @@ export class VRCombatInputController {
       if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${name} must be finite and positive`);
     }
   }
+}
+
+/** Shortest distance between segments p1-q1 and p2-q2 (Ericson, Real-Time Collision Detection 5.1.9). */
+function segmentDistance(p1: THREE.Vector3, q1: THREE.Vector3, p2: THREE.Vector3, q2: THREE.Vector3): number {
+  const d1 = q1.clone().sub(p1);
+  const d2 = q2.clone().sub(p2);
+  const r = p1.clone().sub(p2);
+  const a = d1.lengthSq();
+  const e = d2.lengthSq();
+  const f = d2.dot(r);
+  let s: number;
+  let t: number;
+  if (a <= 1e-9 && e <= 1e-9) return p1.distanceTo(p2);
+  if (a <= 1e-9) {
+    s = 0;
+    t = THREE.MathUtils.clamp(f / e, 0, 1);
+  } else {
+    const c = d1.dot(r);
+    if (e <= 1e-9) {
+      t = 0;
+      s = THREE.MathUtils.clamp(-c / a, 0, 1);
+    } else {
+      const b = d1.dot(d2);
+      const denom = a * e - b * b;
+      s = denom > 1e-9 ? THREE.MathUtils.clamp((b * f - c * e) / denom, 0, 1) : 0;
+      t = (b * s + f) / e;
+      if (t < 0) {
+        t = 0;
+        s = THREE.MathUtils.clamp(-c / a, 0, 1);
+      } else if (t > 1) {
+        t = 1;
+        s = THREE.MathUtils.clamp((b - c) / a, 0, 1);
+      }
+    }
+  }
+  const c1 = p1.clone().addScaledVector(d1, s);
+  const c2 = p2.clone().addScaledVector(d2, t);
+  return c1.distanceTo(c2);
 }

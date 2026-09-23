@@ -912,6 +912,28 @@ function dispatchVREmbodiedCombatInput(
   return false;
 }
 
+/**
+ * ROADMAP 3.16 — the space a melee swing must pass through to count: a
+ * vertical capsule on the target's feet. The radius is the appearance's
+ * personal space, the same number the engine keeps creatures apart by.
+ */
+function resolveVRCombatTargetVolume(target: ModuleObject | null) {
+  if (!target?.position) return null;
+  const creature = target as ModuleCreature;
+  const personalSpace = typeof creature.getPersonalSpace === 'function' ? Number(creature.getPersonalSpace()) : NaN;
+  return {
+    base: target.position.clone(),
+    heightMetres: VR_COMBAT_TARGET_HEIGHT_METRES,
+    radiusMetres: Number.isFinite(personalSpace) && personalSpace > 0
+      ? Math.max(personalSpace, VR_COMBAT_TARGET_MIN_RADIUS_METRES)
+      : VR_COMBAT_TARGET_DEFAULT_RADIUS_METRES,
+  };
+}
+
+const VR_COMBAT_TARGET_HEIGHT_METRES = 1.9;
+const VR_COMBAT_TARGET_MIN_RADIUS_METRES = 0.3;
+const VR_COMBAT_TARGET_DEFAULT_RADIUS_METRES = 0.5;
+
 /** Once per drop reason, so a fight cannot flood the console. */
 const reportedVRSwingBufferDrops = new Set<string>();
 
@@ -3090,6 +3112,7 @@ export class GameState implements EngineContext {
           onGrenadeTrigger: () => {
             commitVRArmedGrenade(actor, target ? String(target.id) : null);
           },
+          nominatedTargetVolume: resolveVRCombatTargetVolume(target),
           // Chest height on the target, matching the engine-derived bolts.
           nominatedTargetAimPoint: target?.position
             ? target.position.clone().setZ(target.position.z + 1.0)

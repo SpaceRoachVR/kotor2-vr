@@ -330,6 +330,11 @@ export interface VRSpikeHooks {
      * the off-hand trigger shoots instead of throwing.
      */
     readonly offhandShotAvailable?: boolean;
+    /**
+     * ROADMAP 3.16 — the capsule a melee swing must pass through to count.
+     * Null without a target; absent keeps the speed-only rule.
+     */
+    readonly nominatedTargetVolume?: import('./runtime/VRCombatInputController').VRCombatTargetVolume | null;
     /** Where a shot at the locked target should land, in world space; null without one. */
     readonly nominatedTargetAimPoint?: THREE.Vector3 | null;
     /** Plays the equipped blaster's own shot sound. Presentation only. */
@@ -2421,13 +2426,34 @@ export class VRSpike {
         dominantHand,
         offhandHand,
         allowDominantTrigger: context.allowDominantTrigger === true,
+        nominatedTargetVolume: context.nominatedTargetVolume ?? null,
       });
+      VRSpike.reportSwingMisses();
       for (const event of events) context.onCombatSwing(event);
     } catch (error) {
       if (!VRSpike.combatInputErrorReported) {
         VRSpike.combatInputErrorReported = true;
         console.error('[VRSpike] combat input rejected', error);
       }
+    }
+  }
+
+  private static reportedSwingMisses = 0;
+
+  /**
+   * TEMPORARY (ROADMAP 3.16): the contact slack is a guess until it is tuned
+   * from real play. The first few fast swings that never reached the target
+   * are logged with how close they came, so a headset session shows whether
+   * genuine swings are being refused. Remove once tuned.
+   */
+  private static reportSwingMisses(): void {
+    for (const miss of VRSpike.combatInputController.drainMisses()) {
+      if (VRSpike.reportedSwingMisses >= 12) return;
+      VRSpike.reportedSwingMisses += 1;
+      console.info(
+        `[VR combat swing] TEMPORARY missed target volume by ${miss.closestMetres.toFixed(2)} m ` +
+        `(slack 0.75) weapon=${miss.weaponMode}`,
+      );
     }
   }
 

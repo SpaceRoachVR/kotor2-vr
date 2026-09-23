@@ -168,6 +168,59 @@ describe('VRCombatInputController', () => {
   });
 });
 
+describe('swings must reach their target (ROADMAP 3.16)', () => {
+  // The frame helper holds the hand at (0, y, -0.4) with identity orientation,
+  // so the weapon runs from there down -Z. A capsule based at z = -2 and 1.9 m
+  // tall spans it.
+  const volume = (x: number) => ({ base: new THREE.Vector3(x, 0, -2), heightMetres: 1.9, radiusMetres: 0.5 });
+  const at = (timestamp: number, x: number | null) => ({
+    ...context('melee-one-handed', timestamp),
+    nominatedTargetVolume: x === null ? null : volume(x),
+  });
+
+  test('a swing through the target counts, and reports how close it came', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+    controller.process(frame(0, 0), at(0, 0.5));
+    const swing = controller.process(frame(160, -0.3), at(160, 0.5));
+    expect(swing).toEqual([expect.objectContaining({ input: 'dominant-swing' })]);
+    // Hand at (0, -0.3), capsule axis at (0.5, 0): 0.58 m minus the 0.5 m radius.
+    expect(swing[0].targetContactMetres).toBeCloseTo(0.083, 2);
+  });
+
+  test('a fast swing at empty air beside the target does not count, and is reported as a miss', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+    controller.process(frame(0, 0), at(0, 5));
+    expect(controller.process(frame(160, -0.3), at(160, 5))).toEqual([]);
+    // The hand stops; once the swing window closes the miss is recorded.
+    expect(controller.process(frame(600, -0.3), at(600, 5))).toEqual([]);
+    const misses = controller.drainMisses();
+    expect(misses).toHaveLength(1);
+    expect(misses[0].closestMetres).toBeCloseTo(4.5, 1);
+    expect(controller.drainMisses()).toHaveLength(0);
+  });
+
+  test('the blade may arrive a moment after the hand was fastest', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+    controller.process(frame(0, 0), at(0, 3));
+    expect(controller.process(frame(160, -0.3), at(160, 3))).toEqual([]);
+    // Slow now, but still inside the 250 ms window, and the weapon is at the target.
+    expect(controller.process(frame(260, -0.3), at(260, 0.5))).toHaveLength(1);
+    expect(controller.process(frame(700, -0.3), at(700, 3))).toEqual([]);
+  });
+
+  test('is forgiving: passing within the slack of the body still counts', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+    controller.process(frame(0, 0), at(0, 1.2));
+    expect(controller.process(frame(160, -0.3), at(160, 1.2))).toHaveLength(1);
+  });
+
+  test('without a target volume the old speed-only rule stands', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+    controller.process(frame(0, 0), at(0, null));
+    expect(controller.process(frame(160, -0.3), at(160, null))).toHaveLength(1);
+  });
+});
+
 function context(
   weaponMode: CombatWeaponMode,
   timestamp: number,

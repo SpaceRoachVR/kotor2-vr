@@ -1345,7 +1345,7 @@ belong together.
     the left controller and a left-hand swing hits the ringed enemy. There is a
     unit test for both hands.
 
-- **3.16** ☐ **A swing must go toward its target.** Today any movement faster than
+- **3.16** ✅ implemented (2026-09-23) / ☐ headset-accepted, ☐ tuned — **A swing must go toward its target.** A fast movement arms a 250 ms window; the swing counts when the weapon segment (hand to 0.9 m along the controller's pointing ray, 0.15 m unarmed, along the hands for a two-handed grip) comes within 0.75 m of the target's capsule (feet, 1.9 m tall, radius = appearance `perspace`, min 0.3, default 0.5). Target *nomination* still comes from the soft lock, not the sweep: a sweep that nominates would fight the lock's dwell and grace rules, and the lock already follows the weapon hand (3.15). A TEMPORARY log reports the first 12 swings that missed and by how much, so the slack can be tuned from Allen's play. Original statement: Today any movement faster than
   0.8 m/s counts as a swing at the locked enemy, wherever the blade actually
   goes. Require the blade sample point to pass through a generous volume around
   the target — its radius plus melee reach slack. Let the blade's sweep
