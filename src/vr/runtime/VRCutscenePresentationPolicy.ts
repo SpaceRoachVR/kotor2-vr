@@ -47,7 +47,12 @@ export interface VRCutsceneShot {
  * geometry says: an adjacent corridor looking in, or a room the engine resolved
  * imprecisely.
  */
-export const VR_CUTSCENE_NEARBY_METRES = 6;
+// Round 12: 6 m sent the Peragus wake-up (101awake) to the theater: its cameras
+// stand 2-12 m from the player in the medbay, and one wide shot from camera 33
+// (12.4 m) made the whole conversation a video. 15 m matches the distance a
+// conversation partner counts as right here (Atton, 11-12 m). Real feeds are
+// far beyond it: the Ebon Hawk feeds are 38-64 m from the cockpit.
+export const VR_CUTSCENE_NEARBY_METRES = 15;
 
 /**
  * A creature this close is someone the player is talking to face to face, even

@@ -205,3 +205,22 @@ describe('a camera shot of someone the player is facing stays in the world', () 
     }))).toBe('theater');
   });
 });
+
+// Round 12: "remove the camera video on the Awaken scene at the start of
+// Peragus." 101awake's cameras stand 2-12 m from the 101PER entry point; one
+// wide shot from camera 33 made the whole wake-up a video.
+describe('the Peragus wake-up (101awake) stays in the world', () => {
+  const entry = new THREE.Vector3(1.63, 23.97, 9.06);
+  const cameras: [number, THREE.Vector3][] = [
+    [6, new THREE.Vector3(-1.1, 20.1, 9.0)], [24, new THREE.Vector3(0.4, 22.2, 9.0)],
+    [32, new THREE.Vector3(-2.3, 18.3, 9.0)], [33, new THREE.Vector3(-5.5, 13.8, 9.1)],
+    [34, new THREE.Vector3(-1.5, 20.3, 9.0)], [35, new THREE.Vector3(-4.4, 18.2, 9.0)],
+    [39, new THREE.Vector3(-2.0, 23.8, 9.0)],
+  ];
+  test.each(cameras)('camera %i is not a remote shot', (_id, cameraPosition) => {
+    expect(resolveVRCutscenePresentation(shot({
+      animatedCutscene: true, cameraKind: 'placeable', cameraPosition,
+      playerPosition: entry, isOverPlayerRoom: () => false,
+    }))).toBe('world');
+  });
+});
