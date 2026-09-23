@@ -86,10 +86,14 @@ describe('first-person body suppression is wired to the right render', () => {
    * a shot while the player stands in the real room; the prerendered-movie path
    * already hides the whole world behind its screen.
    */
-  test('does not touch the cutscene or movie theater renders', () => {
+  test('keeps the body in cutscene theater shots unless the camera is inside it', () => {
+    // Round 12: at Atton's cell the authored camera stood where the player
+    // stood, and the shot was filmed from inside the Exile. Only that case hides.
     const cutsceneAt = spike.indexOf('private static renderCutscene(');
     expect(cutsceneAt).toBeGreaterThan(-1);
-    expect(spike.slice(cutsceneAt)).not.toContain('hidePlayerBodyForFirstPerson');
+    const cutscene = spike.slice(cutsceneAt);
+    expect(cutscene.split('hidePlayerBodyForFirstPerson(').length - 1).toBe(1);
+    expect(cutscene).toMatch(/isCameraInsideBody\(cameraPosition, feet\)\s*\?\s*hidePlayerBodyForFirstPerson\(playerBody\)/);
 
     const movieAt = spike.indexOf('static renderMovie(');
     const movieEnd = spike.indexOf('private static renderCutscene(', movieAt);
@@ -119,5 +123,24 @@ describe('first-person body suppression is wired to the right render', () => {
     const helper = game.slice(helperAt, game.indexOf('public static getMiniGameSeat()', helperAt));
     expect(helper).toContain('GameState.getCurrentPlayer()?.model');
     expect(helper).not.toContain('PartyManager.Player');
+  });
+});
+
+describe('isCameraInsideBody', () => {
+  const { isCameraInsideBody } = require('@/vr/runtime/VRFirstPersonBody');
+  const feet = { x: 76.2, y: -13.0, z: 9.06 };
+
+  test('a camera standing where the player stands is inside the body (camera 21 at the cell)', () => {
+    expect(isCameraInsideBody({ x: 76.1, y: -13.1, z: 10.6 }, feet)).toBe(true);
+  });
+
+  test('a camera a step away, above the head or below the floor is not', () => {
+    expect(isCameraInsideBody({ x: 77.2, y: -13.1, z: 10.6 }, feet)).toBe(false);
+    expect(isCameraInsideBody({ x: 76.1, y: -13.1, z: 12.0 }, feet)).toBe(false);
+    expect(isCameraInsideBody({ x: 76.1, y: -13.1, z: 8.0 }, feet)).toBe(false);
+  });
+
+  test('bad numbers never hide the body', () => {
+    expect(isCameraInsideBody({ x: NaN, y: 0, z: 0 }, feet)).toBe(false);
   });
 });

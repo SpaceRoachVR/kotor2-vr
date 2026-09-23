@@ -39,7 +39,7 @@ import { resolveVRTeleportAim } from "./runtime/VRTeleportAimResolver";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
 import { hideWorldForTheater } from "./runtime/VRTheaterWorldVisibility";
-import { hidePlayerBodyForFirstPerson } from "./runtime/VRFirstPersonBody";
+import { hidePlayerBodyForFirstPerson, isCameraInsideBody } from "./runtime/VRFirstPersonBody";
 import { hideGuiRootsForPanel } from "./runtime/VRPanelSceneVisibility";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
 import { VRRecenterHoldGate } from "./runtime/VRRecenterHoldGate";
@@ -3528,7 +3528,7 @@ export class VRSpike {
 
     if (theaterCutscene) {
       VRSpike.clearWorldActionPrompt(false);
-      VRSpike.renderCutscene(worldCamera, frameTimestamp);
+      VRSpike.renderCutscene(worldCamera, frameTimestamp, playerBody);
       return;
     }
     // Nothing in the world path draws the theater, so nothing may leave it up.
@@ -3705,7 +3705,7 @@ export class VRSpike {
    * control. Keeping both layers on one surface prevents floating captions
    * and letterbox geometry from diverging from a camera cut.
    */
-  private static renderCutscene(worldCamera: THREE.Camera, frameTimestamp: number): void {
+  private static renderCutscene(worldCamera: THREE.Camera, frameTimestamp: number, playerBody?: THREE.Object3D | null): void {
     const renderer = VRSpike.renderer;
     const worldScene = VRSpike.scene;
     const inputFrame = VRSpike.latestInputFrame;
@@ -3794,7 +3794,17 @@ export class VRSpike {
         } catch {
           // Diagnostics must never disturb an authored shot.
         }
-        VRSpike.movieHost.renderGuiLayers(renderer, layers);
+        // The body belongs in a theater shot unless the camera is inside it.
+        const cameraPosition = worldCamera.getWorldPosition(new THREE.Vector3());
+        const feet = playerBody ? playerBody.getWorldPosition(new THREE.Vector3()) : null;
+        const restoreBody = playerBody && feet && isCameraInsideBody(cameraPosition, feet)
+          ? hidePlayerBodyForFirstPerson(playerBody)
+          : () => {};
+        try {
+          VRSpike.movieHost.renderGuiLayers(renderer, layers);
+        } finally {
+          restoreBody();
+        }
       } finally {
         VRSpike.movieHost.object.visible = movieVisible;
         if (VRSpike.panelHost) VRSpike.panelHost.object.visible = panelVisible;

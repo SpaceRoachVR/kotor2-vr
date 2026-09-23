@@ -42,3 +42,25 @@ export function hidePlayerBodyForFirstPerson(
   body.visible = false;
   return () => { body.visible = true; };
 }
+
+export interface VRPointLike { readonly x: number; readonly y: number; readonly z: number; }
+
+/**
+ * Whether an authored camera sits inside the player's own body.
+ *
+ * A theater shot films the scene from the authored camera, and the body belongs
+ * in that picture (see above) - unless the player has walked onto the spot the
+ * camera stands at. Round 12: at Atton's cell, camera 21 (76.1, -13.1) is where
+ * the player stands at the cell door, and the shot was filmed from inside the
+ * Exile's model. The body is an upright cylinder on the feet (Z up).
+ */
+export function isCameraInsideBody(
+  camera: VRPointLike,
+  feet: VRPointLike,
+  radiusMetres = 0.6,
+  heightMetres = 2.2,
+): boolean {
+  if (![camera.x, camera.y, camera.z, feet.x, feet.y, feet.z].every(Number.isFinite)) return false;
+  const horizontal = Math.hypot(camera.x - feet.x, camera.y - feet.y);
+  return horizontal <= radiusMetres && camera.z >= feet.z - 0.2 && camera.z <= feet.z + heightMetres;
+}
