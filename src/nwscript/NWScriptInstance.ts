@@ -1,3 +1,4 @@
+import { ShapeQueryIterator } from "@/nwscript/ShapeQueryIterator";
 import type EngineLocation from "@/engine/EngineLocation";
 import { NWScriptDataType } from "@/enums/nwscript/NWScriptDataType";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
@@ -95,7 +96,8 @@ export class NWScriptInstance {
   creatureEffectIndex: Map<number, number> = new Map<number, number>();
   creatureAttackerIndex: Map<number, number> = new Map<number, number>();
   factionMemberIndex: Map<number, number> = new Map<number, number>();
-  objectInSphapeIndex: Map<number, number> = new Map<number, number>();
+  /** GetFirst/NextObjectInShape: one stored list, as retail keeps it. */
+  shapeQuery: ShapeQueryIterator<any> = new ShapeQueryIterator<any>();
 
   breakPoints: Map<number, boolean> = new Map<number, boolean>();
 
@@ -246,7 +248,7 @@ export class NWScriptInstance {
     this.creatureEffectIndex.clear()
     this.creatureAttackerIndex.clear()
     this.factionMemberIndex.clear()
-    this.objectInSphapeIndex.clear()
+    this.shapeQuery.reset()
 
     this.mgBullet = undefined;
     this.mgFollower = undefined;
@@ -282,7 +284,7 @@ export class NWScriptInstance {
     this.creatureEffectIndex = new Map<number, number>();
     this.creatureAttackerIndex = new Map<number, number>();
     this.factionMemberIndex = new Map<number, number>();
-    this.objectInSphapeIndex = new Map<number, number>();
+    this.shapeQuery = new ShapeQueryIterator<any>();
 
     if(this.globalCache != null){
       //I'm trying to cache instructions from the global scope so they are not processed again when the script is run again.

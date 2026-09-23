@@ -55,37 +55,6 @@ import { DLGNode } from "@/resource/DLGNode";
  */
 export class NWScriptDefK1 extends NWScriptDef { }
 
-/**
- * TEMPORARY (round 6): name what runs GetFirstObjectInShape hundreds of times a
- * second. In 103PER it ran ~460 loops/s from arrival until the page crashed;
- * the retail heartbeat is 3 s, so something is re-firing a script every frame.
- * Counts calls per script and caller and reports, at most every 10 s, any
- * source above 20 calls/s. Remove once the looping script is identified.
- */
-const shapeQueryCounts = new Map<string, number>();
-let shapeQueryWindowStart = 0;
-function reportShapeQueryRate(instance: NWScriptInstance){
-  try{
-    const now = performance.now();
-    if(!shapeQueryWindowStart) shapeQueryWindowStart = now;
-    const caller = instance?.caller as any;
-    const key = `${instance?.name ?? '?'} caller=${caller?.getTag?.() || caller?.tag || '?'}#${caller?.id ?? '?'}`;
-    shapeQueryCounts.set(key, (shapeQueryCounts.get(key) || 0) + 1);
-    const elapsed = (now - shapeQueryWindowStart) / 1000;
-    if(elapsed < 10) return;
-    const hot = [...shapeQueryCounts.entries()]
-      .map(([k, n]) => [k, n / elapsed] as const)
-      .filter(([, rate]) => rate > 20)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8);
-    if(hot.length){
-      console.warn('[NWScript] TEMPORARY hot GetFirstObjectInShape callers (calls/s): ' +
-        hot.map(([k, r]) => `${k}=${r.toFixed(0)}`).join(' | '));
-    }
-    shapeQueryCounts.clear();
-    shapeQueryWindowStart = now;
-  }catch{ /* diagnostics must never break a script */ }
-}
 NWScriptDefK1.Actions = {
   0:{
     comment: "0: Get an integer between 0 and nMaxInteger-1.\nReturn value on error: 0\n",
@@ -1745,14 +1714,11 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.OBJECT,
     args: [NWScriptDataType.INTEGER, NWScriptDataType.FLOAT, NWScriptDataType.LOCATION, NWScriptDataType.INTEGER, NWScriptDataType.INTEGER, NWScriptDataType.VECTOR],
     action: function(this: NWScriptInstance, args: [number, number, EngineLocation, number, number, THREE.Vector3]){
-      this.objectInSphapeIndex.set(args[0], 0);
-      const ls = GameState.ModuleObjectManager.GetObjectsInShape(args[0], args[1], args[2], !!args[3], args[4], args[5], 0);
-      // No per-call logging. This and GetNextObjectInShape logged every call,
-      // and in 103PER something ran them ~460 times a second: 4.07 million of
-      // a 4.08 million line console in one session, which with DevTools open
-      // dragged frame rate and audio down until the page crashed.
-      reportShapeQueryRate(this);
-      return ls;
+      // The whole list, once; GetNext walks it (see ShapeQueryIterator). No
+      // per-call logging: in 103PER this ran ~460 times a second in round 6
+      // and 140,000 in round 12, and logging each call crashed the page.
+      const objects = GameState.ModuleObjectManager.GetObjectsInShape(args[0], args[1], args[2], !!args[3], args[4], args[5], -1);
+      return this.shapeQuery.first(objects as ModuleObject[]);
     }
   },
   129:{
@@ -1761,10 +1727,9 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.OBJECT,
     args: [NWScriptDataType.INTEGER, NWScriptDataType.FLOAT, NWScriptDataType.LOCATION, NWScriptDataType.INTEGER, NWScriptDataType.INTEGER, NWScriptDataType.VECTOR],
     action: function(this: NWScriptInstance, args: [number, number, EngineLocation, number, number, THREE.Vector3]){
-      const nextId = this.objectInSphapeIndex.get(args[0]) + 1;
-      this.objectInSphapeIndex.set(args[0], nextId);
-      const ls = GameState.ModuleObjectManager.GetObjectsInShape(args[0], args[1], args[2], !!args[3], args[4], args[5], nextId);
-      return ls;
+      // Walks the list GetFirst stored. Rebuilding it here from this call's own
+      // radius, with a cursor shared by every sphere, looped nested scans forever.
+      return this.shapeQuery.next();
     }
   },
   130:{
