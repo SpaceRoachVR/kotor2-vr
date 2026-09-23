@@ -31,11 +31,34 @@ function shot(overrides: Partial<VRCutsceneShot> = {}): VRCutsceneShot {
 }
 
 describe('resolveVRCutscenePresentation', () => {
-  test('an animated cutscene DLG is a cinematic throughout', () => {
-    expect(resolveVRCutscenePresentation(shot({ animatedCutscene: true }))).toBe('theater');
+  // Round 11: "movie still shows in kreia introduction scene and in first
+  // peragus 'awaken' scene when they shouldn't." Both were sent to the theater
+  // by being cinematic, not by being somewhere the player cannot see.
+  test('an animated cutscene filmed in the player room stays in the world (101awake)', () => {
+    expect(resolveVRCutscenePresentation(shot({
+      animatedCutscene: true, cameraKind: 'placeable', cameraPosition: new THREE.Vector3(55.2, 82.1, 4.8),
+    }))).toBe('world');
   });
 
-  test('a shot through an animated camera goes to the theater', () => {
+  test('an animated cutscene of a remote place is still shown', () => {
+    expect(resolveVRCutscenePresentation(shot({
+      animatedCutscene: true, cameraKind: 'placeable', cameraPosition: new THREE.Vector3(55, 40.8, 3.1),
+    }))).toBe('theater');
+  });
+
+  test('an animated camera moving around the player conversation stays in the world (101kreia)', () => {
+    expect(resolveVRCutscenePresentation(shot({
+      cameraKind: 'animated', cameraPosition: new THREE.Vector3(52.1, 80.4, 3.9),
+    }))).toBe('world');
+  });
+
+  test('an animated camera somewhere the player cannot see goes to the theater', () => {
+    expect(resolveVRCutscenePresentation(shot({
+      cameraKind: 'animated', cameraPosition: new THREE.Vector3(48.4, 16, 4.7),
+    }))).toBe('theater');
+  });
+
+  test('an animated camera with no known position is shown rather than lost', () => {
     expect(resolveVRCutscenePresentation(shot({ cameraKind: 'animated' }))).toBe('theater');
   });
 
@@ -131,5 +154,14 @@ describe('isVRCutscenePointRemote', () => {
 
   test('with no idea where the player is, every point is remote', () => {
     expect(isVRCutscenePointRemote(new THREE.Vector3(57, 81, 2), null, null)).toBe(true);
+  });
+});
+
+describe('the engine hands the policy every camera position it has', () => {
+  test('placed and animated cameras both report where they are', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const game = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
+    expect(game).toContain("const cameraPosition = cameraKind !== 'dialog' && camera");
   });
 });

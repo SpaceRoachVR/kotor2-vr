@@ -68,8 +68,10 @@ export function isVRCutscenePointRemote(
  * outside of the room the player is in (such as the intro movie and camera
  * feeds or past video logs) should still show."
  *
- * 1. A DLG authored as an animated cutscene is a cinematic throughout.
- * 2. A shot through an animated camera is authored camera motion: theater.
+ * 1. (Revised round 11.) An animated cutscene DLG is judged shot by shot like
+ *    any other; the flag does not send it to the theater by itself.
+ * 2. (Revised round 11.) An animated camera is judged like a placed one: by
+ *    whether the player could see where it is.
  * 3. A placed camera the player could not see from here — the Ebon Hawk adrift
  *    outside, the hyperdrive, a security feed — is theater. A placed camera in
  *    the player's own room is just another angle on what they are looking at,
@@ -85,10 +87,14 @@ export function isVRCutscenePointRemote(
  * with T3-M4.
  */
 export function resolveVRCutscenePresentation(shot: VRCutsceneShot): VRCutscenePresentation {
-  if (shot.animatedCutscene) return 'theater';
-  if (shot.cameraKind === 'animated') return 'theater';
-
-  if (shot.cameraKind === 'placeable') {
+  // Round 11 revised rules 1 and 2. Being authored as a cinematic, or shot
+  // through a moving camera, says the player is not in control, not that the
+  // player cannot see it. 101awake is AnimatedCut and every shot is a placed
+  // camera in the medbay the player lies in; 101kreia's animated camera moves
+  // around the conversation the player is standing in. Both went to the theater
+  // and Allen flagged both. Every camera shot is now judged by where the camera
+  // is, the placed-camera test below.
+  if (shot.cameraKind === 'animated' || shot.cameraKind === 'placeable') {
     if (shot.theaterAlreadyShown) return 'theater';
     if (!shot.cameraPosition) return 'theater';
     return isVRCutscenePointRemote(shot.cameraPosition, shot.playerPosition, shot.isOverPlayerRoom)

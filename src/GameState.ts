@@ -273,7 +273,9 @@ function resolveCurrentVRCutscenePresentation(): VRCutscenePresentation {
     ? 'animated'
     : cameraState?.mode === CameraMode.PLACEABLE ? 'placeable' : 'dialog';
   const camera = GameState.currentCamera;
-  const cameraPosition = cameraKind === 'placeable' && camera
+  // The animated camera is the current camera while it plays; the policy needs
+  // its position to tell a move around the player from a remote shot.
+  const cameraPosition = cameraKind !== 'dialog' && camera
     ? camera.getWorldPosition(new THREE.Vector3())
     : null;
   const participantPositions: THREE.Vector3[] = [];
