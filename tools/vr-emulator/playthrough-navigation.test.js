@@ -106,7 +106,8 @@ test('completes each authored console action in sequence before allowing a check
   assert.equal(choose(['Slice', 'Log out'], { replyScripts: ['a_ia_use_comspk', ''] }), 0);
   assert.equal(choose(['Open door', 'Log out'], { replyScripts: ['a_set001dr', ''] }), 0);
   assert.doesNotThrow(() => choose.assertCompleted());
-  assert.throws(() => choose(['Log out'], { replyScripts: [''] }), /unexpected additional choice/i);
+  assert.equal(choose(['Log out'], { replyScripts: [''] }), 0);
+  assert.throws(() => choose(['Stay'], { replyScripts: [''] }), /no 'log out\.' was offered/i);
 
   const incomplete = createRequiredDialogueScriptSequence(['a_ia_use_comspk', 'a_set001dr'], 'Communications Console');
   assert.equal(incomplete(['Slice'], { replyScripts: ['a_ia_use_comspk'] }), 0);
@@ -170,9 +171,9 @@ test('validates checkpoint claims before SaveCurrentGame can write them', () => 
   );
 });
 
-test('only standard dialogue blocks locomotion progression', () => {
+test('conversation menus block locomotion progression', () => {
   assert.equal(isProgressBlockingForeground('InGameDialog'), true);
-  assert.equal(isProgressBlockingForeground('InGameComputer'), false);
+  assert.equal(isProgressBlockingForeground('InGameComputer'), true);
   assert.equal(isProgressBlockingForeground('MenuContainer'), false);
 });
 
@@ -189,8 +190,8 @@ test('allows hit-radius margin at intermediate walkmesh waypoints', () => {
 test('keeps a local direct-stick request distinct from route-planned navigation', () => {
   const source = require('node:fs').readFileSync(require.resolve('./playthrough-steps'), 'utf8');
   assert.match(source, /async function navigateTo\(harness, \{[\s\S]*?usePath = true,[\s\S]*?\}\)/);
-  assert.match(source, /moveTo\(harness, \{ x, y, z, range, label, usePath \}\)/);
-  assert.match(source, /if \(!usePath\) \{[\s\S]*?refusing walkmesh door recovery/);
+  assert.match(source, /moveTo\(harness, \{ x, y, z, range, label, usePath: attemptUsesPath \}\)/);
+  assert.match(source, /if \(!usePath && attempt >= maxAttempts\) \{[\s\S]*?refusing walkmesh door recovery/);
 });
 
 test('allows a story route to refuse unapproved automatic door interactions', () => {
@@ -215,7 +216,7 @@ test('can pin a repeated authored tag to one exact module object', () => {
   const source = require('node:fs').readFileSync(require.resolve('./playthrough-steps'), 'utf8');
   assert.match(source, /targetId = null/);
   assert.match(source, /matches\.find\(\(candidate\) => candidate\.id === targetId\)/);
-  assert.match(source, /targetId: 200,[\s\S]*?actionLabel: 'Security'/);
+  assert.match(source, /tag: '001EBODrSec',[\s\S]*?actionLabel: 'Security',[\s\S]*?targetId: target\.id/);
 });
 
 test('selects a concrete tagged exterior target before probing its VR action', () => {
@@ -257,7 +258,7 @@ test('uses the return lift only through its authored VR prompt', () => {
 
 test('uses the returned Ebon Hawk state to take the authored Galaxy Map completion route', () => {
   const source = require('node:fs').readFileSync(require.resolve('./playthrough-steps'), 'utf8');
-  assert.match(source, /args\.resume === 'ebon-return-lift-entered'/);
+  assert.match(source, /RETURNED_TO_EBON_HAWK\.has\(args\.resume\)/);
   assert.match(source, /survey the authored Ebon Hawk objective after returning from the exterior/);
   assert.match(source, /return-lift checkpoint loaded \$\{state\.moduleName\}; expected 001ebo/);
   assert.match(source, /Workbench is an optional garage-access tutorial/);

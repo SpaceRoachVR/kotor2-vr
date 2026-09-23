@@ -57,12 +57,11 @@ fresh webpack build. The texture gate now checks the exact retail-verified
 absent resrefs rather than a permissive numeric threshold; its run observed
 16 distinct known-absent names and no unexpected texture failure.
 
-The broader optional `tools/vr-emulator/*.test.js` Node suite is not fully
-green in this worktree: five pre-existing `playthrough-navigation.test.js`
-assertions fail against its current route implementation (32/37 in that file).
-These route tests and implementation were not modified for parity observability.
-This is a separate test-drift issue, not headset acceptance or a claim that
-those playthrough routes pass.
+Five stale `playthrough-navigation.test.js` assertions at this branch's fork
+point were updated to match the current authored route implementation without
+changing gameplay code. The broader `tools/vr-emulator/*.test.js` Node suite
+now passes 91/91. These source-level route tests and the emulated check do not
+prove a complete Peragus playthrough or headset behavior.
 
 ## Fresh 101PER capture and comparison
 
