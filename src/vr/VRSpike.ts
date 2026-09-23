@@ -3194,6 +3194,36 @@ export class VRSpike {
   }
 
   /**
+   * Where the player's ears are while presenting: the headset, in world space.
+   *
+   * The engine placed the audio listener on `GameState.currentCamera`, the
+   * flatscreen follow camera, which no headset movement drives. Measured in a
+   * presenting emulator session it sat 3.3 m from the head and facing the
+   * camera's way, and it stays wherever the player entered VR, so positional
+   * sounds such as doors (50 m range, 10-20% volume by 5-10 m) and mines were
+   * heard from the wrong place or not at all (round 11, G2).
+   *
+   * Fills `position`/`forward` and returns true only while presenting.
+   */
+  static getListenerPose(position: THREE.Vector3, forward: THREE.Vector3): boolean {
+    const renderer = VRSpike.renderer;
+    if (!VRSpike.isPresenting || !renderer || !VRSpike.camera || typeof renderer.xr.getCamera !== 'function') return false;
+    const rig = VRSpike.rig;
+    const xrCamera = (renderer.xr.getCamera as unknown as (sourceCamera: THREE.Camera) => THREE.Camera)(VRSpike.camera);
+    if (!rig || !xrCamera) return false;
+    // The XR camera holds the head pose in tracking space and has no parent,
+    // so its own getWorldPosition() returns that raw pose (measured: 0, 1.6, 0).
+    // The rig is what places tracking space in the world.
+    rig.updateWorldMatrix(true, false);
+    position.copy(xrCamera.position).applyMatrix4(rig.matrixWorld);
+    rig.getWorldQuaternion(VRSpike.listenerRigQuaternion);
+    forward.set(0, 0, -1).applyQuaternion(VRSpike.listenerRigQuaternion.multiply(xrCamera.quaternion));
+    return true;
+  }
+
+  private static readonly listenerRigQuaternion = new THREE.Quaternion();
+
+  /**
    * Stereo render path. Replaces `composer.render()` while presenting.
    *
    * `autoClear` is false engine-wide because the flatscreen path layers world,

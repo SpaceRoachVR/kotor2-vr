@@ -594,6 +594,9 @@ function getVRActionIcon(entry: VRActionMenuEntry): string | undefined {
 const vrCombatIntentQueue = new VRCombatIntentQueue();
 const vrCombatTempoGate = new VRCombatTempoGate();
 const vrArmedGrenadeState = new VRArmedGrenadeState();
+/** Scratch vectors for the headset audio listener, reused every frame. */
+const vrAudioListenerPosition = new THREE.Vector3();
+const vrAudioListenerForward = new THREE.Vector3();
 let vrCombatIntentDispatchInProgress = false;
 let vrCombatQueueActorId: number | null = null;
 let vrCombatQueueWeaponSignature: string | null = null;
@@ -4383,7 +4386,12 @@ export class GameState implements EngineContext {
     }
     VRSpike.traceStartupStage('simulation-complete');
 
-    AudioEngine.GetAudioEngine().update(delta, GameState.currentCamera.position, GameState.currentCamera.rotation, GameState.forwardVector);
+    // In VR the listener is the headset, not the flatscreen follow camera.
+    if(VRSpike.getListenerPose(vrAudioListenerPosition, vrAudioListenerForward)){
+      AudioEngine.GetAudioEngine().update(delta, vrAudioListenerPosition, GameState.currentCamera.rotation, vrAudioListenerForward);
+    }else{
+      AudioEngine.GetAudioEngine().update(delta, GameState.currentCamera.position, GameState.currentCamera.rotation, GameState.forwardVector);
+    }
     VRSpike.traceStartupStage('audio-complete');
 
     const renderCpuStart = performance.now();
