@@ -892,7 +892,40 @@ export class VRSpike {
     if (update.changed && !update.validation.valid) {
       console.warn('[VRSpike] XR controller topology is missing required semantic actions', update);
     }
+    if (update.changed) VRSpike.reportControllerHapticsOnce(sources);
   };
+
+  private static reportedHapticsTopologies = new Set<string>();
+
+  /**
+   * TEMPORARY (round 12, C2): no haptics were felt and every pulse found no
+   * actuator. Names, once per controller set, exactly what each gamepad
+   * exposes so the next round's log says which API this runtime offers.
+   * Remove once haptics are confirmed in the headset.
+   */
+  private static reportControllerHapticsOnce(sources: readonly XRInputSource[]): void {
+    try {
+      const rows = sources.map((source) => {
+        const gamepad = source.gamepad as (Gamepad & {
+          hapticActuators?: readonly unknown[];
+          vibrationActuator?: { type?: string; effects?: readonly string[]; playEffect?: unknown; pulse?: unknown } | null;
+        }) | undefined;
+        const actuators = gamepad?.hapticActuators;
+        const vibration = gamepad?.vibrationActuator;
+        return `${source.handedness}: profiles=${[...source.profiles].join(',')} ` +
+          `hapticActuators=${actuators ? actuators.length : 'none'}` +
+          `${actuators && actuators[0] ? ` pulse=${typeof (actuators[0] as { pulse?: unknown }).pulse}` : ''} ` +
+          `vibrationActuator=${vibration ? `type=${vibration.type ?? '?'} effects=${(vibration.effects ?? []).join('|')} ` +
+            `playEffect=${typeof vibration.playEffect} pulse=${typeof vibration.pulse}` : 'none'}`;
+      });
+      const key = rows.join(' ; ');
+      if (VRSpike.reportedHapticsTopologies.has(key)) return;
+      VRSpike.reportedHapticsTopologies.add(key);
+      console.info(`[VRSpike] TEMPORARY controller haptics: ${key}`);
+    } catch {
+      // Diagnostics must never break input handling.
+    }
+  }
 
   /** Hooks are read at load time, so a host built before they are set still gets hands. */
   private static createControllerAnchorHost(rig: THREE.Object3D): XRControllerAnchorHost {
