@@ -15,6 +15,7 @@ module.exports = {
   testEnvironment: 'node',
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^three/examples/jsm/(.*)$': '<rootDir>/src/tests/mocks/three-esm-stub.js',
   },
   transform: {
     "^.+.ts?$": ["ts-jest", {}],

@@ -177,6 +177,112 @@ cold session can pick one up without re-deriving context. Check off in place.
 The master list of what still needs a human in a headset is
 [HEADSET-TEST-PLAN.md](HEADSET-TEST-PLAN.md).
 
+**2026-09-01 → 2026-09-14 — numbered headset verification rounds (1–10).**
+The two dated sessions above were one-shot: play until it breaks, read the
+console after. Starting 2026-09-01 this became a repeatable loop instead — a
+persistent checklist artifact Allen fills in the headset (pass/fail/note per
+item), read back with `read_db`, against `npm run vr:play` with a live CDP
+console tailer and in-page state queries
+([[kotor2-vr-live-headset-debugging]] / [[kotor2-vr-headset-verification-rounds]]
+in project memory). Each round removes what passed and carries failures
+forward with their notes, so the list shrinks; ten rounds have run so far,
+2026-09-01 through this morning.
+
+**Confirmed working in the headset, not just the emulator, across rounds 1–9:**
+
+- **Ray-pointer routing.** Every ray-driven surface (Comfort Settings, Blink,
+  the action wheel) now resolves the pointing hand by which hand actually hits
+  the surface, not a hard-coded role. Confirmed both hands work, the ray
+  shows before it hits, and Blink lands where its marker sits.
+- **Security lock "did nothing".** Not a lock-gate or action-parameter bug —
+  each trigger press was re-triggering a fresh 1.5 s action ahead of the
+  last, so holding/mashing the trigger looked like the lock never engaged.
+- **Feat icons unselectable in chargen.** The icon's hit box was computed in
+  world space while its row used the list's offset space, 162 units off from
+  its own row.
+- **Droid vs. human checks.** `racialtypes.2da` is 5 = Droid, 6 = Human, but
+  TSL's equipment-icon gate and the VR hand-presentation code both read
+  `getRace() == 6` as if it meant droid. Fixed in both places — T3-M4 now
+  gets equipment icons and no floating hands.
+- **Held weapons "invisible".** Weapon clones for two-handed grips were
+  scaled 0.01 instead of 1.0 (Odyssey models are metres) — not a visibility
+  or attachment bug.
+- **Cutscene theater rendering.** "All movies show space with stars, audio is
+  correct" survived five plausible source-level theories before pixel-reading
+  the render target directly showed a healthy, animating image — the actual
+  fault was geometry (gaze/panel angle), not the render path.
+- **Lift / exterior "boundaries wrong, shaking".** A head-offset rig bug that
+  only appears when the simulated play space is off-origin; hidden if the
+  headset emulation sits at the play-space centre. Fixed.
+- **"Door does nothing" on repeated tries.** Any thumbstick movement during
+  the 1.5 s open action silently cancelled it (`clearAllActions`); holding
+  still resolved it.
+- **A session-long slowdown ending in a crash.** A leftover `console.log` in
+  an NWScript action produced millions of lines (DevTools retains every
+  logged object), so it was a memory leak, not just a frame-time cost.
+- **"Black screen until I press a button."** An exception thrown every frame
+  inside the XR frame callback was being swallowed after its first report,
+  so nothing redrew. Now reported per distinct signature instead of once.
+- **"Extra NPCs spawning in every area."** Not spawning — retail's own
+  `DoSpecialSpawnIn` logs a party member's `OnSpawn`; expected behaviour
+  misread as a bug.
+- **Grenades / spell targeting.** `k_sup_grenade` "does nothing" was four
+  stacked bugs found by wrapping the live NWScript action table on the page
+  (wrong spell id, impact script never copied, target location dropped to
+  `(0,0,0)`, and a stale-room exception in the test lab masking the real fix).
+  Throw and damage now confirmed working.
+- **Sustained performance floor (Phase 0 gate).** With Virtual Desktop
+  Synchronous Spacewarp off and the headset at 72 Hz: 51.82 FPS raw WebXR,
+  p90 31.0 ms, p99 46.1 ms — a PASS against the user-approved sustained-50
+  floor. Still the only comfort/cadence-adjacent number with real device
+  evidence; reprojection and comfort itself remain unmeasured.
+
+**This morning's round (10), verified in the emulator, headset confirmation
+pending as of this write-up:**
+
+- **The plasma torch vs. the Damaged Door.** The torch was landing every
+  time; the door is authored at 15 HP but was starting at 45 (three times
+  its max), and its hardness-100 script gate — meant to require a
+  door-cutting tool — was never enforced by the engine. Both fixed; the
+  emulator now cuts it open in three hits.
+- **Enemy combat math, several bugs at once.** Attack/defense tables were
+  read one level too high for every creature including the player; a
+  critical threat auto-confirmed as a hit with no second roll; the Mining
+  Laser's −1 penalty was never applied; item/creature damage dice all rolled
+  d8 regardless of what their table said; saves missed on a tie. All now
+  match the values the in-game Combat log itself reports (cross-checked
+  against [[kotor2-tsl-rules-reference]]).
+- **Enemy level scaling.** TSL marks most enemies with an autobalance set
+  that the engine never read; it does now, so enemies scale with the party
+  leader's level on new-area entry (won't visibly change anything at
+  level 1 on Peragus, but matters later).
+- **Door sound effects were silent** because the archive lookup for
+  `sounds.bif` entries was case-sensitive and the table asked for
+  `dr_PER01` while the archive holds `dr_per01`.
+
+**Confirmed still broken as of round 9/10, not yet fixed:**
+
+- No grenade model shows in the off-hand while one is armed (the throw and
+  damage themselves work).
+- No autosave, and no way back to the main menu after a party wipe — Load
+  Game still works as a route back in.
+- Some Peragus NPCs (the Maintenance Officer, Atton) request textures by a
+  base resref the installed packs only ship as numbered variants
+  (`pmbamc01` etc.), so they may show untextured patches.
+- No health readout is drawn in the headset view.
+- Grenades leave from the character's hand rather than the controller.
+- Security Tunnelers work even untrained — confirmed as intentional, not a
+  defect.
+- The sustained-50 floor is not yet re-confirmed in the busier Ebon
+  Hawk/Peragus rooms since the first headset session's 32–36 FPS reading;
+  still the largest open performance risk (H3).
+
+Everything above is still **emulator or single-round device evidence, not a
+closed phase exit** — Phase 1's own exit criterion (Peragus completable in
+flatscreen) and the Phase 0 stereo floor under real play (not a fixed
+90-second window) remain open. See [[kotor2-vr-headset-verification-rounds]]
+for the full per-round detail this summary compresses.
+
 ---
 
 ## Phase 0 — De-risk
