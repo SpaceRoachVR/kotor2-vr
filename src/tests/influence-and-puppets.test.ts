@@ -56,6 +56,18 @@ describe('party table fields', () => {
     expect(party).toContain(needle);
   });
 
+  test('swoop upgrades round-trip as unsigned values, 0 when unset like a fresh retail save', () => {
+    // -1 cannot be written to a DWORD: every save logged
+    // "Field.setValue DWORD OutOfBounds label='PT_SWOOP1' value=-1" (round 11).
+    expect(party).not.toMatch(/SwoopUpgrade\d \?\? -1/);
+    expect(party).toMatch(/static SwoopUpgrade1: number = 0;/);
+    for (const n of [1, 2, 3]) {
+      expect(party).toContain(`setValue((PartyManager.SwoopUpgrade${n} ?? 0) >>> 0);`);
+    }
+    expect(party).toContain("['PT_SWOOP1', 'SwoopUpgrade1']");
+    expect(party).toContain('gff.RootNode.getFieldByLabel(label).getValue() >>> 0');
+  });
+
   test('saved puppets are read back on load', () => {
     expect(party).toContain("gff.RootNode.hasField('PT_PUPPETS')");
     expect(party).toContain('slot.inParty = true;');

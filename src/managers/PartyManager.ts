@@ -107,9 +107,11 @@ export class PartyManager {
   static ChemicalCount: number = 0;
   static ComponentCount: number = 0;
 
-  static SwoopUpgrade1: number = -1;
-  static SwoopUpgrade2: number = -1;
-  static SwoopUpgrade3: number = -1;
+  // PARTYTABLE PT_SWOOP1-3 are unsigned DWORDs. A fresh retail save holds 0
+  // (000002 - Game1); -1 could not be written and logged OutOfBounds on every save.
+  static SwoopUpgrade1: number = 0;
+  static SwoopUpgrade2: number = 0;
+  static SwoopUpgrade3: number = 0;
 
   static #eventListeners: Map<PartyManagerEvent, Function[]> = new Map();
 
@@ -247,6 +249,14 @@ export class PartyManager {
     //TSL: PT_ITEM_CHEMICAL
     if(gff.RootNode.hasField('PT_ITEM_CHEMICAL')){
       GameState.PartyManager.ChemicalCount = gff.RootNode.getFieldByLabel('PT_ITEM_CHEMICAL').getValue();
+    }
+
+    //TSL: PT_SWOOP1-3 were written by save() but never read back, so every load
+    //reset the swoop upgrades.
+    for(const [label, key] of [['PT_SWOOP1', 'SwoopUpgrade1'], ['PT_SWOOP2', 'SwoopUpgrade2'], ['PT_SWOOP3', 'SwoopUpgrade3']] as const){
+      if(gff.RootNode.hasField(label)){
+        GameState.PartyManager[key] = gff.RootNode.getFieldByLabel(label).getValue() >>> 0;
+      }
     }
 
     //TSL: PT_ITEM_COMPONEN
@@ -470,9 +480,9 @@ export class PartyManager {
       // chemicals, components, swoop upgrades and the PC's name.
       partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_ITEM_CHEMICAL')).setValue(PartyManager.ChemicalCount || 0);
       partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_ITEM_COMPONEN')).setValue(PartyManager.ComponentCount || 0);
-      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP1')).setValue(PartyManager.SwoopUpgrade1 ?? -1);
-      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP2')).setValue(PartyManager.SwoopUpgrade2 ?? -1);
-      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP3')).setValue(PartyManager.SwoopUpgrade3 ?? -1);
+      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP1')).setValue((PartyManager.SwoopUpgrade1 ?? 0) >>> 0);
+      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP2')).setValue((PartyManager.SwoopUpgrade2 ?? 0) >>> 0);
+      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP3')).setValue((PartyManager.SwoopUpgrade3 ?? 0) >>> 0);
       partytable.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'PT_PCNAME')).setValue(
         GameState.PartyManager.Player?.getName?.() || ''
       );
