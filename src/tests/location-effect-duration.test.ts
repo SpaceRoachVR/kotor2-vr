@@ -191,7 +191,10 @@ describe('Module.addEffect: links', () => {
       expect(child.getDurationType()).toBe(TEMPORARY);
       expect(child.duration).toBe(3);
       expect(child.expireTime).toBe(4000);
-      expect(child.object).toBe(m);
+      // Attached to the host that carries its model and emitter; the module has
+      // neither, which is how every location visual used to vanish (round 11).
+      expect(child.object).toBe(m.locationEffectHosts.get(child));
+      expect(child.object).not.toBe(m);
     }
     expect(a.applied && b.applied).toBe(true);
     expect(scene.children).toHaveLength(1);
@@ -298,5 +301,21 @@ describe('Module.addEffect: the host', () => {
 
     expect(emitter.destroy).toHaveBeenCalledTimes(1);
     expect(scene.children).toHaveLength(0);
+  });
+});
+
+describe('a location effect draws and plays on its host', () => {
+  test('the host offers what a visual effect reads from its object', () => {
+    const removed: unknown[] = [];
+    const owner = { removeEffect: (e: unknown) => { removed.push(e); } };
+    const host = new LocationEffectHost(new THREE.Vector3(1, 2, 3), undefined, undefined, { tag: 'ctx' }, owner as any);
+    expect(host.model).toBeInstanceOf(THREE.Object3D);
+    expect(host.model.position.toArray()).toEqual([1, 2, 3]);
+    expect(host.rotation).toBeInstanceOf(THREE.Euler);
+    expect(host.quaternion).toBeInstanceOf(THREE.Quaternion);
+    expect(host.context).toEqual({ tag: 'ctx' });
+    const effect = {} as any;
+    host.removeEffect(effect);
+    expect(removed).toEqual([effect]);
   });
 });

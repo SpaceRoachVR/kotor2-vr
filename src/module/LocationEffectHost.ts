@@ -19,6 +19,8 @@ import type { GameEffect } from "@/effects/GameEffect";
 export class LocationEffectHost {
   readonly model = new THREE.Object3D();
   readonly position: THREE.Vector3;
+  readonly rotation = new THREE.Euler();
+  readonly quaternion = new THREE.Quaternion();
   readonly effects: GameEffect[] = [];
   disposed = false;
 
@@ -26,10 +28,24 @@ export class LocationEffectHost {
     position: THREE.Vector3,
     private readonly scene?: THREE.Object3D,
     public audioEmitter?: AudioEmitter,
+    /** What model loading reads as `object.context` (GameState in the game). */
+    readonly context?: unknown,
+    /** Removal goes back through the owner, which keeps the host bookkeeping. */
+    private readonly owner?: { removeEffect(effect: GameEffect): void },
   ){
     this.position = position.clone();
     this.model.position.copy(position);
     this.scene?.add(this.model);
+  }
+
+  /**
+   * An effect is attached to its host, not to the module: a visual effect puts
+   * its models on `object.model` and plays on `object.audioEmitter`, and the
+   * module has neither, so every ApplyEffectAtLocation visual loaded its model
+   * and threw it away, silently (round 11: mines, grenade blasts).
+   */
+  removeEffect(effect: GameEffect): void {
+    this.owner?.removeEffect(effect);
   }
 
   track(effect: GameEffect): void {

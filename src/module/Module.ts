@@ -380,7 +380,7 @@ export class Module {
     audioEmitter.load();
     audioEmitter.setPosition(position.x, position.y, position.z);
 
-    const host = new LocationEffectHost(position, GameState.group?.effects, audioEmitter);
+    const host = new LocationEffectHost(position, GameState.group?.effects, audioEmitter, GameState, this);
     this.attachLocationEffect(effect, host);
     // A link with no children leaves nothing to carry.
     if(!host.effects.length){ host.dispose(); }
@@ -401,7 +401,8 @@ export class Module {
 
     effect.loadModel();
     effect.setCreator(host as any);
-    effect.setAttachedObject(this);
+    // The host carries the model and the emitter the effect draws and plays on.
+    effect.setAttachedObject(host as any);
     host.track(effect);
     this.locationEffectHosts.set(effect, host);
     effect.onApply(host as any);
