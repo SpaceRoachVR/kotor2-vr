@@ -211,6 +211,29 @@ const CHECKS = [
     }),
   },
   {
+    id: 'weapon-bash-route',
+    describe: 'a weapon swing at a locked object follows its authored Bash, or refuses when there is none',
+    // ROADMAP 3.17. The checked module (101PER) has one locked object, the
+    // plot-held MorgueDoor, whose authored menu offers only Use — so what this
+    // proves live is the refusal: a swing never invents a Bash the engine does
+    // not offer. The start path is covered by the XR-loop test. With no locked
+    // object at all, the check fails rather than passing on nothing.
+    run: (m) => {
+      const b = m.weaponBash || {};
+      const startedOnce = b.started === true && b.secondStarted === false;
+      const refusedCorrectly = b.started === false && b.secondStarted === false &&
+        /no Bash among/.test(b.refusal || '');
+      return {
+        ok: b.hook === true && (startedOnce || refusedCorrectly),
+        detail: `${startedOnce ? 'STARTED' : refusedCorrectly ? 'REFUSED (no authored Bash)' : 'WRONG'} ` +
+          `locked=${m.weaponBash?.lockedCount} target=${m.weaponBash?.targetTag} ` +
+        `started=${m.weaponBash?.started} inCombat=${m.weaponBash?.inCombat} ` +
+        `restartedBySecondSwing=${m.weaponBash?.secondStarted}` +
+        (m.weaponBash?.refusal ? ` refusal="${m.weaponBash.refusal}"` : ''),
+      };
+    },
+  },
+  {
     id: 'recenter-refuses-vertical-head',
     describe: 'a near-vertical head pose does not recentre',
     // Yaw read from a nearly-vertical forward is mostly tracking noise, and

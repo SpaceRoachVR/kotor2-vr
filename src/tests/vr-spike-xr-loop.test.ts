@@ -889,6 +889,54 @@ describe('VRSpike XR loop ownership', () => {
     }
   });
 
+  test.each([
+    ['a swing through a locked container bashes it', 0.3, 1],
+    ['a swing well wide of it does not', 4, 0],
+  ] as const)('weapon Bash (3.17): %s', (_name, containerX, expectedBashes) => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).combatTargetLock.clear();
+    (VRSpike as any).combatInputController.reset();
+    (VRSpike as any).interactionAimedTargetId = 5;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: {
+          pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(0, 2, 0), trackingState: 'tracked' },
+          targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+        },
+      },
+    };
+    const bash = jest.fn(() => true);
+    const aimedIds: (number | null)[] = [];
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: null, weaponMode: 'melee-one-handed', inCombat: false, stanceReadout: '',
+        onCombatSwing: () => undefined,
+      }),
+      getWeaponBashContext: (aimedTargetId) => {
+        aimedIds.push(aimedTargetId);
+        return {
+          actorId: '7', targetId: '5', weaponMode: 'melee-one-handed',
+          volume: { base: new THREE.Vector3(containerX, 0, -1), heightMetres: 1.6, radiusMetres: 0.6 },
+          bash,
+        };
+      },
+    };
+
+    (VRSpike as any).processCombatInput(1_000);
+
+    expect(aimedIds).toEqual([5]);
+    expect(bash).toHaveBeenCalledTimes(expectedBashes);
+    (VRSpike as any).interactionAimedTargetId = null;
+  });
+
   test('pulses the weapon hand for a melee hit and draws a deflected bolt to the blade (3.13)', () => {
     const pulse = jest.fn(async (
       _session: XRSession,

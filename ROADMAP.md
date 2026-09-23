@@ -1356,7 +1356,7 @@ belong together.
   - **Done when:** swinging at empty air beside a locked enemy does not roll,
     and a real swing at an enemy still rolls every round in Allen's traces.
 
-- **3.17** ☐ **Bash with the weapon.** A melee swing at a locked door or container
+- **3.17** ✅ implemented (2026-09-23) / ☐ headset-accepted — **Bash with the weapon.** With no hostile locked, a melee or unarmed swing through a locked door or container the weapon hand points at (capsule on its bounds centre, 1.6 m tall, 0.6 m radius, same 3.16 contact rule) activates the world prompt's own `Bash` entry. It never invents one: 101PER's only locked object, the plot-held MorgueDoor, offers just `Use`, and the new `weapon-bash-route` emulator check proves the swing refuses there. A swing while already bashing that object does nothing, because the engine keeps Bash rounds going itself and re-activating would restart them. The *start* path is proven only by the XR-loop test; it needs a bashable object in the headset. Original statement: A melee swing at a locked door or container
   queues the engine's own Bash attack. `VRCombatVisualEvents` already knows a
   round aimed at a placeable is a Bash. The retail Bash rules and the plot/lock
   gates in the world-prompt model stay authoritative.

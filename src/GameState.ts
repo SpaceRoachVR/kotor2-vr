@@ -930,6 +930,72 @@ function resolveVRCombatTargetVolume(target: ModuleObject | null) {
   };
 }
 
+/**
+ * ROADMAP 3.17 — a locked door or container the weapon hand is pointing at,
+ * and the space a swing must pass through to bash it. Cheap enough for every
+ * frame: it does not touch ActionMenuManager. Whether Bash is actually on
+ * offer is settled at dispatch, by the authored route itself.
+ */
+function resolveVRWeaponBashTarget(actor: ModuleCreature, targetId: number | null) {
+  if (targetId === null || !Number.isSafeInteger(targetId)) return null;
+  const mode = resolveVRCombatWeaponMode(actor);
+  if (mode === 'blaster' || mode === 'grenade' || mode === 'force') return null;
+  const target = GameState.ModuleObjectManager.playerSelectableObjects.find((object) => object.id === targetId);
+  if (!target) return null;
+  const bashTargetTypes = ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable;
+  if (((target.objectType ?? 0) & bashTargetTypes) === 0) return null;
+  const lockable = target as ModuleObject & { isLocked?: () => boolean };
+  if (typeof lockable.isLocked !== 'function' || !lockable.isLocked()) return null;
+  const centre = resolveVRStructureAimPoint(target);
+  if (!centre) return null;
+  return {
+    target,
+    volume: {
+      base: centre.clone().setZ(centre.z - VR_BASH_VOLUME_HEIGHT_METRES / 2),
+      heightMetres: VR_BASH_VOLUME_HEIGHT_METRES,
+      radiusMetres: VR_BASH_VOLUME_RADIUS_METRES,
+    },
+  };
+}
+
+const reportedVRWeaponBashRefusals = new Set<number>();
+function reportVRWeaponBashRefusalOnce(target: ModuleObject, reason: string): void {
+  if (reportedVRWeaponBashRefusals.has(target.id)) return;
+  reportedVRWeaponBashRefusals.add(target.id);
+  console.info(`[VR combat swing] weapon Bash refused target=${target.getTag?.() ?? target.id}: ${reason}`);
+}
+
+const VR_BASH_VOLUME_HEIGHT_METRES = 1.6;
+const VR_BASH_VOLUME_RADIUS_METRES = 0.6;
+
+/**
+ * Starts the same authored Bash the world prompt offers, so retail's Bash
+ * rules, plot flags and lock gates stay the engine's. A swing while the actor
+ * is already bashing this object does nothing: the engine keeps its Bash
+ * rounds going on its own, and re-activating would restart the action the way
+ * re-pressing Security used to (headset round 3).
+ */
+function dispatchVRWeaponBash(actor: ModuleCreature, targetId: number): boolean {
+  const resolved = resolveVRWeaponBashTarget(actor, targetId);
+  if (!resolved) return false;
+  const { target } = resolved;
+  const alreadyBashing = actor.combatData?.combatState === true &&
+    (actor.combatRound?.action?.target === target || actor.combatData?.lastAttackTarget === target);
+  if (alreadyBashing) return false;
+  const prompt = buildVRWorldActionPrompt(`module-object:${target.id}`);
+  const entries = prompt?.pages.flatMap((page) => page.entries) ?? [];
+  const bash = entries
+    .find((entry): entry is VRWorldPromptAction => entry.kind === 'action' && entry.label === 'Bash');
+  if (!bash || !bash.revalidate()) {
+    reportVRWeaponBashRefusalOnce(target,
+      !prompt ? 'no prompt' : !bash ? `no Bash among [${entries.map((entry) => entry.label).join(', ')}]` : 'Bash revalidated false');
+    return false;
+  }
+  bash.activate();
+  console.info(`[VR combat swing] weapon Bash started target=${target.id}`);
+  return true;
+}
+
 const VR_COMBAT_TARGET_HEIGHT_METRES = 1.9;
 const VR_COMBAT_TARGET_MIN_RADIUS_METRES = 0.3;
 const VR_COMBAT_TARGET_DEFAULT_RADIUS_METRES = 0.5;
@@ -3156,6 +3222,19 @@ export class GameState implements EngineContext {
             actor.cancelCombat();
             vrCombatIssuedTargetId = null;
           },
+        };
+      },
+      getWeaponBashContext: (aimedTargetId) => {
+        const actor = GameState.getCurrentPlayer();
+        if (!actor) return null;
+        const resolved = resolveVRWeaponBashTarget(actor, aimedTargetId);
+        if (!resolved) return null;
+        return {
+          actorId: String(actor.id),
+          targetId: String(resolved.target.id),
+          weaponMode: resolveVRCombatWeaponMode(actor),
+          volume: resolved.volume,
+          bash: () => dispatchVRWeaponBash(actor, resolved.target.id),
         };
       },
       serviceCombatSwingBuffer: () => {

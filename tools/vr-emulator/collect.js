@@ -703,6 +703,37 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     })()`);
     onProgress('renderer configuration');
 
+    // --- weapon Bash route (ROADMAP 3.17) -----------------------------------
+    // The swing detection is covered by unit tests; what only the live engine
+    // can show is that a real locked door or container resolves to the
+    // authored Bash entry and that activating it starts the Bash. Last, because
+    // it puts the player into a Bash round.
+    metrics.weaponBash = await harness.evaluate(`(() => {
+      const K = window.KotOR;
+      const hooks = K.VRSpike && K.VRSpike.hooks;
+      if (!hooks || typeof hooks.getWeaponBashContext !== 'function') return { hook: false };
+      const objects = K.ModuleObjectManager.playerSelectableObjects || [];
+      const locked = objects.filter((o) => typeof o.isLocked === 'function' && o.isLocked());
+      for (const target of locked) {
+        const context = hooks.getWeaponBashContext(target.id);
+        if (!context) continue;
+        const started = context.bash() === true;
+        const player = K.PartyManager.Player;
+        return {
+          hook: true,
+          lockedCount: locked.length,
+          targetTag: target.getTag ? target.getTag() : String(target.id),
+          started,
+          inCombat: !!(player && player.combatData && player.combatData.combatState),
+          // A second swing while already bashing must not restart the action.
+          secondStarted: context.bash() === true,
+          refusal: (window.__xrHarness.log.find((e) => /weapon Bash refused/.test(e.text)) || {}).text || null,
+        };
+      }
+      return { hook: true, lockedCount: locked.length, started: null };
+    })()`);
+    onProgress('weapon bash route');
+
     // --- console health -----------------------------------------------------
     metrics.console = await harness.evaluate(`(() => {
       const log = window.__xrHarness.log;

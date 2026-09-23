@@ -374,6 +374,17 @@ export interface VRSpikeHooks {
    * is still waiting for the round to open.
    */
   serviceCombatSwingBuffer?: () => { readonly released: boolean; readonly armed: boolean } | null;
+  /**
+   * ROADMAP 3.17 — a locked door or container the weapon hand is aimed at,
+   * which a melee swing through `volume` bashes by the authored route.
+   */
+  getWeaponBashContext?: (aimedTargetId: number | null) => {
+    readonly actorId: string;
+    readonly targetId: string;
+    readonly weaponMode: import('./runtime/XRTypes').CombatWeaponMode;
+    readonly volume: import('./runtime/VRCombatInputController').VRCombatTargetVolume;
+    bash(): boolean;
+  } | null;
   getForceContext?: (aimedTargetId: number | null) => { onForceGesture(gesture: VRForceGesture): void } | null;
   /** Clears VR-only lock, queue, and armed-item state on a session lifecycle boundary. */
   resetCombatInteraction?: () => void;
@@ -2407,7 +2418,10 @@ export class VRSpike {
 
       // Cancel is handled by processCombatCancel, which runs every gameplay
       // frame regardless of whether a world prompt consumed input first.
-      if (!context.nominatedTargetId) return;
+      if (!context.nominatedTargetId) {
+        VRSpike.processWeaponBash(inputFrame, timestamp, offhandGrip, dominantHand, offhandHand);
+        return;
+      }
 
       if (VRSpike.processForceInput(timestamp, context)) {
         VRSpike.combatInputController.reset();
@@ -2436,6 +2450,36 @@ export class VRSpike {
         console.error('[VRSpike] combat input rejected', error);
       }
     }
+  }
+
+  /**
+   * ROADMAP 3.17 — with no hostile locked, a melee swing through a locked door
+   * or container the weapon hand points at starts its authored Bash. Uses the
+   * same swing detector, so the same contact rule (3.16) applies.
+   */
+  private static processWeaponBash(
+    inputFrame: XRInputFrame,
+    timestamp: number,
+    offhandGrip: boolean,
+    dominantHand: XRHandRole,
+    offhandHand: XRHandRole,
+  ): void {
+    const bash = VRSpike.hooks?.getWeaponBashContext?.(VRSpike.resolveAimedTargetId()) ?? null;
+    if (!bash) return;
+    const events = VRSpike.combatInputController.process(inputFrame, {
+      actorId: bash.actorId,
+      nominatedTargetId: bash.targetId,
+      weaponMode: bash.weaponMode,
+      timestamp,
+      offhandGrip,
+      weaponActionPressed: false,
+      dominantHand,
+      offhandHand,
+      allowDominantTrigger: false,
+      nominatedTargetVolume: bash.volume,
+    });
+    VRSpike.reportSwingMisses();
+    if (events.some((event) => event.input === 'dominant-swing')) bash.bash();
   }
 
   private static reportedSwingMisses = 0;
