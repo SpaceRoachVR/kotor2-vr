@@ -3,6 +3,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { URL } = require('url');
+const { rewriteRuntimeDocument } = require('./runtime-document');
 
 const SESSION_COOKIE_NAME = 'kotor2vr_session';
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
@@ -144,6 +145,14 @@ class AssetService {
       return this.handleUserFile(request, response, requestUrl.pathname.slice('/user/'.length));
     }
 
+    if (requestUrl.pathname === '/game/index.html') {
+      return this.handleGameDocument(request, response);
+    }
+
+    if (requestUrl.pathname.startsWith('/bundles/')) {
+      return this.handleContentAddressedBundle(request, response, requestUrl.pathname);
+    }
+
     if (requestUrl.pathname.startsWith('/game/')) {
       return this.handleReadOnlyFile(request, response, requestUrl.pathname.slice(1), this.distRoot, 'no-store');
     }
@@ -153,6 +162,43 @@ class AssetService {
     // Keep the fallback authenticated and read-only, and apply the same
     // containment checks as every other static file route.
     return this.handleReadOnlyFile(request, response, requestUrl.pathname.slice(1), this.distRoot, 'no-store');
+  }
+
+  readRuntimeBundle() {
+    const resolved = resolveExistingPath(this.distRoot, ['KotOR.js']);
+    if (!resolved || resolved.stats.isDirectory()) throw new HttpError(404, 'not found');
+    if (this.onBeforeFileOpen) this.onBeforeFileOpen(resolved.path);
+    const contents = fs.readFileSync(resolved.path);
+    const afterRead = fs.statSync(resolved.path);
+    if (!sameFileIdentity(resolved.stats, afterRead)) throw new HttpError(409, 'runtime bundle changed during read');
+    const sha256 = crypto.createHash('sha256').update(contents).digest('hex');
+    return { contents, sha256, integrity: `sha256-${Buffer.from(sha256, 'hex').toString('base64')}` };
+  }
+
+  handleGameDocument(request, response) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return sendMethodNotAllowed(response, ['GET', 'HEAD']);
+    const resolved = resolveExistingPath(this.distRoot, ['game', 'index.html']);
+    if (!resolved || resolved.stats.isDirectory()) return sendError(response, 404, 'not found');
+    if (this.onBeforeFileOpen) this.onBeforeFileOpen(resolved.path);
+    const document = fs.readFileSync(resolved.path, 'utf8');
+    const afterRead = fs.statSync(resolved.path);
+    if (!sameFileIdentity(resolved.stats, afterRead)) throw new HttpError(409, 'game document changed during read');
+    const bundle = this.readRuntimeBundle();
+    const html = rewriteRuntimeDocument(document, new URL('/game/index.html', this.baseUrl).href, bundle);
+    if (html === null) {
+      return sendError(response, 409, 'runtime document does not contain exactly one KotOR.js script');
+    }
+    return sendBuffer(request, response, Buffer.from(html, 'utf8'), '.html', 'no-store');
+  }
+
+  handleContentAddressedBundle(request, response, pathname) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return sendMethodNotAllowed(response, ['GET', 'HEAD']);
+    const match = /^\/bundles\/([a-f0-9]{64})\/KotOR\.js$/.exec(pathname);
+    if (!match) return sendError(response, 404, 'not found');
+    const bundle = this.readRuntimeBundle();
+    if (bundle.sha256 !== match[1]) return sendError(response, 409, 'runtime bundle identity changed');
+    // Send the verified bytes we hashed, rather than reopening a mutable path.
+    return sendBuffer(request, response, bundle.contents, '.js', 'public, max-age=31536000, immutable');
   }
 
   handleLaunch(request, response, requestUrl) {
@@ -656,6 +702,23 @@ function sendFile(request, response, filePath, validatedStats, onBeforeFileOpen,
     }
     throw error;
   }
+}
+
+function sendBuffer(request, response, contents, extension, cacheControl) {
+  const range = parseSingleRange(request.headers.range, contents.length);
+  response.setHeader('Accept-Ranges', 'bytes');
+  response.setHeader('Cache-Control', cacheControl);
+  response.setHeader('Content-Type', MIME_TYPES[extension] || 'application/octet-stream');
+  if (range) {
+    response.statusCode = 206;
+    response.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${contents.length}`);
+    response.setHeader('Content-Length', String(range.end - range.start + 1));
+  } else {
+    response.statusCode = 200;
+    response.setHeader('Content-Length', String(contents.length));
+  }
+  if (request.method === 'HEAD') return response.end();
+  return response.end(range ? contents.subarray(range.start, range.end + 1) : contents);
 }
 
 function sameFileIdentity(expectedStats, actualStats) {

@@ -145,6 +145,10 @@ class VrHarness {
     this.headless = options.headless === true;
     this.consoleMessages = [];
     this.pageErrors = [];
+    this.observeServingBundle = options.observeServingBundle === true;
+    this.servingBundleObserver = null;
+    this.mainFrameId = null;
+    this.captureContext = null;
     this.chrome = null;
     this.cdp = null;
   }
@@ -179,12 +183,13 @@ class VrHarness {
       '--window-size=1600,1000',
     ];
     if (this.headless) args.push('--headless=new');
-    args.push(url);
+    // Attach observers before any untrusted document or engine code executes.
+    args.push(this.observeServingBundle ? 'about:blank' : url);
 
     this.chrome = spawn(chromePath, args, { detached: false, stdio: 'ignore' });
     await waitForEndpoint(this.port);
 
-    const target = await findPageTarget(this.port, (u) => u.startsWith('http://'));
+    const target = await findPageTarget(this.port, (u) => this.observeServingBundle ? u === 'about:blank' : u.startsWith('http://'));
     this.cdp = await CdpSession.connect(target.webSocketDebuggerUrl);
 
     this.cdp.on('Runtime.consoleAPICalled', (params) => {
@@ -199,6 +204,11 @@ class VrHarness {
         (d.exception && d.exception.description) || d.text || 'unknown page exception'
       );
     });
+    if (this.observeServingBundle) {
+      const { ServingBundleObserver } = require('../parity/serving-bundle');
+      this.servingBundleObserver = new ServingBundleObserver(this.cdp);
+      await this.servingBundleObserver.start();
+    }
 
     await this.cdp.send('Runtime.enable');
     await this.cdp.send('Page.enable');
@@ -206,9 +216,13 @@ class VrHarness {
     await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
       source: buildBootstrap(this.deviceName),
     });
-    // The bootstrap only takes effect on a fresh document, and the first
-    // navigation already happened during launch.
-    await this.cdp.send('Page.reload', { ignoreCache: false });
+    if (this.observeServingBundle) {
+      const navigation = await this.cdp.send('Page.navigate', { url });
+      if (navigation.errorText) throw new Error('Harness navigation failed');
+      this.mainFrameId = navigation.frameId;
+    } else {
+      await this.cdp.send('Page.reload', { ignoreCache: false });
+    }
     await this.waitFor('window.__xrHarness && window.__xrHarness.ready === true', 30000);
     return this;
   }
@@ -217,8 +231,9 @@ class VrHarness {
     const deadline = Date.now() + timeoutMs;
     let last = null;
     while (Date.now() < deadline) {
+      if (this.captureContext) this.servingBundleObserver.assertActive(this.captureContext);
       try {
-        const value = await this.cdp.evaluate(`!!(${expression})`);
+        const value = await this.evaluate(`!!(${expression})`);
         if (value === true) return true;
         last = value;
       } catch (error) {
@@ -230,7 +245,23 @@ class VrHarness {
   }
 
   evaluate(expression, options) {
+    if (this.captureContext) return this.servingBundleObserver.evaluate(this.captureContext, expression, options);
     return this.cdp.evaluate(expression, options);
+  }
+
+  beginTrustedCapture() {
+    if (!this.servingBundleObserver) throw new Error('Serving bundle observation was not enabled before navigation');
+    this.captureContext = this.servingBundleObserver.bindContext(this.mainFrameId);
+  }
+
+  /**
+   * Returns the content digest observed by CDP for the script Chrome executed.
+   * This is intentionally not page evaluation: a remote bundle can replace DOM,
+   * Performance, fetch, and crypto APIs after it runs.
+   */
+  async getTrustedServingBundle() {
+    if (!this.servingBundleObserver) throw new Error('Serving bundle observation was not enabled before navigation');
+    return this.servingBundleObserver.identify(this.mainFrameId, this.captureContext);
   }
 
   /**
@@ -238,7 +269,7 @@ class VrHarness {
    * as a user activation — `requestSession('immersive-vr')` is gated on one.
    */
   async clickSelector(selector) {
-    const box = await this.cdp.evaluate(`(() => {
+    const box = await this.evaluate(`(() => {
       const el = document.querySelector(${JSON.stringify(selector)});
       if (!el) return null;
       const r = el.getBoundingClientRect();

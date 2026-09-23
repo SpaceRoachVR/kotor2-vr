@@ -14,6 +14,15 @@
 
 const number = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
+// These names are absent from the configured TSL retail install. The first
+// thirteen are the established GUI baseline; the three character names were
+// checked across Override, 101PER, TPA, GUI, and key/BIF retail sources.
+const KNOWN_ABSENT_TEXTURES = new Set([
+  'bluefill', 'yellowfill', 'invent2', 'invent1', 'confirm2', 'confirm1',
+  '1600x1200back', 'po_pcarth', 'po_no', 'uparrow', 'lbl_wupitems',
+  'boxline4', 'boxline3', 'n_mainof', 'p_attonh', 'pmbamc',
+]);
+
 /** @type {VrCheck[]} */
 const CHECKS = [
   {
@@ -156,15 +165,23 @@ const CHECKS = [
   },
   {
     id: 'texture-resolution-baseline',
-    describe: 'missing textures stay at or below the known-absent set',
-    // 14 distinct resrefs are genuinely absent from this install (several are
-    // K1 names). Anything above that is a new loader regression, and anything
-    // below is an improvement worth re-baselining.
+    describe: 'only retail-verified absent textures may fail resolution',
+    // Compare identities, not a count: an unexpected miss can otherwise hide
+    // below a generous threshold, while optional character models may make
+    // the number of known-absent requests vary across runs.
     run: (m) => {
-      const distinct = number(m.textures?.distinctFailing);
+      const failing = m.textures?.failing;
+      const distinct = m.textures?.distinctFailing;
+      if (!Array.isArray(failing) || !Number.isSafeInteger(distinct) || distinct !== failing.length) {
+        return { ok: false, detail: 'texture failure diagnostics missing or inconsistent' };
+      }
+      const unexpected = failing
+        .filter((row) => !row || row.status !== 'missing' || !KNOWN_ABSENT_TEXTURES.has(row.resref))
+        .map((row) => `${row?.resref ?? '<invalid>'}:${row?.status ?? '<invalid>'}`);
       return {
-        ok: distinct !== null && distinct <= 16,
-        detail: `distinctFailing=${distinct} (want <= 16 known-absent) missing=${m.textures?.missing} of ${m.textures?.total}`,
+        ok: unexpected.length === 0,
+        detail: `distinctFailing=${distinct} missing=${m.textures?.missing} of ${m.textures?.total}`
+          + (unexpected.length ? ` unexpected=${unexpected.join(', ')}` : ' (all retail-known absent)'),
       };
     },
   },

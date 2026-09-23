@@ -33,6 +33,9 @@ exports/
 tools/xr-probe/result.json
 tools/xr-probe/results.jsonl
 
+# Generated parity snapshots, sidecars, and reports are retained locally only.
+/tools/parity/out/
+
 
 # External modding tools
 tools/dencs/

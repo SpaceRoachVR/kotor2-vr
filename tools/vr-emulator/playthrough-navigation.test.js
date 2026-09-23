@@ -107,6 +107,7 @@ test('completes each authored console action in sequence before allowing a check
   assert.equal(choose(['Slice', 'Log out'], { replyScripts: ['a_ia_use_comspk', ''] }), 0);
   assert.equal(choose(['Open door', 'Log out'], { replyScripts: ['a_set001dr', ''] }), 0);
   assert.doesNotThrow(() => choose.assertCompleted());
+  assert.equal(choose(['Log out'], { replyScripts: [''] }), 0);
   assert.throws(() => choose(['Stay'], { replyScripts: [''] }), /no 'log out\.' was offered/i);
 
   const incomplete = createRequiredDialogueScriptSequence(['a_ia_use_comspk', 'a_set001dr'], 'Communications Console');

@@ -1,0 +1,712 @@
+/**
+ * Diffs an engine snapshot against the retail snapshot for one module and ranks
+ * the mismatches by how many objects each one touches — the same blast-radius
+ * ordering `vr:sweep` uses, so the report reads as a work queue.
+ *
+ *   node tools/parity/compare.js --module 101PER
+ *
+ * Inputs:  tools/parity/out/<module>.engine.json, <module>.retail.json
+ * Outputs: tools/parity/out/<module>.parity.json and <module>.parity.md
+ *
+ * Every finding carries a `confidence`:
+ *   - "defect"   the value comes straight from the template and nothing in
+ *                retail changes it at spawn, so a difference is ours.
+ *   - "variable" retail legitimately changes it at spawn (autobalance, OnSpawn
+ *                scripts, item bonuses). Worth a look, not proof of a bug.
+ *   - "coverage" we could not measure it (object missing, or never requested).
+ */
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { deriveCaptureId, assertUnlinkedWorkspacePath, resolveRetainedArtifactPath, sidecarSha256 } = require('./parity-contract');
+
+const OUT_DIR = path.join(__dirname, 'out');
+
+const EXACT_FIELDS = [
+  'appearance', 'race', 'subrace', 'gender', 'portraitId', 'soundSetFile', 'factionId',
+  'bodyVariation', 'textureVar', 'naturalAC',
+  'str', 'dex', 'con', 'int', 'wis', 'cha',
+  'fortbonus', 'refbonus', 'willbonus', 'isHologram', 'plot', 'min1HP',
+];
+const VARIABLE_FIELDS = [
+  'hitPoints', 'currentHitPoints', 'maxHitPoints', 'forcePoints', 'maxForcePoints',
+  'goodEvil', 'challengeRating',
+];
+const SKILL_NAMES = ['computerUse', 'demolitions', 'stealth', 'awareness',
+  'persuade', 'repair', 'security', 'treatInjury'];
+
+// PyKotor EquipmentSlot names -> engine ModuleCreature.equipment keys, matched
+// by bit value, not by name. PyKotor 2.3.12 has the arm slots swapped: it calls
+// 0x80 RIGHT_ARM, but tsl_nwscript.nss defines INVENTORY_SLOT_LEFTARM = 7
+// (1 << 7 = 0x80), which is what ModuleCreatureArmorSlot uses.
+const SLOT_MAP = {
+  HEAD: 'HEAD', ARMOR: 'ARMOR', GAUNTLET: 'ARMS', RIGHT_HAND: 'RIGHTHAND', LEFT_HAND: 'LEFTHAND',
+  RIGHT_ARM: 'LEFTARMBAND', LEFT_ARM: 'RIGHTARMBAND', IMPLANT: 'IMPLANT', BELT: 'BELT',
+  CLAW1: 'CLAW1', CLAW2: 'CLAW2', CLAW3: 'CLAW3', HIDE: 'HIDE',
+  RIGHT_HAND_2: 'RIGHTHAND2', LEFT_HAND_2: 'LEFTHAND2',
+};
+
+// Engine texture sources collapse to retail's lookup layers.
+function textureLayer(source) {
+  if (!source || source === 'none') return 'none';
+  if (source.startsWith('override')) return 'override';
+  if (source === 'active-module') return 'module';
+  return source;
+}
+
+function same(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-4;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function diffSets(retail, engine) {
+  const r = new Map(); const e = new Map();
+  for (const v of retail || []) r.set(v, (r.get(v) || 0) + 1);
+  for (const v of engine || []) e.set(v, (e.get(v) || 0) + 1);
+  const missing = []; const extra = [];
+  for (const [v, n] of r) for (let i = 0; i < n - (e.get(v) || 0); i++) missing.push(v);
+  for (const [v, n] of e) for (let i = 0; i < n - (r.get(v) || 0); i++) extra.push(v);
+  return { missing, extra };
+}
+
+const AUTHORITY_BY_KIND = Object.freeze({ kotormcp: 'parsed-retail', holocron: 'human-review', dencs: 'hypothesis' });
+const SHA256 = /^[a-f0-9]{64}$/i;
+
+function evidenceMatchesFinding(record, finding) {
+  const identity = finding && finding.resourceIdentity;
+  return Boolean(identity && typeof identity.resref === 'string' && typeof identity.restype === 'string'
+    && record && record.resref === identity.resref.toLowerCase() && record.restype === identity.restype.toUpperCase()
+    && typeof identity.sha256 === 'string' && SHA256.test(identity.sha256)
+    && typeof record.sha256 === 'string' && SHA256.test(record.sha256)
+    && record.sha256.toLowerCase() === identity.sha256.toLowerCase()
+    // Equal bytes in different captured layers are distinct resource identities.
+    // Do not infer missing provenance from the selected finding's source.
+    && typeof record.source === 'string' && record.source.trim().length > 0
+    && typeof identity.source === 'string' && identity.source.trim().length > 0
+    && record.source === identity.source);
+}
+
+function validateEvidenceSidecar(document, retailSnapshot, requestedModule) {
+  const module = String(requestedModule || '').trim().toUpperCase();
+  if (!document || String(document.module || '').toUpperCase() !== module) throw new TypeError('Evidence sidecar module does not match comparison module');
+  if (!Array.isArray(document.records)) throw new TypeError('Evidence sidecar requires records');
+  const retailHashes = new Map((retailSnapshot && retailSnapshot.retailInputs || []).map((input) => [
+    `${String(input.resref || '').toLowerCase()}:${String(input.restype || '').toUpperCase()}`, String(input.sha256 || '').toLowerCase(),
+  ]));
+  return document.records.map((record) => {
+    if (!record || typeof record !== 'object') throw new TypeError('Evidence sidecar record must be an object');
+    const kind = String(record.kind || '').toLowerCase();
+    const resref = String(record.resref || '').toLowerCase();
+    const restype = String(record.restype || '').toUpperCase();
+    const sha256 = sidecarSha256(record);
+    if (!AUTHORITY_BY_KIND[kind] || record.authority !== AUTHORITY_BY_KIND[kind]) throw new TypeError('Evidence sidecar authority is invalid for its tool');
+    if (!resref || !restype || !SHA256.test(sha256)) throw new TypeError('Evidence sidecar requires typed resource identity and SHA-256 hash');
+    if (kind === 'dencs' && (restype !== 'NCS' || retailHashes.get(`${resref}:${restype}`) !== sha256)) throw new TypeError('DeNCS evidence hash does not match current retail NCS');
+    return { ...record, kind, resref, restype, sha256, hash: sha256 };
+  });
+}
+
+function linkEvidence(finding, evidenceRecords, evidencePath) {
+  const matchingRecords = (evidenceRecords || []).filter((record) => evidenceMatchesFinding(record, finding));
+  if (matchingRecords.length === 0) return finding;
+  const linkedPath = evidencePath || matchingRecords[0].path;
+  if (typeof linkedPath !== 'string' || !linkedPath.trim()) return finding;
+  return { ...finding, evidenceRefs: [...new Set([...(finding.evidenceRefs || []), linkedPath])] };
+}
+
+/** Resolve a typed source against captured retail inputs, never a display label. */
+function retailIdentity(snapshot, identity) {
+  if (!identity || typeof identity.resref !== 'string' || typeof identity.restype !== 'string') return null;
+  if (identity.sha256 !== undefined && (typeof identity.sha256 !== 'string' || !SHA256.test(identity.sha256))) return null;
+  const resref = identity.resref.trim().toLowerCase();
+  const restype = identity.restype.trim().toUpperCase();
+  if (!resref || !restype || !Array.isArray(snapshot.retailInputs)) return null;
+  const matches = snapshot.retailInputs.filter((input) => input
+    && typeof input.resref === 'string' && input.resref.toLowerCase() === resref
+    && typeof input.restype === 'string' && input.restype.toUpperCase() === restype
+    && typeof input.sha256 === 'string' && SHA256.test(input.sha256)
+    && (identity.source === undefined || input.source === identity.source)
+    && (identity.sha256 === undefined || input.sha256.toLowerCase() === identity.sha256.toLowerCase()));
+  // Multiple layers with the same resref/type are not interchangeable evidence.
+  return matches.length === 1 ? { ...matches[0], resref, restype } : null;
+}
+
+function findingEmitter(add, snapshot, identity) {
+  const resourceIdentity = retailIdentity(snapshot, identity);
+  return (finding) => add(resourceIdentity ? { ...finding, resourceIdentity } : finding);
+}
+
+function templateIdentity(record, restype) {
+  return { resref: record.template, restype, ...(record.source ? { source: record.source } : {}) };
+}
+
+function loadEvidenceSidecar(module, retailSnapshot) {
+  const sidecarPath = path.join(OUT_DIR, `${module}.evidence.json`);
+  let bytes;
+  try { bytes = fs.readFileSync(sidecarPath); } catch (error) {
+    if (error.code === 'ENOENT') return { records: [], path: null };
+    throw error;
+  }
+  const document = JSON.parse(bytes.toString('utf8'));
+  if (!document || !Array.isArray(document.records)) {
+    throw new TypeError(`Evidence sidecar requires records: ${sidecarPath}`);
+  }
+  return { records: validateEvidenceSidecar(document, retailSnapshot, module), bytes,
+    path: `tools/parity/out/${module}.evidence.json` };
+}
+
+/**
+ * Pairs retail GIT creatures with engine area creatures by template, in order.
+ * Order within a template is not meaningful (identical droids), and matching on
+ * template alone keeps one spawn failure from shifting every pair after it.
+ */
+function pairCreatures(retail, engine) {
+  const pool = new Map();
+  for (const c of engine) {
+    if (!pool.has(c.template)) pool.set(c.template, []);
+    pool.get(c.template).push(c);
+  }
+  const pairs = []; const unmatchedRetail = [];
+  for (const r of retail) {
+    const list = pool.get(r.template);
+    if (list && list.length) pairs.push([r, list.shift()]);
+    else unmatchedRetail.push(r);
+  }
+  const unmatchedEngine = [...pool.values()].flat();
+  return { pairs, unmatchedRetail, unmatchedEngine };
+}
+
+function compareCreatures(retailSnap, engineSnap, emit) {
+  const retail = retailSnap.creatures.filter((c) => c.status === 'ok');
+  for (const c of retailSnap.creatures.filter((x) => x.status !== 'ok')) {
+    const add = findingEmitter(emit, retailSnap, templateIdentity(c, 'UTC'));
+    add({ area: 'creature', code: 'retail-template-missing', confidence: 'coverage', object: c.template,
+      detail: 'GIT names a template retail cannot resolve' });
+  }
+  const { pairs, unmatchedRetail, unmatchedEngine } = pairCreatures(retail, engineSnap.creatures);
+
+  for (const r of unmatchedRetail) {
+    const add = findingEmitter(emit, retailSnap, templateIdentity(r, 'UTC'));
+    add({ area: 'creature', code: 'creature-not-spawned', confidence: 'coverage', object: r.template,
+      detail: `retail GIT spawns ${r.template} (${r.tag}); the engine area has no creature with that template`,
+      note: 'a module loaded from a save legitimately differs if the creature died or left' });
+  }
+  for (const e of unmatchedEngine) {
+    emit({ area: 'creature', code: 'creature-not-in-git', confidence: 'coverage', object: e.template || e.tag,
+      detail: `engine area holds ${e.template || '(no template)'} (${e.tag}); retail GIT has no such entry`,
+      note: 'party members and script-spawned creatures land here by design' });
+  }
+
+  // Saved state (HP, equipment changes, deaths) is not a template defect.
+  const saved = engineSnap.loadedFromSave === true;
+  for (const [r, e] of pairs) {
+    const add = findingEmitter(emit, retailSnap, templateIdentity(r, 'UTC'));
+    const object = `${r.template}#${r.gitIndex}`;
+    for (const field of EXACT_FIELDS) {
+      if (!same(r[field], e[field])) {
+        add({ area: 'creature', code: `stat:${field}`, confidence: 'defect', object, retail: r[field], engine: e[field] });
+      }
+    }
+    for (const field of VARIABLE_FIELDS) {
+      if (!same(r[field], e[field])) {
+        add({ area: 'creature', code: `stat:${field}`, confidence: 'variable', object, retail: r[field], engine: e[field],
+          ...(saved ? { note: 'module loaded from a save; value may be saved state' } : {}) });
+      }
+    }
+    for (let i = 0; i < SKILL_NAMES.length; i++) {
+      if (!same(r.skills[i], e.skills[i])) {
+        add({ area: 'creature', code: `skill:${SKILL_NAMES[i]}`, confidence: 'defect', object,
+          retail: r.skills[i], engine: e.skills[i] === undefined ? null : e.skills[i] });
+      }
+    }
+    const rc = r.classes.map((k) => `${k.id}:${k.level}`);
+    const ec = e.classes.map((k) => `${k.id}:${k.level}`);
+    if (!same(rc, ec)) add({ area: 'creature', code: 'classes', confidence: 'defect', object, retail: rc, engine: ec });
+
+    const rp = r.classes.flatMap((k) => k.powers);
+    const ep = e.classes.flatMap((k) => k.powers);
+    const powers = diffSets(rp, ep);
+    if (powers.missing.length || powers.extra.length) {
+      add({ area: 'creature', code: 'powers', confidence: 'defect', object, retail: powers.missing, engine: powers.extra,
+        detail: 'retail = powers the engine lacks; engine = powers retail lacks' });
+    }
+    const feats = diffSets(r.feats, e.feats);
+    if (feats.missing.length || feats.extra.length) {
+      add({ area: 'creature', code: 'feats', confidence: 'defect', object, retail: feats.missing, engine: feats.extra,
+        detail: 'retail = feats the engine lacks; engine = feats retail lacks' });
+    }
+    for (const [slot, item] of Object.entries(r.equipment)) {
+      const key = SLOT_MAP[slot] || slot;
+      const engineHasSlot = Object.prototype.hasOwnProperty.call(e.equipment || {}, key);
+      const got = (e.equipment || {})[key] || null;
+      if (got === item) continue;
+      if (engineHasSlot && !got) {
+        // No resref on the engine item (it came from a saved struct): compare tags.
+        const retailTag = (r.equipmentTags || {})[slot] || null;
+        const engineTag = (e.equipmentTags || {})[key] || null;
+        if (retailTag && engineTag && retailTag === engineTag) continue;
+        add({ area: 'creature', code: `equipment-tag:${key}`, confidence: retailTag && engineTag ? 'defect' : 'coverage',
+          object, retail: retailTag, engine: engineTag, detail: 'engine item has no resref; compared by tag' });
+        continue;
+      }
+      add({ area: 'creature', code: `equipment:${key}`, confidence: saved ? 'variable' : 'defect', object, retail: item, engine: got });
+    }
+    const retailSlots = new Set(Object.keys(r.equipment).map((s) => SLOT_MAP[s] || s));
+    for (const [slot, item] of Object.entries(e.equipment || {})) {
+      if (!retailSlots.has(slot)) {
+        add({ area: 'creature', code: `equipment:${slot}`, confidence: 'variable', object, retail: null, engine: item,
+          note: 'OnSpawn scripts can equip items' });
+      }
+    }
+  }
+  return { paired: pairs.length, unmatchedRetail: unmatchedRetail.length, unmatchedEngine: unmatchedEngine.length };
+}
+
+function compareTextures(retailSnap, engineSnap, emit) {
+  const retail = new Map(retailSnap.textures.map((t) => [t.resref, t]));
+  const engine = new Map();
+  for (const t of engineSnap.textures) {
+    const key = String(t.requestedResref || '').toLowerCase();
+    if (key && !engine.has(key)) engine.set(key, t);
+  }
+
+  let checked = 0;
+  for (const [name, e] of engine) {
+    const r = retail.get(name);
+    const add = findingEmitter(emit, retailSnap, r && r.retail && r.retail.resourceIdentity);
+    if (!r) {
+      add({ area: 'texture', code: 'texture-not-in-retail-snapshot', confidence: 'coverage', object: name,
+        detail: 'rerun retail_snapshot.py with --textures pointing at the engine snapshot' });
+      continue;
+    }
+    checked++;
+    const engineLayer = textureLayer(e.selectedSource);
+    const engineMissing = e.status !== 'resolved';
+    if (engineMissing && r.retailSource !== 'none') {
+      add({ area: 'texture', code: 'texture-missing', confidence: 'defect', object: name,
+        retail: r.retailSource, engine: `${e.status}${e.diagnosticCode ? ` (${e.diagnosticCode})` : ''}`,
+        detail: `searched ${e.searchedSources.join(', ') || 'nothing'}` });
+    } else if (!engineMissing && r.retailSource === 'none') {
+      add({ area: 'texture', code: 'texture-resolved-retail-cannot', confidence: 'defect', object: name,
+        retail: 'none', engine: `${engineLayer}${e.resolvedResref ? ` as ${e.resolvedResref}` : ''}`,
+        note: 'usually an alias; check it is a reviewed one' });
+    } else if (!engineMissing && engineLayer !== r.retailSource) {
+      add({ area: 'texture', code: 'texture-wrong-layer', confidence: 'defect', object: name,
+        retail: r.retailSource, engine: engineLayer,
+        detail: `retail holds it in: ${r.locations.map((l) => l.source).join(', ')}` });
+    }
+    if (e.resolvedResref && e.resolvedResref.toLowerCase() !== name && r.retailSource !== 'none') {
+      add({ area: 'texture', code: 'texture-aliased', confidence: 'defect', object: name,
+        retail: name, engine: e.resolvedResref, detail: 'retail has the requested name; the engine loaded another' });
+    }
+  }
+  for (const [name, r] of retail) {
+    const add = findingEmitter(emit, retailSnap, r.retail && r.retail.resourceIdentity);
+    if (r.namedByRetailModels && !engine.has(name)) {
+      add({ area: 'texture', code: 'texture-never-requested', confidence: 'coverage', object: name,
+        retail: r.retailSource, engine: null,
+        note: 'retail module models name it; the engine never asked. Could be an unrendered model or a skipped material slot.' });
+    }
+  }
+  return { checked };
+}
+
+const SOUND_FIELDS = ['active', 'looping', 'positional', 'random', 'randomPosition',
+  'interval', 'intervalVariation', 'volume', 'volumeVariation', 'maxDistance', 'minDistance', 'priority', 'times'];
+
+/**
+ * Classifies the runtime audio play style only when the retail boolean-to-style
+ * mapping was captured. UTS flags alone do not prove how the retail runtime
+ * schedules a sound, so an absent mapping must not become a defect claim.
+ */
+function selectedRetailPlayStyle(retail, playStyleMapping) {
+  if (!playStyleMapping || typeof playStyleMapping !== 'object') return null;
+  const expected = playStyleMapping[retail && retail.continuous === true ? 'true' : 'false'];
+  return typeof expected === 'string' && expected.trim() ? expected.trim() : null;
+}
+
+function classifyAudioSemantic(retail, engine, playStyleMapping) {
+  const expected = selectedRetailPlayStyle(retail, playStyleMapping);
+  if (!expected) return 'missing-evidence';
+  if (!engine || engine.playStyleAvailable !== true) return 'missing-evidence';
+  return expected === engine.playStyle ? 'authored-retail-behavior' : 'engine-defect';
+}
+
+function describeAudioSemanticEvidence(retail, playStyleMapping, engine) {
+  const mappingAvailable = selectedRetailPlayStyle(retail, playStyleMapping) !== null;
+  const observationAvailable = Boolean(engine && engine.playStyleAvailable === true);
+  if (!mappingAvailable && !observationAvailable) {
+    return 'retail play-style mapping is missing; engine play-style observation is unavailable';
+  }
+  if (!mappingAvailable) return 'retail play-style mapping is missing';
+  if (!observationAvailable) return 'engine play-style observation is unavailable';
+  return 'captured retail play-style mapping disagrees with the engine';
+}
+
+/**
+ * A placeable can deliberately reuse a creature MDL as a static prop. A
+ * missing runtime animation for that authored combination is bind-pose
+ * evidence, not an animation-runtime defect.
+ */
+function classifyModelPresentation(retail, engine) {
+  if (!engine || engine.modelStatus !== 'loaded' || !matchingModelIdentity(retail, engine)) return 'missing-evidence';
+  if (retail && retail.objectType === 'placeable' && retail.modelKind === 'creature'
+      && engine && engine.animationApplied === false) {
+    return 'authored-retail-behavior';
+  }
+  return engine && engine.animationApplied === true ? 'authored-retail-behavior' : 'missing-evidence';
+}
+
+function matchingModelIdentity(retail, engine) {
+  const normalize = (name) => typeof name === 'string' ? name.trim().toLowerCase() : '';
+  const expected = normalize(retail && retail.modelName);
+  return Boolean(expected && expected === normalize(engine && engine.modelName));
+}
+
+function compareAudio(retailSnap, engineSnap, emit) {
+  const r = retailSnap.audio; const e = engineSnap.audio;
+  if (!r || !e) return { skipped: true };
+  const add = findingEmitter(emit, retailSnap, r.resourceIdentity);
+  for (const [label, value] of Object.entries(r.area)) {
+    if (!same(value, e.area[label])) {
+      add({ area: 'audio', code: `area:${label}`, confidence: engineSnap.loadedFromSave ? 'variable' : 'defect',
+        object: retailSnap.module, retail: value, engine: e.area[label] });
+    }
+  }
+  for (const [label, track] of Object.entries(r.tracks || {})) {
+    const add = findingEmitter(emit, retailSnap, track.resourceIdentity);
+    if (track.resource && track.retailSource === 'none') {
+      add({ area: 'audio', code: 'retail-track-missing', confidence: 'coverage', object: track.resource,
+        detail: `${label} names a file retail cannot resolve` });
+    }
+  }
+
+  // Pair by template in order, like creatures.
+  const pool = new Map();
+  for (const s of e.sounds) {
+    if (!pool.has(s.template)) pool.set(s.template, []);
+    pool.get(s.template).push(s);
+  }
+  let paired = 0;
+  for (const rs of r.sounds.filter((x) => x.status === 'ok')) {
+    const add = findingEmitter(emit, retailSnap, templateIdentity(rs, 'UTS'));
+    const list = pool.get(rs.template);
+    const es = list && list.shift();
+    if (!es) {
+      add({ area: 'audio', code: 'sound-not-spawned', confidence: 'coverage', object: rs.template,
+        detail: `GIT places sound ${rs.template} (${rs.tag}); the engine area has none` });
+      continue;
+    }
+    paired++;
+    const object = `${rs.template}#${rs.gitIndex}`;
+    if (!same(rs.continuous, es.continuous)) {
+      const classification = classifyAudioSemantic(rs, es, e.playStyleMapping);
+      if (classification !== 'authored-retail-behavior') {
+        add({ area: 'audio', code: 'sound:play-style', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
+          classification, object, retail: rs.continuous, engine: es.playStyle ?? null,
+          detail: describeAudioSemanticEvidence(rs, e.playStyleMapping, es) });
+      }
+    }
+    for (const field of SOUND_FIELDS) {
+      if (!same(rs[field], es[field])) {
+        add({ area: 'audio', code: `sound:${field}`, confidence: 'defect', object, retail: rs[field], engine: es[field] });
+      }
+    }
+    const files = diffSets(rs.sounds, es.sounds);
+    if (files.missing.length || files.extra.length) {
+      add({ area: 'audio', code: 'sound:files', confidence: 'defect', object, retail: files.missing, engine: files.extra });
+    }
+    if (Array.isArray(es.decoded)) {
+      for (const name of rs.sounds) {
+        const retailHas = rs.soundSources[name] && rs.soundSources[name] !== 'none';
+        if (retailHas && !es.decoded.includes(name)) {
+          add({ area: 'audio', code: 'sound-file-not-decoded', confidence: 'defect', object: name,
+            retail: rs.soundSources[name], engine: 'not in emitter buffers',
+            note: 'an emitter can decode lazily; confirm with a longer settle before chasing' });
+        }
+      }
+    }
+  }
+  for (const leftovers of pool.values()) {
+    for (const es of leftovers) {
+      emit({ area: 'audio', code: 'sound-not-in-git', confidence: 'coverage', object: es.template || es.tag,
+        detail: 'engine area has a sound object the GIT does not place' });
+    }
+  }
+  return { paired };
+}
+
+function compareModelPresentation(retailSnap, engineSnap, emit) {
+  const retail = retailSnap.modelPresentation || [];
+  const engine = engineSnap.modelPresentation || [];
+  const pool = new Map();
+  for (const record of engine) {
+    if (!pool.has(record.template)) pool.set(record.template, []);
+    pool.get(record.template).push(record);
+  }
+  let paired = 0;
+  for (const record of retail) {
+    const candidates = pool.get(record.template);
+    const observed = candidates && candidates.shift();
+    if (!observed) {
+      const add = findingEmitter(emit, retailSnap, templateIdentity(record, 'UTP'));
+      add({ area: 'model', code: 'model-not-spawned', confidence: 'coverage', classification: 'missing-evidence',
+        object: record.template, detail: 'retail GIT places this model, but the engine area has no matching placeable' });
+      continue;
+    }
+    paired++;
+    const identity = retailIdentity(retailSnap, record.modelResourceIdentity) || templateIdentity(record, 'UTP');
+    const add = findingEmitter(emit, retailSnap, identity);
+    if (observed.modelStatus !== 'loaded') {
+      add({ area: 'model', code: 'model:missing', confidence: 'coverage', classification: 'missing-evidence',
+        object: `${record.template}#${record.gitIndex}`, retail: record.modelName ?? null, engine: observed.modelStatus ?? null,
+        detail: 'engine model presence/load status is absent, missing, or unresolved' });
+      continue;
+    }
+    if (!matchingModelIdentity(record, observed)) {
+      add({ area: 'model', code: 'model:identity', confidence: 'coverage', classification: 'missing-evidence',
+        object: `${record.template}#${record.gitIndex}`, retail: record.modelName ?? null, engine: observed.modelName ?? null,
+        detail: 'loaded engine model identity is missing or differs from the captured retail model' });
+      continue;
+    }
+    const classification = classifyModelPresentation(record, observed);
+    const isAuthoredCreatureBindPose = record.objectType === 'placeable'
+      && record.modelKind === 'creature' && observed.animationApplied === false;
+    const needsUnprovenAnimationFinding = observed.requestedAnimation != null
+      && observed.animationApplied === false;
+    if (!isAuthoredCreatureBindPose && !needsUnprovenAnimationFinding) continue;
+    add({ area: 'model', code: 'model:presentation', confidence: classification === 'engine-defect' ? 'defect' : 'coverage',
+      classification, object: `${record.template}#${record.gitIndex}`, retail: record.requestedAnimation ?? null,
+      engine: observed.currentAnimation ?? null,
+      detail: classification === 'authored-retail-behavior'
+        ? 'retail placeable/model metadata identifies an authored bind pose'
+        : 'animation application requires additional retail presentation evidence' });
+  }
+  return { paired };
+}
+
+/** Compare one explicitly bounded authored interaction without treating absent trace data as a match. */
+function compareBehaviorChain(retailSnap, engineSnap, add) {
+  const retail = retailSnap && retailSnap.behaviorChain;
+  const engine = engineSnap && engineSnap.behaviorChain;
+  const nonEmptyInteractionId = (value) => typeof value === 'string' && value.trim().length > 0;
+  const validNcsIdentity = (identity) => identity && typeof identity === 'object' && !Array.isArray(identity)
+    && typeof identity.resref === 'string' && identity.resref.trim().length > 0
+    && typeof identity.restype === 'string' && identity.restype.trim().toUpperCase() === 'NCS'
+    && typeof identity.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(identity.sha256);
+  const hasRetailNcsInput = (identity) => Array.isArray(retailSnap && retailSnap.retailInputs) && retailSnap.retailInputs.some((input) => input
+    && typeof input.resref === 'string' && typeof input.restype === 'string' && typeof input.sha256 === 'string'
+    && input.resref.trim().toLowerCase() === identity.resref.trim().toLowerCase()
+    && input.restype.trim().toUpperCase() === 'NCS'
+    && input.sha256.toLowerCase() === identity.sha256.toLowerCase());
+  const validTrace = (trace) => Array.isArray(trace) && trace.length > 0 && trace.every((entry) => entry && typeof entry === 'object'
+    && !Array.isArray(entry) && typeof entry.action === 'string' && entry.action.trim().length > 0
+    && typeof entry.event === 'string' && entry.event.trim().length > 0);
+  const sameInteraction = retail && engine && nonEmptyInteractionId(retail.interactionId)
+    && nonEmptyInteractionId(engine.interactionId) && retail.interactionId === engine.interactionId;
+  const retailReady = retail && retail.coverage === 'complete' && retail.gffDlgLocated === true && retail.ncsLocated === true
+    && validNcsIdentity(retail.ncsIdentity) && hasRetailNcsInput(retail.ncsIdentity)
+    && retail.resultState !== null && retail.resultState !== undefined;
+  const engineReady = engine && engine.coverage === 'complete' && engine.eventDispatchLocated === true
+    && engine.actionQueueLocated === true && engine.resultStateLocated === true
+    && engine.resultState !== null && engine.resultState !== undefined && validTrace(engine.actionEventTrace);
+  if (!sameInteraction || !retailReady || !engineReady) {
+    add({ area: 'behavior-chain', code: 'behavior-chain:bounded-interaction', confidence: 'coverage',
+      classification: 'missing-evidence', object: (retail && retail.interactionId) || (engine && engine.interactionId) || '101PER',
+      detail: 'The bounded GFF/DLG/NCS interaction lacks a complete retail source or engine action/event/result trace' });
+    return { coverage: 'missing-evidence', retail: retail || null, engine: engine || null };
+  }
+  const matches = same(retail.resultState, engine.resultState);
+  if (!matches) add({ area: 'behavior-chain', code: 'behavior-chain:result-state', confidence: 'defect',
+    classification: 'engine-defect', object: retail.interactionId, retail: retail.resultState, engine: engine.resultState,
+    resourceIdentity: retail.ncsIdentity || undefined });
+  return { coverage: matches ? 'match' : 'engine-defect', retail, engine };
+}
+
+function rank(findings) {
+  const groups = new Map();
+  for (const f of findings) {
+    const key = `${f.area}|${f.code}|${f.confidence}`;
+    if (!groups.has(key)) groups.set(key, { area: f.area, code: f.code, confidence: f.confidence, objects: new Set(), examples: [] });
+    const g = groups.get(key);
+    g.objects.add(f.object);
+    if (g.examples.length < 5) g.examples.push(f);
+  }
+  const order = { defect: 0, variable: 1, coverage: 2 };
+  return [...groups.values()]
+    .map((g) => ({ ...g, count: g.objects.size, objects: undefined }))
+    .sort((a, b) => order[a.confidence] - order[b.confidence] || b.count - a.count || a.code.localeCompare(b.code));
+}
+
+function classificationForFinding(finding) {
+  if (typeof finding.classification === 'string' && finding.classification.trim()) {
+    return finding.classification;
+  }
+  if (finding.confidence === 'defect') return 'engine-defect';
+  if (finding.confidence === 'variable') return 'variable-runtime-output';
+  return 'missing-evidence';
+}
+
+function normalizeFindingForReport(finding) {
+  const normalized = { ...finding, classification: classificationForFinding(finding) };
+  if (normalized.expected === undefined && normalized.retail !== undefined) {
+    normalized.expected = normalized.retail;
+  }
+  if (normalized.observed === undefined && normalized.engine !== undefined) {
+    normalized.observed = normalized.engine;
+  }
+  return normalized;
+}
+
+function reportEvidenceRefs(module, evidencePath) {
+  const normalizedModule = String(module || '').trim().toLowerCase();
+  if (!normalizedModule) throw new TypeError('Parity report requires a module for retained evidence references');
+  return [...new Set([
+    `tools/parity/out/${normalizedModule}.engine.json`,
+    `tools/parity/out/${normalizedModule}.retail.json`,
+    ...(typeof evidencePath === 'string' && evidencePath.trim() ? [evidencePath] : []),
+  ])];
+}
+
+function sha256File(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+/**
+ * Freeze a comparison's evidence under a content-addressed capture directory.
+ * The mutable per-module files remain convenience pointers only; promotions use
+ * the returned manifest and its exact retained copies.
+ */
+function retainCaptureArtifacts({ module, root = OUT_DIR, contents }) {
+  if (path.resolve(root) !== OUT_DIR) throw new TypeError('Retention requires this workspace capture root');
+  const normalizedModule = String(module || '').trim().toLowerCase();
+  if (!/^[a-z0-9_]{1,16}$/.test(normalizedModule)) throw new TypeError('Capture manifest requires a module identifier');
+  if (!contents || typeof contents !== 'object') throw new TypeError('Capture manifest requires captured artifact bytes');
+  const sources = {};
+  for (const key of ['engine', 'retail', 'comparison', ...(contents.sidecar === undefined ? [] : ['sidecar'])]) {
+    if (!Buffer.isBuffer(contents[key]) && typeof contents[key] !== 'string') throw new TypeError(`Capture ${key} requires captured bytes`);
+    sources[key] = Buffer.from(contents[key]);
+  }
+  const sourceHashes = Object.fromEntries(Object.entries(sources).map(([key, bytes]) => [key, crypto.createHash('sha256').update(bytes).digest('hex')]));
+  const captureId = deriveCaptureId(normalizedModule, Object.fromEntries(
+    Object.entries(sourceHashes).map(([key, sha256]) => [key, { sha256 }]),
+  ));
+  const destination = path.join(path.resolve(root), 'captures', normalizedModule, captureId);
+  assertUnlinkedWorkspacePath(__dirname);
+  let directory = __dirname;
+  for (const segment of ['out', 'captures', normalizedModule, captureId]) {
+    directory = path.join(directory, segment);
+    try { fs.mkdirSync(directory); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    assertUnlinkedWorkspacePath(directory);
+  }
+  const artifacts = {};
+  for (const [key, source] of Object.entries(sources)) {
+    const artifactPath = path.join(destination, `${key}.json`);
+    const reference = path.posix.join('tools', 'parity', 'out', 'captures', normalizedModule, captureId, `${key}.json`);
+    if (!fs.existsSync(artifactPath)) fs.writeFileSync(artifactPath, source, { flag: 'wx' });
+    resolveRetainedArtifactPath(reference);
+    if (sha256File(artifactPath) !== sourceHashes[key]) throw new Error(`Retained ${key} artifact hash mismatch`);
+    artifacts[key] = {
+      path: reference,
+      sha256: sourceHashes[key],
+    };
+  }
+  const manifest = { schema: 'kotor2-vr/parity-capture@1', module: normalizedModule.toUpperCase(), captureId, artifacts };
+  const manifestPath = path.join(destination, 'capture.json');
+  const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
+  if (fs.existsSync(manifestPath)) {
+    assertUnlinkedWorkspacePath(manifestPath, true);
+    if (fs.readFileSync(manifestPath, 'utf8') !== serialized) throw new Error(`Capture manifest collision: ${manifestPath}`);
+  } else {
+    fs.writeFileSync(manifestPath, serialized, { flag: 'wx' });
+  }
+  return { path: manifestPath, manifest };
+}
+
+function fmt(v) {
+  if (v === undefined) return '';
+  if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
+  return v === null ? '—' : String(v);
+}
+
+function toMarkdown(report) {
+  const lines = [];
+  lines.push(`# Parity: ${report.module.toUpperCase()}`, '');
+  lines.push(`Engine captured ${report.engineCapturedAt} (bundle ${report.bundleMtime || 'unknown'}).`, '');
+  if (report.loadedFromSave) {
+    lines.push('> **Loaded from a save.** This module was in `gameinprogress`, so creature HP, equipment and presence reflect saved state as well as the template. Treat `variable` and `coverage` rows accordingly.', '');
+  }
+  lines.push(`Creatures paired: ${report.creatures.paired}; retail-only: ${report.creatures.unmatchedRetail}; engine-only: ${report.creatures.unmatchedEngine}. Textures checked: ${report.textures.checked}. Sounds paired: ${report.audio && report.audio.paired !== undefined ? report.audio.paired : 'n/a'}.`, '');
+  for (const confidence of ['defect', 'variable', 'coverage']) {
+    const groups = report.ranked.filter((g) => g.confidence === confidence);
+    lines.push(`## ${confidence} (${groups.length})`, '');
+    if (!groups.length) { lines.push('None.', ''); continue; }
+    lines.push('| Objects | Area | Code | Example | Retail | Engine |', '|---:|---|---|---|---|---|');
+    for (const g of groups) {
+      const ex = g.examples[0];
+      lines.push(`| ${g.count} | ${g.area} | \`${g.code}\` | ${ex.object} | ${fmt(ex.retail)} | ${fmt(ex.engine)} |`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function main(argv = process.argv) {
+  const i = argv.indexOf('--module');
+  if (i < 0) throw new Error('usage: node tools/parity/compare.js --module 101PER');
+  const mod = argv[i + 1].toLowerCase();
+  if (!/^[a-z0-9_]{1,16}$/.test(mod)) throw new TypeError('Comparison requires a valid module identifier');
+  const engineBytes = fs.readFileSync(path.join(OUT_DIR, `${mod}.engine.json`));
+  const retailBytes = fs.readFileSync(path.join(OUT_DIR, `${mod}.retail.json`));
+  const engine = JSON.parse(engineBytes.toString('utf8'));
+  const retail = JSON.parse(retailBytes.toString('utf8'));
+  const evidence = loadEvidenceSidecar(mod, retail);
+
+  const findings = [];
+  const add = (f) => {
+    const linkedFinding = linkEvidence(f, evidence.records, evidence.path);
+    findings.push(normalizeFindingForReport(linkedFinding));
+  };
+  const creatures = compareCreatures(retail, engine, add);
+  const textures = compareTextures(retail, engine, add);
+  const audio = compareAudio(retail, engine, add);
+  const modelPresentation = compareModelPresentation(retail, engine, add);
+  const behaviorChain = compareBehaviorChain(retail, engine, add);
+  const report = {
+    schema: 'kotor2-vr/parity-report@1',
+    module: mod,
+    engineCapturedAt: engine.capturedAt,
+    bundleMtime: engine.bundleMtime,
+    evidenceRefs: reportEvidenceRefs(mod, evidence.path),
+    loadedFromSave: engine.loadedFromSave === true,
+    creatures, textures, audio, modelPresentation, behaviorChain,
+    ranked: rank(findings),
+    findings,
+  };
+  const parityJsonPath = path.join(OUT_DIR, `${mod}.parity.json`);
+  const comparisonBytes = Buffer.from(JSON.stringify(report, null, 2));
+  fs.writeFileSync(parityJsonPath, comparisonBytes);
+  fs.writeFileSync(path.join(OUT_DIR, `${mod}.parity.md`), toMarkdown(report));
+  const retained = retainCaptureArtifacts({ module: mod, root: OUT_DIR, contents: {
+    engine: engineBytes, retail: retailBytes, comparison: comparisonBytes,
+    ...(evidence.path ? { sidecar: evidence.bytes } : {}),
+  } });
+  report.captureManifestPath = retained.path;
+  report.captureManifest = retained.manifest;
+  fs.writeFileSync(parityJsonPath, JSON.stringify(report, null, 2));
+  const counts = { defect: 0, variable: 0, coverage: 0 };
+  for (const g of report.ranked) counts[g.confidence] += 1;
+  console.log(`${mod}: ${findings.length} findings in ${report.ranked.length} groups ` +
+    `(defect ${counts.defect}, variable ${counts.variable}, coverage ${counts.coverage}) -> tools/parity/out/${mod}.parity.md`);
+}
+
+if (require.main === module) main();
+
+module.exports = {
+  compareCreatures, compareTextures,
+  pairCreatures, diffSets, textureLayer, rank, SLOT_MAP, evidenceMatchesFinding, linkEvidence, loadEvidenceSidecar, validateEvidenceSidecar,
+  classifyAudioSemantic, classifyModelPresentation, compareAudio, compareModelPresentation,
+  compareBehaviorChain,
+  describeAudioSemanticEvidence, selectedRetailPlayStyle, classificationForFinding, normalizeFindingForReport,
+  reportEvidenceRefs, retainCaptureArtifacts, main,
+};

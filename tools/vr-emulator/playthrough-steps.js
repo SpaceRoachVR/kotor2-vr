@@ -5917,6 +5917,8 @@ module.exports = {
   clickGuiControl,
   describeMenuControls,
   useTaggedWorldObject,
+  findObjectByTag,
+  enterVrSession,
   waitForMenu,
   waitForModule,
   checkpoint,
@@ -5925,4 +5927,5 @@ module.exports = {
   healPlayerIfInjured,
   sleep,
   line,
+  newGameThroughCharacterCreation,
 };
