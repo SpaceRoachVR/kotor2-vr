@@ -20,6 +20,8 @@ export class EffectBeam extends GameEffect {
   modelName: string;
   model: OdysseyModel3D;
   visualEffect: any;
+  /** Set once the effect is gone, so a model that finishes loading late is dropped. */
+  private removed = false;
 
   constructor(){
     super();
@@ -47,7 +49,9 @@ export class EffectBeam extends GameEffect {
 
     super.initialize();
 
-    switch(this.visualEffect.progfx_duration){
+    // 2DA cells arrive as strings; a strict switch on '614' matched no case,
+    // so every beam (flame spray, ion ray, stun ray) drew the cold ray default.
+    switch(Number(this.visualEffect?.progfx_duration)){
       case 616:
         this.modelName = 'v_coldray_dur';
       break;
@@ -105,6 +109,9 @@ export class EffectBeam extends GameEffect {
           context: this.object.context,
           onComplete: (model: OdysseyModel3D) => {
             this.model = model;
+            // addEffect starts the load and applies at once, so the model is
+            // almost never ready in onApply: attach it here if it was applied.
+            if(this.applied) this.attachBeam();
             resolve();
           }
         });
@@ -119,15 +126,37 @@ export class EffectBeam extends GameEffect {
       return;
       
     super.onApply();
-    
-    if(this.model instanceof OdysseyModel3D){
-      if(this.getCaster().model instanceof OdysseyModel3D){
-        //Add the effect to the casters model
-        this.getCaster().model.add(this.model);
-        //Set the target node of the BeamEffect emitter
-        this.model.setEmitterTarget(this.object.model);
-      }
+    this.attachBeam();
+    // The beam's own sound (v_bem_ionray, v_bem_flamespray, ...) from the caster.
+    const sound = this.visualEffect?.soundduration;
+    const caster = this.getCaster() as any;
+    if(typeof sound === 'string' && sound && sound !== '****' && caster?.audioEmitter?.playSound){
+      try { caster.audioEmitter.playSound(sound); } catch { /* sound is optional */ }
     }
+  }
+
+  /**
+   * Round 12 (F14): the droid shock arm and flamethrower showed no beam. The
+   * beam was attached only if its model had already loaded when the effect was
+   * applied, which it never had, and applied then stayed true for good.
+   */
+  private attachBeam(){
+    if(this.removed || !(this.model instanceof OdysseyModel3D)) return;
+    const caster = this.getCaster();
+    if(!(caster?.model instanceof OdysseyModel3D) || this.model.parent === caster.model) return;
+    //Add the effect to the casters model
+    caster.model.add(this.model);
+    //Set the target node of the BeamEffect emitter
+    this.model.setEmitterTarget(this.object.model);
+  }
+
+  onRemove(){
+    this.removed = true;
+    // The beam lasts as long as the effect (a second for the droid devices).
+    if(this.model){
+      this.model.removeFromParent();
+    }
+    super.onRemove();
   }
 
   update(delta = 0){
