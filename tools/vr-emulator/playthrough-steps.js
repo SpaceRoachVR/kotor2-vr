@@ -5521,6 +5521,8 @@ module.exports = {
   clickGuiControl,
   describeMenuControls,
   useTaggedWorldObject,
+  findObjectByTag,
+  enterVrSession,
   waitForMenu,
   waitForModule,
   checkpoint,

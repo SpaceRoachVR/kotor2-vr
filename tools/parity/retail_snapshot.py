@@ -38,6 +38,7 @@ logging.disable(logging.CRITICAL)  # PyKotor logs every BIF it opens at DEBUG
 from pykotor.common.module import Module  # noqa: E402
 from pykotor.extract.installation import Installation, SearchLocation  # noqa: E402
 from pykotor.resource.generics.utc import read_utc  # noqa: E402
+from pykotor.resource.generics.dlg import read_dlg  # noqa: E402
 from pykotor.resource.generics.uti import read_uti  # noqa: E402
 from pykotor.resource.generics.uts import read_uts  # noqa: E402
 from pykotor.resource.generics.utp import read_utp  # noqa: E402
@@ -390,13 +391,14 @@ def audio_snapshot(inst: Installation, module, git, capsules, retail_inputs: lis
     return {"resourceIdentity": git_identity, "area": area, "tracks": tracks, "sounds": sounds}
 
 
-def behavior_chain_snapshot() -> dict:
-    """State the bounded behavior-chain coverage honestly until an interaction is selected.
+MEDLOG_1_NCS_SHA256 = "88b9169467f3fdfc6ae793ecc7d55cbf92bb0b161e39aa65c952e423295f428f"
+COMP_DLG_NCS_SHA256 = "7c6c4ea4a28acbe2e0eb393b5e11e6638a695bee168f2f08dd8c35108c1ab5e3"
+MEDLOG_ENTRY_NCS_SHA256 = "c86a03c440745350e2f9da1d24019a935c1fa84ebc805e75f3049a9aaf4dc944"
+FADE_OUT_IN_NCS_SHA256 = "e3054cc48f315bee997499583cffd0ae839286af983b0829c893057c4b6ad2b4"
+MEDLOG_CONDITION_NCS_SHA256 = "ce02b5ce42fbc47ecbfdd7df5866523b396cfaad2fce44603b76c26d78c14825"
 
-    A passive module read cannot prove an authored DLG/GFF/NCS interaction.  The
-    explicit record prevents downstream comparison from fabricating an action
-    queue or global result when no safe, user-driven interaction trace exists.
-    """
+
+def missing_behavior_chain(reason: str) -> dict:
     return {
         "coverage": "missing-evidence",
         "interactionId": None,
@@ -404,7 +406,107 @@ def behavior_chain_snapshot() -> dict:
         "ncsLocated": False,
         "ncsIdentity": None,
         "resultState": None,
-        "reason": "No bounded GFF/DLG/NCS interaction was selected for this retail snapshot",
+        "reason": reason,
+    }
+
+
+def behavior_chain_snapshot(inst: Installation, module, git, capsules, retail_inputs: list[dict]) -> dict:
+    """Verify the MedCom log-one branch against the active module's retail bytes.
+
+    The expected global write is tied to the exact independently inspected
+    52-byte a_setmedlog1 NCS, which pushes 1 and 101PER_Med_Log before K2
+    opcode 581 (SetGlobalNumber). A changed script cannot inherit that claim.
+    """
+    if git is None:
+        return missing_behavior_chain("101PER GIT is absent")
+    capsules = require_module_scoped_capsules(capsules)
+    staged_inputs: list[dict] = []
+    try:
+        git_resource = module.git()
+        git_identity = record_retail_input(staged_inputs, git_resource.resname(), git_resource.restype(),
+                                           git_resource.active(), git_resource.data())
+        medcom_instances = [(index, entry) for index, entry in enumerate(git.placeables)
+                            if resref(entry.resref) == "comppnl001"]
+        if len(medcom_instances) != 1:
+            raise ValueError(f"Expected one MedCom GIT instance, found {len(medcom_instances)}")
+        git_index, _ = medcom_instances[0]
+        if git_index != 20:
+            raise ValueError(f"MedCom GIT index changed from the inspected branch: {git_index}")
+
+        def resource(name: str, kind: ResourceType):
+            result = inst.resource(name, kind,
+                                   [SearchLocation.OVERRIDE, SearchLocation.CUSTOM_MODULES, SearchLocation.CHITIN],
+                                   capsules=capsules)
+            if result is None or resref(result.resname) != name or result.restype != kind:
+                raise ValueError(f"Missing or misidentified {name}.{kind.name} in active module scope")
+            return result
+
+        utp_result = resource("comppnl001", ResourceType.UTP)
+        utp = read_utp(utp_result.data)
+        if resref(utp.tag) != "medcom" or resref(utp.conversation) != "medlog" or resref(utp.on_used) != "a_compdlg":
+            raise ValueError("MedCom UTP tag, conversation, or OnUsed script differs")
+        utp_identity = record_resource_input(staged_inputs, utp_result)
+
+        dlg_result = resource("medlog", ResourceType.DLG)
+        dialogue = read_dlg(dlg_result.data)
+        if (len(dialogue.starters) != 2 or resref(dialogue.starters[0].active1) != "c_medloggt0"
+                or dialogue.starters[0].node.list_index != 16):
+            raise ValueError("MedCom conditioned dialogue entry differs from the inspected branch")
+        fresh_starters = [link for link in dialogue.starters if not resref(link.active1)]
+        if len(fresh_starters) != 1 or fresh_starters[0].node.list_index != 0:
+            raise ValueError("MedCom fresh-state dialogue entry is not unique")
+        entry = fresh_starters[0].node
+        if resref(entry.script1) != "a_medlogjmp":
+            raise ValueError("MedCom fresh-state entry script differs")
+        reply = entry.links[0].node
+        next_entry = reply.links[0].node
+        log_reply = next_entry.links[0].node
+        if (reply.list_index, next_entry.list_index, log_reply.list_index) != (16, 14, 19) \
+                or resref(log_reply.script1) != "a_setmedlog1" or resref(log_reply.script2) != "a_fadeoutin":
+            raise ValueError("MedCom log-one reply is not on the verified dialogue path")
+        dlg_identity = record_resource_input(staged_inputs, dlg_result)
+
+        on_used_result = resource("a_compdlg", ResourceType.NCS)
+        on_used_identity = record_resource_input(staged_inputs, on_used_result)
+        if on_used_identity["sha256"] != COMP_DLG_NCS_SHA256:
+            raise ValueError("a_compdlg NCS differs from the inspected conversation dispatch bytecode")
+        condition_result = resource("c_medloggt0", ResourceType.NCS)
+        condition_identity = record_resource_input(staged_inputs, condition_result)
+        if condition_identity["sha256"] != MEDLOG_CONDITION_NCS_SHA256:
+            raise ValueError("c_medloggt0 NCS differs from the inspected dialogue branch condition bytecode")
+        entry_result = resource("a_medlogjmp", ResourceType.NCS)
+        entry_identity = record_resource_input(staged_inputs, entry_result)
+        if entry_identity["sha256"] != MEDLOG_ENTRY_NCS_SHA256:
+            raise ValueError("a_medlogjmp NCS differs from the inspected dialogue entry bytecode")
+        log_result = resource("a_setmedlog1", ResourceType.NCS)
+        ncs_identity = record_resource_input(staged_inputs, log_result)
+        if ncs_identity["sha256"] != MEDLOG_1_NCS_SHA256:
+            raise ValueError("a_setmedlog1 NCS differs from the inspected SetGlobalNumber bytecode")
+        fade_result = resource("a_fadeoutin", ResourceType.NCS)
+        fade_identity = record_resource_input(staged_inputs, fade_result)
+        if fade_identity["sha256"] != FADE_OUT_IN_NCS_SHA256:
+            raise ValueError("a_fadeoutin NCS differs from the inspected dialogue reply bytecode")
+    except (AttributeError, IndexError, KeyError, OSError, TypeError, ValueError) as error:
+        return missing_behavior_chain(str(error))
+
+    for record in staged_inputs:
+        if record not in retail_inputs:
+            retail_inputs.append(record)
+    return {
+        "coverage": "complete",
+        "interactionId": "101per:medcom:medical-log-1",
+        "gffDlgLocated": True,
+        "ncsLocated": True,
+        "ncsIdentity": ncs_identity,
+        "sourceIdentities": {
+            "git": git_identity, "utp": utp_identity, "dlg": dlg_identity, "onUsedNcs": on_used_identity,
+            "conditionNcs": condition_identity, "entryNcs": entry_identity,
+            "replyNcs": ncs_identity, "replySecondaryNcs": fade_identity,
+        },
+        "gitIndex": git_index,
+        "dialoguePath": [0, 16, 14, 19],
+        "replyScript": {"resref": "a_setmedlog1", "restype": "NCS"},
+        "resultState": {"globalNumber": {"101PER_Med_Log": 1}},
     }
 
 
@@ -447,7 +549,7 @@ def main() -> int:
         "creatures": creatures,
         "textures": [],
         "audio": audio_snapshot(inst, module, git, capsules, retail_inputs),
-        "behaviorChain": behavior_chain_snapshot(),
+        "behaviorChain": behavior_chain_snapshot(inst, module, git, capsules, retail_inputs),
         "modelPresentation": model_presentation_snapshot(inst, git, capsules, retail_inputs),
     }
 

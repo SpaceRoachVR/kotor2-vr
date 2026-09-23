@@ -10,10 +10,106 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from retail_snapshot import (audio_snapshot, audio_track_record, item_tag, model_presentation_snapshot,
-                             normalize_retail_input, require_module_scoped_capsules, texture_record)
+                             normalize_retail_input, require_module_scoped_capsules, texture_record,
+                             behavior_chain_snapshot)
 
 
 class RetailSnapshotTests(unittest.TestCase):
+    def test_medcom_behavior_chain_records_only_verified_retail_links_and_result(self):
+        ncs = bytes.fromhex(
+            "4e43532056312e3042000000341e000000000820000403000000010405000e"
+            "3130315045525f4d65645f4c6f6705000245022000"
+        )
+        on_used_ncs = bytes.fromhex(
+            "4e43532056312e30420000006d1e000000000820000403000000000403ffffffff"
+            "0403ffffffff0403000000000405000004050000040500000405000004050000"
+            "0405000004030000000104030000000104030000000004050000040300000000"
+            "0500024101050000cc0f2000"
+        )
+        entry_ncs = bytes.fromhex(
+            "4e43532056312e3042000000701e0000000008200002060403000000000405"
+            "00064d45444c4f47050000c8020101fffffff800041b00fffffffc2c100000"
+            "0000000000041d000000001a0301fffffffc0004050000d501050000d60120"
+            "00050000ee0005000006021b00fffffffc2000"
+        )
+        fade_ncs = bytes.fromhex(
+            "4e43532056312e30420000007a1e0000000008200004040000000004040000"
+            "0000040400000000040400000000040400000000050002d0052c100000000000"
+            "0000001d000000002b04040000000004040000000004040000000004043e9999"
+            "9a040400000000050002cf05200004043f00000005000007022000"
+        )
+        condition_ncs = bytes.fromhex(
+            "4e43532056312e3042000000a202031e0000000008200002030405000e"
+            "3130315045525f4d65645f4c6f6705000244010101fffffff800041b00ff"
+            "fffffc0301fffffffc00040403000000000e201f000000002c040300000001"
+            "0101fffffff400041b00fffffff81d00000000381b00fffffffc1d00000000"
+            "260403000000000101fffffff400041b00fffffff81d00000000121b00ffffff"
+            "fc1b00fffffffc2000"
+        )
+        resources = {
+            ("comppnl001", "UTP"): SimpleNamespace(resname="comppnl001", restype="UTP", filepath="101per_s.rim", data=b"utp"),
+            ("medlog", "DLG"): SimpleNamespace(resname="medlog", restype="DLG", filepath="101per_dlg.erf", data=b"dlg"),
+            ("a_compdlg", "NCS"): SimpleNamespace(resname="a_compdlg", restype="NCS", filepath="scripts.bif", data=on_used_ncs),
+            ("a_setmedlog1", "NCS"): SimpleNamespace(resname="a_setmedlog1", restype="NCS", filepath="101per_s.rim", data=ncs),
+            ("a_medlogjmp", "NCS"): SimpleNamespace(resname="a_medlogjmp", restype="NCS", filepath="101per_s.rim", data=entry_ncs),
+            ("a_fadeoutin", "NCS"): SimpleNamespace(resname="a_fadeoutin", restype="NCS", filepath="101per_s.rim", data=fade_ncs),
+            ("c_medloggt0", "NCS"): SimpleNamespace(resname="c_medloggt0", restype="NCS", filepath="101per_s.rim", data=condition_ncs),
+        }
+        installation = SimpleNamespace(resource=lambda name, kind, order, *, capsules: resources.get((name, kind.name)))
+        reply = SimpleNamespace(list_index=19, script1="a_setmedlog1", script2="a_fadeoutin")
+        logs_entry = SimpleNamespace(list_index=14, links=[SimpleNamespace(node=reply)])
+        logs_reply = SimpleNamespace(list_index=16, links=[SimpleNamespace(node=logs_entry)])
+        fresh_entry = SimpleNamespace(list_index=0, script1="a_medlogjmp", links=[SimpleNamespace(node=logs_reply)])
+        dialogue = SimpleNamespace(starters=[SimpleNamespace(active1="c_medloggt0", node=SimpleNamespace(list_index=16)),
+                                             SimpleNamespace(active1="", node=fresh_entry)])
+        git_resource = SimpleNamespace(resname=lambda: "101per", restype=lambda: "GIT", active=lambda: "101per.rim", data=lambda: b"git")
+        module = SimpleNamespace(git=lambda: git_resource)
+        git = SimpleNamespace(placeables=[SimpleNamespace(resref=f"other_{index}") for index in range(20)]
+                              + [SimpleNamespace(resref="comppnl001")])
+        retail_inputs = []
+
+        with patch("retail_snapshot.read_utp", return_value=SimpleNamespace(tag="MedCom", conversation="medlog", on_used="a_compdlg")), \
+             patch("retail_snapshot.read_dlg", return_value=dialogue):
+            result = behavior_chain_snapshot(installation, module, git, ("101per.rim", "101per_s.rim"), retail_inputs)
+
+        self.assertEqual(result["coverage"], "complete", result)
+        self.assertEqual(result["interactionId"], "101per:medcom:medical-log-1")
+        self.assertEqual(result["resultState"], {"globalNumber": {"101PER_Med_Log": 1}})
+        self.assertEqual(result["ncsIdentity"], normalize_retail_input("a_setmedlog1", "NCS", "101per_s.rim", ncs))
+        self.assertEqual(result["dialoguePath"], [0, 16, 14, 19])
+        self.assertEqual(result["replyScript"], {"resref": "a_setmedlog1", "restype": "NCS"})
+        self.assertEqual({(item["resref"], item["restype"]) for item in retail_inputs},
+                         {("101per", "GIT"), ("comppnl001", "UTP"), ("medlog", "DLG"),
+                          ("a_compdlg", "NCS"), ("a_setmedlog1", "NCS"),
+                          ("a_medlogjmp", "NCS"), ("a_fadeoutin", "NCS"),
+                          ("c_medloggt0", "NCS")})
+        self.assertEqual(result["sourceIdentities"]["onUsedNcs"]["sha256"],
+                         "7c6c4ea4a28acbe2e0eb393b5e11e6638a695bee168f2f08dd8c35108c1ab5e3")
+
+        resources[("a_compdlg", "NCS")] = SimpleNamespace(
+            resname="a_compdlg", restype="NCS", filepath="Override/a_compdlg.ncs", data=b"changed")
+        with patch("retail_snapshot.read_utp", return_value=SimpleNamespace(tag="MedCom", conversation="medlog", on_used="a_compdlg")), \
+             patch("retail_snapshot.read_dlg", return_value=dialogue):
+            changed = behavior_chain_snapshot(installation, module, git, ("101per.rim", "101per_s.rim"), [])
+        self.assertEqual(changed["coverage"], "missing-evidence")
+
+    def test_behavior_chain_io_failure_is_missing_evidence_not_partial_provenance(self):
+        def unreadable_resource(*args, **kwargs):
+            raise OSError("retail capsule became unreadable")
+
+        git_resource = SimpleNamespace(resname=lambda: "101per", restype=lambda: "GIT",
+                                       active=lambda: "101per.rim", data=lambda: b"git")
+        git = SimpleNamespace(placeables=[SimpleNamespace(resref=f"other_{index}") for index in range(20)]
+                              + [SimpleNamespace(resref="comppnl001")])
+        retail_inputs = []
+        result = behavior_chain_snapshot(SimpleNamespace(resource=unreadable_resource),
+                                         SimpleNamespace(git=lambda: git_resource), git,
+                                         ("101per.rim",), retail_inputs)
+
+        self.assertEqual(result["coverage"], "missing-evidence")
+        self.assertIsNone(result["resultState"])
+        self.assertEqual(retail_inputs, [])
+
     def test_normalize_retail_input_requires_hashable_bytes(self):
         with self.assertRaisesRegex(ValueError, "sha256"):
             normalize_retail_input("a", "UTC", "module", b"")
