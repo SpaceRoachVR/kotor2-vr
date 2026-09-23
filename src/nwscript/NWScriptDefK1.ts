@@ -53,6 +53,38 @@ import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
  * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
  */
 export class NWScriptDefK1 extends NWScriptDef { }
+
+/**
+ * TEMPORARY (round 6): name what runs GetFirstObjectInShape hundreds of times a
+ * second. In 103PER it ran ~460 loops/s from arrival until the page crashed;
+ * the retail heartbeat is 3 s, so something is re-firing a script every frame.
+ * Counts calls per script and caller and reports, at most every 10 s, any
+ * source above 20 calls/s. Remove once the looping script is identified.
+ */
+const shapeQueryCounts = new Map<string, number>();
+let shapeQueryWindowStart = 0;
+function reportShapeQueryRate(instance: NWScriptInstance){
+  try{
+    const now = performance.now();
+    if(!shapeQueryWindowStart) shapeQueryWindowStart = now;
+    const caller = instance?.caller as any;
+    const key = `${instance?.name ?? '?'} caller=${caller?.getTag?.() || caller?.tag || '?'}#${caller?.id ?? '?'}`;
+    shapeQueryCounts.set(key, (shapeQueryCounts.get(key) || 0) + 1);
+    const elapsed = (now - shapeQueryWindowStart) / 1000;
+    if(elapsed < 10) return;
+    const hot = [...shapeQueryCounts.entries()]
+      .map(([k, n]) => [k, n / elapsed] as const)
+      .filter(([, rate]) => rate > 20)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8);
+    if(hot.length){
+      console.warn('[NWScript] TEMPORARY hot GetFirstObjectInShape callers (calls/s): ' +
+        hot.map(([k, r]) => `${k}=${r.toFixed(0)}`).join(' | '));
+    }
+    shapeQueryCounts.clear();
+    shapeQueryWindowStart = now;
+  }catch{ /* diagnostics must never break a script */ }
+}
 NWScriptDefK1.Actions = {
   0:{
     comment: "0: Get an integer between 0 and nMaxInteger-1.\nReturn value on error: 0\n",
@@ -619,8 +651,14 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.OBJECT,
     args: [NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [ModuleObject, number]){
-      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)){
-        return args[0].combatData.lastAttacker;
+      // Doors and placeables are attacked too, and their scripts ask. Peragus'
+      // Damaged Door runs a_plasmachk on OnMeleeAttacked: GetLastAttacker(self)
+      // -> GetLastWeaponUsed -> GetItemHasItemProperty(weapon, DoorCutting).
+      // Answering only for creatures made every torch strike read as "not a
+      // torch" and bark "too damaged to be bashed open". CombatRound records
+      // lastAttacker on any target.
+      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleObject)){
+        return args[0].combatData?.lastAttacker;
       }else{
         return undefined;
       }
@@ -1708,7 +1746,11 @@ NWScriptDefK1.Actions = {
     action: function(this: NWScriptInstance, args: [number, number, EngineLocation, number, number, THREE.Vector3]){
       this.objectInSphapeIndex.set(args[0], 0);
       const ls = GameState.ModuleObjectManager.GetObjectsInShape(args[0], args[1], args[2], !!args[3], args[4], args[5], 0);
-      console.log('GetFirstObjectInShape', ls, args);
+      // No per-call logging. This and GetNextObjectInShape logged every call,
+      // and in 103PER something ran them ~460 times a second: 4.07 million of
+      // a 4.08 million line console in one session, which with DevTools open
+      // dragged frame rate and audio down until the page crashed.
+      reportShapeQueryRate(this);
       return ls;
     }
   },
@@ -1721,7 +1763,6 @@ NWScriptDefK1.Actions = {
       const nextId = this.objectInSphapeIndex.get(args[0]) + 1;
       this.objectInSphapeIndex.set(args[0], nextId);
       const ls = GameState.ModuleObjectManager.GetObjectsInShape(args[0], args[1], args[2], !!args[3], args[4], args[5], nextId);
-      console.log('GetNextObjectInShape', ls, args, nextId);
       return ls;
     }
   },
@@ -2813,9 +2854,8 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.VOID,
     args: [NWScriptDataType.INTEGER, NWScriptDataType.EFFECT, NWScriptDataType.LOCATION, NWScriptDataType.FLOAT],
     action: function(this: NWScriptInstance, args: [number, GameEffect, EngineLocation, number]){
-      args[1].setDurationType(args[0]);
-      args[1].setDuration(args[3]);
-      GameState.module.addEffect(args[1], args[2]);
+      // Module.addEffect applies the lifetime, expiry and link unpacking.
+      GameState.module.addEffect(args[1], args[2], args[0], args[3]);
     }
   },
   217:{
@@ -2889,8 +2929,11 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.LOCATION,
     args: [],
     action: function(this: NWScriptInstance, args: []){
+      // The location was computed and dropped, so every spell target location
+      // was the world origin: k_sup_grenade drew its blast there and searched a
+      // 4 m sphere around it for victims (round 8, grenades did nothing).
       if(BitWise.InstanceOfObject(this.talent, TalentObjectType.TalentObject) && BitWise.InstanceOfObject(this.talent.oTarget, ModuleObjectType.ModuleObject)){
-        this.talent.oTarget.getLocation();
+        return this.talent.oTarget.getLocation();
       }
       return new EngineLocation();
     }
@@ -4404,8 +4447,11 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.OBJECT,
     args: [],
     action: function(this: NWScriptInstance, args: []){
-      if(BitWise.InstanceOfObject(this.caller, ModuleObjectType.ModuleCreature)){
-        return this.caller.combatData.lastDamager;
+      // "Get the object which last damaged a creature or placeable object" —
+      // doors and placeables record it (EffectDamage) and their OnDamaged
+      // scripts read it, exactly as GetLastAttacker above.
+      if(BitWise.InstanceOfObject(this.caller, ModuleObjectType.ModuleObject)){
+        return this.caller.combatData?.lastDamager;
       }else{
         return undefined;
       }
@@ -6027,19 +6073,46 @@ NWScriptDefK1.Actions = {
     comment: "491: Get oTarget's base fortitude saving throw value (this will only work for\ncreatures, doors, and placeables).\n* Returns 0 if oTarget is invalid.\n",
     name: "GetFortitudeSavingThrow",
     type: NWScriptDataType.INTEGER,
-    args: [NWScriptDataType.OBJECT]
+    args: [NWScriptDataType.OBJECT],
+    // Creatures report the total a retail save stores (FortSaveThrow):
+    // class base + template bonus + ability modifier + autobalance + effects.
+    // Doors and placeables report their authored value.
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      const target: any = args[0];
+      if(!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleObject)) return 0;
+      if(typeof target.getSavingThrowTotal === 'function') return target.getSavingThrowTotal(1);
+      return target.getFortitudeSave() || 0;
+    }
   },
   492:{
     comment: "492: Get oTarget's base will saving throw value (this will only work for creatures,\ndoors, and placeables).\n* Returns 0 if oTarget is invalid.\n",
     name: "GetWillSavingThrow",
     type: NWScriptDataType.INTEGER,
-    args: [NWScriptDataType.OBJECT]
+    args: [NWScriptDataType.OBJECT],
+    // Creatures report the total a retail save stores (WillSaveThrow):
+    // class base + template bonus + ability modifier + autobalance + effects.
+    // Doors and placeables report their authored value.
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      const target: any = args[0];
+      if(!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleObject)) return 0;
+      if(typeof target.getSavingThrowTotal === 'function') return target.getSavingThrowTotal(3);
+      return target.getWillSave() || 0;
+    }
   },
   493:{
     comment: "493: Get oTarget's base reflex saving throw value (this will only work for\ncreatures, doors, and placeables).\n* Returns 0 if oTarget is invalid.\n",
     name: "GetReflexSavingThrow",
     type: NWScriptDataType.INTEGER,
-    args: [NWScriptDataType.OBJECT]
+    args: [NWScriptDataType.OBJECT],
+    // Creatures report the total a retail save stores (RefSaveThrow):
+    // class base + template bonus + ability modifier + autobalance + effects.
+    // Doors and placeables report their authored value.
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      const target: any = args[0];
+      if(!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleObject)) return 0;
+      if(typeof target.getSavingThrowTotal === 'function') return target.getSavingThrowTotal(2);
+      return target.getReflexSave() || 0;
+    }
   },
   494:{
     comment: "494: Get oCreature's challenge rating.\n* Returns 0.0 if oCreature is invalid.\n",
@@ -6235,12 +6308,25 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [],
     action: function(this: NWScriptInstance, args: []){
-      //This will kinda work for now but I think it is supposed to check if any actions in the queue were set by the player
-      if(BitWise.InstanceOfObject(this.caller, ModuleObjectType.ModuleObject)){
-        return this.caller.combatData.combatQueue.length ? NW_TRUE : NW_FALSE;//this.caller.actionQueue.length ? NW_TRUE : NW_FALSE;
-      }else{
-        return 0;
+      // The party AI's first question every round. GN_DetermineCombatRound
+      // runs ClearAllActions() and picks its own attack unless this is true,
+      // so it is what lets an order the player queued for a companion survive
+      // to the next round. `combatQueue` is never written anywhere in this
+      // engine, so it always answered no and the AI overwrote every queued
+      // order. Orders land in the combat round's schedule (attackCreature,
+      // talents and items all go through CombatRound.addAction).
+      //
+      // Party members only: for anyone else "user actions" cannot exist, and
+      // a hostile's own scheduled attack must not stop its AI thinking.
+      if(!BitWise.InstanceOfObject(this.caller, ModuleObjectType.ModuleCreature)){
+        return NW_FALSE;
       }
+      const caller = this.caller as ModuleCreature;
+      if(GameState.PartyManager.party.indexOf(caller) < 0){
+        return NW_FALSE;
+      }
+      const scheduled = caller.combatRound?.scheduledActionList?.length ?? 0;
+      return (scheduled > 0 || caller.combatData.combatQueue.length > 0) ? NW_TRUE : NW_FALSE;
     }
   },
   515:{

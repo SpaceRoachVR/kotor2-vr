@@ -120,6 +120,11 @@ export class ComputedPath {
     const pruneList: number[] = [];
     let pruneRest = false;
 
+    const area = this.owner?.area || (this.origin as any)?.area;
+    const doorBlocks = (v1: THREE.Vector3, v2: THREE.Vector3) => {
+      return Boolean(area?.path && typeof area.path.segmentBlockedByClosedDoor === 'function' && area.path.segmentBlockedByClosedDoor(v1, v2));
+    };
+
     let lastLOSOrigin;
     for(let i = 0, len = this.points.length; i < len; i++){
       const cPoint = this.points[i];
@@ -136,7 +141,7 @@ export class ComputedPath {
         continue;
       }
 
-      if(cPoint.hasLOS(this.destination, this.owner)){
+      if(!doorBlocks(cPoint.vector, this.destination.vector) && cPoint.hasLOS(this.destination, this.owner)){
         pruneRest = true;
         continue;
       }
@@ -147,14 +152,14 @@ export class ComputedPath {
       if(!lPoint)
         continue;
 
-      if(lastLOSOrigin && lastLOSOrigin.hasLOS(nPoint, this.owner)){
+      if(lastLOSOrigin && !doorBlocks(lastLOSOrigin.vector, nPoint.vector) && lastLOSOrigin.hasLOS(nPoint, this.owner)){
         pruneList.push(i);
         continue;
       }
 
       lastLOSOrigin = undefined;
 
-      if(!!nPoint && lPoint.hasLOS(nPoint, this.owner)){
+      if(!!nPoint && !doorBlocks(lPoint.vector, nPoint.vector) && lPoint.hasLOS(nPoint, this.owner)){
         lastLOSOrigin = lPoint;
         pruneList.push(i);
         continue;

@@ -361,7 +361,7 @@ export class PartyManager {
         availNPCSList.addChildStruct(availStruct);
       }
 
-      partytable.RootNode.addField(new GFFField(GFFDataType.INT, 'PT_CHEAT_USED')).setValue(0);
+      partytable.RootNode.addField(new GFFField(GFFDataType.BYTE, 'PT_CHEAT_USED')).setValue(0);
       partytable.RootNode.addField(new GFFField(GFFDataType.INT, 'PT_CONTROLLED_NP')).setValue( GameState.getCurrentPlayer() == GameState.PartyManager.Player ? -1 : GameState.PartyManager.party.indexOf(GameState.getCurrentPlayer()) );
       partytable.RootNode.addField(new GFFField(GFFDataType.LIST, 'PT_COST_MULT_LIS'));
 
@@ -713,9 +713,29 @@ export class PartyManager {
    * @returns void
    */
   static RemoveAvailableNPC(npcId = 0){
+    if(!PartyManager.NPCS[npcId]) return;
     PartyManager.NPCS[npcId].available = false;
     PartyManager.NPCS[npcId].canSelect = false;
-    PartyManager.NPCS[npcId].template;
+
+    // An NPC that is no longer available cannot stay in the party. Only the
+    // flags were cleared, so the member stayed in CurrentMembers and was
+    // spawned into every later module. That is how the Ebon Hawk prologue
+    // leaked into Peragus: its end script, a_end_001, switches control to the
+    // Exile and then calls RemoveAvailableNPC for T3-M4 and 3C-FD. Both stayed
+    // in the party, T3's items stayed in the shared inventory, and each Peragus
+    // module then had the party's T3 as well as the one its own GIT places —
+    // "a new instance of T3 spawns in every new part of Peragus". 103PER's
+    // a_addt3m4sp adds T3 back with AddPartyMember when the story calls for it.
+    if(PartyManager.IsNPCInParty(npcId) || PartyManager.GetPartyMemberByNPCId(npcId)){
+      const member = PartyManager.GetPartyMemberByNPCId(npcId);
+      // Never strand the party without a leader: if the removed NPC is leading,
+      // hand control back to the player character first.
+      if(member && PartyManager.party[0] === member && PartyManager.party.indexOf(PartyManager.Player) > 0){
+        PartyManager.MakePlayerLeader(false);
+      }
+      PartyManager.RemoveNPCById(npcId, false);
+      PartyManager.RemoveCurrentMemberByNPCId(npcId);
+    }
   }
 
 

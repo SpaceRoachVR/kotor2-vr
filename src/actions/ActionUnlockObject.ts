@@ -19,6 +19,9 @@ import { SignalEventType } from "@/enums/events/SignalEventType";
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 
+/** How long a security tunneler's Security bonus lasts: long enough for the 1.5 s pick. */
+const TUNNELER_BONUS_SECONDS = 3;
+
 /**
  * ActionUnlockObject class.
  * 
@@ -34,6 +37,7 @@ export class ActionUnlockObject extends Action {
   usedItem: boolean;
   oItem: ModuleItem;
   failureSignalled: boolean = false;
+  lockpickStarted: boolean = false;
 
   constructor( actionId: number = -1, groupId: number = -1 ){
     super(actionId, groupId);
@@ -110,21 +114,38 @@ export class ActionUnlockObject extends Action {
             effect.setInt(0, SkillType.SECURITY);
             effect.setInt(1, property.getValue());
             effect.setInt(2, GameState.SWRuleSet.racialTypeCount);
-            this.owner.addEffect(effect.initialize(), GameEffectDurationType.TEMPORARY, 3);
+            // addEffect gives this its duration and expiry. It used to ignore
+            // both for an unlinked effect, so this "3 second" bonus never
+            // expired and each tunneler stacked another +6 Security for good:
+            // a headset run climbed 6 → 12 → 18 → 24 → 42 → 78. See
+            // effects/GameEffectDuration.ts.
+            this.owner.addEffect(effect.initialize(), GameEffectDurationType.TEMPORARY, TUNNELER_BONUS_SECONDS);
           }
         }
         this.usedItem = true;
       }
 
       this.owner.setAnimationState(ModuleCreatureAnimState.IDLE);
-      this.owner.force = 0;
-      this.owner.speed = 0;
-                        
+      // A VR player picks from where they stand and may shuffle while doing it;
+      // pinning them in place for 1.5 s reads as the controls locking up. How
+      // far they may drift before the pick is abandoned is VR's locomotion
+      // policy (retainVRInPlaceSkillActionsWhileMoving), not this action's.
+      if(!ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
+        this.owner.force = 0;
+        this.owner.speed = 0;
+      }
+
       if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature))
         this.owner.setFacingObject( this.target );
 
-      if(this.timer == undefined){
-        this.timer = 1.5;
+      // The constructor sets `timer`, so this condition was never true and
+      // `gui_lockpick` never played. The player therefore got no feedback at
+      // all for the 1.5 s this action takes, which is what made Security read
+      // as a dead button in a headset session — and pressing again restarted
+      // the timer, so trying harder guaranteed it never finished. See
+      // ActionQueue.hasEquivalentAction for the measurement.
+      if(!this.lockpickStarted){
+        this.lockpickStarted = true;
         this.target.audioEmitter.playSound('gui_lockpick');
       }
 
@@ -143,22 +164,21 @@ export class ActionUnlockObject extends Action {
         // calls retain the target's own failure route, but routing both here
         // would execute OnFailToOpen twice.
         const unlocked = (this.target as any).attemptUnlock(this.owner, false);
+        // TEMPORARY (round 7 restart): proves a Security press reached its
+        // roll, and with what, for the headset check on Low Security Doors.
+        if(ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
+          console.info(
+            `[VR security] TEMPORARY attempt target='${this.target.getName?.()}' unlocked=${unlocked}` +
+            ` security=${this.owner.getSkillLevel?.(SkillType.SECURITY)} int=${(this.owner as any).getINT?.()}` +
+            ` inCombat=${!!(this.owner as any).combatData?.combatState}` +
+            ` dc=${(this.target as any).openLockDC} tunneler=${!!this.oItem}`
+          );
+        }
         if(!unlocked){
           this.signalFailure();
         }
+        this.consumeTunneler();
         return ActionStatus.COMPLETE;
-      }
-      
-      if(this.oItem){
-        //If we have more charges, reduce the charges count by 1
-        if(this.oItem.charges > 1){
-          this.oItem.charges -= 1;
-        }
-        //If we are out of charges remove the item from the owners inventory
-        else
-        {
-          this.owner.removeItem(this.oItem, 1);
-        }
       }
 
       return ActionStatus.IN_PROGRESS;
@@ -166,6 +186,23 @@ export class ActionUnlockObject extends Action {
     }
 
     return ActionStatus.FAILED;
+  }
+
+  /**
+   * Spends one charge of the security tunneler this attempt used.
+   *
+   * This used to run on every in-progress frame of the 1.5 s pick, so a
+   * single-charge tunneler was taken out of the inventory on the first frame —
+   * before the roll it was meant to boost — and a multi-charge one was drained
+   * in a handful of frames. One attempt costs one charge.
+   */
+  private consumeTunneler(): void {
+    if(!this.oItem) return;
+    if(this.oItem.charges > 1){
+      this.oItem.charges -= 1;
+    }else{
+      this.owner.removeItem(this.oItem, 1);
+    }
   }
 
   private signalFailure(): void {

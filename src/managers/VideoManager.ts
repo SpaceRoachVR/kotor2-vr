@@ -438,6 +438,29 @@ export class VideoManager {
       this.bikObject = null;
     }
 
+    // Unbind the decoded frame as well as the decoder.
+    //
+    // `initVideoTextures` is the only thing that binds these uniforms, and it
+    // runs from `onReady` — i.e. only once a decoder reports its dimensions.
+    // Leaving the previous movie's textures bound meant a movie whose decode
+    // never reached `onReady` still had its planes added to the scene, and drew
+    // the last frame of the movie before it. Reported from a headset session as
+    // the wrong clip playing — "only a video of space showed" — and noticed to
+    // begin only after leaving the ship and coming back, which is exactly when
+    // a module transition calls `reset()` and tears the decoder down.
+    //
+    // Clearing them makes that failure show black, which is honest, instead of
+    // convincingly playing the wrong scene.
+    if (VideoManager.yTex) { VideoManager.yTex.dispose(); VideoManager.yTex = null; }
+    if (VideoManager.uTex) { VideoManager.uTex.dispose(); VideoManager.uTex = null; }
+    if (VideoManager.vTex) { VideoManager.vTex.dispose(); VideoManager.vTex = null; }
+    if (VideoManager.material?.uniforms) {
+      VideoManager.material.uniforms.yTex.value = null;
+      VideoManager.material.uniforms.uTex.value = null;
+      VideoManager.material.uniforms.vTex.value = null;
+      VideoManager.material.uniformsNeedUpdate = true;
+    }
+
     this.currentMovie = null;
     this.isPlaying = false;
 

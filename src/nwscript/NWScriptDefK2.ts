@@ -1,3 +1,5 @@
+import * as THREE from "three";
+import EngineLocation from "@/engine/EngineLocation";
 import { ModuleObjectScript, ModuleObjectType } from "@/enums";
 import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
 import { EngineMode } from "@/enums/engine/EngineMode";
@@ -5,6 +7,7 @@ import { NWScriptDataType } from "@/enums/nwscript/NWScriptDataType";
 import { GameState } from "@/GameState";
 import { Planetary } from "@/engine/Planetary";
 import type { ModuleCreature, ModuleObject } from "@/module";
+import type { OdysseyModel3D } from "@/three/odyssey";
 import { BitWise } from "@/utility/BitWise";
 import { NW_FALSE, NW_TRUE } from "@/nwscript/NWScriptConstants";
 import { NWScriptDef } from "@/nwscript/NWScriptDef";
@@ -2346,7 +2349,17 @@ NWScriptDefK2.Actions = {
     name: 'GetLastWeaponUsed',
     type: NWScriptDataType.OBJECT,
     args: [ NWScriptDataType.OBJECT ],
-    action: undefined
+    // Peragus' damaged doors read this in their OnDamaged script to ask "was
+    // that a plasma torch?". Unimplemented, it answered OBJECT_INVALID, so a
+    // torch-wielding player got "too damaged to be bashed open with anything
+    // short of a plasma torch" on every hit and the door never opened. The
+    // weapon is recorded by CombatRound.calculateWeaponAttack as each attack
+    // is rolled; an unarmed strike is OBJECT_INVALID, as documented.
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      const creature = args[0] as any;
+      if(!creature || !BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return undefined;
+      return creature.combatData?.lastWeaponUsed ?? undefined;
+    }
   },
   329: {
     comment: '329: Use oPlaceable.',
@@ -2842,7 +2855,12 @@ NWScriptDefK2.Actions = {
     name: 'GetItemHasItemProperty',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject, number]){
+      const item = args[0] as any;
+      if(!item || !BitWise.InstanceOfObject(item, ModuleObjectType.ModuleItem)) return NW_FALSE;
+      const properties = Array.isArray(item.properties) ? item.properties : [];
+      return properties.some((property: any) => property?.is?.(args[1])) ? NW_TRUE : NW_FALSE;
+    }
   },
   399: {
     comment: '399: The creature will equip the melee weapon in its possession that can do the\nmost damage. If no valid melee weapon is found, it will equip the most\ndamaging range weapon. This function should only ever be called in the\nEndOfCombatRound scripts, because otherwise it would have to stop the combat\nround to run simulation.\n- oVersus: You can try to get the most damaging weapon against oVersus\n- bOffHand',
@@ -4916,42 +4934,71 @@ NWScriptDefK2.Actions = {
     name: 'AddAvailableNPCByObject',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, ModuleObject]){
+      return GameState.PartyManager.AddAvailableNPCByObject( args[0], args[1] as ModuleCreature ) ? NW_TRUE : NW_FALSE;
+    }
   },
   695: {
     comment: '695. RemoveAvailableNPC\nThis removes a NPC from the list of available party members\nReturns whether it was successful or not',
     name: 'RemoveAvailableNPC',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      GameState.PartyManager.RemoveAvailableNPC(args[0]);
+      return NW_TRUE;
+    }
   },
   696: {
     comment: '696. IsAvailableNPC\nThis returns whether a NPC is in the list of available party members',
     name: 'IsAvailableCreature',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      return GameState.PartyManager.IsAvailable(args[0]) ? NW_TRUE : NW_FALSE;
+    }
   },
   697: {
     comment: '697. AddAvailableNPCByTemplate\nThis adds a NPC to the list of available party members using\na template\nReturns if true if successful, false if the NPC had already\nbeen added or the template specified is invalid',
     name: 'AddAvailableNPCByTemplate',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.STRING ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, string]){
+      return GameState.PartyManager.AddAvailableNPCByTemplate( args[0], args[1] ) ? NW_TRUE : NW_FALSE;
+    }
   },
   698: {
     comment: '698. SpawnAvailableNPC\nThis spawns a NPC from the list of available creatures\nReturns a pointer to the creature object',
     name: 'SpawnAvailableNPC',
     type: NWScriptDataType.OBJECT,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.LOCATION ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, EngineLocation]){
+      const template = GameState.PartyManager.NPCS[args[0]]?.template;
+      if(!template){ return undefined; }
+      const partyMember = new GameState.Module.ModuleArea.ModuleCreature(template);
+      args[1].area.attachObject(partyMember);
+      partyMember.load();
+      partyMember.clearAllActions();
+      partyMember.loadModel().then( (model: OdysseyModel3D) => {
+        partyMember.model.userData.moduleObject = partyMember;
+        partyMember.setPosition(args[1].position);
+        partyMember.setFacing(args[1].getFacing(), true);
+        partyMember.box = new THREE.Box3().setFromObject(partyMember.container);
+        model.hasCollision = true;
+        GameState.group.creatures.add( partyMember.container );
+        partyMember.getCurrentRoom();
+        partyMember.onSpawn();
+      });
+      return partyMember;
+    }
   },
   699: {
     comment: '699. IsNPCPartyMember\nReturns if a given NPC constant is in the party currently',
     name: 'IsNPCPartyMember',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      return GameState.PartyManager.IsNPCInParty(args[0]) ? NW_TRUE : NW_FALSE;
+    }
   },
   700: {
     comment: '700. ActionBarkString\nthis will cause a creature to bark the strRef from the talk table.',
@@ -5866,7 +5913,11 @@ NWScriptDefK2.Actions = {
     name: 'GetSpellBaseForcePointCost',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      const spell = GameState.TwoDAManager.datatables.get('spells')?.rows?.[args[0]];
+      if(!spell) return 0;
+      return parseInt(spell.forcepoints) || 0;
+    }
   },
   819: {
     comment: '819\nRWT-OEI 04/05/04\nSetting this to TRUE makes it so that the Stealth status is\nleft on characters even when entering cutscenes. By default,\nstealth is removed from anyone taking part in a cutscene.\nALWAYS set this back to FALSE on every End Dialog node in\nthe cutscene you wanted to stay stealthed in. This isn\'t a\nflag that should be left on indefinitely. In fact, it isn\'t\nsaved, so needs to be set/unset on a case by case basis.',
@@ -5880,7 +5931,22 @@ NWScriptDefK2.Actions = {
     name: 'HasLineOfSight',
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.VECTOR, NWScriptDataType.VECTOR, NWScriptDataType.OBJECT, NWScriptDataType.OBJECT ],
-    action: undefined
+    // TSL's combat AI calls this, and it was unimplemented — logged live as
+    // `NWScript Action HasLineOfSight not found` in the same session where
+    // Peragus enemies never engaged the player. Resolved through the object
+    // pair when the script supplies one, using the same walkmesh ray the
+    // engine's own perception uses; the vectors are those objects' positions
+    // in every AI call site. Without a valid pair the answer is TRUE, the
+    // pre-existing behaviour of "nothing blocks", rather than a FALSE that
+    // would send ranged AI hunting for a firing position forever.
+    action: function(this: NWScriptInstance, args: [any, any, ModuleObject, ModuleObject]){
+      const source = args[2];
+      const target = args[3];
+      const isObject = (o: any) => !!o && BitWise.InstanceOfObject(o, ModuleObjectType.ModuleObject) && !!o.position;
+      if(!isObject(source) || !isObject(target)) return NW_TRUE;
+      const distance = source.position.distanceTo(target.position);
+      return source.hasLineOfSight(target, distance + 1) ? NW_TRUE : NW_FALSE;
+    }
   },
   821: {
     comment: '821\nFAK - OEI 5/3/04\nShowDemoScreen, displays a texture, timeout, string and xy for string',
@@ -6254,7 +6320,34 @@ NWScriptDefK2.Actions = {
     name: 'RemoveEffectByID',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject, number]){
+      // The "ID" here is NOT the effect type. That reading was inferred from
+      // neighbouring 868 and the evidence disproved it: the tutorial passes
+      // 8000, while the Sensor Droids carry only types 30, 68 and 38
+      // (EffectVisualEffect, EffectRacialType, EffectDamage). Every call
+      // removes nothing.
+      //
+      // Nor is removing an effect what would free those droids. Measured live
+      // mid-fight: hp 1 of 5, min1HP true, plot 0, and no protective effect on
+      // them at all — their invulnerability is the creature flag, set once per
+      // droid by the spawn script `k_fab_fade_sp`. In retail that protection is
+      // presumably carried by an effect this call removes, which this engine
+      // models as the flag instead, so the release has nothing to act on.
+      //
+      // Left matching on type because it is harmless and honest about what it
+      // did, and kept logging so a future session can see the real argument.
+      // Do not treat 8000 as an effect type without new evidence.
+      const target = args[0];
+      const effectId = args[1];
+      if(!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleCreature)) return;
+      const effects = Array.isArray(target.effects) ? target.effects : [];
+      const matching = effects.filter((effect) => effect && effect.type === effectId);
+      for(const effect of matching){ target.removeEffect(effect); }
+      console.info(
+        `[NWScript] TEMPORARY RemoveEffectByID(${target.getTag?.() ?? target.id}, ${effectId}) removed ${matching.length}` +
+        (matching.length ? '' : ` — carried types [${effects.map((effect) => effect?.type).join(',')}]`)
+      );
+    }
   },
   868: {
     comment: '//868\nRWT-OEI 10/07/04\nThis script removes an effect by an identical match\nbased on:\nMust have matching EffectID types.\nMust have the same value in Integer(0)\nMust have the same value in Integer(1)\nI\'m specifically using this function for Mandalore\'s implant swapping\nscript and it will probably not be useful for anyone else. If you\'re\nnot sure what this script function does, see me before using it.',

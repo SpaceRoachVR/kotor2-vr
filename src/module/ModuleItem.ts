@@ -324,6 +324,15 @@ export class ModuleItem extends ModuleObject {
     return 0;
   }
 
+  /** Whether this item carries a usable Monster_Damage property — true of creature weapons, not held ones. */
+  hasMonsterDamage(): boolean {
+    for(let i = 0, len = this.properties.length; i < len; i++){
+      const property = this.properties[i];
+      if(property.isUseable() && property.is(ModuleItemProperty.Monster_Damage)) return true;
+    }
+    return false;
+  }
+
   getMonsterDamage(){
     for(let i = 0, len = this.properties.length; i < len; i++){
       let property = this.properties[i];
@@ -332,6 +341,24 @@ export class ModuleItem extends ModuleObject {
       }
     }
     return 0;
+  }
+
+  /**
+   * The total of this item's usable Damage Penalty properties, as a positive
+   * number. Their cost table (IPRP_NEG5COST) stores "-1".."-5" in its value
+   * column, which getValue() has no case for, so it answered 0 and the Mining
+   * Laser's -1 never applied.
+   */
+  getDamagePenalty(): number {
+    let penalty = 0;
+    for(let i = 0, len = this.properties.length; i < len; i++){
+      const property = this.properties[i];
+      if(!property.isUseable() || !property.is(ModuleItemProperty.DamagePenalty)) continue;
+      const row = property.getCostTableRow?.();
+      const value = row ? parseInt(row.value) : NaN;
+      penalty += Number.isFinite(value) ? Math.abs(value) : Math.max(0, property.costValue || 0);
+    }
+    return penalty;
   }
 
   hasDamageBonus(): boolean {
@@ -468,7 +495,7 @@ export class ModuleItem extends ModuleObject {
       if(!property.isUseable()){ continue; }
 
       if(property.is(ModuleItemProperty.CastSpell)){
-        const spellId = property.getValue();
+        const spellId = property.getCastSpellId();
         if(!Number.isSafeInteger(spellId) || spellId < 0){ continue; }
         // Ordinary item use remains an authored direct item-cast action. The
         // embodied grenade bridge is the sole caller that deliberately enters
@@ -868,7 +895,10 @@ export class ModuleItem extends ModuleObject {
     itemStruct.addField( new GFFField(GFFDataType.WORD, 'StackSize') ).setValue(this.stackSize);
     itemStruct.addField( new GFFField(GFFDataType.BYTE, 'Stolen') ).setValue(this.stolen);
     itemStruct.addField( new GFFField(GFFDataType.DWORD, 'Upgrades') ).setValue(this.upgrades);
-    itemStruct.addField( new GFFField(GFFDataType.BYTE, 'Dropable') ).setValue(this.dropable);
+    // An item with no flag was added by script (CreateItemOnObject) and is loot
+    // by construction. Writing undefined read back as 0 and would have made it
+    // vanish from a corpse after a save and load. See CorpseLoot.
+    itemStruct.addField( new GFFField(GFFDataType.BYTE, 'Dropable') ).setValue(this.dropable ?? 1);
     itemStruct.addField( new GFFField(GFFDataType.BYTE, 'Pickpocketable') ).setValue(1);
     itemStruct.addField( new GFFField(GFFDataType.BYTE, 'ModelVariation') ).setValue(this.modelVariation);
     itemStruct.addField( new GFFField(GFFDataType.BYTE, 'Charges') ).setValue(this.charges);

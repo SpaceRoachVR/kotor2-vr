@@ -36,6 +36,8 @@ import { TextSprite3D } from "@/engine/TextSprite3D";
 import { ModuleObject } from "@/module/ModuleObject";
 import { ModuleAreaOfEffect } from "@/module/ModuleAreaOfEffect";
 import { ModuleCamera } from "@/module/ModuleCamera";
+import { RIMObject } from "@/resource/RIMObject";
+import { isUnplacedStaticCamera, matchAuthoredStaticCameras } from "@/module/StaticCameraRecovery";
 import { ModuleCreature } from "@/module/ModuleCreature";
 import { ModuleDoor } from "@/module/ModuleDoor";
 import { ModuleEncounter } from "@/module/ModuleEncounter";
@@ -631,10 +633,28 @@ export class ModuleArea extends ModuleObject {
     }
   }
 
+  /** TEMPORARY (R6): when this area first updated its music. */
+  musicDiagStartedAt: number | undefined;
+
   updateMusic(delta: number = 0){
+    this.musicDiagStartedAt ??= performance.now();
     const audioEngine = AudioEngine.GetAudioEngine();
     const oPC = GameState.getCurrentPlayer();
     if(oPC.excitedDuration > 0 && audioEngine.bgmMode == BackgroundMusicMode.AREA && audioEngine.battleMusicLoaded){
+      // TEMPORARY (headset round 5, R6): "fight music ended after fight, but
+      // comes back on after loading another area or loading a save". Names
+      // what excited the leader each time battle music starts, and how long
+      // after this area began updating, which separates a stale excited state
+      // carried through a load from a hostile genuinely perceiving the player.
+      try{
+        const name = (o: any) => (o && typeof o.getName === 'function') ? String(o.getName()) : 'none';
+        console.info(
+          `[AreaMusic] TEMPORARY battle music start: module=${GameState.module?.filename ?? '?'}` +
+          ` sinceAreaStart=${((performance.now() - (this.musicDiagStartedAt ?? performance.now())) / 1000).toFixed(1)}s` +
+          ` leader=${name(oPC)} excited=${Math.round(oPC.excitedDuration)} combatState=${oPC.combatData?.combatState}` +
+          ` lastAttacker=${name(oPC.combatData?.lastAttacker)} lastAttackTarget=${name(oPC.combatData?.lastAttackTarget)}`
+        );
+      }catch{ /* diagnostics must never stop the music loop */ }
       audioEngine.bgmMode = BackgroundMusicMode.BATTLE;
       audioEngine.areaMusicDayAudioEmitter.stop();
       audioEngine.battleMusicAudioEmitter.play(true);
@@ -805,6 +825,25 @@ export class ModuleArea extends ModuleObject {
   }
 
   lastRoom: ModuleRoom = undefined;
+  /**
+   * TEMPORARY (headset R4): "after coming back from outside of the ship on the
+   * lift, all remaining movies and cutscenes just show space with stars and
+   * asteroids instead of what they're supposed to show. The correct audio does
+   * play though."
+   *
+   * Correct audio with a wrong picture rules out movie selection, and an
+   * in-engine cutscene cannot be affected by the video decoder at all — so the
+   * suspect is this branch hiding every room, leaving the authored camera
+   * pointed at nothing but the skybox. That is a failure this engine has had
+   * before: the Ebon Hawk security console rendered the same asteroid field
+   * because each room failed both the containsPoint test and a frustum that
+   * belonged to a different camera (see `GameState.updateViewportFrustum`).
+   *
+   * Reports which of the three ways a room can qualify actually fired, once per
+   * distinct shape so a held cutscene logs a single line. Remove once settled.
+   */
+  private reportedDialogCullingShapes: Set<string> = new Set();
+
   updateRoomVisibility(delta: number = 0){
     switch(GameState.Mode){
       case EngineMode.DIALOG:
@@ -813,15 +852,34 @@ export class ModuleArea extends ModuleObject {
         const pos = GameState.currentCamera.position.clone().add(GameState.playerFeetOffset);
 
 
+        let dialogShown = 0, byNoVisObject = 0, byContainsPoint = 0, byFrustum = 0;
         for(let i = 0, roomCount = this.rooms.length; i < roomCount; i++){
           const room = this.rooms[i];
           const inCamera = GameState.viewportFrustum.intersectsBox(room.box);
-          roomInView[i] = (!room.visObject || room.box.containsPoint(pos) || inCamera);
+          const containsCamera = room.box.containsPoint(pos);
+          roomInView[i] = (!room.visObject || containsCamera || inCamera);
+          if(!room.visObject){ byNoVisObject++; }
+          if(containsCamera){ byContainsPoint++; }
+          if(inCamera){ byFrustum++; }
           if(!roomInView[i]){
             room.hide();
             continue;
           }
+          dialogShown++;
           room.show(false);
+        }
+        //TEMPORARY (headset R4): see reportedDialogCullingShapes.
+        try{
+          const shape = `${dialogShown}/${this.rooms.length} noVis=${byNoVisObject} inside=${byContainsPoint} frustum=${byFrustum}`;
+          if(!this.reportedDialogCullingShapes.has(shape)){
+            this.reportedDialogCullingShapes.add(shape);
+            console.info(
+              `[VR dialog rooms] shown=${shape}` +
+              ` camera=(${pos.x.toFixed(1)},${pos.y.toFixed(1)},${pos.z.toFixed(1)})`
+            );
+          }
+        }catch(e){
+          // Diagnostics must never disturb an authored shot.
         }
       break;
       case EngineMode.MINIGAME:
@@ -1713,6 +1771,20 @@ export class ModuleArea extends ModuleObject {
         GameState.ModuleObjectManager.AddObjectById(member);
       }
     }
+
+    // A fight does not follow the party through a door. Party members survive
+    // the transition as the same objects, so their excitedDuration came with
+    // them and the new area started battle music before anything was in it —
+    // logged in the round-6 run as `battle music start: module=002ebo
+    // sinceAreaStart=0.0s excited=9762 lastAttackTarget=Sensor Droid`, a
+    // droid in the module just left. A hostile in the new area re-arms it
+    // through perception the moment it sees the party.
+    for(const member of [GameState.PartyManager.Player, ...GameState.PartyManager.party]){
+      const creature = member as any;
+      if(!creature || typeof creature.cancelCombat !== 'function') continue;
+      creature.combatRound?.clearActions?.();
+      creature.cancelCombat();
+    }
   }
 
   /**
@@ -1720,10 +1792,42 @@ export class ModuleArea extends ModuleObject {
    */
   async loadCameras(){
     console.log('Loading Cameras');
+    await this.restoreUnplacedStaticCameras();
     for(let i = 0; i < this.cameras.length; i++){
       const camera = this.cameras[i];
       camera.load();
       GameState.staticCameras.push(camera.perspectiveCamera);
+    }
+  }
+
+  /**
+   * Takes authored placement back from the module archive for static cameras a
+   * save stored at the world origin. See StaticCameraRecovery.
+   */
+  private async restoreUnplacedStaticCameras(): Promise<void> {
+    try{
+      const unplaced = this.cameras.filter((camera) => isUnplacedStaticCamera(camera.template?.RootNode));
+      const modName = this.module?.filename;
+      if(!unplaced.length || !modName) return;
+      const rim = new RIMObject(`modules/${modName}.rim`);
+      await rim.load();
+      if(rim.loadFailed) return;
+      const info = rim.getResourceInfo(this.name, ResourceTypes['git']);
+      if(!info) return;
+      const buffer = await rim.getResourceBuffer(info);
+      if(!buffer || !buffer.length) return;
+      const authoredGit = new GFFObject(buffer);
+      const authored = authoredGit.RootNode.hasField('CameraList')
+        ? authoredGit.RootNode.getFieldByLabel('CameraList').getChildStructs()
+        : [];
+      const matches = matchAuthoredStaticCameras(unplaced.map((camera) => camera.template.RootNode), authored);
+      for(const camera of unplaced){
+        const strt = matches.get(camera.template.RootNode);
+        if(strt) camera.template = GFFObject.FromStruct(strt);
+      }
+      console.log(`ModuleArea: restored ${matches.size} of ${unplaced.length} static camera placement(s) in ${this.name} from modules/${modName}.rim`);
+    }catch(e){
+      console.error('ModuleArea.restoreUnplacedStaticCameras failed', e);
     }
   }
 
@@ -2055,7 +2159,7 @@ export class ModuleArea extends ModuleObject {
     for(let i = 0; i < this.sounds.length; i++){
       try{
         const sound = this.sounds[i];
-        sound.load();
+        await sound.load();
         await sound.loadSound();
       }catch(e){
         console.error(e);
@@ -2282,9 +2386,12 @@ export class ModuleArea extends ModuleObject {
     struct.addField( new GFFField(GFFDataType.INT, 'MusicNight') ).setValue(this.audio.music.night);
 
     struct.addField( new GFFField(GFFDataType.BYTE, 'RestrictMode') ).setValue(this.restrictMode ? 1 : 0);
+    // Types and fields as a retail SAVEGAME.sav writes them; the values were
+    // hard-coded 0, so a save/load reset the area's stealth XP rules.
     struct.addField( new GFFField(GFFDataType.DWORD, 'StealthXPCurrent') ).setValue(0);
-    struct.addField( new GFFField(GFFDataType.BYTE, 'StealthXPLoss') ).setValue(0);
-    struct.addField( new GFFField(GFFDataType.DWORD, 'StealthXPMax') ).setValue(0);
+    struct.addField( new GFFField(GFFDataType.BYTE, 'StealthXPEnabled') ).setValue(this.stealthXPEnabled ? 1 : 0);
+    struct.addField( new GFFField(GFFDataType.DWORD, 'StealthXPLoss') ).setValue(this.stealthXPLoss || 0);
+    struct.addField( new GFFField(GFFDataType.DWORD, 'StealthXPMax') ).setValue(this.stealthXPMax || 0);
     struct.addField( new GFFField(GFFDataType.DWORD, 'SunFogColor') ).setValue(0);
     
     struct.addField( new GFFField(GFFDataType.BYTE, 'TransPendCurrID') ).setValue(0);
@@ -2308,6 +2415,7 @@ export class ModuleArea extends ModuleObject {
 
     const aoeList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'AreaEffectList') );
     for(let i = 0; i < this.areaOfEffects.length; i++){
+      if(!this.areaOfEffects[i].initialized) continue;
       aoeList.addChildStruct( this.areaOfEffects[i].save().RootNode );
     }
 
@@ -2319,23 +2427,27 @@ export class ModuleArea extends ModuleObject {
 
     const cameraList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'CameraList') );
     for(let i = 0; i < this.cameras.length; i++){
+      if(!this.cameras[i].initialized) continue;
       cameraList.addChildStruct( this.cameras[i].save().RootNode );
     }
 
     const creatureList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'Creature List') );
     for(let i = 0; i < this.creatures.length; i++){
+      if(!this.creatures[i].initialized) continue;
       creatureList.addChildStruct( this.creatures[i].save().RootNode );
     }
 
-    git.RootNode.addField( new GFFField(GFFDataType.LIST, 'CurrentWeather') ).setValue(this.weather.currentWeather);
+    git.RootNode.addField( new GFFField(GFFDataType.BYTE, 'CurrentWeather') ).setValue(this.weather.currentWeather);
 
     const doorList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'Door List') );
     for(let i = 0; i < this.doors.length; i++){
+      if(!this.doors[i].initialized) continue;
       doorList.addChildStruct( this.doors[i].save().RootNode );
     }
 
     const encounterList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'Encounter List') );
     for(let i = 0; i < this.encounters.length; i++){
+      if(!this.encounters[i].initialized) continue;
       encounterList.addChildStruct( this.encounters[i].save().RootNode );
     }
 
@@ -2344,6 +2456,7 @@ export class ModuleArea extends ModuleObject {
 
     const placeableList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'Placeable List') );
     for(let i = 0; i < this.placeables.length; i++){
+      if(!this.placeables[i].initialized) continue;
       placeableList.addChildStruct( this.placeables[i].save().RootNode );
     }
 
@@ -2353,11 +2466,13 @@ export class ModuleArea extends ModuleObject {
 
     const soundList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'SoundList') );
     for(let i = 0; i < this.sounds.length; i++){
+      if(!this.sounds[i].initialized) continue;
       soundList.addChildStruct( this.sounds[i].save().RootNode );
     }
 
     const storeList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'StoreList') );
     for(let i = 0; i < this.stores.length; i++){
+      if(!this.stores[i].initialized) continue;
       storeList.addChildStruct( this.stores[i].save().RootNode );
     }
     
@@ -2367,6 +2482,7 @@ export class ModuleArea extends ModuleObject {
 
     const triggerList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'TriggerList') );
     for(let i = 0; i < this.triggers.length; i++){
+      if(!this.triggers[i].initialized) continue;
       triggerList.addChildStruct( this.triggers[i].save().RootNode );
     }
 
@@ -2374,6 +2490,7 @@ export class ModuleArea extends ModuleObject {
 
     const waypointList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'WaypointList') );
     for(let i = 0; i < this.waypoints.length; i++){
+      if(!this.waypoints[i].initialized) continue;
       waypointList.addChildStruct( this.waypoints[i].save().RootNode );
     }
     

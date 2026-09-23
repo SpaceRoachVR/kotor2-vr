@@ -217,4 +217,48 @@ export class ActionQueue extends Array {
     return this.findIndex( (a: Action) => a.type == actionType ) >= 0;
   }
 
+  /**
+   * Whether an action equivalent to `candidate` — same type, same parameters —
+   * is already in this queue.
+   *
+   * Re-issuing an authored menu action while its predecessor is still running
+   * is not harmless. `addFront` puts the new one ahead of the old, and these
+   * actions time themselves: `ActionUnlockObject` runs a 1.5 s lockpick before
+   * it rolls. So a player who presses Security again — which they do, because
+   * nothing visible happens during those 1.5 s — restarts the timer, and the
+   * door can never open while they keep trying.
+   *
+   * Measured live in a headset session: nine presses at ~0.9 s intervals left
+   * nine `ActionUnlockObject`s queued with the front timer oscillating around
+   * 0.6 and the door still locked; the moment the presses stopped the queue
+   * drained and the door unlocked. The player's reading was "the button does
+   * nothing", and pressing harder was precisely the wrong remedy.
+   *
+   * Compares the stored parameter values rather than resolved objects: those
+   * are ids and primitives, so two presses of the same menu entry against the
+   * same target compare equal without touching the module object manager.
+   */
+  hasEquivalentAction(candidate: Action): boolean {
+    if(!candidate) return false;
+    return this.findIndex( (queued: Action) =>
+      ActionQueue.actionsAreEquivalent(queued, candidate) ) >= 0;
+  }
+
+  private static actionsAreEquivalent(a: Action, b: Action): boolean {
+    if(!a || !b || a.type !== b.type) return false;
+    const aParams = a.parameters || [];
+    const bParams = b.parameters || [];
+    if(aParams.length !== bParams.length) return false;
+    for(let i = 0; i < aParams.length; i++){
+      const pa = aParams[i];
+      const pb = bParams[i];
+      if(!pa || !pb) {
+        if(pa !== pb) return false;
+        continue;
+      }
+      if(pa.type !== pb.type || pa.value !== pb.value) return false;
+    }
+    return true;
+  }
+
 }

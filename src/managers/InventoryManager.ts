@@ -7,6 +7,7 @@ import type { ModuleCreature, ModuleItem } from "@/module";
 import { GameState } from "@/GameState";
 import { BaseItemType } from "@/enums/combat/BaseItemType";
 import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
+import { canEquipInSlot } from "@/engine/rules/EquipmentSlotRules";
 // import { PartyManager } from "@/managers/PartyManager";
 
 /**
@@ -98,8 +99,8 @@ export class InventoryManager {
   }
 
   static isItemUsableInSlot( item: ModuleItem, slot: any ): boolean {
-    let baseItem = item.baseItem;
-    return (baseItem.equipableSlots & slot || baseItem.equipableSlots === slot) ? true : false;
+    // The second weapon set shares the first set's rules; see EquipmentSlotRules.
+    return canEquipInSlot(item.baseItem.equipableSlots, slot);
   }
 
   static addItem(template: GFFObject|ModuleItem = new GFFObject(), limitOne = false): ModuleItem {

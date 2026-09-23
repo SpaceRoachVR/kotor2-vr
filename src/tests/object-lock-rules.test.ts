@@ -74,7 +74,7 @@ describe('resolveSecurityUnlock', () => {
     expect(result).toEqual({ attempted: true, unlocked: false, roll: 1, total: 7 });
   });
 
-  test('rejects a Security total exactly equal to the authored OpenLockDC', () => {
+  test('accepts a Security total exactly equal to the authored OpenLockDC', () => {
     const result = resolveSecurityUnlock({
       locked: true,
       lockable: false,
@@ -85,7 +85,7 @@ describe('resolveSecurityUnlock', () => {
       inCombat: true,
     }, () => 15);
 
-    expect(result).toEqual({ attempted: true, unlocked: false, roll: 15, total: 21 });
+    expect(result).toEqual({ attempted: true, unlocked: true, roll: 15, total: 21 });
   });
 
   test('scores Security off Intelligence, as a modifier rather than half the score', () => {

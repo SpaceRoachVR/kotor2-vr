@@ -44,6 +44,29 @@ export class ActionMenuManager {
     ActionMenuManager.oTarget = oTarget;
   }
 
+  /**
+   * Whether a spell actually has the friendly/hostile variant a panel is asking
+   * for.
+   *
+   * `spells.2da` uses **-1** for "no such variant", not a blank. The previous
+   * test was `!isNaN(parseInt(value))`, which accepts -1 happily, so every
+   * spell qualified for both panels — the same -1-as-a-real-value confusion
+   * that has bitten `ItemProperty.UpgradeType` and `ModuleStore.buySellFlag` in
+   * this engine.
+   *
+   * What it looked like: T3-M4's only ability is `DROID_ITEM_CHARGE_ARM`
+   * (`forcefriendly=-1, forcehostile=28, forcepoints=0`) — a droid shock arm,
+   * not a Force power. Because -1 passed, it was added to the friendly self
+   * panel, which the VR action wheel presents as **Force Powers**. Reported
+   * from a headset session as "regular attacks such as droid shock arm show up
+   * under the force powers tab". With the sentinel honoured it stays on the
+   * hostile target panel, where its `forcehostile` row says it belongs.
+   */
+  private static hasSpellVariant(value: any): boolean {
+    const row = parseInt(value);
+    return Number.isInteger(row) && row >= 0;
+  }
+
   static InitActionMenuPanels(){
     ActionMenuManager.TARGET_MENU_COUNT = 3;
     ActionMenuManager.SELF_MENU_COUNT = (GameState.GameKey == GameEngineType.KOTOR ? 4 : 6);
@@ -71,7 +94,13 @@ export class ActionMenuManager {
     }
 
     const securityTalent = ActionMenuManager.oPC.skills[SkillType.SECURITY];
-    const bHasSecuritySkill = ActionMenuManager.oPC.getSkillLevel(SkillType.SECURITY) >= 1;
+    // Trained ranks, not the effective level. Security cannot be used untrained
+    // (skills.2da), and a tunneler grants its bonus as a short temporary
+    // EffectSkillIncrease — so gating on getSkillLevel made a bare "Security"
+    // entry appear on an untrained character for the few seconds after a
+    // tunneler attempt, and choosing it rolled with no bonus at all (Round 8:
+    // `security=0 tunneler=false` against the DC 28 Security Locker).
+    const bHasSecuritySkill = (ActionMenuManager.oPC.skills[SkillType.SECURITY]?.rank ?? 0) >= 1;
     const bHasDemolitionsSkill = ActionMenuManager.oPC.getSkillLevel(SkillType.DEMOLITIONS) >= 1;
 
     if(ActionMenuManager.oTarget instanceof GameState.Module.ModuleArea.ModuleObject){
@@ -230,7 +259,10 @@ export class ActionMenuManager {
             }
           }
         }
-      }else if(ActionMenuManager.oTarget instanceof GameState.Module.ModuleArea.ModuleCreature && ActionMenuManager.oTarget.isHostile(GameState.PartyManager.party[0] as ModuleObject)){
+      // A defeated hostile is loot, not a target: attacking a corpse queues an
+      // attack that never resolves (Round 8: "defeated enemies should not show
+      // attack options").
+      }else if(ActionMenuManager.oTarget instanceof GameState.Module.ModuleArea.ModuleCreature && ActionMenuManager.oTarget.isHostile(GameState.PartyManager.party[0] as ModuleObject) && !ActionMenuManager.oTarget.isDead()){
         ActionMenuManager.ActionPanels.targetPanels[0].addAction(new GameState.ActionMenuManager.ActionMenuItem({
           action: {
             type: ActionType.ActionPhysicalAttacks,
@@ -279,7 +311,7 @@ export class ActionMenuManager {
         }
 
         const hostileSpells = ActionMenuManager.oPC.getSpells().filter( (s: any) => {
-          return !isNaN(parseInt(s.forcehostile));
+          return ActionMenuManager.hasSpellVariant(s.forcehostile);
         });
 
         for(let i = 0; i < hostileSpells.length; i++){
@@ -323,7 +355,7 @@ export class ActionMenuManager {
     }
 
     const friendlySpells = ActionMenuManager.oPC.getSpells().filter( (s: any) => {
-      return !isNaN(parseInt(s.forcefriendly));
+      return ActionMenuManager.hasSpellVariant(s.forcefriendly);
     });
 
     for(let i = 0; i < friendlySpells.length; i++){
@@ -353,6 +385,23 @@ export class ActionMenuManager {
     );
   }
 
+  /**
+   * Queues an authored menu action, unless the same one is already pending.
+   *
+   * These actions time themselves — `ActionUnlockObject` spends 1.5 s picking
+   * before it rolls — and `addFront` puts a re-press ahead of the action it
+   * duplicates, restarting that timer. Pressing Security repeatedly therefore
+   * guaranteed it never completed; see `ActionQueue.hasEquivalentAction` for
+   * the measurement. Ignoring the duplicate makes a re-press a no-op instead
+   * of a reset, which is what the player already believes it is.
+   */
+  private static queueMenuAction(action: any){
+    const queue = ActionMenuManager.oPC.actionQueue;
+    if(queue.hasEquivalentAction(action)){ return; }
+    console.log('onTargetMenuAction', action);
+    queue.addFront(action);
+  }
+
   static onTargetMenuAction(index: number = 0){
     if(!ActionMenuManager.oPC){ return; }
 
@@ -362,20 +411,14 @@ export class ActionMenuManager {
         if(action.action && action.action.type == ActionType.ActionPhysicalAttacks){
           ActionMenuManager.oPC.attackCreature(action.target, undefined);
         }else if(action.action){
-          console.log('onTargetMenuAction', action);
-          ActionMenuManager.oPC.actionQueue.addFront(
-            action.action
-          ); 
+          ActionMenuManager.queueMenuAction(action.action);
         }else if(action.talent instanceof TalentObject){
           action.talent.useTalentOnObject(action.target, ActionMenuManager.oPC);
         }
       }else if(action.talent){
         action.talent.useTalentOnObject(action.target, ActionMenuManager.oPC);
       }else if(action.action){
-        console.log('onTargetMenuAction', action);
-        ActionMenuManager.oPC.actionQueue.addFront(
-          action.action
-        );
+        ActionMenuManager.queueMenuAction(action.action);
       }
     }
   }

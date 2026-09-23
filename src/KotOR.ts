@@ -92,3 +92,19 @@ export * from "@/engine/interaction/ActionApproachPolicy";
 // semantic actions are bound to physical buttons without reaching into the
 // bundle internals.
 export * from "@/vr/runtime/XRInputRouter";
+
+// WebXR input recording & trace playback.
+export * from "@/vr/runtime/recording/VRTraceTypes";
+export * from "@/vr/runtime/recording/VRInputRecorder";
+export * from "@/vr/runtime/recording/VRTracePlayer";
+
+// In-game 3D debug gizmos.
+export * from "@/vr/runtime/debug/VRInteractionGizmoHost";
+
+// Declarative gesture framework & physical manipulation.
+export * from "@/vr/runtime/gestures/VRGestureTypes";
+export * from "@/vr/runtime/gestures/VRGestureStateMachine";
+export * from "@/vr/runtime/gestures/StandardGestures";
+export * from "@/vr/runtime/manipulation/VRPhysicalSocket";
+export * from "@/vr/runtime/manipulation/VRGrabHandle";
+

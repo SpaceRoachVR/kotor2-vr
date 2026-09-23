@@ -36,6 +36,7 @@ import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { transferPlaceableInventory } from "@/module/PlaceableInventoryTransfer";
 import { resolveSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 import { Dice } from "@/utility/Dice";
+import { capStructureCurrentHP } from "@/engine/interaction/StructureDamageRules";
 
 interface AnimStateInfo {
   lastAnimState: ModulePlaceableAnimState;
@@ -217,9 +218,10 @@ export class ModulePlaceable extends ModuleObject {
         }
       }
 
-      if(this.model.visible && (!this.static || this.staticPoseSettleTicksRemaining > 0)){
+      const isAnimating = this.animStateInfo.started || !!this.model.getAnimationName();
+      if(this.model.visible && (!this.static || this.staticPoseSettleTicksRemaining > 0 || isAnimating)){
         this.model.update(delta);
-        if(this.static && this.staticPoseSettleTicksRemaining > 0){
+        if(this.static && this.staticPoseSettleTicksRemaining > 0 && !isAnimating){
           this.staticPoseSettleTicksRemaining--;
         }
       }
@@ -450,6 +452,7 @@ export class ModulePlaceable extends ModuleObject {
     this.animStateInfo.started = false;
     if(animState == ModulePlaceableAnimState.OPEN) this.animStateInfo.loop = true;
     if(animState == ModulePlaceableAnimState.DEFAULT) this.animStateInfo.loop = true;
+    if(this.static) this.staticPoseSettleTicksRemaining = 5;
     if(this.model) this.model.stopAnimation();
   }
 
@@ -795,6 +798,10 @@ export class ModulePlaceable extends ModuleObject {
         
     if(this.template.RootNode.hasField('HP'))
       this.hp = this.template.RootNode.getFieldByLabel('HP').getValue();
+
+    // Current hit points above the authored maximum are capped: the Peragus
+    // Damaged Door ships CurrentHP 45 against HP 15. See StructureDamageRules.
+    this.currentHP = capStructureCurrentHP(this.currentHP, this.hp);
 
     if(this.template.RootNode.hasField('Hardness'))
       this.hardness = this.template.RootNode.getFieldByLabel('Hardness').getValue();
