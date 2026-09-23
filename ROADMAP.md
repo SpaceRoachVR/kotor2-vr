@@ -1261,6 +1261,149 @@ unit/integration-tested only.
   - **Files:** `src/vr/runtime/XRControllerAnchorHost.ts`,
     `src/vr/runtime/VRFirstPersonBody.ts`, `src/vr/VRSpike.ts`.
 
+#### Combat feel pass (audit 2026-09-23)
+
+A source audit of VR combat and world actions, plus the round-11 headset
+notes. The d20 layer was sound. What was missing is how the player *feels* it:
+haptics are only called by world prompts and the action wheel, never by combat.
+With the avatar hidden in first person, a hit, a miss, a critical, a parry and
+taking damage all feel the same, which is nothing. Allen's calls on the audit:
+**buffer off-tempo swings**, an **optional player-invoked pause is acceptable**
+(it amends "no round pauses" only for a pause the player asks for), and
+**haptics work on his rig** — the "haptics are unavailable on this rig" comment
+in `VRSpike.applyWorldPromptEffects` is stale.
+
+Rule for every item below: the stats still decide. Nothing here changes a roll,
+a range, a cost or the 3-second round. It changes what the player feels and
+sees, and which physical input counts. Items are in priority order; 3.12-3.14
+belong together.
+
+- **3.12** ☐ **One-swing buffer plus a round-ready pulse.** Today a swing made while
+  a round is running is refused by `VRCombatTempoGate` (`round-active`) and
+  thrown away. That matches the round-5 report "rounds failed several times and
+  did not register a swing". Instead, keep one pending swing or trigger pull
+  (keep the latest; no stacking) and dispatch it through the normal
+  `dispatchVREmbodiedCombatInput` path the moment the gate opens. It is the VR
+  version of flatscreen letting you queue the next action. A soft haptic tick
+  on the weapon hand marks the round opening, so the player knows when to swing
+  without looking at the hilt.
+  - The buffer clears on target death or invalidation, on a weapon change, on a
+    party swap, and when combat ends. A stale buffered swing must never fire at
+    a new enemy.
+  - The hilt (`VRWeaponStanceHost`) shows an "armed" state while a swing is
+    buffered.
+  - Only a buffered **basic** attack, or the queue head's own required input,
+    may fire. The buffer never changes which intent fires.
+  - Once this settles the round-5 question, remove the TEMPORARY
+    `reportVRSwingOutcomeOnce` diagnostic in `GameState.ts`.
+  - **Done when:** in the headset, swinging continuously through a fight rolls
+    once per round with no lost rounds, the ready tick is felt, and a swing
+    buffered just before the target dies does not fire at the next enemy.
+  - **Files:** `GameState.ts` (dispatch), `VRCombatTempoGate.ts`, a new
+    buffer module beside `VRCombatIntentQueue.ts`, `VRWeaponStanceHost.ts`,
+    `VRSpike.ts` (haptic).
+
+- **3.13** ☐ **Feel the roll.** When an attack result is calculated, pulse the weapon hand
+  differently for hit, miss, critical and parried or deflected (8/9). The
+  transition is already observed in `VRCombatVisualEvents`
+  (`attackResultsCalculated`, `attackResult`), so add an event there rather
+  than a hook in `CombatRound`. Parried: spark and clash sound where the blades
+  would meet. Deflected: the bolt from `VRBlasterBoltHost` bounces off the
+  player's blade instead of hitting the body. A spray of blade sparks is fine;
+  a physics simulation is not the goal.
+  - **Done when:** with eyes closed, Allen can tell a hit, a miss and a
+    critical apart by feel, and a deflected bolt is visibly deflected.
+  - **Files:** `VRCombatVisualEvents.ts`, `VRBlasterBoltHost.ts`,
+    `VRHapticFeedback.ts`, `VRSpike.ts`.
+
+- **3.14** ☐ **Feel getting hit.** When the controlled creature takes damage, show a
+  short red flash at the edge of the view on the side the attacker is on, and
+  pulse the controller on that side. A critical gets a stronger flash and pulse.
+  The vignette host already draws at the edge of the view, so extend it rather
+  than adding a new overlay. Respect a comfort toggle.
+  - **Done when:** in a fight with two enemies on opposite sides, Allen can
+    tell from the flash and pulse which one hit him.
+  - **Files:** `VRComfortVignetteHost.ts` (or a sibling), `VRSpike.ts`,
+    `VRComfortSettingsHost.ts`.
+
+- **3.15** ☐ **Combat aim follows the dominant hand.** Bug:
+  `VRSpike.resolveAimedCombatTargetId` reads `hands.right` whatever
+  `VRSpike.dominantHand` is set to, so a left-handed player swings with the
+  left hand and aims with the right. The keyboard and overlay pointers at
+  `VRSpike.ts` ~1413/1488/1699 also read `right`. Check whether they should
+  follow the setting too.
+  - **Done when:** with the dominant hand set to left, the target ring follows
+    the left controller and a left-hand swing hits the ringed enemy. There is a
+    unit test for both hands.
+
+- **3.16** ☐ **A swing must go toward its target.** Today any movement faster than
+  0.8 m/s counts as a swing at the locked enemy, wherever the blade actually
+  goes. Require the blade sample point to pass through a generous volume around
+  the target — its radius plus melee reach slack. Let the blade's sweep
+  nominate the target, falling back to the soft lock. Keep it forgiving: it
+  exists to make waving in the air stop counting, not to make hitting harder.
+  Tune only from real headset traces (`VRInputRecorder`), never from synthetic
+  probes.
+  - **Done when:** swinging at empty air beside a locked enemy does not roll,
+    and a real swing at an enemy still rolls every round in Allen's traces.
+
+- **3.17** ☐ **Bash with the weapon.** A melee swing at a locked door or container
+  queues the engine's own Bash attack. `VRCombatVisualEvents` already knows a
+  round aimed at a placeable is a Bash. The retail Bash rules and the plot/lock
+  gates in the world-prompt model stay authoritative.
+  - **Done when:** swinging at a lockable Peragus container bashes it with the
+    same result as the prompt's Bash.
+
+- **3.18** ☐ **A pause that works for combat.** A pause already exists: the dominant `B`
+  (`SemanticXRAction.Pause`, button 5) calls `togglePause`, which sets
+  `EngineState.PAUSED`. Make it useful mid-fight the way retail's is:
+  - While paused, the action wheel opens and queues attacks, Force powers,
+    items and party orders.
+  - A clear sign that the game is paused, such as a dimmed or desaturated world
+    or a wrist readout.
+  - Swings and trigger pulls do nothing while paused. The swing buffer (3.12)
+    is empty on resume.
+  - Locomotion stays blocked while paused, as it is now.
+  - An option to un-pause automatically when the wheel closes. Off by default.
+
+  It must never engage on its own; auto-pause events stay a separate decision.
+  - **Done when:** Allen can pause mid-fight, queue three actions and a party
+    order, unpause, and watch them play out in order.
+
+- **3.19** ☐ **One generic Force cast gesture.** Keep push and pull, and add one
+  gesture: an off-hand open-palm thrust toward the target releases whatever
+  Force power is at the head of the queue. This keeps the locked "small gesture
+  set" at three, instead of one gesture per power. Force-point cost, range and
+  saves stay with the spell. The flick detector in
+  `VRForceGestureController` is the model to follow. It is also T3's route
+  once it has a usable power or item (F14).
+  - **Done when:** a queued non-push/pull power (e.g. Stun) fires on the palm
+    thrust at the locked target, and does not fire with nothing queued.
+
+- **3.20** ☐ **Physical consumables and hold-to-work.** Each of these routes to the
+  same engine action it uses today:
+  - A medpac or stim held to the neck or mouth uses it and spends the round's
+    action, as in retail.
+  - Security and mine disarm or recover become hold-to-work: the wrist or hilt
+    ring fills over the engine's own action time. This also removes the
+    re-press restart that made Security look broken (headset round notes).
+  - A grenade can be thrown with a real arm motion; the target snaps to the
+    hostile nearest where it lands, and retail's throw range is kept.
+
+  Each part lands separately and is accepted in the headset before the next
+  starts.
+
+- **3.21** ☐ **Party: attack my target.** Point the off hand at an enemy and
+  choose a wheel entry (e.g. "Party → Attack my target"). It goes into the
+  party order queue, which already runs ahead of members' own attacks.
+  - **Done when:** both companions switch to the pointed enemy on the next round.
+
+Also open from round 11, tracked where they already live: F14 (the shock arm
+has no audio or visuals), G2 (mine audio and explosion — retest after
+`e54a1a3c`/`c34507d3`), K6 (the hilt stack in `21ce86ac` needs the headset).
+F6's request for Security beside the tunneler was superseded the same day by
+the retail rule: an untrained character sees only the tunneler.
+
 **Exit:** a Peragus combat encounter completable in VR with the d20 layer intact.
 **Not yet verified on-device** — implemented and unit/integration-tested only.
 
