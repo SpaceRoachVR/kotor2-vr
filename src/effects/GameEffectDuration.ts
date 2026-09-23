@@ -62,3 +62,15 @@ export function inheritLinkDuration(link: DurationCarrier, child: DurationCarrie
   child.setExpireDay(link.expireDay);
   child.setExpireTime(link.expireTime);
 }
+
+/**
+ * Whether an effect belongs in a save. INSTANT effects (EffectDamage, EffectHeal
+ * and the like) do their work in onApply and are never written by retail, but
+ * addEffect keeps them on the object, so every save carried each hit taken and
+ * every load re-applied it: the round-11 Peragus save held ten 1-point
+ * EffectDamage entries and lost 10 HP on each load.
+ */
+export function isPersistedEffect(effect: Pick<GameEffect, 'getDurationType'> | null | undefined): boolean {
+  if(!effect || typeof effect.getDurationType !== 'function') return false;
+  return effect.getDurationType() !== GameEffectDurationType.INSTANT;
+}

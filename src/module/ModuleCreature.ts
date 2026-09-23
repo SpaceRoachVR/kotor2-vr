@@ -71,7 +71,7 @@ import { AudioPriorityGroup } from "@/enums/audio/AudioPriorityGroup";
 import { CombatActionType } from "@/enums/combat/CombatActionType";
 import { CombatRoundAction } from "@/combat";
 import { GameEffectFactory } from "@/effects/GameEffectFactory";
-import { applyEffectDuration } from "@/effects/GameEffectDuration";
+import { applyEffectDuration, isPersistedEffect } from "@/effects/GameEffectDuration";
 import type { Action } from "@/actions/Action";
 import { ModuleTriggerType } from "@/enums/module/ModuleTriggerType";
 import { EngineDebugType } from "@/enums/engine/EngineDebugType";
@@ -3735,7 +3735,17 @@ export class ModuleCreature extends ModuleObject {
       this.loadScripts();
       GameState.FactionManager.AddCreatureToFaction(this);
     }
-    
+
+    // A creature saved dead enters the world dead; it is not killed again.
+    // Without this the death latch started false on every load, so each saved
+    // corpse ran onDeath once more: kill XP (+100 apiece, +1,000 per load of
+    // the round-11 Peragus save), its OnDeath script, a second corpse loot and
+    // the death sound. Party members keep their own downed/revive handling.
+    if(this.isDead() && !this.isPartyMember()){
+      this.deathStarted = true;
+      this.deathAnimationPlayed = true;
+    }
+
     if(!this.debugLabel){
       this.debugLabel = new TextSprite3D(`${this.getName()} | ${this.getTag()}`);
       this.debugLabel.setColor(this.helperColor);
@@ -4444,7 +4454,9 @@ export class ModuleCreature extends ModuleObject {
           let effects = this.template.RootNode.getFieldByLabel('EffectList').getChildStructs() || [];
           for(let i = 0; i < effects.length; i++){
             let effect = GameEffectFactory.EffectFromStruct(effects[i]);
-            if(effect){
+            // Saves from before isPersistedEffect hold every instant hit taken;
+            // applying them again on load would deal that damage again.
+            if(effect && isPersistedEffect(effect)){
               // Saves written before addEffect stamped expiries hold TEMPORARY
               // effects with none — linked children, tunneler Security bonuses —
               // which never count down. Give them one so a poisoned save heals.
@@ -4874,6 +4886,7 @@ export class ModuleCreature extends ModuleObject {
     //Effects
     let effectList = gff.RootNode.addField( new GFFField(GFFDataType.LIST, 'EffectList') );
     for(let i = 0; i < this.effects.length; i++){
+      if(!isPersistedEffect(this.effects[i])) continue;
       effectList.addChildStruct( this.effects[i].save() );
     }
 
