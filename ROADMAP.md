@@ -1096,7 +1096,11 @@ unit/integration-tested only.
   already, or (c) reconcile the avatar to the player's own head position before
   activating. Needs a decision before implementing.
 
-- **3.11** ☐ **Visible hands, and what they hold.** Nothing renders the
+- **3.11** ✅ implemented (`codex/embodied-vr-combat`, merged `8872f4cf`) / ☐ headset-accepted —
+  **superseded by Allen's 2026-09-12 call:** premade rigged hands (the MIT
+  `@webxr-input-profiles` generic-hand GLBs, `src/vr/runtime/hands/`) rather than
+  a clone of the avatar's own hand nodes. The analysis below is kept for the
+  constraints it records. **Visible hands, and what they hold.** Nothing renders the
   player's hands. `XRControllerAnchorHost` tracks both controllers and both
   ray origins, but the anchors themselves are bare `THREE.Group`s: 3.2's "hand
   presence" is tracking presence, not visible hands.
@@ -1401,8 +1405,22 @@ First shippable artifact.
 
 - **7.1** TSLRCM integration and compatibility.
 - **7.2** Per-area geometry passes for the rest of the game.
-- **7.3** Remaining TSL-only opcodes — ~81 with no K1 counterpart. Influence trio
-  795–797 is the most valuable cluster and needs a storage design decision first.
+- **7.3** ◑ Remaining TSL-only routines. **Measured, not estimated (2026-09-22):**
+  PyKotor decodes the 3,896 distinct compiled scripts in the retail install; counting
+  ACTION instructions against the routine tables leaves **45 routines that retail
+  scripts actually call and nothing implements, 286 call sites**, after `c2dcaa4a`
+  (23 routines, influence trio on the parity branch) and `ec56e76b` (AddMultiClass,
+  RemoveEffectByExactMatch, ForceHeartbeat, FaceObjectAwayFromObject, AngleToVector,
+  SetMapPinEnabled). The uncommitted main-checkout work adds HasLineOfSight,
+  RemoveEffectByID and the Force-point cost routines on top; missing from both
+  trees: 40 routines, 133 call sites. Largest remaining:
+  SetForfeitConditions/GetLastForfeitViolation (the dueling rings - a rules system,
+  not a routine), EffectModifyAttacks, SpawnMine/DetonateMine, ActionUseSkill, the
+  Modify*SavingThrowBase trio (waits on the save-throw rewrite) and about a dozen
+  Force-power effects used only by `k_sp1_generic`. Re-measure with
+  `tools/parity/routine_usage.py` + `routine_coverage.js` (on
+  `codex/parity-observability-spec`) before picking the next batch; decompile callers
+  with `tools/dencs` (write to files, the CLI is very verbose on stdout).
 - **7.4** Full playthrough.
 - **7.5** Optional AI-upscaled texture pack support — see below. Blocked on
   usage permission from the mod author.
