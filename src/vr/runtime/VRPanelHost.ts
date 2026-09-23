@@ -9,6 +9,28 @@ export interface VRPanelHostOptions {
   readonly maximumTextureHeight: number;
 }
 
+/**
+ * The part of the legacy GUI canvas a panel shows, in normalized texture
+ * coordinates (u right, v up, both 0..1). The plane is sized to the region, so
+ * what it shows keeps the scale it has on a full panel, and pointer hits map
+ * back through the plane's own UVs to the right canvas position.
+ */
+export interface VRPanelRegion {
+  readonly uMin: number;
+  readonly uMax: number;
+  readonly vMin: number;
+  readonly vMax: number;
+}
+
+export interface VRPanelPresentOptions {
+  /** Defaults to the whole canvas. */
+  readonly region?: VRPanelRegion | null;
+  /** Added to the panel's height relative to the head when it is placed. */
+  readonly verticalOffsetMetres?: number;
+}
+
+const FULL_REGION: VRPanelRegion = { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
+
 /** A menu-owned nested pass rendered while the legacy GUI camera is authoritative. */
 export interface LegacyPanelRenderPass {
   render(renderer: THREE.WebGLRenderer): void;
@@ -66,6 +88,7 @@ export class VRPanelHost {
   private readonly repaintPolicy = new VRPanelRepaintPolicy();
   private viewportWidth = 0;
   private viewportHeight = 0;
+  private activeRegion: VRPanelRegion = FULL_REGION;
 
   constructor(worldScene: THREE.Scene, options: Partial<VRPanelHostOptions> = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -105,33 +128,51 @@ export class VRPanelHost {
     owner: object,
     headPose: XRWorldPose,
     viewportWidth: number,
-    viewportHeight: number
+    viewportHeight: number,
+    options: VRPanelPresentOptions = {}
   ): void {
     if (!owner) throw new TypeError('VR panel owner is required');
     VRPanelHost.validateViewport(viewportWidth, viewportHeight);
+    const region = VRPanelHost.validateRegion(options.region ?? FULL_REGION);
+    const verticalOffset = options.verticalOffsetMetres ?? 0;
+    if (!Number.isFinite(verticalOffset)) throw new RangeError('VR panel vertical offset must be finite');
     this.resizeTexture(viewportWidth, viewportHeight);
     this.viewportWidth = viewportWidth;
     this.viewportHeight = viewportHeight;
+    // A different region is a different surface: re-place it rather than
+    // resizing a panel the player has already located in the world.
+    if (!VRPanelHost.sameRegion(region, this.activeRegion)) {
+      this.applyRegion(region);
+      this.activeOwner = null;
+    }
 
     // A legacy menu owns one world-space surface for its entire visible
     // lifetime. Recomputing this pose every XR frame turns it into a
     // head-locked HUD and makes controller rays appear to drift with the
     // player. Only place it when a different menu opens.
     if (this.activeOwner !== owner) {
-      this.place(owner, headPose);
+      // Never pin a panel from a pose that has not arrived yet. A head exactly
+      // at the world origin is the first frame of a session before tracking
+      // and the rig have settled; placement would pin the panel there — in the
+      // floor — for its whole lifetime. Wait a frame instead.
+      if (headPose.position.lengthSq() < 1e-6) {
+        this.object.visible = false;
+        return;
+      }
+      this.place(owner, headPose, verticalOffset);
       this.activeOwner = owner;
     }
 
     const aspect = viewportWidth / viewportHeight;
     this.object.scale.set(
-      this.options.widthMetres,
-      this.options.widthMetres / aspect,
+      this.options.widthMetres * (region.uMax - region.uMin),
+      (this.options.widthMetres / aspect) * (region.vMax - region.vMin),
       1
     );
     this.object.visible = true;
   }
 
-  private place(owner: object, headPose: XRWorldPose): void {
+  private place(owner: object, headPose: XRWorldPose, verticalOffsetMetres = 0): void {
 
     const forward = new THREE.Vector3(0, 0, -1)
       .applyQuaternion(headPose.orientation);
@@ -146,7 +187,7 @@ export class VRPanelHost {
       forward,
       this.options.distanceMetres
     );
-    this.object.position.z = headPose.position.z + VRPanelHost.getVerticalOffset(owner);
+    this.object.position.z = headPose.position.z + VRPanelHost.getVerticalOffset(owner) + verticalOffsetMetres;
 
     const worldUp = new THREE.Vector3(0, 0, 1);
     const panelNormal = forward.clone().negate();
@@ -157,6 +198,7 @@ export class VRPanelHost {
       panelNormal
     );
     this.object.quaternion.setFromRotationMatrix(uprightBasis);
+
 
     if (!VRPanelHost.placementLogged) {
       VRPanelHost.placementLogged = true;
@@ -292,6 +334,36 @@ export class VRPanelHost {
     this.object.geometry.dispose();
     this.object.material.dispose();
     this.renderTarget.dispose();
+  }
+
+  /** Points the plane's UVs at the region so hits report canvas positions inside it. */
+  private applyRegion(region: VRPanelRegion): void {
+    const uv = this.object.geometry.getAttribute('uv') as THREE.BufferAttribute;
+    const position = this.object.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let index = 0; index < uv.count; index++) {
+      // PlaneGeometry spans -0.5..0.5; map each corner to its end of the region.
+      uv.setXY(
+        index,
+        position.getX(index) < 0 ? region.uMin : region.uMax,
+        position.getY(index) < 0 ? region.vMin : region.vMax,
+      );
+    }
+    uv.needsUpdate = true;
+    this.activeRegion = region;
+  }
+
+  private static sameRegion(first: VRPanelRegion, second: VRPanelRegion): boolean {
+    return first.uMin === second.uMin && first.uMax === second.uMax &&
+      first.vMin === second.vMin && first.vMax === second.vMax;
+  }
+
+  private static validateRegion(region: VRPanelRegion): VRPanelRegion {
+    const { uMin, uMax, vMin, vMax } = region ?? ({} as VRPanelRegion);
+    const inRange = (value: number) => Number.isFinite(value) && value >= 0 && value <= 1;
+    if (!inRange(uMin) || !inRange(uMax) || !inRange(vMin) || !inRange(vMax) || uMin >= uMax || vMin >= vMax) {
+      throw new RangeError('VR panel region must be a non-empty rectangle within 0..1');
+    }
+    return region;
   }
 
   private resizeTexture(viewportWidth: number, viewportHeight: number): void {

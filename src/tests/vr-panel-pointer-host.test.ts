@@ -25,7 +25,10 @@ describe('VRPanelPointerHost', () => {
     expect(pointer.cursorObject.visible).toBe(true);
   });
 
-  test('keeps the menu ray visible but hides its cursor when the panel is missed', () => {
+  // Round 6 reversed the round-2 rule: the ray now draws only while it is on
+  // the panel ("ray only over the panel"), so conversations, movies and menus
+  // are not crossed by a pointer streaming into the scene.
+  test('hides both the menu ray and its cursor when the panel is missed', () => {
     const scene = new THREE.Scene();
     const panel = new THREE.Mesh(new THREE.PlaneGeometry(1, 1));
     panel.position.set(0, 0, -1);
@@ -38,7 +41,7 @@ describe('VRPanelPointerHost', () => {
     ));
 
     expect(pointer.update(panel, away, 1600, 900)).toBeNull();
-    expect(pointer.rayObject.visible).toBe(true);
+    expect(pointer.rayObject.visible).toBe(false);
     expect(pointer.cursorObject.visible).toBe(false);
 
     pointer.clear();

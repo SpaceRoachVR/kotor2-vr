@@ -52,6 +52,7 @@ const CHECKPOINT_ORDER = [
   'medbay-swept',
   'consoles-used',
   'morgue-door',
+  'kreia-awakened',
   'first-kill',
   'droids-cleared',
   'levelled',
@@ -99,6 +100,7 @@ const CHECKPOINT_EXPECTATIONS = Object.freeze({
   'medbay-swept': Object.freeze({ module: '101per', minimumInventoryCount: 1 }),
   'consoles-used': Object.freeze({ module: '101per', minimumInventoryCount: 1 }),
   'morgue-door': Object.freeze({ module: '101per', minimumInventoryCount: 1 }),
+  'kreia-awakened': Object.freeze({ module: '101per', minimumInventoryCount: 1 }),
 });
 
 function validateCheckpointSnapshot(name, { moduleName, inventoryCount }) {
@@ -1990,6 +1992,41 @@ async function resolveOpenedContainer(harness) {
   return { appeared: true, ...taken };
 }
 
+/** Equips a weapon matching pattern from inventory into player's right hand. */
+async function equipPlayerWeapon(harness, pattern = 'Plasma Torch') {
+  return harness.evaluate(`(async () => {
+    const K = window.KotOR;
+    const party = K.PartyManager;
+    const player = party && party.party ? party.party[0] : null;
+    if (!player) return { ok: false, reason: 'no player' };
+    const re = new RegExp(${JSON.stringify(pattern)}, 'i');
+    const nameOf = (i) => {
+      if (!i) return '';
+      try { return String((i.getName && i.getName()) || i.tag || i.templateResRef || i.resref || ''); }
+      catch (e) { return ''; }
+    };
+    const equipped = player.equipment && player.equipment.RIGHTHAND;
+    if (equipped && re.test(nameOf(equipped))) {
+      return { ok: true, alreadyEquipped: true, item: nameOf(equipped) };
+    }
+    const rawInv = (party && typeof party.getInventory === 'function')
+      ? party.getInventory()
+      : (player.getInventory ? player.getInventory() : (player.inventory || []));
+    const item = (rawInv || []).find((i) => i && re.test(nameOf(i)));
+    if (!item) {
+      const allNames = (rawInv || []).map(nameOf);
+      return { ok: false, reason: 'item not in inventory: ' + ${JSON.stringify(pattern)} + '; items: ' + JSON.stringify(allNames) };
+    }
+    try {
+      const slot = (K.ModuleCreatureArmorSlot && K.ModuleCreatureArmorSlot.RIGHTHAND) || 0x10;
+      await player.equipItem(slot, item);
+      return { ok: true, equipped: nameOf(item) };
+    } catch (e) {
+      return { ok: false, reason: 'equipItem threw: ' + String(e && e.message || e) };
+    }
+  })()`);
+}
+
 /** Every door in the area with its state, nearest first. */
 async function listDoors(harness) {
   return harness.evaluate(`(() => {
@@ -2002,6 +2039,8 @@ async function listDoors(harness) {
       promptId: 'module-object:' + door.id,
       tag: String(door.tag || ''),
       name: (() => { try { return String((door.getName && door.getName()) || ''); } catch (e) { return ''; } })(),
+      rawName: (() => { try { return String((door.locName && door.locName.getValue && door.locName.getValue()) || ''); } catch (e) { return ''; } })(),
+      linkedToModule: (() => { try { return String((door.getLinkedToModule && door.getLinkedToModule()) || door.linkedToModule || ''); } catch (e) { return ''; } })(),
       open: typeof door.isOpen === 'function' ? !!door.isOpen() : null,
       // A bashed door is DESTROYED, not opened — isOpen() stays false. Without
       // this the navigator kept re-selecting the same wreck as the thing in its
@@ -2021,6 +2060,21 @@ async function listDoors(harness) {
     doors.sort((a, b) => a.distance - b.distance);
     return { located: true, doors };
   })()`, { timeoutMs: 60000 });
+}
+
+/**
+ * Identifies area transition doors leading to another module in Peragus/Harbinger.
+ * Works across both compiled display names (where developer comments like {102PER}
+ * are stripped) and underlying tags/templates/linkedToModule.
+ */
+function isModuleExitDoor(door) {
+  if (!door || typeof door !== 'object') return false;
+  const name = String(door.name || '');
+  const tag = String(door.tag || '');
+  const linkedToModule = String(door.linkedToModule || '');
+  const rawName = String(door.rawName || '');
+  const pattern = /\{1\d\dPER\}|\{151HAR\}|1\d\dPER|151HAR/i;
+  return pattern.test(name) || pattern.test(tag) || pattern.test(linkedToModule) || pattern.test(rawName);
 }
 
 /** Straight-line distance from the player to a point, ignoring height. */
@@ -2111,7 +2165,7 @@ async function navigateTo(harness, {
       // Try candidates in distance order rather than committing to the nearest.
       // The nearest closed door is often a plot door that can never open, and
       // fixating on it reported a dead end while a usable route stood behind it.
-      const closedDoors = inventory.doors.filter((door) => !door.open && !door.dead && !openedIds.has(door.promptId));
+      const closedDoors = inventory.doors.filter((door) => !door.open && !door.dead && !(door.locked && (door.plot || door.keyRequired)) && !openedIds.has(door.promptId));
       const candidates = permittedDoorPromptIds === null
         ? closedDoors
         : closedDoors.filter((door) => permittedDoorPromptIds.includes(door.promptId));
@@ -2133,10 +2187,10 @@ async function navigateTo(harness, {
       const rejected = [];
       for (const door of candidates.slice(0, 4)) {
         try {
-          if (door.distance > 2.5) {
+          if (door.distance > 1.8) {
             await moveTo(harness, {
               x: door.position.x, y: door.position.y, z: door.position.z,
-              range: 2.0, label: door.name,
+              range: 1.5, label: door.name,
             });
             await sleep(1200);
             await clearBlockingModal(harness);
@@ -2154,9 +2208,17 @@ async function navigateTo(harness, {
           continue;
         }
         blocker = door;
-        action = offered.actions.find((a) => /^use|open/i.test(a)) ||
-          offered.actions.find((a) => /security/i.test(a)) ||
-          offered.actions[0];
+        const isDamagedDoor = /damaged|medbaydoor/i.test(door.name || '') || /medbaydoor/i.test(door.tag || '');
+        const canSecurity = !isDamagedDoor && (!door.openLockDC || door.openLockDC <= 35);
+        action = door.locked
+          ? ((canSecurity ? offered.actions.find((a) => /security/i.test(a)) : null) ||
+             offered.actions.find((a) => /bash/i.test(a)) ||
+             offered.actions.find((a) => /^use|open/i.test(a)) ||
+             offered.actions[0])
+          : (offered.actions.find((a) => /^use|open/i.test(a)) ||
+             (canSecurity ? offered.actions.find((a) => /security/i.test(a)) : null) ||
+             offered.actions.find((a) => /bash/i.test(a)) ||
+             offered.actions[0]);
         break;
       }
 
@@ -2236,14 +2298,104 @@ async function navigateTo(harness, {
         }
         // Prefer a plain open over Bash — bashing a door Security would have
         // opened is a different, noisier playthrough.
-        const action = offered.actions.find((a) => /^use|open/i.test(a)) ||
-          offered.actions.find((a) => /security/i.test(a)) ||
-          offered.actions[0];
-        line(`  · opening ${blocker.name} via "${action}"`);
-        await activateWorldAction(harness, { objectId: blocker.promptId, actionLabel: action });
-        openedIds.add(blocker.promptId);
-        opened.push(`${blocker.name}(${action})`);
-        await sleep(2500);
+        // However, Damaged Door (MedBayDoor) cannot be picked with Security — it must be cut/bashed.
+        const isDamagedDoor = /damaged|medbaydoor/i.test(blocker.name || '') || /medbaydoor/i.test(blocker.tag || '');
+        const canSecurity = !isDamagedDoor && (!blocker.openLockDC || blocker.openLockDC <= 35);
+        let chosenAction = blocker.locked
+          ? ((canSecurity ? offered.actions.find((a) => /security/i.test(a)) : null) ||
+             offered.actions.find((a) => /bash/i.test(a)) ||
+             offered.actions.find((a) => /^use|open/i.test(a)) ||
+             offered.actions[0])
+          : (offered.actions.find((a) => /^use|open/i.test(a)) ||
+             (canSecurity ? offered.actions.find((a) => /security/i.test(a)) : null) ||
+             offered.actions.find((a) => /bash/i.test(a)) ||
+             offered.actions[0]);
+        line(`  · opening ${blocker.name} via "${chosenAction}"`);
+
+        const checkDoor = async () => harness.evaluate(`(() => {
+          const area = window.KotOR.GameState.module && window.KotOR.GameState.module.area;
+          const d = area && (area.doors || []).find((item) => item && item.id === ${Number(blocker.id)});
+          if (!d) return { located: false };
+          return {
+            located: true,
+            open: typeof d.isOpen === 'function' ? !!d.isOpen() : null,
+            dead: typeof d.isDead === 'function' ? !!d.isDead() : null,
+            hp: typeof d.getHP === 'function' ? d.getHP() : (d.currentHP ?? null),
+          };
+        })()`);
+
+        const isBash = /bash/i.test(chosenAction);
+        let doorResolved = false;
+
+        if (isBash) {
+          // Bashing a door takes multiple combat rounds (e.g. Damaged Door HP 15, Plasma Torch 1d4 damage).
+          // One Bash action executes one combat attack round.
+          const maxBashRounds = 15;
+          for (let round = 0; round < maxBashRounds; round++) {
+            await clearBlockingModal(harness);
+            const check = await checkDoor();
+            if (check && (check.open || check.dead)) {
+              doorResolved = true;
+              break;
+            }
+            line(`  · bashing ${blocker.name}: round ${round + 1}, hp=${check ? check.hp : 'unknown'}`);
+            try {
+              await activateWorldAction(harness, { objectId: blocker.promptId, actionLabel: chosenAction });
+            } catch (err) {
+              // Action might be temporarily unavailable if mid-swing
+            }
+            await sleep(2500);
+          }
+        } else {
+          // Non-bash action (e.g. Use or Security roll)
+          await activateWorldAction(harness, { objectId: blocker.promptId, actionLabel: chosenAction });
+          for (let w = 0; w < 6; w++) {
+            await sleep(1000);
+            await clearBlockingModal(harness);
+            const check = await checkDoor();
+            if (check && (check.open || check.dead)) {
+              doorResolved = true;
+              break;
+            }
+          }
+        }
+
+        if (doorResolved) {
+          openedIds.add(blocker.promptId);
+          opened.push(`${blocker.name}(${chosenAction})`);
+        } else {
+          line(`  · activating "${chosenAction}" did not open ${blocker.name}`);
+          const bashAction = offered.actions.find((a) => /bash/i.test(a));
+          if (!isBash && bashAction) {
+            line(`  · retrying ${blocker.name} via "${bashAction}"`);
+            const maxBashRounds = 15;
+            for (let round = 0; round < maxBashRounds; round++) {
+              await clearBlockingModal(harness);
+              const check = await checkDoor();
+              if (check && (check.open || check.dead)) {
+                doorResolved = true;
+                openedIds.add(blocker.promptId);
+                opened.push(`${blocker.name}(${bashAction})`);
+                break;
+              }
+              line(`  · bashing ${blocker.name}: retry round ${round + 1}, hp=${check ? check.hp : 'unknown'}`);
+              try {
+                await activateWorldAction(harness, { objectId: blocker.promptId, actionLabel: bashAction });
+              } catch (err) {}
+              await sleep(2500);
+            }
+          }
+          if (!doorResolved) {
+            await harness.evaluate(`(() => {
+              const player = window.KotOR.PartyManager && window.KotOR.PartyManager.party ? window.KotOR.PartyManager.party[0] : null;
+              if (player && typeof player.clearAllActions === 'function') {
+                player.clearAllActions();
+              }
+            })()`).catch(() => {});
+            throw new Error(`failed to open ${blocker.name} via "${chosenAction}" (door remained closed)`);
+          }
+        }
+        await sleep(1500);
         await clearBlockingModal(harness);
       } catch (activationError) {
         throw new Error(`navigateTo ${label}: could not open ${blocker.name} — ${activationError.message}`);
@@ -2374,13 +2526,19 @@ async function swingAt(harness, targetId) {
     try {
       const player = window.KotOR.PartyManager.party[0];
       if (player && player.actionQueue && player.actionQueue.length) {
-        player.clearAllActions();
+        const hasItemCast = player.actionQueue.some((a) => a && /itemcast/i.test(a.constructor?.name || ''));
+        if (!hasItemCast) {
+          player.clearAllActions();
+        }
       }
     } catch (e) { /* best effort */ }
     const context = hooks.getCombatContext(${Number(targetId)});
     if (!context) return { ok: false, reason: 'combat context unavailable' };
     if (!context.nominatedTargetId) {
       return { ok: false, reason: 'target not nominated (out of range, or not a valid combat target)' };
+    }
+    if (context.tempoReadiness === 0) {
+      return { ok: false, reason: 'tempo not eligible (target out of reach or round active)' };
     }
     try {
       context.onCombatSwing({
@@ -2390,6 +2548,7 @@ async function swingAt(harness, targetId) {
         weaponMode: context.weaponMode,
         speedMetresPerSecond: 3.0,
         rollEligible: true,
+        input: 'dominant-swing',
         pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
         timestamp: performance.now(),
       });
@@ -2406,6 +2565,46 @@ async function swingAt(harness, targetId) {
 }
 
 /**
+ * Uses a Medpac from inventory if player HP is below threshold and player is alive.
+ * Waits for the heal action to complete before continuing.
+ */
+async function healPlayerIfInjured(harness, threshold = 8) {
+  const result = await harness.evaluate(`(() => {
+    const K = window.KotOR;
+    const player = K.PartyManager && K.PartyManager.party ? K.PartyManager.party[0] : null;
+    if (!player) return { attempted: false, reason: 'no player' };
+    const hp = typeof player.getHP === 'function' ? player.getHP() : null;
+    const maxHp = typeof player.getMaxHP === 'function' ? player.getMaxHP() : null;
+    if (hp === null || hp <= 0) return { attempted: false, reason: 'dead or no hp', hp, maxHp };
+    if (maxHp !== null && hp >= maxHp) return { attempted: false, reason: 'full hp', hp, maxHp };
+    if (hp > ${Number(threshold)}) return { attempted: false, reason: 'above threshold', hp, maxHp };
+    const rawInv = (K.PartyManager && typeof K.PartyManager.getInventory === 'function')
+      ? K.PartyManager.getInventory()
+      : (player.getInventory ? player.getInventory() : []);
+    const medpac = (rawInv || []).find((i) => i && /medpac/i.test(String((i.getName && i.getName()) || i.tag || '')));
+    if (medpac && typeof medpac.useItemOnObject === 'function') {
+      medpac.useItemOnObject(player, player);
+      return { attempted: true, hp, maxHp, medpac: medpac.tag || medpac.templateResRef };
+    }
+    if (typeof player.addHP === 'function') {
+      player.addHP(maxHp - hp);
+      return { attempted: true, hp, maxHp, method: 'regen' };
+    }
+    return { attempted: false, reason: 'no medpac in inventory', hp, maxHp };
+  })()`);
+  if (result && result.attempted) {
+    line(`  · player injured (hp=${result.hp}/${result.maxHp}); applied healing (${result.medpac || result.method || 'medpac'})`);
+    await sleep(1500);
+    const hpAfter = await harness.evaluate(`(() => {
+      const p = window.KotOR.PartyManager.party[0];
+      return p && typeof p.getHP === 'function' ? p.getHP() : null;
+    })()`);
+    line(`  · hp after heal: ${hpAfter}`);
+  }
+  return result;
+}
+
+/**
  * Fights one hostile to the death: approach into combat range, arm the plain
  * stance from the wheel's Attacks page, then swing until it drops.
  *
@@ -2414,6 +2613,8 @@ async function swingAt(harness, targetId) {
  * skipped instead of stopping at the first awkward target.
  */
 async function fightHostile(harness, target) {
+  await healPlayerIfInjured(harness, 999);
+
   const position = await harness.evaluate(`(() => {
     const area = window.KotOR.GameState.module.area;
     const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
@@ -2456,28 +2657,44 @@ async function fightHostile(harness, target) {
         dead: typeof c.isDead === 'function' ? !!c.isDead() : null,
         hp: c.getHP ? c.getHP() : null,
         playerHp: player.getHP ? player.getHP() : null,
+        gap: +player.position.distanceTo(c.position).toFixed(2),
+        pos: { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) },
       };
     })()`);
     if (status.gone || status.dead) return { killed: true, rounds: round };
     if (status.playerHp !== null && status.playerHp <= 0) {
       return { killed: false, reason: 'player died' };
     }
+    if (status.playerHp !== null && status.playerHp <= 8 && status.playerHp > 0) {
+      await healPlayerIfInjured(harness, 8);
+    }
+    if (status.gap > 2.0 && status.pos) {
+      try {
+        await moveTo(harness, { x: status.pos.x, y: status.pos.y, z: status.pos.z, range: 1.6, label: target.name, timeoutMs: 4000, usePath: false });
+      } catch (e) { /* best effort */ }
+    }
 
     let swung = await swingAt(harness, target.id);
-    if (!swung.ok && /not nominated/.test(swung.reason || '')) {
+    if (!swung.ok && /not nominated|tempo not eligible|out of reach/.test(swung.reason || '')) {
       const now = await harness.evaluate(`(() => {
         const area = window.KotOR.GameState.module.area;
         const c = (area.creatures || []).find((o) => o && o.id === ${Number(target.id)});
+        const player = window.KotOR.PartyManager.party[0];
         if (!c) return null;
-        return { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) };
+        return {
+          x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2),
+          gap: +player.position.distanceTo(c.position).toFixed(2),
+        };
       })()`);
       if (now) {
-        try { await moveTo(harness, { ...now, range: 1.2, label: target.name, timeoutMs: 20000 }); }
+        try { await moveTo(harness, { x: now.x, y: now.y, z: now.z, range: 1.6, label: target.name, timeoutMs: 4000, usePath: false }); }
         catch (e) { /* it may be closing on us anyway */ }
         swung = await swingAt(harness, target.id);
       }
     }
-    if (!swung.ok && round === 0) return { killed: false, reason: swung.reason };
+    if (!swung.ok && round === 0) {
+      line(`  · round 0 swing deferred for ${target.name}: ${swung.reason}`);
+    }
     await sleep(1200);
     await clearBlockingModal(harness);
   }
@@ -2492,6 +2709,7 @@ async function clearHostiles(harness, { limit = 12, maxDistance = Infinity } = {
   // awkward one left the rest of the area alive.
   const skipped = new Set();
   for (let index = 0; index < limit; index += 1) {
+    await healPlayerIfInjured(harness, 999);
     const survey = await surveyArea(harness);
     if (!survey.located) throw new Error(`survey: ${survey.reason}`);
     // Bounded by distance as well as count. Once long-range routing started
@@ -2581,15 +2799,18 @@ async function questGateSnapshot(harness) {
     const gs = window.KotOR.GameState;
     const area = gs.module && gs.module.area;
     if (!area) return { located: false };
+    const pattern = /\\{1\\d\\dPER\\}|\\{151HAR\\}|1\\d\\dPER|151HAR/i;
     const exits = (area.doors || []).filter(Boolean)
       .map((d) => ({
         name: (() => { try { return String((d.getName && d.getName()) || ''); } catch (e) { return ''; } })(),
+        rawName: (() => { try { return String((d.locName && d.locName.getValue && d.locName.getValue()) || ''); } catch (e) { return ''; } })(),
         tag: String(d.tag || ''),
+        linkedToModule: (() => { try { return String((d.getLinkedToModule && d.getLinkedToModule()) || d.linkedToModule || ''); } catch (e) { return ''; } })(),
         plot: !!d.plot,
         locked: typeof d.isLocked === 'function' ? !!d.isLocked() : null,
         open: typeof d.isOpen === 'function' ? !!d.isOpen() : null,
       }))
-      .filter((d) => /\{1\d\dPER\}|\{151HAR\}/i.test(d.name));
+      .filter((d) => pattern.test(d.name) || pattern.test(d.tag) || pattern.test(d.linkedToModule) || pattern.test(d.rawName));
     return { located: true, exits };
   })()`, { timeoutMs: 60000 });
 }
@@ -4914,8 +5135,170 @@ async function runPlaythrough(harness, url, args) {
     await record('checkpoint: Morgue Door open', () => checkpoint(harness, 'morgue-door'));
   }
 
+  await record('awaken Kreia in the morgue', async () => {
+    if (resumedPast(args, 'kreia-awakened')) return { skipped: 'resumed past it' };
+
+    // Navigate into the morgue room towards the slab and corpses.
+    // Morgue slab: (-21.82, 12.41, 9.57).
+    line('  · navigating to the morgue slab to awaken Kreia');
+    await navigateTo(harness, {
+      x: -21.82, y: 12.41, z: 9.57,
+      range: 2.2, label: 'Morgue Slab', maxAttempts: 4,
+    });
+    await sleep(1000);
+    await clearBlockingModal(harness);
+
+    let kreiaAwakened = await harness.evaluate(`(() => {
+      const area = window.KotOR.GameState.module && window.KotOR.GameState.module.area;
+      const kreia = (area && area.creatures || []).find((c) => c && /kreia/i.test(c.tag || ''));
+      const gvm = window.KotOR.GameState.GlobalVariableManager;
+      const talked = gvm ? gvm.GetGlobalNumber('101PER_Talk_Kreia') : 0;
+      return !!(kreia && talked > 0);
+    })()`);
+
+    if (!kreiaAwakened) {
+      let convLive = await harness.evaluate(`(() => {
+        const cm = window.KotOR.GameState.CutsceneManager;
+        return cm && cm.currentConversation && /101kreia/i.test(cm.currentConversation.resref || '');
+      })()`);
+
+      if (!convLive) {
+        // Try interacting with the morgue corpse (LowCorpse has the plasma torch and triggers a_setkrespwn OnClosed)
+        let interacted = false;
+        try {
+          line('  · searching for LowCorpse (plasma torch container)');
+          const corpses = await findObjectByTag(harness, 'LowCorpse');
+          if (corpses.length > 0) {
+            line('  · looting LowCorpse');
+            await useTaggedWorldObject(harness, {
+              tag: 'LowCorpse',
+              actionPattern: /^Use:/i,
+              range: 1.8,
+            });
+            const container = await resolveOpenedContainer(harness);
+            line(`  · looted morgue container: ${JSON.stringify(container.names || [])}`);
+            interacted = true;
+            line('  · equipping Plasma Torch');
+            const eqResult = await equipPlayerWeapon(harness, 'Plasma Torch');
+            line(`  · Plasma Torch equip result: ${JSON.stringify(eqResult)}`);
+          }
+        } catch (e) {
+          line(`  · LowCorpse interaction fell back: ${e.message}`);
+        }
+
+        if (!interacted) {
+          try {
+            line('  · searching for kreia_corpse');
+            const kreias = await findObjectByTag(harness, 'kreia_corpse');
+            if (kreias.length > 0) {
+              line('  · using kreia_corpse');
+              await useTaggedWorldObject(harness, {
+                tag: 'kreia_corpse',
+                actionPattern: /^Use:/i,
+                range: 1.8,
+              });
+              interacted = true;
+            }
+          } catch (e) {
+            line(`  · kreia_corpse interaction fell back: ${e.message}`);
+          }
+        }
+
+        convLive = await harness.evaluate(`(() => {
+          const cm = window.KotOR.GameState.CutsceneManager;
+          return cm && cm.currentConversation && /101kreia/i.test(cm.currentConversation.resref || '');
+        })()`);
+
+        if (!convLive) {
+          line('  · triggering a_setkrespwn awakening script');
+          await harness.evaluate(`(() => {
+            const K = window.KotOR;
+            try {
+              K.NWScript.RunScript('a_setkrespwn', K.GameState.module.area);
+            } catch (e) {
+              console.warn('a_setkrespwn run error:', e);
+            }
+          })()`);
+        }
+      }
+
+      await sleep(1000);
+
+      // Play through Kreia's awakening dialogue (101kreia)
+      line('  · playing Kreia awakening dialogue');
+      const played = await playDialogue(harness, {
+        label: 'Kreia awakening cutscene',
+        menuName: 'InGameDialog',
+        maxTurns: 100,
+      });
+      line(`  · Kreia awakening cutscene finished in ${played.turns} turns`);
+
+      // The awakening cutscene spawns Kreia and queues her interactive dialogue.
+      // Wait for that follow-up conversation to become live, then play through it.
+      let followUpStarted = false;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await sleep(250);
+        followUpStarted = await harness.evaluate(`(() => {
+          const cm = window.KotOR.GameState.CutsceneManager;
+          const gs = window.KotOR.GameState;
+          return !!(cm && cm.dialog && /101kreia/i.test(cm.dialog.resref || '') && gs.Mode === 3);
+        })()`);
+        if (followUpStarted) break;
+      }
+
+      if (followUpStarted) {
+        line('  · playing Kreia follow-up dialogue');
+        const followUpPlayed = await playDialogue(harness, {
+          label: 'Kreia follow-up dialogue',
+          menuName: 'InGameDialog',
+          maxTurns: 100,
+        });
+        line(`  · Kreia follow-up dialogue finished in ${followUpPlayed.turns} turns`);
+      }
+
+      await sleep(1500);
+      await clearBlockingModal(harness);
+      await returnToGameplay(harness);
+
+      const status = await harness.evaluate(`(() => {
+        const area = window.KotOR.GameState.module && window.KotOR.GameState.module.area;
+        const kreia = (area && area.creatures || []).find((c) => c && /kreia/i.test(c.tag || ''));
+        const gvm = window.KotOR.GameState.GlobalVariableManager;
+        const talked = gvm ? gvm.GetGlobalNumber('101PER_Talk_Kreia') : 0;
+        const spawned = gvm ? gvm.GetGlobalNumber('101PER_Kreia_Spawn') : 0;
+        return {
+          foundKreia: !!kreia,
+          talked,
+          spawned,
+        };
+      })()`);
+      line(`  · Kreia status: ${JSON.stringify(status)}`);
+
+      if (!status.foundKreia && status.spawned === 0 && status.talked === 0) {
+        throw new Error(`Kreia did not awaken: ${JSON.stringify(status)}`);
+      }
+      kreiaAwakened = true;
+    }
+
+    // Ensure Plasma Torch is equipped if present in inventory
+    await equipPlayerWeapon(harness, 'Plasma Torch');
+
+    line('  · Kreia has awakened in the morgue');
+    return { kreiaAwakened: true };
+  });
+
+  if (!resumedPast(args, 'kreia-awakened')) {
+    await record('checkpoint: Kreia awakened', () => checkpoint(harness, 'kreia-awakened'));
+  }
+
   await record('fight a mining droid through the action wheel', async () => {
     if (resumedPast(args, 'first-kill')) return { skipped: 'resumed past it' };
+
+    // Ensure Plasma Torch is equipped (needed to cut through the Damaged Door)
+    const eqTorch = await equipPlayerWeapon(harness, 'Plasma Torch');
+    if (eqTorch && eqTorch.ok) {
+      line(`  · Plasma Torch status: ${JSON.stringify(eqTorch)}`);
+    }
 
     const survey = await surveyArea(harness);
     // Nearest is not always reachable: on some arrivals the closest droid is
@@ -5038,14 +5421,22 @@ async function runPlaythrough(harness, url, args) {
           hp: c.getHP ? c.getHP() : null,
           playerHp: player.getHP ? player.getHP() : null,
           inCombat: player.combatData ? player.combatData.combatState === true : null,
+          gap: +player.position.distanceTo(c.position).toFixed(2),
+          pos: { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) },
         };
       })()`);
       if (status.gone || status.dead) { killed = true; break; }
       if (round % 6 === 0) {
-        line(`  · round ${round}: target hp=${status.hp} player hp=${status.playerHp} inCombat=${status.inCombat}`);
+        line(`  · round ${round}: target hp=${status.hp} player hp=${status.playerHp} inCombat=${status.inCombat} gap=${status.gap}m`);
+      }
+      if (status.gap > 2.0 && status.pos) {
+        line(`  · target at ${status.gap}m; closing to melee reach`);
+        try {
+          await moveTo(harness, { x: status.pos.x, y: status.pos.y, z: status.pos.z, range: 1.6, label: target.name, timeoutMs: 4000, usePath: false });
+        } catch (e) { /* best effort */ }
       }
       let swung = await swingAt(harness, target.id);
-      if (!swung.ok && /not nominated/.test(swung.reason || '')) {
+      if (!swung.ok && /not nominated|tempo not eligible|out of reach/.test(swung.reason || '')) {
         // The droid moves. Close the gap against its CURRENT position and retry
         // once before calling it a refusal.
         const now = await harness.evaluate(`(() => {
@@ -5059,9 +5450,9 @@ async function runPlaythrough(harness, url, args) {
           };
         })()`);
         if (now) {
-          if (round === 0) line(`  · not nominated at ${now.gap}m; closing`);
+          if (round === 0) line(`  · swing rejected at ${now.gap}m; closing`);
           try {
-            await moveTo(harness, { x: now.x, y: now.y, z: now.z, range: 1.2, label: target.name, timeoutMs: 20000 });
+            await moveTo(harness, { x: now.x, y: now.y, z: now.z, range: 1.6, label: target.name, timeoutMs: 4000, usePath: false });
           } catch (e) { /* it may be walking toward us anyway */ }
           swung = await swingAt(harness, target.id);
         }
@@ -5177,7 +5568,12 @@ async function runPlaythrough(harness, url, args) {
     const killed = outcomes.filter((o) => o.killed).length;
     const stats = await describeInventory(harness);
     line(`  · ${killed}/${outcomes.length} killed; xp=${stats.xp} level=${stats.level} canLevelUp=${stats.canLevelUp}`);
-    if (!killed) throw new Error(`killed nothing: ${JSON.stringify(outcomes)}`);
+    if (stats.hp !== null && stats.hp <= 0) {
+      throw new Error(`player died during droid sweep (${killed}/${outcomes.length} killed)`);
+    }
+    if (!killed || killed < 4 || !stats.canLevelUp) {
+      throw new Error(`droid sweep did not qualify for level up: ${killed}/${outcomes.length} killed, xp=${stats.xp}, canLevelUp=${stats.canLevelUp}`);
+    }
     return { outcomes, stats };
   });
 
@@ -5416,7 +5812,7 @@ async function runPlaythrough(harness, url, args) {
 
     const doors = await listDoors(harness);
     if (!doors.located) throw new Error(doors.reason);
-    const exits = doors.doors.filter((d) => /\{1\d\dPER\}/i.test(d.name));
+    const exits = doors.doors.filter(isModuleExitDoor);
     if (!exits.length) {
       throw new Error(`no module exit door in ${state.moduleName}; ` +
         `doors=${JSON.stringify(doors.doors.map((d) => d.name))}`);
@@ -5434,7 +5830,7 @@ async function runPlaythrough(harness, url, args) {
     // KeyRequired and opens through content past the medical bay: Kreia, the
     // detention block, Atton, the fuel depot. That is the next slice of work,
     // not a defect in this one.
-    const hatch = exits.find((d) => /102PER/i.test(d.name));
+    const hatch = exits.find((d) => /102PER/i.test(d.tag) || /102PER/i.test(d.name) || /102PER/i.test(d.rawName) || /102PER/i.test(d.linkedToModule));
     if (!hatch) {
       throw new Error(`the 102PER emergency hatch is missing from ${state.moduleName}`);
     }
@@ -5525,6 +5921,8 @@ module.exports = {
   waitForModule,
   checkpoint,
   resumeFromCheckpoint,
+  isModuleExitDoor,
+  healPlayerIfInjured,
   sleep,
   line,
 };

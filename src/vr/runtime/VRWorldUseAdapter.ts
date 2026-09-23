@@ -21,6 +21,7 @@ export interface VRWorldUseTarget {
   readonly scripts?: unknown;
   readonly tag?: unknown;
   readonly templateResRef?: unknown;
+  isLocked?(): boolean;
   getName?(): string;
   getTag?(): string;
   getTemplateResRef?(): string | null;
@@ -44,6 +45,23 @@ export interface VRWorldUseSafetySource {
   readonly authoredActionCount: number;
   /** Re-resolves authored ownership at revalidation and execution boundaries. */
   getLiveAuthoredActionCount(): number;
+  /**
+   * Whether the actor is carrying the key this target names, re-resolved at
+   * each boundary like the count above — a key dropped or consumed between
+   * opening the prompt and pressing it must refuse again.
+   *
+   * `keyRequired` alone refuses the direct-use route, which is right for a lock
+   * the player cannot open and wrong for one they can. Reported from a headset
+   * session: the cargo hold locker offered no options at all while its key sat
+   * in the inventory, because Security refuses a key lock, Bash refuses a
+   * non-blastable one, and this route refused everything that was left. The
+   * engine already settles the attempt in `ModulePlaceable.attemptUnlockWithKey`,
+   * which looks the key up by tag; this only decides whether the player is
+   * allowed to make it.
+   *
+   * Optional, so existing callers keep today's behaviour.
+   */
+  actorHoldsRequiredKey?(): boolean;
 }
 
 export type SafeDirectVRWorldUseClassification = 'ordinary' | 'ebon-hawk-galaxy-map';
@@ -70,13 +88,22 @@ export function describeDirectVRWorldUse(
   validateActor(actor);
   validateTarget(target);
   validateSafetySource(safetySource);
+  // Re-read at each boundary rather than captured once: a key spent, dropped or
+  // traded away between building the prompt and pressing it must refuse again.
+  const holdsKey = (): boolean => {
+    try {
+      return safetySource.actorHoldsRequiredKey?.() === true;
+    } catch {
+      return false;
+    }
+  };
   if (!isSupportedAndInRange(actor, target) ||
-    !isSafeDirectVRWorldUse(target, safetySource.authoredActionCount)) return null;
+    !isSafeDirectVRWorldUse(target, safetySource.authoredActionCount, holdsKey())) return null;
 
   const name = resolveDisplayName(target.getName?.()) || 'Object';
   const remainsSafe = (): boolean => {
     try {
-      return isSafeDirectVRWorldUse(target, safetySource.getLiveAuthoredActionCount());
+      return isSafeDirectVRWorldUse(target, safetySource.getLiveAuthoredActionCount(), holdsKey());
     } catch {
       return false;
     }
@@ -103,6 +130,7 @@ export function describeDirectVRWorldUse(
 export function classifySafeDirectVRWorldUse(
   target: VRWorldUseTarget,
   authoredActionCount: number,
+  actorHoldsRequiredKey: boolean = false,
 ): SafeDirectVRWorldUseClassification | null {
   try {
     if (!Number.isInteger(authoredActionCount) || authoredActionCount < 0) return null;
@@ -126,7 +154,24 @@ export function classifySafeDirectVRWorldUse(
     // an authored failure script still refuses further down. The engine owns
     // the outcome of the attempt either way — this only decides whether the
     // player is allowed to make it.
-    if (!isExplicitFalseFlag(target.keyRequired)) return null;
+    // ...unless the actor is actually carrying the key. `keyRequired` refuses a
+    // lock the player cannot open, which is right, and refused one they can,
+    // which left the cargo hold locker with no options at all: Security refuses
+    // a key lock, Bash refuses a non-blastable one, and this route refused the
+    // remainder. The engine still owns the outcome — `attemptUnlockWithKey`
+    // looks the key up by tag and answers for itself.
+    //
+    // And both of the ownership guards below only mean anything while the
+    // object is LOCKED. A key requirement is a condition on unlocking, and an
+    // OnFailToOpen script runs only when opening fails — an unlocked door or
+    // container cannot fail to open. Flatscreen clicks such an object and it
+    // opens (or starts its conversation). Refusing it anyway is what stranded
+    // the player at Peragus' holding cell: `PrisonRoomDr` was unlocked by the
+    // story with `KeyRequired=1`, an empty `KeyName` and
+    // `OnFailToOpen=a_compdlg`, so both guards refused and it offered nothing.
+    // Unknown lock state is treated as locked.
+    const locked = typeof target.isLocked === 'function' ? target.isLocked() !== false : true;
+    if (locked && !isExplicitFalseFlag(target.keyRequired) && !actorHoldsRequiredKey) return null;
 
     if (isEbonHawkGalaxyMap(target)) return 'ebon-hawk-galaxy-map';
 
@@ -140,7 +185,13 @@ export function classifySafeDirectVRWorldUse(
     // refusal, the engine owns that outcome and the generic route must not
     // pre-empt it. Keys and authored ActionMenu actions are still checked
     // above; locks deliberately are not.
-    if (hasStoryFailureScript(target.scripts)) return null;
+    //
+    // Holding the named key also passes it: the key IS the authored way in, and
+    // the engine's attemptUnlockWithKey consumes it before any failure script
+    // could run. The Ebon Hawk cargo locker (`locker_locked`) is key-locked,
+    // not blastable, plot-flagged and carries `OnFailToOpen=a_compdlg` — with
+    // the key in hand it still offered nothing.
+    if (locked && !actorHoldsRequiredKey && hasStoryFailureScript(target.scripts)) return null;
     return 'ordinary';
   } catch {
     return null;
@@ -150,8 +201,9 @@ export function classifySafeDirectVRWorldUse(
 export function isSafeDirectVRWorldUse(
   target: VRWorldUseTarget,
   authoredActionCount: number,
+  actorHoldsRequiredKey: boolean = false,
 ): boolean {
-  return classifySafeDirectVRWorldUse(target, authoredActionCount) !== null;
+  return classifySafeDirectVRWorldUse(target, authoredActionCount, actorHoldsRequiredKey) !== null;
 }
 
 /**

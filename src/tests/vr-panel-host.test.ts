@@ -4,6 +4,50 @@ import { VRPanelHost } from '@/vr/runtime/VRPanelHost';
 import { XRWorldPose } from '@/vr/runtime/XRTypes';
 
 describe('VRPanelHost', () => {
+  test('shows only a region of the canvas, at its full-panel scale, below the eyeline', () => {
+    const host = new VRPanelHost(new THREE.Scene(), { distanceMetres: 1.5, widthMetres: 1.6 });
+    const head = pose(new THREE.Vector3(0, 0, 1.7), new THREE.Quaternion());
+
+    host.present({}, head, 1600, 900, {
+      region: { uMin: 0.3, uMax: 0.7, vMin: 0, vMax: 0.5 },
+      verticalOffsetMetres: -0.35,
+    });
+
+    expect(host.object.scale.x).toBeCloseTo(1.6 * 0.4);
+    expect(host.object.scale.y).toBeCloseTo(0.9 * 0.5);
+    expect(host.object.position.z).toBeCloseTo(1.35);
+    const uv = host.object.geometry.getAttribute('uv') as THREE.BufferAttribute;
+    const us = Array.from({ length: uv.count }, (_, i) => uv.getX(i));
+    const vs = Array.from({ length: uv.count }, (_, i) => uv.getY(i));
+    expect(Math.min(...us)).toBeCloseTo(0.3);
+    expect(Math.max(...us)).toBeCloseTo(0.7);
+    expect(Math.min(...vs)).toBeCloseTo(0);
+    expect(Math.max(...vs)).toBeCloseTo(0.5);
+  });
+
+  test('returning to the full canvas restores the UVs and re-places the panel', () => {
+    const host = new VRPanelHost(new THREE.Scene(), { distanceMetres: 1.5, widthMetres: 1.6 });
+    const owner = {};
+    host.present(owner, pose(new THREE.Vector3(0, 0, 1.7), new THREE.Quaternion()), 1600, 900, {
+      region: { uMin: 0.3, uMax: 0.7, vMin: 0, vMax: 0.5 },
+      verticalOffsetMetres: -0.35,
+    });
+
+    host.present(owner, pose(new THREE.Vector3(5, 0, 1.7), new THREE.Quaternion()), 1600, 900);
+
+    expect(host.object.position.z).toBeCloseTo(1.7);
+    expect(host.object.position.x).toBeCloseTo(5);
+    const uv = host.object.geometry.getAttribute('uv') as THREE.BufferAttribute;
+    expect(Math.max(...Array.from({ length: uv.count }, (_, i) => uv.getY(i)))).toBeCloseTo(1);
+  });
+
+  test('rejects an empty or out-of-range region', () => {
+    const host = new VRPanelHost(new THREE.Scene());
+    const head = pose(new THREE.Vector3(0, 0, 1.7), new THREE.Quaternion());
+    expect(() => host.present({}, head, 1600, 900, { region: { uMin: 0.5, uMax: 0.5, vMin: 0, vMax: 1 } })).toThrow(RangeError);
+    expect(() => host.present({}, head, 1600, 900, { region: { uMin: -0.1, uMax: 1, vMin: 0, vMax: 1 } })).toThrow(RangeError);
+  });
+
   test('places a readable panel once in front of the head when a menu opens', () => {
     const worldScene = new THREE.Scene();
     const host = new VRPanelHost(worldScene, { distanceMetres: 1.5, widthMetres: 1.6 });

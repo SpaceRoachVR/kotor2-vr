@@ -5,12 +5,17 @@ import type { HeldItemVisualDescriptor } from "./runtime/XRControllerAnchorHost"
 import type { VRHandModelLoader } from "./runtime/hands/VRHandModel";
 import { XRGamepadReader } from "./runtime/XRGamepadReader";
 import { XRInputFrameBuilder } from "./runtime/XRInputFrameBuilder";
+import { VRInputRecorder } from "./runtime/recording/VRInputRecorder";
+import { VRTracePlayer } from "./runtime/recording/VRTracePlayer";
+import type { VRPlayerOptions } from "./runtime/recording/VRTracePlayer";
+import type { VRTraceMetadata, VRTraceRecording } from "./runtime/recording/VRTraceTypes";
 import { RoutedXRAction, XRActionContext, XRInputRouter } from "./runtime/XRInputRouter";
 import { InteractionSystem } from "./runtime/InteractionSystem";
 import { InteractionTargetRegistry } from "./runtime/InteractionTargetRegistry";
+import { VRInteractionGizmoHost } from "./runtime/debug/VRInteractionGizmoHost";
 import { LocomotionController, ResolvedLocomotion } from "./runtime/LocomotionController";
 import { VRPanelHost } from "./runtime/VRPanelHost";
-import type { LegacyPanelRenderLayer } from "./runtime/VRPanelHost";
+import type { LegacyPanelRenderLayer, VRPanelPresentOptions } from "./runtime/VRPanelHost";
 import { DEFAULT_XR_FRAMEBUFFER_SCALE, parseXRFramebufferScale } from "@/utility/RendererOptions";
 import { VRPanelPointerHost } from "./runtime/VRPanelPointerHost";
 import { VRPointerHandResolver } from "./runtime/VRPointerHandResolver";
@@ -35,6 +40,7 @@ import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
 import { hideWorldForTheater } from "./runtime/VRTheaterWorldVisibility";
 import { hidePlayerBodyForFirstPerson } from "./runtime/VRFirstPersonBody";
+import { hideGuiRootsForPanel } from "./runtime/VRPanelSceneVisibility";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
 import { VRRecenterHoldGate } from "./runtime/VRRecenterHoldGate";
 import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
@@ -42,6 +48,16 @@ import { VRHiltTimerHost } from "./runtime/VRHiltTimerHost";
 import { VRWeaponStanceHost } from "./runtime/VRWeaponStanceHost";
 import { VRCombatTargetHighlightHost, type VRCombatTargetHighlight } from "./runtime/VRCombatTargetHighlightHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
+import {
+  resolveVRCombatAimedTargetId,
+  type VRCombatAimCandidate,
+} from "./runtime/VRCombatAimResolver";
+import {
+  VRCombatVisualEventObserver,
+  type VRCombatActorSnapshot,
+} from "./runtime/VRCombatVisualEvents";
+import { VRBlasterBoltHost } from "./runtime/VRBlasterBoltHost";
+import { VRDroidExplosionHost } from "./runtime/VRDroidExplosionHost";
 import {
   VRWorldTargetIndicator,
   VRWorldTargetLabelHost,
@@ -64,7 +80,7 @@ import {
   EngineInteractionActor,
   ModuleObjectInteractionTargetSet,
 } from "./runtime/ModuleObjectInteractionTarget";
-import { CombatWeaponMode, SemanticXRAction, VRComfortSettings, XRHandRole, XRInputFrame, XRWorldPose } from "./runtime/XRTypes";
+import { CombatWeaponMode, SemanticXRAction, VRComfortSettings, XRHandInputFrame, XRHandRole, XRInputFrame, XRWorldPose } from "./runtime/XRTypes";
 import { PerfSampler, PerfWorldSnapshot } from "./PerfSampler";
 import type { EngineFrameSource } from "./XRFrameCadence";
 import { XRSessionController } from './runtime/XRSessionController';
@@ -103,6 +119,10 @@ import { XRInputCapabilityValidator } from './input/XRInputCapabilityValidator';
  * forward vector reports is mostly tracking noise.
  */
 const RECENTER_MIN_HORIZONTAL_FORWARD = 0.26;
+/** Steady head frames (~half a second) whose median is the player's standing head height. */
+const HEAD_HEIGHT_CALIBRATION_FRAMES = 36;
+/** How far an untargeted presentation shot travels. */
+const PRESENTATION_SHOT_RANGE_METRES = 20;
 
 const DEFAULT_COMFORT_SETTINGS: VRComfortSettings = {
   locomotionMode: 'smooth',
@@ -118,6 +138,12 @@ interface VRMovieInputContext {
 
 interface VRCutsceneInputContext extends VRMovieInputContext {
   abort?(): void;
+  /**
+   * 'theater' for a scripted cutscene with an authored animated camera;
+   * 'world' for a character conversation, shown in the scene with the
+   * dialogue as a floating panel. Absent is treated as 'theater'.
+   */
+  readonly presentation?: 'theater' | 'world';
 }
 
 interface VRMovieInputContexts {
@@ -137,6 +163,12 @@ export interface VRSpikeHooks {
    * walkmesh-collision-checked. Null when no room/walkmesh is resolved yet.
    */
   getCurrentRoomWalkmesh?: () => VRWalkmeshQuery | null;
+  /**
+   * The floor the avatar stands on at `floorZ`, across its room and the rooms
+   * that room links to — what the wall soft-block tests the head against.
+   * Falls back to `getCurrentRoomWalkmesh` when absent.
+   */
+  getSoftBlockFloor?: (floorZ: number) => VRWalkmeshQuery | null;
   /** Comfort settings (ROADMAP 2.5/2.6): locomotion/turn mode and vignette. */
   getComfortSettings?: () => VRComfortSettings;
   setComfortSettings?: (patch: Partial<VRComfortSettings>) => void;
@@ -158,6 +190,11 @@ export interface VRSpikeHooks {
    * suppression, so only the player stops walking to targets.
    */
   getControlledActor?: () => unknown;
+  /**
+   * Eye height, in metres above the feet, of the character being driven — or
+   * null when it cannot be read. See `VRSpike.resolveEyeHeightOffset`.
+   */
+  getEyeHeight?: () => number | null;
   /** Instantly relocates the player, e.g. for a committed blink-teleport. */
   teleportPlayer?: (point: THREE.Vector3) => void;
   /** Follower camera facing, radians about the world Z axis. */
@@ -216,6 +253,37 @@ export interface VRSpikeHooks {
    * a cancel demonstrably runs. Remove with the rest of the issue-8 tracing.
    */
   describeCombatQueue?: () => string;
+  /**
+   * Hostiles the weapon hand may aim at, and the reach combat actually allows.
+   *
+   * Deliberately not `getInteractionContext`: that set is capped at each
+   * object's use distance — 3 m for a creature — so that selecting something
+   * distant can never queue the engine's walk-to-target. Shooting is allowed
+   * out to `resolveVRCombatRange` (15 m ranged), so every hostile between the
+   * two ranges was targetable by the rules of combat and invisible to aim
+   * resolution. Returns null when there is no actor to aim from.
+   */
+  getCombatAimCandidates?: () => {
+    readonly actorPosition: THREE.Vector3;
+    readonly maxRangeMetres: number;
+    readonly candidates: readonly VRCombatAimCandidate[];
+  } | null;
+  /**
+   * Per-frame combat state for the VR-authored visuals the engine never had:
+   * blaster bolts and droid destruction bursts.
+   *
+   * Snapshots rather than callbacks, so VRSpike derives the one-shot events by
+   * observing transitions and the engine stays untouched — the same reasoning
+   * behind `vrAttackStance.observeRound`. `localActorId` marks the player, whose
+   * bolt must start at the weapon in their hand rather than at their avatar,
+   * because first person hides that avatar.
+   */
+  getCombatVisualSnapshots?: () => {
+    readonly localActorId: number | null;
+    readonly snapshots: readonly VRCombatActorSnapshot[];
+    /** The player's weapon report, for the bolts VR draws on their behalf. */
+    playLocalShotSound?(): void;
+  } | null;
   getCombatContext?: (aimedTargetId: number | null) => {
     readonly actorId: string;
     readonly nominatedTargetId: string | null;
@@ -237,6 +305,17 @@ export interface VRSpikeHooks {
     /** Returns true only when the gesture was spent on a queued Push/Pull. */
     onDirectionalForceGesture?(gesture: VRForceGesture): boolean;
     onGrenadeTrigger?(): void;
+    /**
+     * True when the off hand holds a ranged weapon and no grenade is armed, so
+     * the off-hand trigger shoots instead of throwing.
+     */
+    readonly offhandShotAvailable?: boolean;
+    /** Where a shot at the locked target should land, in world space; null without one. */
+    readonly nominatedTargetAimPoint?: THREE.Vector3 | null;
+    /** Plays the equipped blaster's own shot sound. Presentation only. */
+    playShotSound?(): void;
+    /** Plays the off-hand blaster's shot sound. Presentation only. */
+    playOffhandShotSound?(): void;
     /** Cancels transient target-dependent VR state after engine invalidation. */
     onCombatTargetInvalidated?(): void;
     cancel?(): void;
@@ -294,6 +373,18 @@ export interface VRSpikeHooks {
     readonly viewportWidth: number;
     readonly viewportHeight: number;
     readonly pointerSink: VRPanelPointerSink;
+    /**
+     * GUI roots that are visible but do not belong to this panel — the in-game
+     * HUD and any menu underneath the foreground one. Hidden for the composite
+     * so the panel shows its own menu rather than a copy of the whole 2D
+     * interface. See `hideGuiRootsForPanel`.
+     */
+    readonly occludedGuiRoots?: readonly THREE.Object3D[];
+    /**
+     * How the panel is shown: a conversation held in the world shows only its
+     * lower, dialogue part below the player's eyeline. Absent is a full panel.
+     */
+    readonly presentOptions?: VRPanelPresentOptions;
   };
   /** Current engine movie and its authoritative skip capability. */
   getMovieContext?: () => VRMovieInputContext | null;
@@ -326,6 +417,33 @@ export class VRSpike {
 
   /** Parent of the XR camera. Its world transform is the headset's origin. */
   static rig: THREE.Group | null = null;
+  /**
+   * The player's own standing head height above the XR floor, calibrated from
+   * the first steady frames of a session and again on every recenter.
+   */
+  private static headHeightBaselineMetres: number | null = null;
+  private static headHeightSamples: number[] = [];
+  /** Whether syncRig has placed the rig at least once in this session. */
+  private static rigSyncedThisSession = false;
+  /**
+   * The headset's position in the XR reference space, straight from the viewer
+   * pose. `syncRig` measures the head offset through the rig orientation it is
+   * about to build, which the world-space head in `latestInputFrame` cannot
+   * give it: that one was computed through last frame's rig.
+   */
+  private static latestLocalHeadPosition: THREE.Vector3 | null = null;
+  /** The follower-camera facing `syncRig` last built the rig from. */
+  private static lastRigFacing: number | null = null;
+  /** `performance.now()` of the last rig sync, to notice when syncing stopped. */
+  private static lastRigSyncMs = Number.NEGATIVE_INFINITY;
+  /** Put the head back over the avatar on the next sync that has a player. */
+  private static rigAnchorPending = true;
+  /**
+   * A gap this long without a rig sync means the view was owned by something
+   * else — a theater cutscene, a movie, a load — during which the engine may
+   * have moved the avatar. The head is re-seated over it when syncing resumes.
+   */
+  private static readonly RIG_RESUME_ANCHOR_MS = 500;
   /** Passed to `renderer.render`; THREE overwrites it from the headset pose. */
   static camera: THREE.PerspectiveCamera | null = null;
 
@@ -335,6 +453,8 @@ export class VRSpike {
   private static traceXRStartupCallbacksSeen = 0;
   private static xrFrameRenderTarget: THREE.WebGLRenderTarget | null = null;
   private static readonly inputRouter = new XRInputRouter();
+  static readonly inputRecorder = new VRInputRecorder();
+  static readonly tracePlayer = new VRTracePlayer();
   private static dominantHand: XRHandRole = 'right';
   private static inputCapabilityValidator = new XRInputCapabilityValidator();
   private static desktopLoopNeedsRestart = false;
@@ -369,8 +489,13 @@ export class VRSpike {
   private static comfortVignetteHost: VRComfortVignetteHost | null = null;
   private static hiltTimerHost: VRHiltTimerHost | null = null;
   private static weaponStanceHost: VRWeaponStanceHost | null = null;
-  private static readonly combatTargetLock = new VRCombatTargetLock();
+  // A longer switch dwell than the class default. With a group of droids the
+  // ray crosses several in the course of an ordinary swing, and 180 ms let the
+  // lock hop between them — reported as "aim still quickly flickers between
+  // opponents when they're grouped".
+  private static readonly combatTargetLock = new VRCombatTargetLock({ switchDwellMilliseconds: 400 });
   private static offhandGrenadeTriggerHeld = false;
+  private static dominantShotTriggerHeld = false;
   private static combatTargetHighlightHost: VRCombatTargetHighlightHost | null = null;
   private static combatTargetHighlightErrorReported = false;
   /**
@@ -384,6 +509,10 @@ export class VRSpike {
   private static radialFrozenTargetId: number | null = null;
   private static weaponStanceErrorReported = false;
   private static blasterLaserHost: VRBlasterLaserHost | null = null;
+  private static blasterBoltHost: VRBlasterBoltHost | null = null;
+  private static droidExplosionHost: VRDroidExplosionHost | null = null;
+  private static readonly combatVisualObserver = new VRCombatVisualEventObserver();
+  private static combatVisualsErrorReported = false;
   private static cutsceneFadeHost: VRCutsceneFadeHost | null = null;
   private static readonly cutsceneFadeEnvelope = new VRCutsceneFadeEnvelope();
   private static lastCutsceneCamera: THREE.Camera | null = null;
@@ -400,13 +529,25 @@ export class VRSpike {
   private static worldTargetLabelErrorReported = false;
   private static syncRigFallbackReported = false;
   private static missingMovieRenderPrerequisiteReported = false;
+  /**
+   * TEMPORARY (headset R4): movies reported as showing "space with stars and
+   * asteroids" while the correct audio plays. If `scene_movie` is empty at the
+   * moment it is composited, the theater texture keeps whatever was drawn into
+   * it last, which would read exactly that way. One line per distinct shape.
+   */
+  private static reportedMovieTheaterShapes = new Set<string>();
+  private static lastMovieTheaterShape: string | null = null;
+  private static movieTheaterShapeFrames = 0;
+  private static lastCutsceneTheaterShape: string | null = null;
+  private static cutsceneTheaterShapeFrames = 0;
   private static turnYaw = 0;
   private static readonly turnOriginOffset = new THREE.Vector3();
   private static controllerAnchorHost: XRControllerAnchorHost | null = null;
   private static latestInputFrame: XRInputFrame | null = null;
   private static latestXRFrame: XRFrame | null = null;
   private static latestXRFrameTimestamp = 0;
-  private static readonly interactionRegistry = new InteractionTargetRegistry();
+  static readonly interactionRegistry = new InteractionTargetRegistry();
+  static interactionGizmoHost: VRInteractionGizmoHost | null = null;
   private static readonly interactionSystem = new InteractionSystem(VRSpike.interactionRegistry);
   private static readonly panelInputController = new VRPanelInputController();
   private static panelHost: VRPanelHost | null = null;
@@ -755,6 +896,10 @@ export class VRSpike {
     VRSpike.keyboardGrabHeld = false;
     VRSpike.turnYaw = 0;
     VRSpike.turnOriginOffset.set(0, 0, 0);
+    VRSpike.latestLocalHeadPosition = null;
+    VRSpike.lastRigFacing = null;
+    VRSpike.lastRigSyncMs = Number.NEGATIVE_INFINITY;
+    VRSpike.rigAnchorPending = true;
     VRSpike.interactionTargetSet.clear();
     VRSpike.interactionSystem.cancelTransientState();
     VRSpike.clearWorldActionPrompt(false);
@@ -830,6 +975,9 @@ export class VRSpike {
   private static finishSessionEnd = (): void => {
     VRSpike.perf.stop();
     VRSpike.session = null;
+    VRSpike.headHeightBaselineMetres = null;
+    VRSpike.headHeightSamples = [];
+    VRSpike.rigSyncedThisSession = false;
     VRSpike.xrFrameRenderTarget = null;
     VRSpike.previousXRInputTimestamp = null;
     VRSpike.latestXRFrame = null;
@@ -873,6 +1021,13 @@ export class VRSpike {
     VRSpike.hiltTimerHost = null;
     VRSpike.blasterLaserHost?.dispose();
     VRSpike.blasterLaserHost = null;
+    VRSpike.blasterBoltHost?.dispose();
+    VRSpike.blasterBoltHost = null;
+    VRSpike.droidExplosionHost?.dispose();
+    VRSpike.droidExplosionHost = null;
+    // Latched attack/death state belongs to creatures that no longer exist;
+    // carrying it across would let a reused object id read as a fresh shot.
+    VRSpike.combatVisualObserver.reset();
     VRSpike.cutsceneFadeHost?.dispose();
     VRSpike.cutsceneFadeHost = null;
     VRSpike.cutsceneFadeEnvelope.reset();
@@ -964,6 +1119,13 @@ export class VRSpike {
       VRSpike.processComfortSettingsInput();
     const panelOwnsInput = !movieOwnsInput && !keyboardOwnsInput &&
       !comfortSettingsOwnsInput && VRSpike.processPanelInput();
+    if (movieOwnsInput || keyboardOwnsInput || comfortSettingsOwnsInput) {
+      // processPanelInput did not run, so nothing refreshed the panel ray this
+      // frame. Left alone it hangs in the air where it last was: a skippable
+      // line after a reply choice hands input to the movie/dialogue skip, and
+      // the ray froze at the click for the rest of the line (round 8, S5).
+      VRSpike.clearLegacyPanelPointer();
+    }
     const foregroundSurfaceOwnsInput = movieOwnsInput || keyboardOwnsInput ||
       comfortSettingsOwnsInput || panelOwnsInput;
     if (foregroundSurfaceOwnsInput && !lifecycleSuspendsGameplayInput) {
@@ -1006,16 +1168,24 @@ export class VRSpike {
     try {
       VRSpike.hooks?.update(timestamp, 'xr');
     } catch (error) {
-      if (!VRSpike.engineUpdateErrorReported) {
+      // Once per distinct error, not once per session. A throw here aborts the
+      // rest of that engine tick — including the draw — so a per-frame throw
+      // reads in the headset as a black screen, and a second, different one
+      // later in the session used to be completely invisible behind the first.
+      const signature = String((error as Error)?.stack ?? error).split('\n').slice(0, 2).join(' | ');
+      if (VRSpike.engineUpdateErrorSignatures.size < 20 && !VRSpike.engineUpdateErrorSignatures.has(signature)) {
+        VRSpike.engineUpdateErrorSignatures.add(signature);
         VRSpike.engineUpdateErrorReported = true;
         console.error(
           '[VRSpike] engine update threw inside the XR frame callback; the frame loop ' +
-          'has been kept alive and further occurrences are suppressed',
+          'has been kept alive and repeats of this error are suppressed',
           error
         );
       }
     }
   };
+
+  private static readonly engineUpdateErrorSignatures = new Set<string>();
 
   private static updateTrackedInput(timestamp: number, frame: XRFrame): void {
     const rig = VRSpike.rig;
@@ -1045,14 +1215,27 @@ export class VRSpike {
     }
 
     try {
-      const inputFrame = XRInputFrameBuilder.build(
-        timestamp,
-        frame,
-        referenceSpace,
-        rig,
-        Array.from(session.inputSources ?? [])
-      );
+      let inputFrame = VRSpike.tracePlayer.isPlaying()
+        ? VRSpike.tracePlayer.sample(timestamp)
+        : null;
+
+      if (!inputFrame) {
+        inputFrame = XRInputFrameBuilder.build(
+          timestamp,
+          frame,
+          referenceSpace,
+          rig,
+          Array.from(session.inputSources ?? [])
+        );
+      }
       VRSpike.latestInputFrame = inputFrame;
+      const viewerPosition = frame.getViewerPose(referenceSpace)?.transform.position;
+      if (viewerPosition && Number.isFinite(viewerPosition.x) && Number.isFinite(viewerPosition.y) &&
+        Number.isFinite(viewerPosition.z)) {
+        (VRSpike.latestLocalHeadPosition ??= new THREE.Vector3())
+          .set(viewerPosition.x, viewerPosition.y, viewerPosition.z);
+      }
+      VRSpike.sampleHeadHeight(frame, referenceSpace);
       if (!VRSpike.controllerAnchorHost) {
         VRSpike.controllerAnchorHost = VRSpike.createControllerAnchorHost(rig);
       }
@@ -1061,13 +1244,65 @@ export class VRSpike {
       VRSpike.controllerAnchorHost.setHeldVisual('right', heldVisuals?.right ?? null);
       const avatarPresentation = VRSpike.hooks?.getAvatarPresentation?.();
       VRSpike.controllerAnchorHost.setHumanoidHandsVisible(avatarPresentation?.humanoidHands === true);
-      VRSpike.controllerAnchorHost.update(inputFrame);
+      const presentationOwnsView = VRSpike.isViewOwnedByPresentation();
+      VRSpike.controllerAnchorHost.setPresentationSuppressed(presentationOwnsView);
+      // While a menu, dialogue or movie owns the view the weapon is hidden, so
+      // panels keep the controller's own ray. In the world a held blaster aims.
+      const aimedFrame = (presentationOwnsView || !inputFrame)
+        ? inputFrame
+        : VRSpike.alignRaysToHeldWeapons(inputFrame, VRSpike.controllerAnchorHost);
+      VRSpike.latestInputFrame = aimedFrame;
+      VRSpike.controllerAnchorHost.update(aimedFrame);
+      if (VRSpike.scene) {
+        if (!VRSpike.interactionGizmoHost) {
+          VRSpike.interactionGizmoHost = new VRInteractionGizmoHost(VRSpike.scene);
+        }
+        if (VRSpike.interactionGizmoHost.isEnabled()) {
+          VRSpike.interactionGizmoHost.update(aimedFrame, VRSpike.interactionRegistry);
+        }
+      }
+      if (aimedFrame && VRSpike.inputRecorder.isRecording()) {
+        VRSpike.inputRecorder.recordFrame(aimedFrame, timestamp);
+      }
     } catch (error) {
       VRSpike.clearTrackedInput();
       if (!VRSpike.trackedInputErrorReported) {
         VRSpike.trackedInputErrorReported = true;
         console.error('[VRSpike] tracked controller pose rejected', error);
       }
+    }
+  }
+
+  /**
+   * Replaces each hand's target ray with its held ranged weapon's barrel ray.
+   * Done once here, where the frame is built, so every gameplay consumer —
+   * world prompts, combat aim, the blaster laser, presentation bolts and the
+   * ray anchor — agrees on one aim instead of each re-deriving it.
+   */
+  private static alignRaysToHeldWeapons(
+    inputFrame: XRInputFrame,
+    anchorHost: Pick<XRControllerAnchorHost, 'getAimPose'>,
+  ): XRInputFrame {
+    let hands: Partial<Record<XRHandRole, XRHandInputFrame>> | null = null;
+    for (const hand of ['left', 'right'] as const) {
+      const handFrame = inputFrame.hands[hand];
+      if (!handFrame) continue;
+      const aimPose = anchorHost.getAimPose(hand, handFrame.pose);
+      if (!aimPose) continue;
+      hands ??= { ...inputFrame.hands };
+      hands[hand] = { ...handFrame, targetRayPose: aimPose };
+    }
+    return hands ? { ...inputFrame, hands } : inputFrame;
+  }
+
+  /** True while a movie, cutscene/conversation or a foreground menu owns the view. */
+  private static isViewOwnedByPresentation(): boolean {
+    try {
+      return !!VRSpike.hooks?.getMovieContext?.() ||
+        !!VRSpike.hooks?.getCutsceneContext?.() ||
+        !!VRSpike.hooks?.getPanelContext?.()?.menu;
+    } catch {
+      return false;
     }
   }
 
@@ -1129,7 +1364,10 @@ export class VRSpike {
     try {
       const worldScene = VRSpike.scene;
       if (!worldScene) return true;
-      const cutsceneOwnsTheater = (VRSpike.hooks?.getCutsceneContext?.() ?? null) !== null;
+      // Only a theater cutscene composites the dialogue into the theater
+      // surface. A conversation presented in the world uses the ordinary panel.
+      const cutsceneForInput = VRSpike.hooks?.getCutsceneContext?.() ?? null;
+      const cutsceneOwnsTheater = cutsceneForInput !== null && cutsceneForInput.presentation !== 'world';
       if (!cutsceneOwnsTheater && !VRSpike.panelHost) {
         VRSpike.panelHost = new VRPanelHost(worldScene);
       }
@@ -1160,7 +1398,9 @@ export class VRSpike {
           context.viewportHeight
         ) ?? null
         : null;
-      if (!dominantHand) VRSpike.panelPointerHost?.clear();
+      // No hit test ran — no hand, or the presenting surface is not this
+      // menu's yet — so the ray must not keep last frame's position either.
+      if (!pointerHit) VRSpike.panelPointerHost?.clear();
       VRSpike.latestPanelPointerPosition = pointerHit?.guiPosition.clone() ?? null;
       return VRSpike.panelInputController.process(
         menu,
@@ -1275,15 +1515,43 @@ export class VRSpike {
     };
   }
 
+  /**
+   * Select must be HELD this long on an unskippable dialogue line before the
+   * whole conversation is abandoned.
+   *
+   * A tap used to do it. Skip and abort shared one press edge — skip when the
+   * line was skippable, otherwise abort — so the press a player naturally makes
+   * to move past a scripted beat ended the conversation instead. That is how
+   * the prologue could not be finished: the Galaxy Map's `outro` reached "T3
+   * moves to hallway, makes a sound" (LISTENING_TO_SPEAKER, unskippable), one
+   * press aborted it with its reply still pending, and the end-of-conversation
+   * script that starts the travel to Peragus never ran. Logged twice in one
+   * headset session as `endConversation(aborted) dlg='outro' state=0
+   * replies=1`.
+   *
+   * Flatscreen keeps these on separate keys — a click does nothing on an
+   * unskippable line, Escape abandons the conversation — and a hold is the VR
+   * equivalent of reaching for a different key. The escape hatch for a
+   * genuinely stuck line survives; it just can no longer be reached by
+   * accident. Longer than recenter's hold because what it destroys is story
+   * state: an aborted conversation skips its ending script.
+   */
+  private static readonly cutsceneAbortHoldGate = new VRRecenterHoldGate(1500);
+  /** A hold must begin while the line is unskippable; one carried in does not count. */
+  private static cutsceneAbortNeedsFreshPress = true;
+
   /** Keeps movie playback authoritative while allowing the original skip rule. */
   private static processMovieInput(
     contexts: VRMovieInputContexts = VRSpike.resolveMovieInputContexts(),
+    timestampMs: number = performance.now(),
   ): boolean {
     const movieContext = contexts.movie;
     const cutsceneContext = contexts.cutscene;
     const context = movieContext ?? cutsceneContext;
     if (!context) {
       VRSpike.movieCancelHeld = false;
+      VRSpike.cutsceneAbortHoldGate.reset();
+      VRSpike.cutsceneAbortNeedsFreshPress = true;
       VRSpike.movieHost?.clear();
       return false;
     }
@@ -1292,20 +1560,28 @@ export class VRSpike {
     if (!session) return true;
     try {
       const skipPressed = VRSpike.readMovieInputPressed(session);
-      if (skipPressed && !VRSpike.movieCancelHeld) {
-        if (context.canSkip) {
-          context.skip();
-        } else {
-          // The per-line skip is gated by the authored `skippable` flag, but
-          // flatscreen also has an unconditional abort (DialogAbort) that
-          // works even on a `NodeUnskippable` entry. VR previously had no
-          // equivalent, so an unskippable line was a permanent dead end.
+      if (context.canSkip) {
+        // A skip still held when the next line turns out to be unskippable
+        // must not start counting toward an abort.
+        VRSpike.cutsceneAbortHoldGate.reset();
+        VRSpike.cutsceneAbortNeedsFreshPress = skipPressed;
+        if (skipPressed && !VRSpike.movieCancelHeld) context.skip();
+      } else if ((context as VRCutsceneInputContext).abort) {
+        // The per-line skip is gated by the authored `skippable` flag, but
+        // flatscreen also has an unconditional abort (DialogAbort) that works
+        // even on a `NodeUnskippable` entry. VR keeps that escape hatch behind
+        // a deliberate hold — see cutsceneAbortHoldGate.
+        if (!skipPressed) VRSpike.cutsceneAbortNeedsFreshPress = false;
+        const holding = skipPressed && !VRSpike.cutsceneAbortNeedsFreshPress;
+        if (VRSpike.cutsceneAbortHoldGate.update(holding, timestampMs)) {
+          console.info('[VRSpike] dialogue abandoned: Select held 1.5 s on an unskippable line');
           (context as VRCutsceneInputContext).abort?.();
         }
       }
       VRSpike.movieCancelHeld = skipPressed;
     } catch (error) {
       VRSpike.movieCancelHeld = false;
+      VRSpike.cutsceneAbortHoldGate.reset();
       if (!VRSpike.movieInputErrorReported) {
         VRSpike.movieInputErrorReported = true;
         console.error('[VRSpike] movie input rejected', error);
@@ -1822,6 +2098,57 @@ export class VRSpike {
     return VRSpike.interactionAimedTargetId;
   }
 
+  /**
+   * Extra radius on every combat aim candidate.
+   *
+   * A sensor droid subtends well under a degree across a room, and holding a
+   * controller steady enough to intersect its true bounding sphere at 12 m is
+   * not a skill this game ever asked for — KOTOR's own targeting is a click on
+   * a screen-space reticle. Reported from a headset session as "targeting
+   * combat droids was difficult".
+   */
+  private static readonly COMBAT_AIM_ASSIST_RADIUS_METRES = 0.6;
+
+  /**
+   * The hostile creature the weapon hand is pointing at.
+   *
+   * Strictly a fallback behind `resolveAimedTargetId`: whenever the interaction
+   * ray has already resolved something, that stays authoritative, so aiming at
+   * a door or a footlocker still opens its own actions and is never overridden
+   * by a creature standing behind it. This only fills the gap the interaction
+   * set cannot cover — hostiles beyond its 3 m per-type use distance but inside
+   * combat range — which is why the wheel opened with no Attacks wedge and no
+   * target highlight while four hostile droids stood in the room.
+   *
+   * Builds its candidate list on demand rather than caching: it runs only when
+   * nothing is already aimed at, the list is a handful of creatures, and a
+   * cache would have to be invalidated on every spawn, death and module load.
+   */
+  private static resolveAimedCombatTargetId(): number | null {
+    const rayPose = VRSpike.latestInputFrame?.hands.right?.targetRayPose;
+    if (!rayPose || rayPose.trackingState !== 'tracked') return null;
+    try {
+      const context = VRSpike.hooks?.getCombatAimCandidates?.() ?? null;
+      if (!context || !context.candidates.length) return null;
+      return resolveVRCombatAimedTargetId({
+        rayPose,
+        actorPosition: context.actorPosition,
+        candidates: context.candidates,
+        maxRangeMetres: context.maxRangeMetres,
+        aimAssistRadiusMetres: VRSpike.COMBAT_AIM_ASSIST_RADIUS_METRES,
+      });
+    } catch {
+      // Aim resolution must never break the frame loop; no target is the
+      // honest outcome and the player can step closer.
+      return null;
+    }
+  }
+
+  /** Interaction aim first, then combat reach. See `resolveAimedCombatTargetId`. */
+  private static resolveAimedTargetIdForCombat(): number | null {
+    return VRSpike.resolveAimedTargetId() ?? VRSpike.resolveAimedCombatTargetId();
+  }
+
   private static parseModuleObjectTargetId(id: string | null): number | null {
     if (!id) return null;
     const match = /^module-object:(\d+)$/.exec(id);
@@ -1918,7 +2245,7 @@ export class VRSpike {
     // Resolve the candidate through the engine first. The lock intentionally
     // never sees raw ray ids, because a door, corpse, or stale selectable must
     // not become a combat target during the aim-loss grace window.
-    const candidateContext = VRSpike.hooks?.getCombatContext?.(VRSpike.resolveAimedTargetId()) ?? null;
+    const candidateContext = VRSpike.hooks?.getCombatContext?.(VRSpike.resolveAimedTargetIdForCombat()) ?? null;
     const lock = VRSpike.combatTargetLock.update({
       candidateTargetId: candidateContext?.nominatedTargetId ?? undefined,
       nowMilliseconds: timestamp,
@@ -1964,13 +2291,41 @@ export class VRSpike {
       const weaponActionPressed = actions.some((action) =>
         action.action === SemanticXRAction.WeaponAction && action.hand === dominantHand && action.pressed
       );
-      const offhandGrenadePressed = actions.some((action) =>
+      const offhandTriggerPressed = actions.some((action) =>
         action.action === SemanticXRAction.WeaponAction && action.hand === offhandHand && action.pressed
       );
-      if (offhandGrenadePressed && !VRSpike.offhandGrenadeTriggerHeld) {
-        context.onGrenadeTrigger?.();
+      // An armed grenade always owns the off-hand trigger. Without one, an
+      // off-hand blaster shoots exactly like the dominant one — round 8, T3:
+      // "should also work with offhand when offhand ranged weapon is equipped".
+      const offhandShotPressed = offhandTriggerPressed && context.offhandShotAvailable === true;
+      if (offhandTriggerPressed && !VRSpike.offhandGrenadeTriggerHeld) {
+        if (!offhandShotPressed) {
+          context.onGrenadeTrigger?.();
+        } else if (VRSpike.isPresentationShotAllowed(context)) {
+          VRSpike.firePresentationShot(context, timestamp, offhandHand, () => context.playOffhandShotSound?.());
+        }
       }
-      VRSpike.offhandGrenadeTriggerHeld = offhandGrenadePressed;
+      VRSpike.offhandGrenadeTriggerHeld = offhandTriggerPressed;
+
+      // Every pull of a blaster trigger shows a shot and plays its sound, even
+      // though the engine resolves only one attack per round — reported in
+      // round 6 as "the bolt animation and sound should happen on every
+      // trigger pull, even though shots only count once per round". This is
+      // presentation only: the pull still goes through the tempo gate below,
+      // and the engine-derived bolt for the player is suppressed in
+      // updateCombatVisuals so a counted shot does not draw twice.
+      //
+      // ...but only a pull that is a shot. The trigger is also Select, so the
+      // same finger picks dialogue replies, opens containers and presses
+      // prompts; round 7 reported "blaster fires on any trigger pull". A pull
+      // shoots while the actor is in combat, or when it opens combat against
+      // a nominated hostile. Anything else is the player using the world.
+      const shotPressed = context.weaponMode === 'blaster' && weaponActionPressed;
+      if (shotPressed && !VRSpike.dominantShotTriggerHeld &&
+        VRSpike.isPresentationShotAllowed(context)) {
+        VRSpike.firePresentationShot(context, timestamp);
+      }
+      VRSpike.dominantShotTriggerHeld = shotPressed;
 
       // Cancel is handled by processCombatCancel, which runs every gameplay
       // frame regardless of whether a world prompt consumed input first.
@@ -1986,7 +2341,10 @@ export class VRSpike {
         weaponMode: context.weaponMode,
         timestamp,
         offhandGrip,
-        weaponActionPressed,
+        // Either blaster's pull completes the round; the controller latches
+        // the combined press, so holding one trigger and pulling the other
+        // is still one pull.
+        weaponActionPressed: weaponActionPressed || offhandShotPressed,
         dominantHand,
         offhandHand,
         allowDominantTrigger: context.allowDominantTrigger === true,
@@ -1996,6 +2354,47 @@ export class VRSpike {
       if (!VRSpike.combatInputErrorReported) {
         VRSpike.combatInputErrorReported = true;
         console.error('[VRSpike] combat input rejected', error);
+      }
+    }
+  }
+
+  /** In combat, or opening it on a hostile the engine has nominated. */
+  private static isPresentationShotAllowed(context: {
+    readonly inCombat: boolean;
+    readonly nominatedTargetId: string | null;
+  }): boolean {
+    return context.inCombat === true || context.nominatedTargetId !== null;
+  }
+
+  private static firePresentationShot(context: {
+    readonly nominatedTargetAimPoint?: THREE.Vector3 | null;
+    playShotSound?(): void;
+  }, timestamp: number, hand: XRHandRole = VRSpike.dominantHand, playSound?: () => void): void {
+    const worldScene = VRSpike.scene;
+    const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor(hand) ?? null;
+    if (!worldScene || !rayAnchor) return;
+    try {
+      const from = rayAnchor.getWorldPosition(new THREE.Vector3());
+      const aim = context.nominatedTargetAimPoint ?? null;
+      const to = aim
+        ? aim.clone()
+        : from.clone().add(
+          new THREE.Vector3(0, 0, -1)
+            .applyQuaternion(rayAnchor.getWorldQuaternion(new THREE.Quaternion()))
+            .multiplyScalar(PRESENTATION_SHOT_RANGE_METRES),
+        );
+      if (!VRSpike.blasterBoltHost) {
+        VRSpike.blasterBoltHost = new VRBlasterBoltHost(worldScene);
+      }
+      // attackResult 1 (a plain hit colour); presentation never reports a roll.
+      // Same clock as updateCombatVisuals, which advances and retires bolts.
+      VRSpike.blasterBoltHost.fire({ from, to, attackResult: 1 }, timestamp);
+      if (playSound) playSound();
+      else context.playShotSound?.();
+    } catch (error) {
+      if (!VRSpike.combatVisualsErrorReported) {
+        VRSpike.combatVisualsErrorReported = true;
+        console.error('[VRSpike] presentation shot rejected', error);
       }
     }
   }
@@ -2064,7 +2463,7 @@ export class VRSpike {
     if (!inputFrame || !session) return false;
     const legacyContext = combatContext
       ? null
-      : (VRSpike.hooks?.getForceContext?.(VRSpike.resolveAimedTargetId()) ?? null);
+      : (VRSpike.hooks?.getForceContext?.(VRSpike.resolveAimedTargetIdForCombat()) ?? null);
     if (!combatContext?.onDirectionalForceGesture && !legacyContext) return false;
     try {
       const actions = VRSpike.inputRouter.route(
@@ -2127,7 +2526,16 @@ export class VRSpike {
         // highlight. Calling resolveAimedTargetId() twice could return two
         // different objects if aim drifts between the calls, and the highlight
         // would then mark a creature the page does not act on.
-        const aimedTargetId = VRSpike.resolveAimedTargetId();
+        // The soft-locked hostile wins over this frame's ray. Reaching for the
+        // menu button moves the controller, so the instantaneous aim at the
+        // press was usually off a small target — the round-5 log shows the
+        // wheel opening with `aimedTargetId=null` while a hostile was
+        // selectable, which is "the wheel almost never shows available
+        // attacks". The lock exists precisely so the target survives that.
+        const lockedTargetId = VRSpike.parseModuleObjectTargetId(
+          VRSpike.combatTargetLock.getSnapshot().lockedTargetId ?? null,
+        );
+        const aimedTargetId = lockedTargetId ?? VRSpike.resolveAimedTargetIdForCombat();
         openingMenu = VRSpike.hooks?.createActionWheel?.(aimedTargetId) ?? null;
         VRSpike.radialFrozenTargetId = openingMenu ? aimedTargetId : null;
       }
@@ -2244,6 +2652,7 @@ export class VRSpike {
     }
     if (module === VRSpike.worldPromptModule) return false;
     VRSpike.worldPromptModule = module;
+    VRSpike.rigAnchorPending = true;
     return true;
   }
 
@@ -2329,6 +2738,10 @@ export class VRSpike {
         action.action === SemanticXRAction.WeaponAction && action.hand === offhandHand && action.pressed
       );
       VRSpike.combatInputController.synchronizeWeaponActionHeld(pressed);
+      // The presentation shot keeps its own edge. Left stale, a trigger that
+      // picked a reply or opened a container read as a fresh pull on the first
+      // frame the world got input back, and fired a bolt nobody aimed.
+      VRSpike.dominantShotTriggerHeld = pressed;
       VRSpike.offhandGrenadeTriggerHeld = offhandPressed;
     } catch {
       // Keep the prior latch on malformed optional input rather than treating
@@ -2677,6 +3090,10 @@ export class VRSpike {
     // `rigFacing` already carries the previous offset, so the correction
     // collapses to a direct assignment rather than an accumulation, which is
     // what makes repeat presses idempotent.
+    // Recenter is also "measure me again": a player who sat down or stood up
+    // since the session began gets the character's eye height back.
+    VRSpike.headHeightBaselineMetres = null;
+    VRSpike.headHeightSamples = [];
     const previousYawOffset = VRSpike.yawOffset;
     VRSpike.yawOffset = wrap(rigFacing - headFacing);
     const yawDelta = wrap(VRSpike.yawOffset - previousYawOffset);
@@ -2787,6 +3204,7 @@ export class VRSpike {
     // and the theater panel below requires it to place itself from the
     // physical head pose.
     const cutsceneContext = VRSpike.hooks?.getCutsceneContext?.() ?? null;
+    const theaterCutscene = !!cutsceneContext && cutsceneContext.presentation !== 'world';
     if (VRSpike.followCamera && worldCamera) {
       // A scripted cutscene/dialogue camera cut moves the *player*/*camera*
       // to frame a shot — invisible on flatscreen because FollowerCamera is
@@ -2798,15 +3216,33 @@ export class VRSpike {
       // theater panel is positioned from the physical head pose, not from
       // this sync, so skipping only syncRig during a cutscene costs
       // nothing and stops both bugs.
-      if (!cutsceneContext) VRSpike.syncRig(worldCamera);
+      // ...but only once the rig has been placed at all. Entering VR while a
+      // cutscene or movie is already up left the rig wherever the last session
+      // did, or at the origin, and the theater and menu panels were then placed
+      // from that head pose — logged as `[VRPanelHost] placed head=(0.00,0.00,
+      // 0.00)` and reported as "menus and movies spawn in the floor any time
+      // you enter VR while they are open". One sync puts the player where they
+      // stand; skipping after that still keeps camera cuts from yanking them.
+      if (!theaterCutscene || !VRSpike.rigSyncedThisSession) VRSpike.syncRig(worldCamera);
       VRSpike.refreshTrackedPresentationPose();
     }
 
-    if (cutsceneContext) {
+    if (theaterCutscene) {
       VRSpike.clearWorldActionPrompt(false);
       VRSpike.renderCutscene(worldCamera, frameTimestamp);
       return;
     }
+    // Nothing in the world path draws the theater, so nothing may leave it up.
+    // A conversation that cuts from an authored shot to the player's own view
+    // used to strand the screen where it was placed, showing its last frame —
+    // black, after the fade that ends most shots. Round 8: "the first
+    // interaction with Kreia rendered a black box", and at the end of the
+    // Ebon Hawk intro the replies panel sat behind that same stale screen.
+    // Movies render through renderMovie, never through here.
+    VRSpike.movieHost?.clear();
+    // A conversation shown in the world: no world prompts or target labels
+    // compete with the dialogue panel, which renderPanel draws below.
+    if (cutsceneContext) VRSpike.clearWorldActionPrompt(false);
     // Not (or no longer) in a cutscene: the next one's first shot must not
     // fade in against a stale camera reference from a previous, unrelated
     // cutscene.
@@ -2817,8 +3253,11 @@ export class VRSpike {
     VRSpike.renderKeyboard();
     VRSpike.renderPanel();
     VRSpike.renderInGameOverlay();
-    VRSpike.renderWorldActionPrompt();
-    VRSpike.renderWorldTargetLabel();
+    if (!cutsceneContext) {
+      VRSpike.renderWorldActionPrompt();
+      VRSpike.renderWorldTargetLabel();
+    }
+    VRSpike.updateCombatVisuals(frameTimestamp);
 
     // The GUI texture pass restores the target it observed. Legacy engine
     // renders may already have reset that target, so make the XR target
@@ -2897,6 +3336,38 @@ export class VRSpike {
         viewportWidth,
         viewportHeight
       );
+      //TEMPORARY (headset R4): see reportedMovieTheaterShapes.
+      try {
+        let visibleMeshes = 0;
+        movieScene.traverse((object) => {
+          if ((object as THREE.Mesh).isMesh && object.visible) visibleMeshes++;
+        });
+        const shape = `children=${movieScene.children.length} visibleMeshes=${visibleMeshes}`;
+        // Report TRANSITIONS with how many composites were spent in the previous
+        // state, not one line per distinct shape.
+        //
+        // The first version deduplicated by shape, which was the wrong
+        // instrument: it proved the theater sometimes composites an empty
+        // movie scene, but could not distinguish a two-frame race at movie
+        // start from an entire movie drawn with nothing visible. Only the
+        // latter would explain "the correct audio plays over the previous
+        // movie's picture", so the duration is the whole question.
+        if (shape !== VRSpike.lastMovieTheaterShape) {
+          if (VRSpike.lastMovieTheaterShape !== null) {
+            console.info(
+              `[VR movie theater] ${VRSpike.lastMovieTheaterShape}` +
+              ` held ${VRSpike.movieTheaterShapeFrames} composites -> ${shape}`
+            );
+          } else {
+            console.info(`[VR movie theater] ${shape}`);
+          }
+          VRSpike.lastMovieTheaterShape = shape;
+          VRSpike.movieTheaterShapeFrames = 0;
+        }
+        VRSpike.movieTheaterShapeFrames++;
+      } catch {
+        // Diagnostics must never disturb a movie.
+      }
       VRSpike.movieHost.renderGui(renderer, movieScene, movieCamera);
 
       if (VRSpike.xrFrameRenderTarget) {
@@ -2993,6 +3464,36 @@ export class VRSpike {
           });
         } else {
           captionContext?.pointerSink.setPointerPosition(null);
+        }
+        //TEMPORARY (headset R4): the reported "cutscene shows only space" cases
+        // are CUTSCENES, not movies — `[VR movie theater]` instruments
+        // renderMovie and could never see them. A cutscene composites the world
+        // through the authored camera into this same surface, so what matters
+        // here is whether that camera has any visible geometry in front of it.
+        // Reports transitions with how many composites each state held.
+        try {
+          let visibleMeshes = 0;
+          worldScene.traverse((object) => {
+            if ((object as THREE.Mesh).isMesh && object.visible) visibleMeshes++;
+          });
+          const shape = `visibleMeshes=${visibleMeshes} captions=${!!captionContext?.menu}` +
+            ` cam=(${worldCamera.position.x.toFixed(1)},` +
+            `${worldCamera.position.y.toFixed(1)},${worldCamera.position.z.toFixed(1)})`;
+          if (shape !== VRSpike.lastCutsceneTheaterShape) {
+            if (VRSpike.lastCutsceneTheaterShape !== null) {
+              console.info(
+                `[VR cutscene theater] ${VRSpike.lastCutsceneTheaterShape}` +
+                ` held ${VRSpike.cutsceneTheaterShapeFrames} composites -> ${shape}`
+              );
+            } else {
+              console.info(`[VR cutscene theater] ${shape}`);
+            }
+            VRSpike.lastCutsceneTheaterShape = shape;
+            VRSpike.cutsceneTheaterShapeFrames = 0;
+          }
+          VRSpike.cutsceneTheaterShapeFrames++;
+        } catch {
+          // Diagnostics must never disturb an authored shot.
         }
         VRSpike.movieHost.renderGuiLayers(renderer, layers);
       } finally {
@@ -3171,7 +3672,8 @@ export class VRSpike {
         context.menu,
         inputFrame.head,
         context.viewportWidth,
-        context.viewportHeight
+        context.viewportHeight,
+        context.presentOptions ?? {}
       );
       // GameState deliberately hides the legacy mouse cursor during ordinary
       // XR play. Reapply the panel hit after simulation so the original cursor
@@ -3182,13 +3684,20 @@ export class VRSpike {
       // did so on every XR frame for as long as any menu stayed open. Placement
       // and the pointer sink above still run every frame — only the redraw is
       // gated. See VRPanelRepaintPolicy for what the gate can and cannot see.
-      VRSpike.panelHost.renderGuiIfChanged(
-        renderer,
-        context.guiScene,
-        context.guiCamera,
-        context.menu.getLegacyPanelRenderPass?.() ?? null,
-        VRSpike.latestPanelPointerPosition,
-      );
+      // Only this panel's own menu belongs in the composite. Restored in a
+      // `finally` so a throwing render cannot leave the interface hidden.
+      const restoreGuiRoots = hideGuiRootsForPanel(context.occludedGuiRoots);
+      try {
+        VRSpike.panelHost.renderGuiIfChanged(
+          renderer,
+          context.guiScene,
+          context.guiCamera,
+          context.menu.getLegacyPanelRenderPass?.() ?? null,
+          VRSpike.latestPanelPointerPosition,
+        );
+      } finally {
+        restoreGuiRoots();
+      }
     } catch (error) {
       VRSpike.panelHost?.clear();
       VRSpike.panelPointerHost?.clear();
@@ -3233,6 +3742,67 @@ export class VRSpike {
       if (!VRSpike.combatTargetHighlightErrorReported) {
         VRSpike.combatTargetHighlightErrorReported = true;
         console.error('[VRSpike] combat target highlight rejected', error);
+      }
+    }
+  }
+
+  /**
+   * Draws the blaster bolts and droid bursts the engine never produced.
+   *
+   * Driven from the render path rather than `processCombatInput`: a bolt in
+   * flight and an expanding blast must keep animating and expire on time even
+   * on frames where gameplay input is suspended (a cutscene starting, a module
+   * transition), otherwise they freeze mid-air.
+   */
+  private static updateCombatVisuals(nowMs: number): void {
+    const worldScene = VRSpike.scene;
+    if (!worldScene) return;
+    try {
+      const context = VRSpike.hooks?.getCombatVisualSnapshots?.() ?? null;
+      if (context) {
+        for (const event of VRSpike.combatVisualObserver.observe(context.snapshots)) {
+          if (event.kind === 'bolt') {
+            if (!VRSpike.blasterBoltHost) {
+              VRSpike.blasterBoltHost = new VRBlasterBoltHost(worldScene);
+            }
+            // The player's weapon is on their controller; their avatar - which
+            // is where the engine thinks the weapon is - is hidden in first
+            // person, so a bolt from there appears to come out of nowhere.
+            // The player's own shots at a creature are drawn per trigger pull
+            // instead (firePresentationShot), so a counted round must not add
+            // a second. A Bash is the exception: its rounds against a door or
+            // container resolve with no trigger to pull, so suppressing them
+            // left the player seeing and hearing nothing while the lock took
+            // damage — round 8: "bashing is a combat scene and requires the
+            // sound and bolt animation".
+            const isLocalShot = context.localActorId !== null && event.actorId === context.localActorId;
+            if (VRSpike.session && isLocalShot && event.targetIsCreature) {
+              continue;
+            }
+            let from = event.from;
+            if (isLocalShot) {
+              const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor(VRSpike.dominantHand) ?? null;
+              if (rayAnchor) from = rayAnchor.getWorldPosition(new THREE.Vector3());
+            }
+            VRSpike.blasterBoltHost.fire(
+              { from, to: event.to, attackResult: event.attackResult },
+              nowMs,
+            );
+            if (VRSpike.session && isLocalShot) context.playLocalShotSound?.();
+          } else {
+            if (!VRSpike.droidExplosionHost) {
+              VRSpike.droidExplosionHost = new VRDroidExplosionHost(worldScene);
+            }
+            VRSpike.droidExplosionHost.detonate(event.at, nowMs);
+          }
+        }
+      }
+      VRSpike.blasterBoltHost?.update(nowMs);
+      VRSpike.droidExplosionHost?.update(nowMs);
+    } catch (error) {
+      if (!VRSpike.combatVisualsErrorReported) {
+        VRSpike.combatVisualsErrorReported = true;
+        console.error('[VRSpike] combat visuals rejected', error);
       }
     }
   }
@@ -3287,6 +3857,46 @@ export class VRSpike {
     }
   }
 
+  private static sampleHeadHeight(frame: XRFrame, referenceSpace: XRReferenceSpace): void {
+    if (VRSpike.headHeightBaselineMetres !== null) return;
+    try {
+      const y = frame.getViewerPose(referenceSpace)?.transform.position.y;
+      // A head below 30 cm is tracking that has not settled, not a person.
+      if (typeof y !== 'number' || !Number.isFinite(y) || y < 0.3 || y > 2.5) return;
+      VRSpike.headHeightSamples.push(y);
+      if (VRSpike.headHeightSamples.length < HEAD_HEIGHT_CALIBRATION_FRAMES) return;
+      const sorted = [...VRSpike.headHeightSamples].sort((a, b) => a - b);
+      VRSpike.headHeightBaselineMetres = sorted[Math.floor(sorted.length / 2)];
+      VRSpike.headHeightSamples = [];
+      const eye = VRSpike.hooks?.getEyeHeight?.() ?? null;
+      console.info(
+        `[VRSpike] head height calibrated: player ${VRSpike.headHeightBaselineMetres.toFixed(2)} m, ` +
+        `character eye ${eye === null ? 'unknown' : eye.toFixed(2) + ' m'}`
+      );
+    } catch {
+      // Calibration is best-effort; without it the rig keeps the raw floor.
+    }
+  }
+
+  /**
+   * How far to raise or lower the rig so the camera sits at the CHARACTER's
+   * eye height rather than the player's own.
+   *
+   * The design fixes a canonical eye height per character. Relying on the
+   * runtime's floor alone put the camera wherever the player's head happened to
+   * be: the round-5 run measured 1.08 m above the play-space floor, which felt
+   * right as T3-M4 — a metre-tall droid — and sat at the Exile's torso.
+   * Movement relative to the calibrated baseline still passes straight through,
+   * so crouching and leaning work, and a seated player gets the same view.
+   */
+  private static resolveEyeHeightOffset(): number {
+    const baseline = VRSpike.headHeightBaselineMetres;
+    if (baseline === null) return 0;
+    const eye = VRSpike.hooks?.getEyeHeight?.() ?? null;
+    if (eye === null || !Number.isFinite(eye)) return 0;
+    return eye - baseline;
+  }
+
   /**
    * Put the rig where the player is standing. Height comes from the floor, not
    * from the follower camera, which sits well above the head and pitched down.
@@ -3295,7 +3905,53 @@ export class VRSpike {
     const rig = VRSpike.rig;
     if (!rig) return;
 
+    const now = performance.now();
+    const resumedAfterGap = now - VRSpike.lastRigSyncMs > VRSpike.RIG_RESUME_ANCHOR_MS;
+    VRSpike.lastRigSyncMs = now;
+
+    // Orientation first: the head's offset from the rig origin is measured
+    // through this frame's rotation, so every correction below agrees with the
+    // pose the headset will actually render from.
+    // Z-up conversion first, then yaw about the world's up axis. Order matters
+    // — yaw is applied in world space.
+    const facing = VRSpike.hooks?.getFacing() ?? 0;
+    XRCoordinateConverter.applyXRToGameBasis(rig);
+    rig.rotateOnWorldAxis(
+      new THREE.Vector3(0, 0, 1),
+      // FollowerCamera.facing is the orbit bearing. KOTOR renders its camera
+      // and drives forward creature movement at bearing + 90 degrees.
+      facing + Math.PI / 2 + VRSpike.yawOffset + VRSpike.turnYaw
+    );
+
     const feet = VRSpike.hooks?.getPlayerPosition() ?? null;
+    const localHead = VRSpike.latestLocalHeadPosition;
+    const headOffset = localHead ? localHead.clone().applyQuaternion(rig.quaternion) : null;
+    if (headOffset && feet && (VRSpike.rigAnchorPending || resumedAfterGap)) {
+      // Seat the head directly over the avatar, as a positional recenter does.
+      // Whatever offset the player's place in the room built up belongs to the
+      // spot they stood on before; after a load, a cutscene or a movie the
+      // engine has usually put the avatar somewhere new.
+      VRSpike.turnOriginOffset.set(-headOffset.x, -headOffset.y, 0);
+      VRSpike.rigAnchorPending = false;
+    } else if (headOffset && VRSpike.lastRigFacing !== null && facing !== VRSpike.lastRigFacing) {
+      // The engine turned its follower camera — ModuleArea.loadScene aims it on
+      // arrival, and conversation focus eases it — and the rig yaw follows.
+      // Turning the rig about its origin swings a head that stands away from
+      // that origin through an arc; turn about the head instead, exactly as
+      // applyTurnAroundHead does for the player's own turning. Measured in the
+      // emulator with the head 1.2 m off-centre: an unanswered 1.5 rad facing
+      // change moved the view 1.64 m with no input at all, into the Ebon Hawk's
+      // hull on the exterior walkway (round 7).
+      const previousHeadOffset = localHead!.clone().applyQuaternion(
+        new THREE.Quaternion()
+          .setFromAxisAngle(new THREE.Vector3(0, 0, 1), VRSpike.lastRigFacing - facing)
+          .multiply(rig.quaternion)
+      );
+      VRSpike.turnOriginOffset.x += previousHeadOffset.x - headOffset.x;
+      VRSpike.turnOriginOffset.y += previousHeadOffset.y - headOffset.y;
+    }
+    VRSpike.lastRigFacing = facing;
+
     if (feet) {
       rig.position.copy(feet);
     } else {
@@ -3323,31 +3979,71 @@ export class VRSpike {
       rig.position.z = 0;
     }
     rig.position.add(VRSpike.turnOriginOffset);
+    rig.position.z += VRSpike.resolveEyeHeightOffset();
+    VRSpike.rigSyncedThisSession = true;
 
     // Soft-block on wall intrusion (ROADMAP 2.4): the joystick-driven avatar
     // body is already walkmesh-collision-checked, but physical room-scale
     // head tracking is layered on top of the rig placed above and isn't —
     // the player's real footsteps can put their head past a wall the avatar
-    // never reached. Nudge the rig back by exactly the delta needed every
-    // frame; no fade, no hard stop, and it self-corrects as the player's
-    // physical position changes rather than accumulating state.
-    const headPosition = VRSpike.latestInputFrame?.head.position ?? null;
-    if (headPosition) {
-      const walkmesh = VRSpike.hooks?.getCurrentRoomWalkmesh?.() ?? null;
-      const correction = resolveWallSoftBlockCorrection(headPosition, walkmesh);
-      if (correction) rig.position.add(correction);
+    // never reached. Nudge the rig back by exactly the delta needed.
+    //
+    // The head is taken at THIS frame's rig, not from `latestInputFrame`. That
+    // one was built through last frame's rig, which already carried last
+    // frame's correction, so the head looked inside the wall, no correction
+    // was applied, the next frame it looked outside again, and so on: the view
+    // alternated between two places every frame. Measured in the emulator at
+    // 0.26 m per frame with the head 1.2 m off-centre and 1.07 m per frame at
+    // 3.5 m — the uncontrollable shaking reported on the Ebon Hawk (round 7).
+    if (headOffset && feet) {
+      const probe = new THREE.Vector3(
+        rig.position.x + headOffset.x,
+        rig.position.y + headOffset.y,
+        feet.z,
+      );
+      const floor = VRSpike.hooks?.getSoftBlockFloor?.(feet.z) ??
+        VRSpike.hooks?.getCurrentRoomWalkmesh?.() ?? null;
+      const correction = resolveWallSoftBlockCorrection(probe, floor);
+      if (correction) {
+        rig.position.x += correction.x;
+        rig.position.y += correction.y;
+      }
     }
+  }
 
-    // Rebuild the rotation each frame: Z-up conversion first, then yaw about
-    // the world's up axis. Order matters — yaw is applied in world space.
-    const facing = VRSpike.hooks?.getFacing() ?? 0;
-    XRCoordinateConverter.applyXRToGameBasis(rig);
-    rig.rotateOnWorldAxis(
-      new THREE.Vector3(0, 0, 1),
-      // FollowerCamera.facing is the orbit bearing. KOTOR renders its camera
-      // and drives forward creature movement at bearing + 90 degrees.
-      facing + Math.PI / 2 + VRSpike.yawOffset + VRSpike.turnYaw
-    );
+  static startInputRecording(metadata?: Partial<VRTraceMetadata>): void {
+    VRSpike.inputRecorder.start(metadata, performance.now());
+  }
+
+  static stopInputRecording(): VRTraceRecording {
+    return VRSpike.inputRecorder.stop(performance.now());
+  }
+
+  static playInputTrace(recording: VRTraceRecording, options?: VRPlayerOptions): void {
+    VRSpike.tracePlayer.load(recording, options);
+    VRSpike.tracePlayer.play(performance.now(), options);
+  }
+
+  static stopInputTracePlayback(): void {
+    VRSpike.tracePlayer.stop();
+  }
+
+  static toggleInteractionGizmos(): boolean {
+    if (VRSpike.scene && !VRSpike.interactionGizmoHost) {
+      VRSpike.interactionGizmoHost = new VRInteractionGizmoHost(VRSpike.scene);
+    }
+    return VRSpike.interactionGizmoHost ? VRSpike.interactionGizmoHost.toggle() : false;
+  }
+
+  static setInteractionGizmosEnabled(enabled: boolean): void {
+    if (VRSpike.scene && !VRSpike.interactionGizmoHost) {
+      VRSpike.interactionGizmoHost = new VRInteractionGizmoHost(VRSpike.scene);
+    }
+    VRSpike.interactionGizmoHost?.setEnabled(enabled);
+  }
+
+  static isInteractionGizmosEnabled(): boolean {
+    return VRSpike.interactionGizmoHost?.isEnabled() ?? false;
   }
 }
 

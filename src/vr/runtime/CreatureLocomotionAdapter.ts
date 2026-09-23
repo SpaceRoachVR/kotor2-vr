@@ -9,18 +9,35 @@ export interface CreatureLocomotionTarget {
   setFacing(facing: number, instant?: boolean, speed?: number): void;
 }
 
+/**
+ * Decides whether stick movement may leave the target's queued actions alone.
+ * Called only on frames that actually move the target.
+ */
+export type LocomotionActionRetention<TTarget extends CreatureLocomotionTarget = CreatureLocomotionTarget> =
+  (target: TTarget) => boolean;
+
 /** Applies VR intent through the original creature movement/collision entity. */
-export class CreatureLocomotionAdapter {
-  constructor(private readonly movementTurnSpeed: number) {
+export class CreatureLocomotionAdapter<TTarget extends CreatureLocomotionTarget = CreatureLocomotionTarget> {
+  constructor(
+    private readonly movementTurnSpeed: number,
+    /**
+     * Desktop KOTOR cancels everything the moment you walk, and without this
+     * so does VR. That is right for a walk-to or an attack, and wrong for a
+     * short in-place job like picking a lock: a thumbstick nudge during its
+     * 1.5 s silently threw it away and left the door locked, which is what
+     * "low security doors would not open at all" was (round 7).
+     */
+    private readonly retainActionsWhileMoving: LocomotionActionRetention<TTarget> | null = null,
+  ) {
     if (!Number.isFinite(movementTurnSpeed) || movementTurnSpeed <= 0) {
       throw new Error('Creature movement turn speed must be finite and positive');
     }
   }
 
-  apply(target: CreatureLocomotionTarget, locomotion: ResolvedLocomotion): boolean {
+  apply(target: TTarget, locomotion: ResolvedLocomotion): boolean {
     if (!target.canMove()) return false;
     if (locomotion.magnitude > 0 && locomotion.worldDirection.lengthSq() > 1e-10) {
-      target.clearAllActions(true);
+      if (!this.shouldRetainActions(target)) target.clearAllActions(true);
       // KOTOR decelerates on every frame where force is below one. Its W key
       // and legacy gamepad therefore use full force after accepting movement.
       target.force = 1;
@@ -42,6 +59,17 @@ export class CreatureLocomotionAdapter {
     // Body yaw has already been dead-zoned and rate-limited by the controller.
     target.setFacing(locomotion.bodyFacing, true);
     return true;
+  }
+
+  private shouldRetainActions(target: TTarget): boolean {
+    if (!this.retainActionsWhileMoving) return false;
+    try {
+      return this.retainActionsWhileMoving(target) === true;
+    } catch {
+      // A throwing policy falls back to the desktop rule rather than stranding
+      // an action the player is trying to walk away from.
+      return false;
+    }
   }
 
   static directionToCreatureFacing(x: number, y: number): number {

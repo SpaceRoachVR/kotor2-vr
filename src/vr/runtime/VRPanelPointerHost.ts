@@ -89,7 +89,11 @@ export class VRPanelPointerHost {
       this.options.maximumDistanceMetres
     );
     this.updateRayGeometry(origin, endpoint);
-    this.rayObject.visible = true;
+    // Drawn only while it is actually on the panel. A ray streaming off into
+    // the scene during a conversation or movie was reported as clutter
+    // (round 6); pointing at the panel brings it back, so replies stay
+    // clickable.
+    this.rayObject.visible = !!intersection?.uv;
 
     if (!intersection?.uv) {
       this.cursorObject.visible = false;

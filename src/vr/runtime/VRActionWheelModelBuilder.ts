@@ -11,6 +11,18 @@ export interface VRActionWheelEngineAction {
   readonly label: string;
   readonly icon?: string;
   /**
+   * Whether this entry is a Force power, by the engine's own rule — see
+   * `classifyVRForcePower`. `undefined` for anything that is not a spell:
+   * attacks, feats, items, world actions.
+   *
+   * Needed because target panel 1 is not only Force powers. It is every spell
+   * with a hostile variant, which includes droid and item abilities: T3-M4's
+   * shock arm is `DROID_ITEM_CHARGE_ARM`, and filing all of panel 1 under
+   * "Force Powers" put it there — reported from the headset as "regular
+   * attacks such as droid shock arm show up under the force powers tab".
+   */
+  readonly isForcePower?: boolean;
+  /**
    * Which `ActionMenuManager` panel this came from. Carried through because the
    * panel *is* the categorisation (ROADMAP 4.8): `UpdateActionMenus` puts Attack
    * and the equipped-weapon attack-mode feats in target panel 0 and hostile
@@ -89,6 +101,13 @@ export interface VRActionWheelBuildContext {
   readonly canClearUpcomingActions: boolean;
   /** Clears only the VR-owned upcoming-action queue. */
   readonly clearUpcomingActions: () => void;
+  /**
+   * True when the actor has a second weapon set (RIGHTHAND2/LEFTHAND2) to
+   * swap to — TSL's weapon configuration swap.
+   */
+  readonly canSwapWeapons?: boolean;
+  /** Swaps the actor's primary and secondary weapon sets. */
+  readonly swapWeapons?: () => void;
 }
 
 export interface VRActionMenuEntry {
@@ -130,11 +149,32 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
   const combatTargetActions = hostile ? context.targetActions : [];
   const worldTargetActions = hostile ? [] : context.targetActions;
 
-  const attackActions = actionsFromPanel(combatTargetActions, ATTACK_PANEL_INDEX);
-  const forcePowerActions = [
-    ...actionsFromPanel(combatTargetActions, FORCE_POWER_PANEL_INDEX),
-    ...actionsFromPanel(context.selfActions, FORCE_POWER_PANEL_INDEX),
+  // Target panel 1 is every spell with a hostile variant, not only Force
+  // powers: droid and item abilities live there too. Those are attacks in the
+  // player's eyes — T3-M4's shock arm was reported as a "regular attack" filed
+  // under Force Powers — so they go on the Attacks page, and Force Powers keeps
+  // only what the Abilities screen itself calls a Force power. An entry with no
+  // classification (not a spell) keeps its panel's old placement.
+  const isAbility = (action: VRActionWheelEngineAction): boolean => action.isForcePower === false;
+  const targetSpellActions = actionsFromPanel(combatTargetActions, FORCE_POWER_PANEL_INDEX);
+  const attackActions = [
+    ...actionsFromPanel(combatTargetActions, ATTACK_PANEL_INDEX),
+    ...targetSpellActions.filter(isAbility),
   ];
+  reportMissingAttacksOnce(hostile, context, attackActions.length);
+  const forcePowerActions = [
+    ...targetSpellActions.filter((action) => !isAbility(action)),
+    ...actionsFromPanel(context.selfActions, FORCE_POWER_PANEL_INDEX)
+      .filter((action) => !isAbility(action)),
+  ];
+
+  // Weapon swap without opening the equipment screen — reported as "there is
+  // no quick and reliable way to weapon swap without opening the menu". Mid
+  // fight it leads the Attacks page, because the combat root is already at its
+  // wedge budget; outside a fight it sits on the root, which has room.
+  const swapWeaponsItem = context.canSwapWeapons === true && typeof context.swapWeapons === 'function'
+    ? createStaticAction('action:swap-weapons', 'Swap Weapons', undefined, context.swapWeapons)
+    : null;
 
   appendSubmenuOfEngineActions(items, {
     id: 'submenu:attacks',
@@ -142,6 +182,7 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
     icon: 'i_attack',
     menuId: `${rootId}:attacks`,
     actions: attackActions,
+    leadingItems: hostile && swapWeaponsItem ? [swapWeaponsItem] : [],
   });
 
   appendSubmenuOfEngineActions(items, {
@@ -170,7 +211,10 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
   appendEngineActions(items, worldTargetActions, engineIds);
   appendEngineActions(
     items,
-    context.selfActions.filter((action) => readPanelIndex(action) !== FORCE_POWER_PANEL_INDEX),
+    // A friendly self ability that is not a Force power has no page of its
+    // own; keep it reachable at the top level rather than drop it.
+    context.selfActions.filter((action) =>
+      readPanelIndex(action) !== FORCE_POWER_PANEL_INDEX || isAbility(action)),
     engineIds,
   );
   if (hostile) {
@@ -184,6 +228,7 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
     );
   }
 
+  if (!hostile && swapWeaponsItem) items.push(swapWeaponsItem);
   items.push(createStaticAction('menu:screens', 'Menu', 'lbl_icn_char2', context.openMenu));
 
   const partyMembers = validPartyMembers(context.partyMembers);
@@ -281,6 +326,40 @@ function actionsFromPanel(
  * empty menu fails `validateVRRadialMenu`'s "at least one page" rule with a
  * `RangeError`, which would take the whole wheel down mid-fight.
  */
+/**
+ * TEMPORARY diagnostic for a headset report: "the wheel brings up Attacks on
+ * the first try, but the tab does not appear on subsequent tries".
+ *
+ * The wedge is built from target panel 0, which `ActionMenuManager` fills only
+ * while the target is a creature that `isHostile(PartyManager.party[0])` — note
+ * that is party[0], not the controlled actor, which is its own known hazard in
+ * this engine. Nothing currently records which of those conditions lapsed, so
+ * a second round would be as blind as the first.
+ *
+ * Reports the shape of the build rather than a conclusion, once per distinct
+ * shape so a wheel opened every few seconds cannot flood the console — the same
+ * discipline the lip-sync reclassification imposed. Remove once the cause is
+ * settled.
+ */
+const reportedAttackShapes = new Set<string>();
+function reportMissingAttacksOnce(
+  hostile: boolean,
+  context: VRActionWheelBuildContext,
+  attackCount: number,
+): void {
+  if (!hostile || attackCount > 0) return;
+  const panels = context.targetActions
+    .map((action) => readPanelIndex(action))
+    .join(',') || 'none';
+  const shape = `targets=${context.targetActions.length} panels=[${panels}] self=${context.selfActions.length}`;
+  if (reportedAttackShapes.has(shape)) return;
+  reportedAttackShapes.add(shape);
+  console.warn(
+    `[VRActionWheel] TEMPORARY: hostile target but no Attacks wedge — ${shape}. ` +
+    'Panel 0 was empty, so ActionMenuManager produced no attack entries for this target.'
+  );
+}
+
 function appendSubmenuOfEngineActions(
   output: VRRadialContentItem[],
   submenu: {
@@ -289,10 +368,12 @@ function appendSubmenuOfEngineActions(
     readonly icon: string;
     readonly menuId: string;
     readonly actions: readonly VRActionWheelEngineAction[];
+    /** VR-owned routes shown before the engine actions, e.g. Swap Weapons. */
+    readonly leadingItems?: readonly VRRadialContentItem[];
   },
 ): void {
   const buildItems = (): VRRadialContentItem[] => {
-    const items: VRRadialContentItem[] = [];
+    const items: VRRadialContentItem[] = [...(submenu.leadingItems ?? [])];
     appendEngineActions(items, submenu.actions, new Set<string>());
     return items;
   };

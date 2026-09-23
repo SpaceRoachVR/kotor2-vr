@@ -21,6 +21,7 @@ function state(overrides: Partial<VRCreaturePromptState> = {}): VRCreaturePrompt
     isHostile: false,
     hasConversation: true,
     isUseable: true,
+    hasLoot: true,
     ...overrides,
   };
 }
@@ -55,6 +56,18 @@ describe('hasCreatureWorldPromptAction', () => {
   test('declines a corpse that is not useable', () => {
     expect(hasCreatureWorldPromptAction(state({ isDead: true, isUseable: false }))).toBe(false);
   });
+
+  // ModuleCreature.use opens the loot screen only when the corpse holds
+  // something, so a Use on an empty or already-looted droid did nothing.
+  test('declines a corpse with nothing left to take', () => {
+    expect(hasCreatureWorldPromptAction(
+      state({ isDead: true, isHostile: true, hasLoot: false }),
+    )).toBe(false);
+  });
+
+  test('loot is irrelevant to a living creature', () => {
+    expect(hasCreatureWorldPromptAction(state({ hasLoot: false }))).toBe(true);
+  });
 });
 
 describe('readVRCreaturePromptState', () => {
@@ -66,6 +79,7 @@ describe('readVRCreaturePromptState', () => {
       isHostile: () => false,
       isUseable: () => true,
       getConversation: () => ({ resref: '3cfd' }),
+      hasInventory: () => 2,
     };
     expect(readVRCreaturePromptState(actor, target)).toEqual({
       isSelf: false,
@@ -73,7 +87,12 @@ describe('readVRCreaturePromptState', () => {
       isHostile: false,
       isUseable: true,
       hasConversation: true,
+      hasLoot: true,
     });
+  });
+
+  test('an item count of zero is no loot', () => {
+    expect(readVRCreaturePromptState(actor, { hasInventory: () => 0 }).hasLoot).toBe(false);
   });
 
   test('an empty conversation resref is not a conversation', () => {
@@ -93,6 +112,7 @@ describe('readVRCreaturePromptState', () => {
       isHostile: () => { throw new Error('destroyed'); },
       isUseable: () => { throw new Error('destroyed'); },
       getConversation: () => { throw new Error('destroyed'); },
+      hasInventory: () => { throw new Error('destroyed'); },
     };
     expect(readVRCreaturePromptState(actor, target)).toEqual({
       isSelf: false,
@@ -100,6 +120,7 @@ describe('readVRCreaturePromptState', () => {
       isHostile: false,
       isUseable: false,
       hasConversation: false,
+      hasLoot: false,
     });
   });
 
