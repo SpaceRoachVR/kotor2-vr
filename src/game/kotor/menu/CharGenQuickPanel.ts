@@ -59,6 +59,7 @@ export class CharGenQuickPanel extends GameMenu {
         // without this the character keeps the class template's base skills and
         // spends none of its points. See CharGenManager.applyRecommendedBuild.
         GameState.CharGenManager.applyRecommendedBuild();
+        GameState.CharGenManager.applyStartingVitality();
         GameState.CharGenManager.selectedCreature.equipment.ARMOR = undefined;
         GameState.CharGenManager.selectedCreature.template.getFieldByLabel('Equip_ItemList').childStructs = [];
         GameState.GlobalVariableManager.Init();

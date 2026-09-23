@@ -57,6 +57,9 @@ function collectDroppedHandlers(): Map<string, readonly string[]> {
  * cannot be deleted.
  */
 const ACCEPTED_DROPPED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
+  // Wired through the shared K1 wireAbilityControls(), which this textual
+  // audit cannot follow; the same holds for CharGenSkills below.
+  CharGenAbilities: ['BTN_ACCEPT', 'BTN_BACK', 'BTN_RECOMMENDED'],
   CharGenCustomPanel: ['BTN_BACK', 'BTN_STEPNAME1', 'BTN_STEPNAME2', 'BTN_STEPNAME3', 'BTN_STEPNAME4', 'BTN_STEPNAME5', 'BTN_STEPNAME6'],
   CharGenSkills: ['BTN_ACCEPT', 'BTN_BACK', 'BTN_RECOMMENDED'],
   InGameOverlay: ['BTN_MINIMAP'],

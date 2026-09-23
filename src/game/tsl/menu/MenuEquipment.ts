@@ -312,25 +312,9 @@ export class MenuEquipment extends K1_MenuEquipment {
       this.BTN_SWAPWEAPONS.addEventListener('click', (e) => {
         const currentPC = this.getEquipmentTarget();
         if(currentPC){
-          const right_1 = currentPC.equipment.RIGHTHAND;
-          const right_2 = currentPC.equipment.RIGHTHAND2;
-          currentPC.equipment.RIGHTHAND = undefined;
-          currentPC.equipment.RIGHTHAND2 = undefined;
-
-          if(right_1) right_1.destroy();
-
-          if(right_1) currentPC.equipItem(ModuleCreatureArmorSlot.RIGHTHAND2, right_1).then(() => { this.updateSlotIcons(true); });
-          if(right_2) currentPC.equipItem(ModuleCreatureArmorSlot.RIGHTHAND,  right_2).then(() => { this.updateSlotIcons(true); });
-
-          const left_1 = currentPC.equipment.LEFTHAND;
-          const left_2 = currentPC.equipment.LEFTHAND2;
-          currentPC.equipment.LEFTHAND = undefined;
-          currentPC.equipment.LEFTHAND2 = undefined;
-
-          if(left_1) left_1.destroy();
-
-          if(left_1) currentPC.equipItem(ModuleCreatureArmorSlot.LEFTHAND2, left_1).then(() => { this.updateSlotIcons(true); });
-          if(left_2) currentPC.equipItem(ModuleCreatureArmorSlot.LEFTHAND,  left_2).then(() => { this.updateSlotIcons(true); });
+          // Shared with the VR action wheel's Swap Weapons; see
+          // ModuleCreature.swapWeaponSets.
+          currentPC.swapWeaponSets(() => { this.updateSlotIcons(true); });
           this.updateSlotIcons(true);
         }
       });
@@ -408,7 +392,22 @@ export class MenuEquipment extends K1_MenuEquipment {
     const currentPC = this.getEquipmentTarget();
     if(!currentPC) return;
 
-    if(currentPC.getRace() == 6){
+    // Every slot write below used to be gated on `getRace() == 6`, with no else
+    // branch — so for any character that did not match that exact race value
+    // this method ran and wrote nothing at all. Not just the equipped icons:
+    // the placeholder art (`ihead`, `iforearm_l`, `iweap_r` …) is set in the
+    // same branches, so the slots stayed completely blank.
+    //
+    // Measured live on the equipment screen with T3-M4, a droid: every
+    // LBL_INV_* label reported an empty fill texture and no bound map, while
+    // the engine correctly held a Field Survival Pistol, a Mining Laser, a
+    // Droid Shock Arm and a Droid Hide. Reported from a headset session as
+    // "it doesn't show item icons for items already equipped".
+    //
+    // The K1 copy of this method had the identical gate removed for exactly
+    // this reason, and its comment records the same finding; the TSL override
+    // kept it. No other code in either class gates on race this way.
+    {
       let implant = currentPC.GetItemInSlot(ModuleCreatureArmorSlot.IMPLANT);
       if(implant){
         let icon = 'i' + implant.baseItem.itemClass + '_' + ('000' + implant.getModelVariation()).slice(-3);
@@ -535,12 +534,14 @@ export class MenuEquipment extends K1_MenuEquipment {
 
     const rWeap = currentPC.GetItemInSlot(ModuleCreatureArmorSlot.RIGHTHAND);
     const lWeap = currentPC.GetItemInSlot(ModuleCreatureArmorSlot.LEFTHAND);
+    // Per weapon: Strength for melee, Dexterity for ranged, plus the weapon's
+    // own bonus — the same number the combat round rolls with.
+    const signed = (value: number) => value >= 0 ? `+${value}` : String(value);
     const bab = currentPC.getBaseAttackBonus();
-    const babStr = bab >= 0 ? `+${bab}` : String(bab);
 
-    this.LBL_TOHITR?.setText(rWeap ? babStr : '-');
-    this.LBL_TOHITL?.setText(lWeap ? babStr : '-');
-    this.LBL_ATTACKMOD?.setText(babStr);
+    this.LBL_TOHITR?.setText(rWeap ? signed(currentPC.getAttackBonusFor(rWeap)) : '-');
+    this.LBL_TOHITL?.setText(lWeap ? signed(currentPC.getAttackBonusFor(lWeap)) : '-');
+    this.LBL_ATTACKMOD?.setText(signed(bab));
     this.LBL_DAMAGE?.setText(
       rWeap && rWeap.baseItem?.numDice ? `${rWeap.baseItem.numDice}d${rWeap.baseItem.die}` : '-'
     );

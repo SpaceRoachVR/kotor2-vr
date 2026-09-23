@@ -112,6 +112,7 @@ export class CharGenCustomPanel extends GameMenu {
 
       this.BTN_STEPNAME6.addEventListener('click', (e) => {
         e.stopPropagation();
+        GameState.CharGenManager.applyStartingVitality();
         const progression = GameState.CharGenManager.validateSelectedCreatureProgression();
         if (progression.valid === false) {
           console.error(`CharGenCustomPanel: cannot start with invalid progression (${progression.reason})`);

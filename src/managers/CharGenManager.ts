@@ -3,7 +3,8 @@ import { AudioLoader } from "@/audio/AudioLoader";
 import { GameEngineType } from "@/enums/engine";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
-import { CharGenClasses } from "@/game/CharGenClasses";
+import { getCharGenClasses } from "@/game/CharGenClasses";
+import type { CharGenClassInterface } from "@/game/CharGenClasses";
 import { GameState } from "@/GameState";
 import { LBL_3DView } from "@/gui";
 import type { ModulePlayer } from "@/module/ModulePlayer";
@@ -18,6 +19,8 @@ import { MDLLoader, ResourceLoader } from "@/loaders";
 import { ResourceTypes } from "@/resource/ResourceTypes";
 import { allocateRecommendedCharGenSkills } from "@/game/kotor/menu/CharGenSkillRules";
 import { validateCharGenProgression } from "@/game/kotor/menu/CharGenProgression";
+import { resolveLevelUpVitalityGain } from "@/game/kotor/menu/LevelUpRules";
+import type { LevelUpSession } from "@/game/kotor/menu/LevelUpSession";
 
 /**
  * CharGenManager class.
@@ -41,6 +44,15 @@ export class CharGenManager {
   
 
   static availSkillPoints = 0;
+
+  /**
+   * Set while a level-up is being spent. The Attributes, Skills and Feats
+   * screens are character creation's, reused; this is how they know to apply
+   * level-up rules (one point per score, floors at the pre-level values, the
+   * level's own allowances) and to report a finished step instead of updating
+   * the character-creation main screen.
+   */
+  static levelUp: LevelUpSession | undefined = undefined;
 
   static computerUse = 0;
   static demolitions = 0;
@@ -135,32 +147,28 @@ export class CharGenManager {
     CharGenManager.selectedCreature = new GameState.Module.ModuleArea.ModulePlayer(template);
   }
 
+  /**
+   * A class-selection slot for the running game. The slot number is NOT a
+   * `classes.2da` row: slot 0 is a Scoundrel in KotOR I and a Consular in TSL.
+   * Code that indexed the class table by slot read the wrong class's
+   * attributes, saving throws and feats.
+   */
+  static getCharGenClass(slot: number = CharGenManager.selectedClass): CharGenClassInterface {
+    return getCharGenClasses(GameState.GameKey)[slot];
+  }
+
+  /** The `classes.2da` row of the selected slot. */
+  static getSelectedClassId(): number {
+    return CharGenManager.getCharGenClass().id;
+  }
+
   static GetPlayerTemplate(nth = 0) {
     let template = new GFFObject();
     let idx = Math.floor(Math.random() * 15);
-    let classId = 0;
-    switch (nth) {
-    case 0:
-      classId = 2;
-      break;
-    case 1:
-      classId = 1;
-      break;
-    case 2:
-      classId = 0;
-      break;
-    case 3:
-      classId = 0;
-      break;
-    case 4:
-      classId = 1;
-      break;
-    case 5:
-      classId = 2;
-      break;
-    }
+    const slotClass = CharGenManager.getCharGenClass(nth);
+    const classId = slotClass.id;
     let portraitId = 0;
-    let appearanceIdx = CharGenClasses[nth].appearances[idx];
+    let appearanceIdx = slotClass.appearances[idx];
     const portraits2DA = GameState.SWRuleSet.portraits;
     if(portraits2DA){
       for (let i = 0; i < portraits2DA.length; i++) {
@@ -267,6 +275,38 @@ export class CharGenManager {
 
   
 
+  /**
+   * First-level vitality and Force points, by the same rule each later level
+   * adds: the class hit die plus the Constitution modifier, and for a Force user
+   * the Force die plus the Wisdom modifier. Undefined without a class.
+   */
+  static getStartingVitality(creature: any = CharGenManager.selectedCreature){
+    const characterClass = creature?.classes?.[0];
+    if(!characterClass) return undefined;
+    return resolveLevelUpVitalityGain(characterClass, creature.con, creature.wis);
+  }
+
+  /**
+   * Writes starting vitality and Force points onto the creature, from its final
+   * attributes, just before Play saves it.
+   *
+   * The template gave every character 20 vitality whatever its class or
+   * Constitution, and no Force points at all — the latter only went unnoticed
+   * while TSL wrongly handed out KotOR I's non-Force classes. Each pool's base,
+   * maximum and current value are set together, so the character starts full.
+   * Retail TSL creation has no Powers step, so no powers are granted here.
+   */
+  static applyStartingVitality(creature: any = CharGenManager.selectedCreature){
+    const start = CharGenManager.getStartingVitality(creature);
+    if(!start) return;
+    creature.hitPoints = start.hitPoints;
+    creature.maxHitPoints = start.hitPoints;
+    creature.currentHitPoints = start.hitPoints;
+    creature.forcePoints = start.forcePoints;
+    creature.maxForcePoints = start.forcePoints;
+    creature.currentForce = start.forcePoints;
+  }
+
   static resetSkillPoints() {
     for (let i = 0; i < 8; i++) {
       CharGenManager.selectedCreature.skills[i].rank = 0;
@@ -284,7 +324,11 @@ export class CharGenManager {
   
 
   static getMaxSkillPoints() {
-    return 10 + parseInt(CharGenManager.selectedCreature.classes[0].skillpointbase as any);
+    const creature = CharGenManager.selectedCreature;
+    if (!creature || !creature.classes || !creature.classes[0]) return 4;
+    const base = Number(creature.classes[0].skillpointbase) || 1;
+    const intMod = Math.floor(((Number(creature.int) || 10) - 10) / 2);
+    return Math.max(4, (base + intMod) * 4);
   }
 
   static getSkillTableColumn() {

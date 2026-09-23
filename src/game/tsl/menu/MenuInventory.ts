@@ -4,6 +4,7 @@ import type { GUILabel, GUIButton, GUIListBox } from "@/gui";
 import type { ModuleItem } from "@/module/ModuleItem";
 import { MenuInventory as K1_MenuInventory } from "@/game/kotor/KOTOR";
 import { GUIInventoryItem } from "@/game/tsl/gui/GUIInventoryItem";
+import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 
 enum InventoryFilter {
   DATAPADS = 1,
@@ -107,6 +108,31 @@ export class MenuInventory extends K1_MenuInventory {
         this.filter = InventoryFilter.MISC;
         this.filterInventory();
         this.updateFilterButton();
+      });
+
+      // "Use Item" had no handler in either game's inventory screen, so using
+      // a Medpac from the inventory did nothing (round 6). Use the selected
+      // item on the character whose inventory this is, through the engine's
+      // own item route (ModuleItem.useItemOnObject queues ActionItemCastSpell,
+      // which spends the charge or stack). The screen closes so the queued
+      // action can run: actions do not advance while a menu owns the game.
+      this.BTN_USEITEM?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const item = this.selected as ModuleItem | undefined;
+        const user = GameState.getCurrentPlayer();
+        if(!item || !user) return;
+        const usable = Array.isArray(item.properties) &&
+          item.properties.some((property: any) => property?.isUseable?.() && (
+            property.is(ModuleItemProperty.CastSpell) ||
+            property.is(ModuleItemProperty.ThievesTools) ||
+            property.is(ModuleItemProperty.Trap)
+          ));
+        if(!usable){
+          console.info(`[MenuInventory] "${item.getName?.()}" has no use-on-self property`);
+          return;
+        }
+        item.useItemOnObject(user, user);
+        this.close();
       });
 
       this.LB_ITEMS.setProtoBuilder(GUIInventoryItem);

@@ -38,7 +38,7 @@ export class MenuSaveLoad extends GameMenu {
   // TLK
   // 1592: "Are you sure you want to delete the save game?"
   // 1591: "Are you sure you want to overwrite the save game?"
-  private static readonly STRREF_CONFIRM_DELETE = 1592;
+  protected static readonly STRREF_CONFIRM_DELETE = 1592;
   protected static readonly STRREF_CONFIRM_OVERWRITE = 1591;
 
   constructor(){
@@ -50,13 +50,13 @@ export class MenuSaveLoad extends GameMenu {
 
   // KotOR lets you delete in both Save and Load screens.
   // Only disallow deleting the "New Save" row.
-  private canDeleteSelected(): boolean {
+  protected canDeleteSelected(): boolean {
     if (!(this.selected instanceof SaveGame)) return false;
     if (this.selected instanceof NewSaveItem) return false;
     return true;
   }
 
-  private async deleteSelectedSaveNow(): Promise<void> {
+  protected async deleteSelectedSaveNow(): Promise<void> {
     const save = this.selected;
     if (!this.canDeleteSelected()) return;
 

@@ -109,26 +109,32 @@ export class MenuCharacter extends GameMenu {
       });
       this._button_b = this.BTN_EXIT;
 
+      // Auto spends the level on each step's Recommended choice through the
+      // same level-up session the Level Up button opens. The creature's own
+      // autoLevelUp spent no skills, feats or powers.
       this.BTN_AUTO.addEventListener('click', (e) => {
         e.stopPropagation();
-        if(GameState.getCurrentPlayer().canLevelUp()){
-          GameState.getCurrentPlayer().autoLevelUp();
-          this.updateCharacterStats(GameState.getCurrentPlayer());
-        }
+        const character = GameState.getCurrentPlayer();
+        if(!character?.canLevelUp()) return;
+        this.manager.MenuLevelUp?.autoLevelUp(character).then(() => {
+          this.updateCharacterStats(character);
+        }).catch((error: unknown) => {
+          console.error('MenuCharacter: auto level-up failed', error);
+        });
       });
       this._button_y = this.BTN_AUTO;
 
-      // BTN_LEVELUP had no handler in either game — K1 only ever calls
-      // `.hide()` on it — so pressing Level Up did nothing at all. Reported
-      // from the second headset session. `MenuLevelUp` is a 48-line shell with
-      // no handlers in either game, so there is no manual screen to open;
-      // routing to the same guarded auto route BTN_AUTO uses at least lets the
-      // player actually level up. Manual point-spend remains unimplemented.
+      // Level Up opens the real level-up steps; Auto stays the quick route.
+      // This button had been routed to auto level-up because MenuLevelUp was
+      // an empty shell, which a headset session reported as level-up "instead
+      // automatically leveling the character like quick level".
       this.BTN_LEVELUP?.addEventListener('click', (e) => {
         e.stopPropagation();
-        if(GameState.getCurrentPlayer().canLevelUp()){
-          GameState.getCurrentPlayer().autoLevelUp();
-          this.updateCharacterStats(GameState.getCurrentPlayer());
+        const character = GameState.getCurrentPlayer();
+        if(character?.canLevelUp()){
+          this.manager.MenuLevelUp?.beginLevelUp(character).catch((error: unknown) => {
+            console.error('MenuCharacter: level-up could not start', error);
+          });
         }
       });
 

@@ -66,169 +66,126 @@ export class CharGenAbilities extends GameMenu {
     await super.menuControlInitializer();
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
-      //this.lbl_hint = this.getControlByName('LBL_HINT');
-
-      this.BTN_BACK.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.close();
-      });
-
-      this.BTN_ACCEPT.addEventListener('click', (e) => {
-        e.stopPropagation();
-
-        if(this.creature){
-          this.creature.str = GameState.CharGenManager.str;
-          this.creature.dex = GameState.CharGenManager.dex;
-          this.creature.con = GameState.CharGenManager.con;
-          this.creature.wis = GameState.CharGenManager.wis;
-          this.creature.int = GameState.CharGenManager.int;
-          this.creature.cha = GameState.CharGenManager.cha;
-        }
-
-        this.manager.CharGenMain.updateAttributes();
-
-        this.close();
-      });
-
-      this.BTN_RECOMMENDED.addEventListener('click', (e) => {
-        GameState.CharGenManager.availPoints = 0;
-        if(this.creature){
-          GameState.CharGenManager.str = parseInt(this.creature.classes[0].str as any);
-          GameState.CharGenManager.dex = parseInt(this.creature.classes[0].dex as any);
-          GameState.CharGenManager.con = parseInt(this.creature.classes[0].con as any);
-          GameState.CharGenManager.wis = parseInt(this.creature.classes[0].wis as any);
-          GameState.CharGenManager.int = parseInt(this.creature.classes[0].int as any);
-          GameState.CharGenManager.cha = parseInt(this.creature.classes[0].cha as any);
-        }
-
-        this.updateButtonStates();
-      });
-
-      //MINUS Buttons
-      this.STR_MINUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-
-        if(this.creature && GameState.CharGenManager.str > this.creature.str && GameState.CharGenManager.str > 8){
-          let cost = this.getAttributeCost(CharGenAttribute.STR);
-          GameState.CharGenManager.str -= 1;
-          GameState.CharGenManager.availPoints += cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.DEX_MINUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && GameState.CharGenManager.dex > this.creature.dex && GameState.CharGenManager.dex > 8){
-          let cost = this.getAttributeCost(CharGenAttribute.DEX);
-          GameState.CharGenManager.dex -= 1;
-          GameState.CharGenManager.availPoints += cost;
-        }
-        this.updateButtonStates();
-      });
-      
-      this.CON_MINUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && GameState.CharGenManager.con > this.creature.con && GameState.CharGenManager.con > 8){
-          let cost = this.getAttributeCost(CharGenAttribute.CON);
-          GameState.CharGenManager.con -= 1;
-          GameState.CharGenManager.availPoints += cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.WIS_MINUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && GameState.CharGenManager.wis > this.creature.wis && GameState.CharGenManager.wis > 8){
-          let cost = this.getAttributeCost(CharGenAttribute.WIS);
-          GameState.CharGenManager.wis -= 1;
-          GameState.CharGenManager.availPoints += cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.INT_MINUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && GameState.CharGenManager.int > this.creature.int && GameState.CharGenManager.int > 8){
-          let cost = this.getAttributeCost(CharGenAttribute.INT);
-          GameState.CharGenManager.int -= 1;
-          GameState.CharGenManager.availPoints += cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.CHA_MINUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && GameState.CharGenManager.cha > this.creature.cha && GameState.CharGenManager.cha > 8){
-          let cost = this.getAttributeCost(CharGenAttribute.CHA);
-          GameState.CharGenManager.cha -= 1;
-          GameState.CharGenManager.availPoints += cost;
-        }
-        this.updateButtonStates();
-      });
-      
-      //PLUS Buttons
-      this.STR_PLUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && this.getAttributeCost(CharGenAttribute.STR) <= GameState.CharGenManager.availPoints){
-          GameState.CharGenManager.str += 1;
-          let cost = this.getAttributeCost(CharGenAttribute.STR);
-          GameState.CharGenManager.availPoints -= cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.DEX_PLUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && this.getAttributeCost(CharGenAttribute.DEX) <= GameState.CharGenManager.availPoints){
-          GameState.CharGenManager.dex += 1;
-          let cost = this.getAttributeCost(CharGenAttribute.DEX);
-          GameState.CharGenManager.availPoints -= cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.CON_PLUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && this.getAttributeCost(CharGenAttribute.CON) <= GameState.CharGenManager.availPoints){
-          GameState.CharGenManager.con += 1;
-          let cost = this.getAttributeCost(CharGenAttribute.CON);
-          GameState.CharGenManager.availPoints -= cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.WIS_PLUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && this.getAttributeCost(CharGenAttribute.WIS) <= GameState.CharGenManager.availPoints){
-          GameState.CharGenManager.wis += 1;
-          let cost = this.getAttributeCost(CharGenAttribute.WIS);
-          GameState.CharGenManager.availPoints -= cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.INT_PLUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && this.getAttributeCost(CharGenAttribute.INT) <= GameState.CharGenManager.availPoints){
-          GameState.CharGenManager.int += 1;
-          let cost = this.getAttributeCost(CharGenAttribute.INT);
-          GameState.CharGenManager.availPoints -= cost;
-        }
-        this.updateButtonStates();
-      });
-
-      this.CHA_PLUS_BTN.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if(this.creature && this.getAttributeCost(CharGenAttribute.CHA) <= GameState.CharGenManager.availPoints){
-          GameState.CharGenManager.cha += 1;
-          let cost = this.getAttributeCost(CharGenAttribute.CHA);
-          GameState.CharGenManager.availPoints -= cost;
-        }
-        this.updateButtonStates();
-      });
-
+      this.wireAbilityControls();
       resolve();
     });
+  }
+
+  /** The six rows: attribute id, `CharGenManager` field, control prefix. */
+  private static readonly ATTRIBUTE_ROWS: ReadonlyArray<[number, 'str'|'dex'|'con'|'wis'|'int'|'cha', string]> = [
+    [CharGenAttribute.STR, 'str', 'STR'], [CharGenAttribute.DEX, 'dex', 'DEX'],
+    [CharGenAttribute.CON, 'con', 'CON'], [CharGenAttribute.WIS, 'wis', 'WIS'],
+    [CharGenAttribute.INT, 'int', 'INT'], [CharGenAttribute.CHA, 'cha', 'CHA'],
+  ];
+
+  private static fieldFor(attribute: number): 'str'|'dex'|'con'|'wis'|'int'|'cha' {
+    return CharGenAbilities.ATTRIBUTE_ROWS.find(([id]) => id === attribute)?.[1] ?? 'str';
+  }
+
+  /**
+   * Back, Accept, Recommended and the twelve adjust buttons.
+   *
+   * One method for both games: TSL's subclass calls
+   * `super.menuControlInitializer(true)` and so never runs this class's body,
+   * and it had grown a line-for-line copy of these handlers instead. Level-up
+   * needed the same screen with different rules — one point per attribute, a
+   * floor at the pre-level score, and no character-creation main screen to
+   * update — and changing two copies is how they drift.
+   */
+  protected wireAbilityControls(){
+    const manager = GameState.CharGenManager;
+
+    this.BTN_BACK.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.close();
+    });
+
+    this.BTN_ACCEPT.addEventListener('click', (e) => {
+      e.stopPropagation();
+
+      this.commitAttributes();
+
+      const levelUp = manager.levelUp;
+      if(levelUp){
+        levelUp.completeStep('attributes');
+      }else{
+        this.manager.CharGenMain?.updateAttributes();
+      }
+
+      this.close();
+    });
+
+    this.BTN_RECOMMENDED.addEventListener('click', (e) => {
+      e?.stopPropagation?.();
+      const levelUp = manager.levelUp;
+      if(levelUp){
+        this.applyRecommendedLevelUpAttributes();
+      }else{
+        manager.availPoints = 0;
+        if(this.creature){
+          for(const [, field] of CharGenAbilities.ATTRIBUTE_ROWS){
+            manager[field] = parseInt(this.creature.classes[0][field] as any);
+          }
+        }
+      }
+      this.updateButtonStates();
+    });
+
+    for(const [attribute, field, prefix] of CharGenAbilities.ATTRIBUTE_ROWS){
+      (this as any)[`${prefix}_MINUS_BTN`].addEventListener('click', (e: any) => {
+        e.stopPropagation();
+        if(this.creature && manager[field] > this.getAttributeFloor(attribute)){
+          const cost = this.getAttributeCost(attribute);
+          manager[field] -= 1;
+          manager.availPoints += cost;
+        }
+        this.updateButtonStates();
+      });
+
+      (this as any)[`${prefix}_PLUS_BTN`].addEventListener('click', (e: any) => {
+        e.stopPropagation();
+        if(this.creature && this.getAttributeCost(attribute) <= manager.availPoints){
+          manager[field] += 1;
+          const cost = this.getAttributeCost(attribute);
+          manager.availPoints -= cost;
+        }
+        this.updateButtonStates();
+      });
+    }
+  }
+
+  /**
+   * The lowest a score may be lowered to on this visit. In character creation
+   * that is 8, or what an earlier Accept already committed; in a level-up it is
+   * the score before this level, so points already owned cannot be refunded.
+   */
+  getAttributeFloor(attribute: number): number {
+    const field = CharGenAbilities.fieldFor(attribute);
+    const levelUp = GameState.CharGenManager.levelUp;
+    if(levelUp) return levelUp.baseline.abilities[field];
+    return Math.max(8, Number(this.creature?.[field] ?? 8));
+  }
+
+  /** Writes the scores being edited onto the creature. */
+  commitAttributes(){
+    if(!this.creature) return;
+    for(const [, field] of CharGenAbilities.ATTRIBUTE_ROWS){
+      this.creature[field] = GameState.CharGenManager[field];
+    }
+  }
+
+  /** Level-up Recommended: this level's points go to the class's primary ability. */
+  applyRecommendedLevelUpAttributes(){
+    const manager = GameState.CharGenManager;
+    const levelUp = manager.levelUp;
+    if(!levelUp) return;
+    for(const [, field] of CharGenAbilities.ATTRIBUTE_ROWS){
+      manager[field] = levelUp.baseline.abilities[field];
+    }
+    const primary = String(levelUp.characterClass.primaryabil || '').toLowerCase();
+    const target = CharGenAbilities.ATTRIBUTE_ROWS.find(([, field]) => field === primary)?.[1] ?? 'str';
+    manager[target] += levelUp.allowances.attributePoints;
+    manager.availPoints = 0;
   }
 
   show(){
@@ -301,22 +258,22 @@ export class CharGenAbilities extends GameMenu {
     // The show() calls above deliberately stay outside the guard.
     if(!this.creature) return;
 
-    if(GameState.CharGenManager.str <= 8 || this.creature.str == GameState.CharGenManager.str)
+    if(GameState.CharGenManager.str <= this.getAttributeFloor(CharGenAttribute.STR))
       this.STR_MINUS_BTN.hide();
 
-    if(GameState.CharGenManager.dex <= 8 || this.creature.dex == GameState.CharGenManager.dex)
+    if(GameState.CharGenManager.dex <= this.getAttributeFloor(CharGenAttribute.DEX))
       this.DEX_MINUS_BTN.hide();
 
-    if(GameState.CharGenManager.con <= 8 || this.creature.con == GameState.CharGenManager.con)
+    if(GameState.CharGenManager.con <= this.getAttributeFloor(CharGenAttribute.CON))
       this.CON_MINUS_BTN.hide();
 
-    if(GameState.CharGenManager.wis <= 8 || this.creature.wis == GameState.CharGenManager.wis)
+    if(GameState.CharGenManager.wis <= this.getAttributeFloor(CharGenAttribute.WIS))
       this.WIS_MINUS_BTN.hide();
 
-    if(GameState.CharGenManager.int <= 8 || this.creature.int == GameState.CharGenManager.int)
+    if(GameState.CharGenManager.int <= this.getAttributeFloor(CharGenAttribute.INT))
       this.INT_MINUS_BTN.hide();
 
-    if(GameState.CharGenManager.cha <= 8 || this.creature.cha == GameState.CharGenManager.cha)
+    if(GameState.CharGenManager.cha <= this.getAttributeFloor(CharGenAttribute.CHA))
       this.CHA_MINUS_BTN.hide();
 
     if(this.getAttributeCost(CharGenAttribute.STR) > GameState.CharGenManager.availPoints)
@@ -429,6 +386,8 @@ export class CharGenAbilities extends GameMenu {
   }
 
   getAttributeCost(index = 0){
+    // A level-up point buys exactly one score, whatever the score already is.
+    if(GameState.CharGenManager.levelUp) return 1;
     let mod = 0;
     switch(index){
       case CharGenAttribute.STR:

@@ -106,9 +106,22 @@ export class GUISpellItem extends GUIProtoItem {
           this.list?.markListRttDirty?.();
         });
 
+        // The Abilities screen's Powers tab never described anything: this
+        // handler only stopped propagation, and no menu method existed to
+        // call. Report the power under the pointer to the menu, which writes
+        // its name and description — the same contract GUIFeatItem keeps. An
+        // unknown power (drawn as ip_secret) is not described, so a locked
+        // secret stays a secret.
+        const describeThisSpell = () => {
+          if(isUnknown && !hasSpell) return;
+          const describe = (this.menu as any)?.describeSpell;
+          if(typeof describe === 'function') describe.call(this.menu, spell);
+        };
         buttonIcon.addEventListener('click', (e) => {
           e.stopPropagation();
+          describeThisSpell();
         });
+        buttonIcon.addEventListener('hover', describeThisSpell);
 
         /**
          * FEAT ICON 

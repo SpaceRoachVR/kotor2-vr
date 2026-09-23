@@ -1,5 +1,6 @@
 import { GameMenu } from "@/gui";
 import type { GUIListBox, GUILabel, GUIButton } from "@/gui";
+import { GameState } from "@/GameState";
 
 enum AbilityFilter {
   SKILLS = 1,
@@ -35,6 +36,43 @@ export class MenuAbilities extends GameMenu {
   BTN_EXIT: GUIButton;
   BTN_CHANGE1: GUIButton;
   BTN_CHANGE2: GUIButton;
+
+  /**
+   * The Abilities screen never described anything. Its feat and power items
+   * report the icon under the pointer to their menu by name — `highlightFeat`,
+   * `describeFeat`, `describeSpell`, the contract `CharGenFeats` already keeps
+   * — and this menu had none of those methods, so the calls fell through a
+   * `typeof ... === 'function'` guard and did nothing. Reported from a headset
+   * session as "static icons are un-interactable".
+   *
+   * The text is the game's own: feats.2da `name`/`description` and spells.2da
+   * `name`/`spelldesc` are TLK string references.
+   */
+  highlightFeat(feat: any){
+    this.describeFeat(feat);
+  }
+
+  describeFeat(feat: any){
+    if(!feat) return;
+    this.showAbilityDescription(feat.name, feat.description);
+  }
+
+  describeSpell(spell: any){
+    if(!spell) return;
+    this.showAbilityDescription(spell.name, spell.spelldesc);
+  }
+
+  /** The list the current tab shows descriptions in. TSL overrides this for its Feats tab. */
+  getDescriptionList(): GUIListBox {
+    return this.LB_DESC;
+  }
+
+  protected showAbilityDescription(nameRef: unknown, descriptionRef: unknown){
+    const nameText = GameState.TLKManager.GetStringById(Number(nameRef))?.Value;
+    const descriptionText = GameState.TLKManager.GetStringById(Number(descriptionRef))?.Value;
+    this.LBL_NAME?.setText(nameText || '');
+    this.getDescriptionList()?.setItem(descriptionText || '');
+  }
 
   filter: AbilityFilter = AbilityFilter.SKILLS;
 

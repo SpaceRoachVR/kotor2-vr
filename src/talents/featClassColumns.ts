@@ -17,7 +17,7 @@
  * the world.
  */
 
-export type FeatClassColumnSuffix = 'Granted' | 'Recom' | 'List';
+export type FeatClassColumnSuffix = 'Granted' | 'Recom' | 'List' | 'PcGranted';
 
 /**
  * An explicit allowlist rather than an open property read: an unexpected
@@ -47,7 +47,7 @@ export function readFeatClassColumn(
   if (!code) return FEAT_CLASS_COLUMN_ABSENT;
 
   const normalizedColumn = `${code}${suffix}`;
-  const rawColumn = `${code}_${suffix.toLowerCase()}`;
+  const rawColumn = suffix === 'PcGranted' ? `${code}_pc_granted` : `${code}_${suffix.toLowerCase()}`;
   const fields = row as Record<string, unknown>;
   const value = fields[normalizedColumn] !== undefined
     ? fields[normalizedColumn]
@@ -58,4 +58,23 @@ export function readFeatClassColumn(
   // A non-numeric column must not become NaN: callers compare against 1, and
   // NaN would silently fail every comparison the same way the old default did.
   return Number.isFinite(numeric) ? numeric : FEAT_CLASS_COLUMN_ABSENT;
+}
+
+/**
+ * Resolves the granted level for a feat. In TSL, starting Jedi player characters
+ * have authored `_pc_granted` columns in `feat.2da` providing additional starting
+ * combat and Force proficiencies (e.g. Force Chain, basic combat feats).
+ */
+export function readGrantedFeatLevel(
+  row: unknown,
+  skillsTable: unknown,
+  isPlayerCharacter: boolean = false,
+): number {
+  if (isPlayerCharacter) {
+    const pcGranted = readFeatClassColumn(row, skillsTable, 'PcGranted');
+    if (pcGranted !== FEAT_CLASS_COLUMN_ABSENT) {
+      return pcGranted;
+    }
+  }
+  return readFeatClassColumn(row, skillsTable, 'Granted');
 }

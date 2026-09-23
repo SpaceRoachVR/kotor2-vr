@@ -3,7 +3,6 @@ import type { GUILabel, GUIButton } from "@/gui";
 import { TextureLoader } from "@/loaders";
 import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 import { OdysseyModel3D } from "@/three/odyssey";
-import { CharGenClasses } from "@/game/CharGenClasses";
 import * as THREE from "three";
 import { GameState } from "@/GameState";
 
@@ -57,12 +56,12 @@ export class CharGenPortCust extends GameMenu {
       this.isCharLoading = true;
       const creature = GameState.CharGenManager.selectedCreature;
     
-      let idx = CharGenClasses[GameState.CharGenManager.selectedClass].appearances.indexOf(creature.appearance);
-      const arrayLength = CharGenClasses[GameState.CharGenManager.selectedClass].appearances.length;
+      let idx = GameState.CharGenManager.getCharGenClass().appearances.indexOf(creature.appearance);
+      const arrayLength = GameState.CharGenManager.getCharGenClass().appearances.length;
       if(idx <= 0){
-        creature.appearance = CharGenClasses[GameState.CharGenManager.selectedClass].appearances[arrayLength - 1];
+        creature.appearance = GameState.CharGenManager.getCharGenClass().appearances[arrayLength - 1];
       }else{
-        creature.appearance = CharGenClasses[GameState.CharGenManager.selectedClass].appearances[--idx];
+        creature.appearance = GameState.CharGenManager.getCharGenClass().appearances[--idx];
       }
       creature.setAppearance(creature.appearance);
 
@@ -102,12 +101,12 @@ export class CharGenPortCust extends GameMenu {
       this.isCharLoading = true;
       const creature = GameState.CharGenManager.selectedCreature;
 
-      let idx = CharGenClasses[GameState.CharGenManager.selectedClass].appearances.indexOf(creature.appearance);
-      const arrayLength = CharGenClasses[GameState.CharGenManager.selectedClass].appearances.length;
+      let idx = GameState.CharGenManager.getCharGenClass().appearances.indexOf(creature.appearance);
+      const arrayLength = GameState.CharGenManager.getCharGenClass().appearances.length;
       if(idx >= arrayLength - 1){
-        creature.appearance = CharGenClasses[GameState.CharGenManager.selectedClass].appearances[0];
+        creature.appearance = GameState.CharGenManager.getCharGenClass().appearances[0];
       }else{
-        creature.appearance = CharGenClasses[GameState.CharGenManager.selectedClass].appearances[++idx];
+        creature.appearance = GameState.CharGenManager.getCharGenClass().appearances[++idx];
       }
       creature.setAppearance(creature.appearance);
 

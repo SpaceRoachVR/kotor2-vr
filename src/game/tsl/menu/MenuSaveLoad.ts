@@ -90,6 +90,23 @@ export class MenuSaveLoad extends K1_MenuSaveLoad {
       });
       this._button_a = this.BTN_SAVELOAD;
 
+      // Delete was wired only in the K1 initializer, which this override
+      // skips (super is called with skipInit), so in TSL the button did
+      // nothing — "the option to delete saves does nothing" (round 6). Same
+      // confirm-then-delete flow as K1.
+      this.BTN_DELETE?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if(!this.canDeleteSelected()) return;
+        this.manager.InGameConfirm.showConfirmDialog(
+          MenuSaveLoad.STRREF_CONFIRM_DELETE,
+          async () => {
+            await this.deleteSelectedSaveNow();
+          },
+          () => {}
+        );
+      });
+      this._button_y = this.BTN_DELETE;
+
       this.BTN_BACK.addEventListener('click', (e) => {
         e.stopPropagation();
         this.close();

@@ -202,6 +202,15 @@ export class MenuAbilities extends K1_MenuAbilities {
     return groups;
   }
 
+  /**
+   * Where a hovered or clicked ability's description goes. TSL's Feats tab
+   * shows `LB_DESC_FEATS` and hides `LB_DESC` (see updateFilter), so writing
+   * the shared list would describe feats into a hidden control.
+   */
+  getDescriptionList(): GUIListBox {
+    return this.filter === AbilityFilter.FEATS ? this.LB_DESC_FEATS : this.LB_DESC;
+  }
+
   updateFilter(){
     console.log('updateFilter');
 

@@ -3,6 +3,7 @@ import type { GUIListBox, GUILabel, GUIButton } from "@/gui";
 import { GUIFeatItem } from "@/game/kotor/gui/GUIFeatItem";
 import type { ModuleCreature } from "@/module";
 import { GameState } from "@/GameState";
+import { isFeatPrerequisiteMet } from "@/talents/featPrerequisiteRules";
 
 /**
  * CharGenFeats class.
@@ -62,6 +63,7 @@ export class CharGenFeats extends GameMenu {
 
     this.BTN_ACCEPT?.addEventListener('click', (e) => {
       e.stopPropagation();
+      GameState.CharGenManager.levelUp?.completeStep('feats');
       this.close();
     });
   }
@@ -90,6 +92,55 @@ export class CharGenFeats extends GameMenu {
   }
 
   /**
+   * How each feat should read on a SELECTION screen.
+   *
+   * `GUIFeatItem`'s own rule — locked means "the character does not already
+   * have it" — is right for the Abilities screen, which reviews what a
+   * character holds, and backwards here: it draws every feat still available to
+   * pick at opacity 0, so the grid shows only feats already owned and nothing
+   * to choose between. Reported from a headset session as needing "a visual
+   * indicator for which feats are available and which are already taken".
+   *
+   * Three states, matching what the flat game distinguishes: feats the
+   * character holds, feats selectable right now, and feats shown but not yet
+   * takeable (prerequisite or class status). `picked` separates a choice made
+   * during this visit — which Select can take back — from a class grant, which
+   * it cannot.
+   *
+   * Deliberately a contract the menu offers rather than logic inside the item,
+   * so the level-up and Force power selection screens can answer it their own
+   * way without another copy of the item.
+   */
+  getFeatPresentation(feat: any): { state: 'owned'|'selectable'|'unavailable'; picked: boolean; highlighted: boolean } {
+    const picked = !!feat && this.selectedFeatIds.has(feat.id);
+    const highlighted = !!feat && !!this.highlightedFeat && this.highlightedFeat.id === feat.id;
+    if(!feat || !this.creature) return { state: 'unavailable', picked, highlighted };
+    if(this.creature.getHasFeat(feat.id)) return { state: 'owned', picked, highlighted };
+    return { state: this.canSelectFeat(feat) ? 'selectable' : 'unavailable', picked, highlighted };
+  }
+
+  /**
+   * A click on a feat icon: select it, or take it back if it was picked here.
+   *
+   * The headset round-5 report: selecting was possible but "difficult" —
+   * click to highlight, then find and press Select — and the player asked for
+   * feats to "select on click". Select stays as the flat-screen route. A click
+   * that the rules refuse (a class grant, no picks left, prerequisites unmet)
+   * still highlights and describes the feat, so the frame moves to it and the
+   * description explains why.
+   */
+  selectFeatFromList(feat: any){
+    this.highlightFeat(feat);
+    if(!feat || !this.creature) return;
+    const isClassGrant = this.creature.getHasFeat(feat.id) && !this.selectedFeatIds.has(feat.id);
+    if(isClassGrant || !this.toggleHighlightedFeat()){
+      // Nothing changed, but the highlight frame moved: redraw the grid.
+      this.buildFeatList();
+      this.LB_FEATS?.markListRttDirty?.();
+    }
+  }
+
+  /**
    * How many feats this character may still choose by hand.
    *
    * `featgain.2da` states the picks a class receives at each level, already
@@ -102,6 +153,11 @@ export class CharGenFeats extends GameMenu {
    */
   getRemainingFeatSelections(): number {
     if(!this.creature) return 0;
+    // A level-up's picks are this level's alone, from the new CLASS level.
+    // The total-level lookup below is character creation's, where the two are
+    // the same number.
+    const levelUp = GameState.CharGenManager.levelUp;
+    if(levelUp) return Math.max(0, levelUp.allowances.featPicks - this.selectedFeatIds.size);
     const mainClass = this.creature.getMainClass();
     if(!mainClass) return 0;
     const level = Math.max(1, this.creature.getTotalClassLevel());
@@ -120,6 +176,16 @@ export class CharGenFeats extends GameMenu {
     // Only the second is the counter. The first is the caption beside it and
     // must be left exactly as the GUI file authored it.
     this.STD_REMAINING_SELECTIONS_LBL?.setText(String(this.getRemainingFeatSelections()));
+  }
+
+  /**
+   * Forgets the picks recorded for an earlier visit. A level-up restores the
+   * character's feats itself when its Feats step reopens; the ids left here
+   * would otherwise count against the new visit's allowance.
+   */
+  resetFeatSelections(){
+    this.selectedFeatIds.clear();
+    this.highlightedFeat = null;
   }
 
   /** Feats chosen by hand this visit, as opposed to granted by class. */
@@ -147,13 +213,23 @@ export class CharGenFeats extends GameMenu {
     return this.hasFeatPrerequisites(feat);
   }
 
-  /** Both prerequisite slots, treating an absent one (-1) as satisfied. */
+  /** Evaluates feat prerequisites against the creature's level, attributes, and known feats. */
   hasFeatPrerequisites(feat: any): boolean {
-    const satisfied = (prereq: unknown) => {
-      const id = Number(prereq);
-      return !Number.isInteger(id) || id < 0 || this.creature.getHasFeat(id);
-    };
-    return satisfied(feat?.prereqFeat1) && satisfied(feat?.prereqFeat2);
+    if (!feat || !this.creature) return false;
+    const level = Math.max(1, this.creature.getTotalClassLevel());
+    return isFeatPrerequisiteMet(feat, {
+      characterLevel: level,
+      baseAttackBonus: (this.creature as any).baseAttackBonus ?? 0,
+      hasFeat: (id: number) => this.creature.getHasFeat(id),
+      attributes: {
+        str: (this.creature as any).str,
+        dex: (this.creature as any).dex,
+        con: (this.creature as any).con,
+        int: (this.creature as any).int,
+        wis: (this.creature as any).wis,
+        cha: (this.creature as any).cha,
+      },
+    });
   }
 
   /** Called by `GUIFeatItem` when a feat row is clicked. */
@@ -170,6 +246,10 @@ export class CharGenFeats extends GameMenu {
    * removed because they were never picks.
    */
   toggleHighlightedFeat(): boolean {
+    return this.applyHighlightedFeatToggle();
+  }
+
+  private applyHighlightedFeatToggle(): boolean {
     const feat = this.highlightedFeat;
     if(!feat || !this.creature) return false;
 
@@ -274,9 +354,10 @@ export class CharGenFeats extends GameMenu {
         if (mainClass && feat.constant != '****') {
           if (mainClass.isFeatAvailable(feat)) {
             const status = mainClass.getFeatStatus(feat);
-            if (status == 3 && this.creature.getTotalClassLevel() >= mainClass.getFeatGrantedLevel(feat)) {
+            const isPC = this.creature === GameState.getCurrentPlayer() || this.creature === (GameState.CharGenManager as any)?.selectedCreature;
+            const grantedLvl = mainClass.getFeatGrantedLevel(feat, isPC);
+            if ((status === 3 || isPC) && grantedLvl > 0 && this.creature.getTotalClassLevel() >= grantedLvl) {
               if (!this.creature.getHasFeat(feat.id)) {
-                console.log('Feat Granted', feat);
                 this.creature.addFeat(feat.id);
                 granted.push(feat);
               }
