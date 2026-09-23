@@ -22,6 +22,11 @@ export interface VRCutsceneShot {
   readonly cameraPosition: THREE.Vector3 | null;
   /** Speaker and listener positions, excluding the player's own character. */
   readonly participantPositions: readonly THREE.Vector3[];
+  /**
+   * The same, creatures only: the people in the conversation, not the console,
+   * terminal or log placeable that owns a camera feed.
+   */
+  readonly creatureParticipantPositions?: readonly THREE.Vector3[];
   readonly playerPosition: THREE.Vector3 | null;
   /**
    * Whether a point lies over the floor of the room the player stands in:
@@ -43,6 +48,13 @@ export interface VRCutsceneShot {
  * imprecisely.
  */
 export const VR_CUTSCENE_NEARBY_METRES = 6;
+
+/**
+ * A creature this close is someone the player is talking to face to face, even
+ * through a doorway or a cell's force field. Measured round 12: Atton sits
+ * 11-12 m from where the player stands at his cell, in a room of his own.
+ */
+export const VR_CUTSCENE_CONVERSATION_METRES = 15;
 
 /**
  * Whether a point is somewhere the player cannot see from where they stand.
@@ -86,6 +98,14 @@ export function isVRCutscenePointRemote(
  * world, i.e. never shown at all, while cameras 6 and 7 sit in the cockpit
  * with T3-M4.
  */
+/** Whether a creature in the conversation is close enough to talk to face to face. */
+export function isVRCutsceneConversationNearby(shot: VRCutsceneShot): boolean {
+  const player = shot.playerPosition;
+  return (shot.creatureParticipantPositions ?? []).some((position) =>
+    shot.isOverPlayerRoom?.(position) === true ||
+    (player !== null && Math.hypot(position.x - player.x, position.y - player.y) <= VR_CUTSCENE_CONVERSATION_METRES));
+}
+
 export function resolveVRCutscenePresentation(shot: VRCutsceneShot): VRCutscenePresentation {
   // Round 11 revised rules 1 and 2. Being authored as a cinematic, or shot
   // through a moving camera, says the player is not in control, not that the
@@ -95,6 +115,10 @@ export function resolveVRCutscenePresentation(shot: VRCutsceneShot): VRCutsceneP
   // and Allen flagged both. Every camera shot is now judged by where the camera
   // is, the placed-camera test below.
   if (shot.cameraKind === 'animated' || shot.cameraKind === 'placeable') {
+    // Round 12: 101atton films Atton through cameras 40/41 inside his cell.
+    // The camera is somewhere the player cannot stand, but the person being
+    // filmed is right in front of them, so it is a direct conversation.
+    if (isVRCutsceneConversationNearby(shot)) return 'world';
     if (shot.theaterAlreadyShown) return 'theater';
     if (!shot.cameraPosition) return 'theater';
     return isVRCutscenePointRemote(shot.cameraPosition, shot.playerPosition, shot.isOverPlayerRoom)

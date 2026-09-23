@@ -165,3 +165,43 @@ describe('the engine hands the policy every camera position it has', () => {
     expect(game).toContain("const cameraPosition = cameraKind !== 'dialog' && camera");
   });
 });
+
+// Round 12: "the Atton video shouldn't play since he's right there." 101atton
+// films Atton through cameras 40/41 inside his cell, 11-12 m from the player.
+describe('a camera shot of someone the player is facing stays in the world', () => {
+  // Measured from 101PER: player at the cell door, Atton in the cell, camera 40.
+  const player = new THREE.Vector3(76.2, -13.0, 9.1);
+  const atton = new THREE.Vector3(65.9, -15.0, 9.1);
+  const camera40 = new THREE.Vector3(65.6, -13.7, 9.1);
+  const otherRoom = () => false;
+
+  test('Atton through his cell camera is a direct conversation', () => {
+    expect(resolveVRCutscenePresentation(shot({
+      cameraKind: 'placeable', cameraPosition: camera40, playerPosition: player, isOverPlayerRoom: otherRoom,
+      participantPositions: [atton], creatureParticipantPositions: [atton],
+    }))).toBe('world');
+  });
+
+  test('even after an earlier shot went to the theater', () => {
+    expect(resolveVRCutscenePresentation(shot({
+      cameraKind: 'placeable', cameraPosition: camera40, playerPosition: player, isOverPlayerRoom: otherRoom,
+      participantPositions: [atton], creatureParticipantPositions: [atton], theaterAlreadyShown: true,
+    }))).toBe('world');
+  });
+
+  test('a security feed owned by a console is still shown on the theater', () => {
+    const console = new THREE.Vector3(76.0, -12.0, 9.1);
+    expect(resolveVRCutscenePresentation(shot({
+      cameraKind: 'placeable', cameraPosition: new THREE.Vector3(20, -60, 9), playerPosition: player,
+      isOverPlayerRoom: otherRoom, participantPositions: [console], creatureParticipantPositions: [],
+    }))).toBe('theater');
+  });
+
+  test('a creature far away through a remote camera is still shown', () => {
+    const remote = new THREE.Vector3(20, -60, 9);
+    expect(resolveVRCutscenePresentation(shot({
+      cameraKind: 'placeable', cameraPosition: remote, playerPosition: player, isOverPlayerRoom: otherRoom,
+      participantPositions: [remote], creatureParticipantPositions: [remote],
+    }))).toBe('theater');
+  });
+});

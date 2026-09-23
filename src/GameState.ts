@@ -281,9 +281,13 @@ function resolveCurrentVRCutscenePresentation(): VRCutscenePresentation {
     ? camera.getWorldPosition(new THREE.Vector3())
     : null;
   const participantPositions: THREE.Vector3[] = [];
+  const creatureParticipantPositions: THREE.Vector3[] = [];
   for (const participant of [cameraState?.speaker?.participant, cameraState?.listener?.participant]) {
     if (!participant || participant === player || !participant.position) continue;
     participantPositions.push(participant.position);
+    if ((((participant as any).objectType ?? 0) & ModuleObjectType.ModuleCreature) === ModuleObjectType.ModuleCreature) {
+      creatureParticipantPositions.push(participant.position);
+    }
   }
   const playerRoom = player?.room ?? null;
   const presentation = resolveVRCutscenePresentation({
@@ -291,6 +295,7 @@ function resolveCurrentVRCutscenePresentation(): VRCutscenePresentation {
     cameraKind,
     cameraPosition,
     participantPositions,
+    creatureParticipantPositions,
     playerPosition: player?.position ?? null,
     isOverPlayerRoom: playerRoom
       ? (point) => {
