@@ -15,8 +15,10 @@ const { normalizeFindingForReport } = require('../../tools/parity/compare');
 const engineArtifact = JSON.stringify({ module: '101per', loadedFromSave: false, bootstrap: 'new-game-ui', playerName: 'T3-M4', partySize: 1, engineIdentity: {
   module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64),
 } });
-const retailArtifact = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
 const sidecarIdentity = { resref: 'metalstrain', restype: 'UTS', source: 'module', sha256: 'a'.repeat(64) };
+const retailArtifact = JSON.stringify({ module: '101per', retailInputs: [
+  { resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }, sidecarIdentity,
+] });
 const sidecarArtifact = JSON.stringify({ module: '101PER', records: [{ ...sidecarIdentity, kind: 'kotormcp', authority: 'parsed-retail' }] });
 const hash = (contents: string): string => createHash('sha256').update(contents).digest('hex');
 function promoteRetainedReport(report: { module: string; findings: unknown[]; [key: string]: unknown }, reportPath: string) {

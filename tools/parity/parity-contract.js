@@ -114,6 +114,21 @@ function artifactText(artifacts, artifact, name, module, captureId) {
   try { return JSON.parse(text); } catch { throw new TypeError(`Canonical capture ${name} artifact is not valid JSON`); }
 }
 
+function matchesRetainedRetailInput(identity, retailInputs) {
+  if (!identity || typeof identity.resref !== 'string' || !identity.resref.trim()
+      || typeof identity.restype !== 'string' || !identity.restype.trim()
+      || typeof identity.sha256 !== 'string' || !SHA256.test(identity.sha256)
+      || typeof identity.source !== 'string' || !identity.source.trim()
+      || !Array.isArray(retailInputs)) return false;
+  return retailInputs.some((input) => input && typeof input.resref === 'string'
+    && typeof input.restype === 'string' && typeof input.sha256 === 'string'
+    && typeof input.source === 'string' && input.source.trim()
+    && input.resref.toLowerCase() === identity.resref.toLowerCase()
+    && input.restype.toUpperCase() === identity.restype.toUpperCase()
+    && input.sha256.toLowerCase() === identity.sha256.toLowerCase()
+    && input.source === identity.source);
+}
+
 function validateManifestSidecar(sidecar, retail, module) {
   if (!sidecar || String(sidecar.module || '').toUpperCase() !== module) throw new TypeError('Canonical capture sidecar module mismatch');
   if (!Array.isArray(sidecar.records)) throw new TypeError('Canonical capture sidecar requires records');
@@ -204,4 +219,5 @@ function validateEvidenceRecord(record) {
 module.exports = {
   CLASSIFICATIONS, createCaptureIdentity, validateEvidenceRecord, validateCanonicalCaptureManifest, deriveCaptureId,
   validateCaptureManifestPaths, resolveRetainedArtifactPath, assertUnlinkedWorkspacePath,
+  matchesRetainedRetailInput,
 };

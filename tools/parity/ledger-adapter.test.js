@@ -6,8 +6,10 @@ const { deriveCaptureId } = require('./parity-contract');
 const crypto = require('crypto');
 
 const fixtureEngine = JSON.stringify({ module: '101per', loadedFromSave: false, bootstrap: 'new-game-ui', playerName: 'T3-M4', partySize: 1, engineIdentity: { module: '101PER', freshState: true, loadedFromSave: false, servingBundleSha256: 'a'.repeat(64) } });
-const fixtureRetail = JSON.stringify({ module: '101per', retailInputs: [{ resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }] });
 const fixtureIdentity = { resref: 'resource_a', restype: 'UTS', source: 'module', sha256: 'a'.repeat(64) };
+const fixtureRetail = JSON.stringify({ module: '101per', retailInputs: [
+  { resref: '101per', restype: 'RIM', sha256: 'b'.repeat(64) }, fixtureIdentity,
+] });
 const fixtureSidecar = JSON.stringify({ module: '101PER', records: [{ ...fixtureIdentity, kind: 'kotormcp', authority: 'parsed-retail' }] });
 const fixtureHash = (contents) => crypto.createHash('sha256').update(contents).digest('hex');
 function toParityDefectRecords(report, reportPath, options = {}) {
@@ -105,6 +107,31 @@ test('sidecar promotion rejects references without matching full finding identit
       resourceIdentity, evidenceRefs: ['tools/parity/out/101per.evidence.json'],
     }]), 'report.json'), /matching full resource identity/);
   }
+});
+
+test('promotion rejects a self-consistent sidecar and finding absent from retained retail inputs', () => {
+  const invented = { resref: 'resource_b', restype: 'UTS', source: 'other-module', sha256: 'c'.repeat(64) };
+  const finding = {
+    classification: 'engine-defect', code: 'sound:volume', expected: 10, observed: 8,
+    resourceIdentity: invented, evidenceRefs: ['tools/parity/out/101per.evidence.json'],
+  };
+  const contents = {
+    engine: fixtureEngine,
+    retail: fixtureRetail,
+    comparison: JSON.stringify({ module: '101per', findings: [finding] }),
+    sidecar: JSON.stringify({ module: '101PER', records: [{ ...invented, kind: 'holocron', authority: 'human-review' }] }),
+  };
+  const rawArtifacts = Object.fromEntries(Object.entries(contents).map(([name, value]) => [name, { sha256: fixtureHash(value) }]));
+  const captureId = deriveCaptureId('101PER', rawArtifacts);
+  const artifacts = Object.fromEntries(Object.entries(rawArtifacts).map(([name, artifact]) => [name, {
+    ...artifact, path: `tools/parity/out/captures/101per/${captureId}/${name}.json`,
+  }]));
+  const retainedContents = Object.fromEntries(Object.entries(artifacts).map(([name, artifact]) => [artifact.path, contents[name]]));
+  const report = reportWith([finding]);
+  report.captureManifest = { schema: 'kotor2-vr/parity-capture@1', module: '101PER', captureId, artifacts };
+  assert.throws(() => toParityDefectRecords(report, 'report.json', {
+    readArtifact: (artifactPath) => retainedContents[artifactPath],
+  }), /matching full resource identity/);
 });
 
 test('preserves temporal step order and only deduplicates identical whole procedures', () => {
