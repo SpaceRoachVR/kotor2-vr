@@ -58,6 +58,11 @@ export class MenuSaveLoad extends K1_MenuSaveLoad {
         //LOADGAME mode: load the selected save
         if(this.mode == MenuSaveLoadMode.LOADGAME){
           if(savegame){
+            // Round 13: a second Load click, delivered after the menu had closed and
+            // while the first load was finishing, disposed the level mid-load and left
+            // a black screen with only the ambient sound. One load at a time, and only
+            // from a menu that is actually showing.
+            if (!this.bVisible || GameState.loadingModule) return;
             this.manager.ClearMenus();
             if(GameState.module){
               GameState.module.dispose();
