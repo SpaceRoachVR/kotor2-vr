@@ -851,6 +851,64 @@ describe('VRSpike XR loop ownership', () => {
     expect(combatEvents).toEqual([expect.objectContaining({ hand: 'left', input: 'dominant-swing' })]);
   });
 
+  test('pulses the weapon hand for a melee hit and draws a deflected bolt to the blade (3.13)', () => {
+    const pulse = jest.fn(async (
+      _session: XRSession,
+      _hand: 'left' | 'right',
+      _pattern: { durationMs: number; amplitude: number },
+    ) => undefined);
+    (VRSpike as any).haptics = { pulse };
+    (VRSpike as any).attackResultObserver.reset();
+    (VRSpike as any).combatVisualObserver.reset();
+    const scene = new THREE.Scene();
+    (VRSpike as any).scene = scene;
+    VRSpike.session = { inputSources: [] } as unknown as XRSession;
+    const grip = new THREE.Object3D();
+    grip.position.set(0, 0, 1.2);
+    scene.add(grip);
+    (VRSpike as any).controllerAnchorHost = { getAnchor: () => grip, getRayAnchor: () => grip };
+
+    const base = {
+      position: new THREE.Vector3(), isDroid: false, deathStarted: false,
+      attackIsRanged: false, attackResult: 1, attackTargetPosition: new THREE.Vector3(1, 0, 0),
+    };
+    let playerLanded = false;
+    let enemyLanded = false;
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatVisualSnapshots: () => ({
+        localActorId: 7,
+        snapshots: [
+          { ...base, id: 7, attackResultsCalculated: playerLanded, attackTargetId: 42 },
+          {
+            ...base, id: 42, position: new THREE.Vector3(8, 0, 0), attackIsRanged: true, attackResult: 9,
+            attackResultsCalculated: enemyLanded, attackTargetId: 7, attackTargetPosition: new THREE.Vector3(),
+          },
+        ],
+      }),
+    };
+
+    (VRSpike as any).updateCombatVisuals(1_000);
+    playerLanded = true;
+    (VRSpike as any).updateCombatVisuals(1_016);
+    expect(pulse).toHaveBeenCalledWith(expect.anything(), 'right', { durationMs: 50, amplitude: 0.55 });
+
+    enemyLanded = true;
+    (VRSpike as any).updateCombatVisuals(1_032);
+    const bolts = (VRSpike as any).blasterBoltHost;
+    const incoming = bolts.pool[0];
+    // Grip at z 1.2 pointing down -Z, so the contact point is 0.55 m below it.
+    expect(incoming.to.z).toBeCloseTo(0.65);
+    expect(bolts.pool.filter((bolt: { active: boolean }) => bolt.active)).toHaveLength(2);
+    expect((VRSpike as any).bladeSparkHost).not.toBeNull();
+
+    (VRSpike as any).controllerAnchorHost = null;
+    (VRSpike as any).scene = null;
+  });
+
   test('ticks the weapon hand once as each combat round opens, including on a buffered release (3.12)', () => {
     const pulse = jest.fn(async (
       _session: XRSession,

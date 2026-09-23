@@ -66,6 +66,8 @@ export interface VRCombatActorSnapshot {
    * footlocker is knee-high, so the creature chest height would fly over it.
    */
   readonly attackTargetAimPoint?: THREE.Vector3 | null;
+  /** The attack's target object id, when it has one (ROADMAP 3.13). */
+  readonly attackTargetId?: number | null;
 }
 
 export interface VRBlasterBoltEvent {
@@ -76,6 +78,8 @@ export interface VRBlasterBoltEvent {
   readonly attackResult: number;
   /** False for a Bash on a door or placeable; see VRSpike.updateCombatVisuals. */
   readonly targetIsCreature: boolean;
+  /** The shot's target id, so a bolt deflected by the player can meet their blade. */
+  readonly targetId: number | null;
 }
 
 export interface VRDroidExplosionEvent {
@@ -151,6 +155,7 @@ export class VRCombatVisualEventObserver {
               : target.clone().setZ(target.z + VR_MUZZLE_HEIGHT_METRES),
             attackResult: snapshot.attackResult,
             targetIsCreature: snapshot.attackTargetIsCreature !== false,
+            targetId: resolveTargetId(snapshot),
           });
         }
       }
@@ -186,6 +191,64 @@ export class VRCombatVisualEventObserver {
   reset(): void {
     this.memory.clear();
   }
+}
+
+/**
+ * Every attack roll that lands, melee or ranged — the moment
+ * `CombatRoundAction.resultsCalculated` flips true (ROADMAP 3.13).
+ *
+ * Separate from `VRCombatVisualEventObserver` because that one only reports
+ * what draws a bolt or an explosion; a melee hit draws neither but is exactly
+ * what the player needs to feel. Same first-sighting rule: an actor seen for
+ * the first time mid-round reports nothing, so loading into a fight does not
+ * replay rolls that already landed.
+ */
+export interface VRCombatAttackResultEvent {
+  readonly attackerId: number;
+  readonly targetId: number | null;
+  readonly attackResult: number;
+  readonly ranged: boolean;
+  readonly targetIsCreature: boolean;
+}
+
+/** `INVALID` and `ATTACK_FAILED` — no attack happened, so there is nothing to feel. */
+const NON_ATTACK_RESULTS: ReadonlySet<number> = new Set([0, 6]);
+
+export class VRCombatAttackResultObserver {
+  private readonly calculated = new Map<number, boolean>();
+
+  observe(snapshots: readonly VRCombatActorSnapshot[]): VRCombatAttackResultEvent[] {
+    const events: VRCombatAttackResultEvent[] = [];
+    const seen = new Set<number>();
+    for (const snapshot of snapshots) {
+      if (!snapshot || !Number.isInteger(snapshot.id)) continue;
+      seen.add(snapshot.id);
+      const now = !!snapshot.attackResultsCalculated;
+      const previous = this.calculated.get(snapshot.id);
+      this.calculated.set(snapshot.id, now);
+      if (previous !== false || !now) continue;
+      if (!Number.isInteger(snapshot.attackResult) || NON_ATTACK_RESULTS.has(snapshot.attackResult)) continue;
+      events.push({
+        attackerId: snapshot.id,
+        targetId: resolveTargetId(snapshot),
+        attackResult: snapshot.attackResult,
+        ranged: !!snapshot.attackIsRanged,
+        targetIsCreature: snapshot.attackTargetIsCreature !== false,
+      });
+    }
+    for (const id of Array.from(this.calculated.keys())) {
+      if (!seen.has(id)) this.calculated.delete(id);
+    }
+    return events;
+  }
+
+  reset(): void {
+    this.calculated.clear();
+  }
+}
+
+function resolveTargetId(snapshot: VRCombatActorSnapshot): number | null {
+  return Number.isInteger(snapshot.attackTargetId) ? snapshot.attackTargetId as number : null;
 }
 
 function isFiniteVector(vector: THREE.Vector3): boolean {

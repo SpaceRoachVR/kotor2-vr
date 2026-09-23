@@ -54,9 +54,13 @@ import {
 } from "./runtime/VRCombatAimResolver";
 import {
   VRCombatVisualEventObserver,
+  VRCombatAttackResultObserver,
   type VRCombatActorSnapshot,
 } from "./runtime/VRCombatVisualEvents";
-import { VRBlasterBoltHost } from "./runtime/VRBlasterBoltHost";
+import { BOLT_TRAVEL_MS, VRBlasterBoltHost } from "./runtime/VRBlasterBoltHost";
+import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
+import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
+import type { VRHapticPattern } from "./runtime/VRHapticFeedback";
 import { VRDroidExplosionHost } from "./runtime/VRDroidExplosionHost";
 import {
   VRWorldTargetIndicator,
@@ -125,6 +129,11 @@ const HEAD_HEIGHT_CALIBRATION_FRAMES = 36;
 const PRESENTATION_SHOT_RANGE_METRES = 20;
 /** ROADMAP 3.12 — light enough to sit under the combat feedback 3.13 will add. */
 const ROUND_READY_HAPTIC = { durationMs: 25, amplitude: 0.25 } as const;
+/** Engine `AttackResult.DEFLECTED`. */
+const DEFLECTED_ATTACK_RESULT = 9;
+/** How far along the weapon a clash or deflection is drawn, from the grip. */
+const BLADE_CONTACT_DISTANCE_METRES = 0.55;
+const DEFLECTION_REBOUND_METRES = 6;
 
 const DEFAULT_COMFORT_SETTINGS: VRComfortSettings = {
   locomotionMode: 'smooth',
@@ -526,6 +535,8 @@ export class VRSpike {
   private static blasterBoltHost: VRBlasterBoltHost | null = null;
   private static droidExplosionHost: VRDroidExplosionHost | null = null;
   private static readonly combatVisualObserver = new VRCombatVisualEventObserver();
+  private static readonly attackResultObserver = new VRCombatAttackResultObserver();
+  private static bladeSparkHost: VRBladeSparkHost | null = null;
   private static combatVisualsErrorReported = false;
   private static cutsceneFadeHost: VRCutsceneFadeHost | null = null;
   private static readonly cutsceneFadeEnvelope = new VRCutsceneFadeEnvelope();
@@ -1051,6 +1062,9 @@ export class VRSpike {
     // Latched attack/death state belongs to creatures that no longer exist;
     // carrying it across would let a reused object id read as a fresh shot.
     VRSpike.combatVisualObserver.reset();
+    VRSpike.attackResultObserver.reset();
+    VRSpike.bladeSparkHost?.dispose();
+    VRSpike.bladeSparkHost = null;
     VRSpike.cutsceneFadeHost?.dispose();
     VRSpike.cutsceneFadeHost = null;
     VRSpike.cutsceneFadeEnvelope.reset();
@@ -3878,10 +3892,25 @@ export class VRSpike {
               const rayAnchor = VRSpike.controllerAnchorHost?.getRayAnchor(VRSpike.dominantHand) ?? null;
               if (rayAnchor) from = rayAnchor.getWorldPosition(new THREE.Vector3());
             }
+            // ROADMAP 3.13: a bolt the player deflected meets their blade and
+            // rebounds from it, instead of flying into their chest.
+            const bladePoint = VRSpike.session && event.attackResult === DEFLECTED_ATTACK_RESULT &&
+              context.localActorId !== null && event.targetId === context.localActorId
+              ? VRSpike.resolveBladeContactPoint()
+              : null;
             VRSpike.blasterBoltHost.fire(
-              { from, to: event.to, attackResult: event.attackResult },
+              { from, to: bladePoint ?? event.to, attackResult: event.attackResult },
               nowMs,
             );
+            if (bladePoint) {
+              VRSpike.blasterBoltHost.fire({
+                from: bladePoint,
+                to: VRSpike.resolveDeflectionReboundPoint(bladePoint, from),
+                attackResult: event.attackResult,
+                delayMs: BOLT_TRAVEL_MS,
+              }, nowMs);
+              VRSpike.ensureBladeSparkHost(worldScene).spark(bladePoint, nowMs, BOLT_TRAVEL_MS);
+            }
             if (VRSpike.session && isLocalShot) context.playLocalShotSound?.();
           } else {
             if (!VRSpike.droidExplosionHost) {
@@ -3890,14 +3919,97 @@ export class VRSpike {
             VRSpike.droidExplosionHost.detonate(event.at, nowMs);
           }
         }
+        VRSpike.presentAttackResultFeedback(context.snapshots, context.localActorId, worldScene, nowMs);
       }
       VRSpike.blasterBoltHost?.update(nowMs);
+      VRSpike.bladeSparkHost?.update(nowMs);
       VRSpike.droidExplosionHost?.update(nowMs);
     } catch (error) {
       if (!VRSpike.combatVisualsErrorReported) {
         VRSpike.combatVisualsErrorReported = true;
         console.error('[VRSpike] combat visuals rejected', error);
       }
+    }
+  }
+
+  /**
+   * ROADMAP 3.13 — the player feels every roll that involves them: their own
+   * attacks, and their blade parrying or deflecting someone else's. The engine
+   * has already decided each result; this only presents it.
+   */
+  private static presentAttackResultFeedback(
+    snapshots: Parameters<VRCombatAttackResultObserver['observe']>[0],
+    localActorId: number | null,
+    worldScene: THREE.Object3D,
+    nowMs: number,
+  ): void {
+    const events = VRSpike.attackResultObserver.observe(snapshots);
+    const session = VRSpike.session;
+    if (!session) return;
+    for (const event of events) {
+      const feedback = resolveVRCombatFeedback({
+        attackerId: event.attackerId,
+        targetId: event.targetId,
+        attackResult: event.attackResult,
+        localActorId,
+      });
+      if (!feedback) continue;
+      // A deflection is felt when the bolt reaches the blade, not when it leaves the gun.
+      const delayMs = feedback.effect === 'deflect' ? BOLT_TRAVEL_MS : 0;
+      VRSpike.playHapticSequence(session, VRSpike.dominantHand, feedback.pulses, feedback.gapMs, delayMs);
+      if (feedback.effect === 'clash') {
+        const bladePoint = VRSpike.resolveBladeContactPoint();
+        if (bladePoint) VRSpike.ensureBladeSparkHost(worldScene).spark(bladePoint, nowMs);
+      }
+    }
+  }
+
+  private static ensureBladeSparkHost(worldScene: THREE.Object3D): VRBladeSparkHost {
+    if (!VRSpike.bladeSparkHost) VRSpike.bladeSparkHost = new VRBladeSparkHost(worldScene);
+    return VRSpike.bladeSparkHost;
+  }
+
+  /**
+   * Where on the player's weapon a blade or bolt meets it: part way along the
+   * direction the weapon hand points, from the grip. Null without tracking.
+   */
+  private static resolveBladeContactPoint(): THREE.Vector3 | null {
+    const grip = VRSpike.controllerAnchorHost?.getAnchor(VRSpike.dominantHand) ?? null;
+    const ray = VRSpike.controllerAnchorHost?.getRayAnchor(VRSpike.dominantHand) ?? null;
+    if (!grip || !ray) return null;
+    const forward = new THREE.Vector3(0, 0, -1)
+      .applyQuaternion(ray.getWorldQuaternion(new THREE.Quaternion()));
+    return grip.getWorldPosition(new THREE.Vector3()).addScaledVector(forward, BLADE_CONTACT_DISTANCE_METRES);
+  }
+
+  /** Back roughly the way the bolt came, scattered so rebounds do not all retrace one line. */
+  private static resolveDeflectionReboundPoint(bladePoint: THREE.Vector3, shooter: THREE.Vector3): THREE.Vector3 {
+    const back = shooter.clone().sub(bladePoint);
+    if (back.lengthSq() < 1e-6) back.set(1, 0, 0);
+    back.normalize();
+    const scatter = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, (Math.random() - 0.5) * 0.4);
+    return bladePoint.clone().addScaledVector(back.add(scatter.multiplyScalar(0.9)).normalize(),
+      DEFLECTION_REBOUND_METRES);
+  }
+
+  /** Plays `pulses` in order, `gapMs` apart, starting `delayMs` from now. */
+  private static playHapticSequence(
+    session: XRSession,
+    hand: XRHandRole,
+    pulses: readonly VRHapticPattern[],
+    gapMs: number,
+    delayMs: number,
+  ): void {
+    let at = Math.max(0, delayMs);
+    for (const pattern of pulses) {
+      if (at <= 0) {
+        void VRSpike.haptics.pulse(session, hand, pattern);
+      } else {
+        setTimeout(() => {
+          if (VRSpike.session === session) void VRSpike.haptics.pulse(session, hand, pattern);
+        }, at);
+      }
+      at += pattern.durationMs + gapMs;
     }
   }
 

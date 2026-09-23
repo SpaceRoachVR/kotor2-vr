@@ -3023,6 +3023,7 @@ export class GameState implements EngineContext {
             attackTargetPosition: target?.position ?? null,
             attackTargetIsCreature: targetIsCreature,
             attackTargetAimPoint: targetIsCreature ? null : resolveVRStructureAimPoint(target),
+            attackTargetId: target && Number.isInteger(target.id) ? target.id : null,
           });
         };
         for (const creature of (area.creatures ?? [])) add(creature as ModuleCreature);

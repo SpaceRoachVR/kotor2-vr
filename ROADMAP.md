@@ -1303,7 +1303,16 @@ belong together.
     buffer module beside `VRCombatIntentQueue.ts`, `VRWeaponStanceHost.ts`,
     `VRSpike.ts` (haptic).
 
-- **3.13** ☐ **Feel the roll.** When an attack result is calculated, pulse the weapon hand
+- **3.13** ✅ implemented (2026-09-23) / ☐ headset-accepted — **Feel the roll.**
+  Done as `VRCombatAttackResultObserver` (every landed roll, melee included),
+  `resolveVRCombatFeedback` (pure mapping: miss 12 ms/0.1, hit 50 ms/0.55,
+  critical two knocks 60+90 ms up to 1.0, parry clash 75 ms/0.75, deflect
+  45 ms/0.6) and `VRBladeSparkHost`. A bolt the player deflected is drawn to a
+  point 0.55 m along the weapon hand's aim from the grip, rebounds towards the
+  shooter with scatter, and sparks when it arrives. The engine already plays
+  the parry animation and colours deflected bolts; no clash *sound* yet — none
+  was found in the engine's combat path, so it is left for the headset pass
+  to judge whether one is needed. Original statement: When an attack result is calculated, pulse the weapon hand
   differently for hit, miss, critical and parried or deflected (8/9). The
   transition is already observed in `VRCombatVisualEvents`
   (`attackResultsCalculated`, `attackResult`), so add an event there rather

@@ -25,6 +25,11 @@ export interface VRBlasterBoltRequest {
   readonly to: THREE.Vector3;
   /** Engine `AttackResult`; only used to colour the bolt. */
   readonly attackResult: number;
+  /**
+   * Launch this long after `nowMs`. Used by the rebound of a bolt the player
+   * deflected, which must leave the blade when the incoming bolt arrives.
+   */
+  readonly delayMs?: number;
 }
 
 interface ActiveBolt {
@@ -36,7 +41,7 @@ interface ActiveBolt {
 }
 
 const MAX_CONCURRENT_BOLTS = 24;
-const BOLT_TRAVEL_MS = 160;
+export const BOLT_TRAVEL_MS = 160;
 const BOLT_LENGTH_METRES = 0.55;
 const BOLT_RADIUS_METRES = 0.035;
 /** Red for hostile fire is the series convention; deflected bolts read green. */
@@ -81,7 +86,8 @@ export class VRBlasterBoltHost {
 
     bolt.from.copy(from);
     bolt.to.copy(to);
-    bolt.startedAtMs = nowMs;
+    const delayMs = request.delayMs ?? 0;
+    bolt.startedAtMs = nowMs + (Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 0);
     bolt.active = true;
     bolt.mesh.material.color.setHex(
       request.attackResult === DEFLECTED ? DEFLECTED_BOLT_COLOUR : BOLT_COLOUR,
@@ -92,7 +98,7 @@ export class VRBlasterBoltHost {
     const direction = to.clone().sub(from).normalize();
     bolt.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
     bolt.mesh.position.copy(from);
-    bolt.mesh.visible = true;
+    bolt.mesh.visible = bolt.startedAtMs <= nowMs;
   }
 
   /** Advances every live bolt and retires the ones that have landed. */
@@ -100,12 +106,14 @@ export class VRBlasterBoltHost {
     for (const bolt of this.pool) {
       if (!bolt.active) continue;
       const elapsed = nowMs - bolt.startedAtMs;
+      if (elapsed < 0) continue;
       if (!Number.isFinite(elapsed) || elapsed >= BOLT_TRAVEL_MS) {
         bolt.active = false;
         bolt.mesh.visible = false;
         continue;
       }
       const t = Math.max(0, elapsed / BOLT_TRAVEL_MS);
+      bolt.mesh.visible = true;
       bolt.mesh.position.lerpVectors(bolt.from, bolt.to, t);
       // Fade only at the very end, so the streak stays solid in flight and
       // does not read as a fading smear for its whole life.
