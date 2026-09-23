@@ -1415,7 +1415,9 @@ First shippable artifact.
   RemoveEffectByID and the Force-point cost routines on top; missing from both
   trees: 40 routines, 133 call sites. Largest remaining:
   SetForfeitConditions/GetLastForfeitViolation (the dueling rings - a rules system,
-  not a routine), EffectModifyAttacks, SpawnMine/DetonateMine, ActionUseSkill, the
+  not a routine), EffectModifyAttacks, SpawnMine/DetonateMine (351NAR, 601DAN,
+  603DAN - the engine can trap a door or placeable but has no way to lay a ground
+  mine trigger at a location, so this is a feature, not a routine), ActionUseSkill, the
   Modify*SavingThrowBase trio (waits on the save-throw rewrite) and about a dozen
   Force-power effects used only by `k_sp1_generic`. Re-measure with
   `tools/parity/routine_usage.py` + `routine_coverage.js` (on
