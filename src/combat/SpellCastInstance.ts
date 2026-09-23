@@ -55,6 +55,20 @@ export class SpellCastInstance {
     this.owner = caster;
     this.target = target;
     this.spell = spell;
+    // spells.2da drives the cast. None of these were copied, so `impactscript`
+    // was undefined and impact() loaded a script by that name: no spell or
+    // grenade ever applied anything. Round 8: "thrown grenades still appear to
+    // do nothing. they do not cause damage to mining droids or show animated
+    // explosion" — the Frag Grenade's k_sup_grenade never ran.
+    this.impactscript = typeof spell?.impactscript === 'string' ? spell.impactscript : '';
+    this.casthandvisual = typeof spell?.casthandvisual === 'string' ? spell.casthandvisual : '';
+    // The authored timing, not a flat 3 s in the hand with no flight: a Frag
+    // Grenade is 170 ms conjure and a 1330 ms throw, and the projectile only
+    // travels its arc while castTime is counting down.
+    const conjure = Number(spell?.conjtime);
+    if(Number.isFinite(conjure) && conjure >= 0) this.conjureTime = conjure;
+    const cast = Number(spell?.casttime);
+    if(Number.isFinite(cast) && cast > 0) this.castTime = cast;
   }
 
   init(){
@@ -159,8 +173,24 @@ export class SpellCastInstance {
     //We only want to run the impact script once
     if(this.impacted) return;
     this.impacted = true;
-    
-    if(this.impactscript != ''){
+
+    // What the impact script asks for: GetSpellTargetObject reads the caster's
+    // lastSpellTarget and GetSpellTargetLocation the talent's target. A power
+    // chosen from a menu records both when queued (TalentSpell.useTalentOnObject);
+    // an item cast — a thrown grenade — never did, so k_sup_grenade centred its
+    // blast and its damage sphere on the world origin.
+    if(this.spell){
+      this.spell.oCaster = this.owner;
+      if(this.target) this.spell.oTarget = this.target;
+    }
+    if(this.target && this.owner?.combatData){
+      this.owner.combatData.lastSpellTarget = this.target;
+    }
+    if(this.owner && this.target?.combatData){
+      this.target.combatData.lastSpellAttacker = this.owner;
+    }
+
+    if(this.impactscript){
       console.log('Casting spell', this.impactscript, this);
       const instance = GameState.NWScript.Load(this.impactscript);
       if(instance) {
@@ -171,7 +201,7 @@ export class SpellCastInstance {
       };
     }
 
-    if(this.casthandvisual != ''){
+    if(this.casthandvisual){
       MDLLoader.loader.load(this.casthandvisual)
       .then((mdl: OdysseyModel) => {
         OdysseyModel3D.FromMDL(mdl, {

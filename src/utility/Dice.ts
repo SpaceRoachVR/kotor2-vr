@@ -15,6 +15,8 @@ export class Dice {
     if(num <= 0) return 0;
 
     switch(die){
+      case DiceType.d1:
+        return num + modifier;
       case DiceType.d2:
         return Dice.rollD2(num) + modifier;
       case DiceType.d3:
@@ -38,9 +40,15 @@ export class Dice {
     }
   }
 
-  static intToDiceType(sides: number = 0): DiceType {
+  static intToDiceType(sides: number | string = 0): DiceType {
     let type: DiceType = DiceType.d8;
-    switch(sides){
+    // 2DA cells arrive as strings: iprp_damagecost's "1d6" row has die "6", and
+    // switching on the string matched no case, so every damage bonus and every
+    // creature claw rolled a d8 (a Plasma Torch's +1d6 fire did 1-8).
+    switch(Number(sides)){
+      case 1:
+        type = DiceType.d1;
+      break;
       case 2:
         type = DiceType.d2;
       break;

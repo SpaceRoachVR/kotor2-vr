@@ -38,6 +38,13 @@ export enum ModuleItemProperty {
   DecreaseAbilityScore = 19,
   DecreasedSkill = 21,
   Disguise = 59,
+  // TSL additions, from nwscript.nss ITEM_PROPERTY_*.
+  LimitUseByGender = 60,
+  LimitUseBySubrace = 61,
+  LimitUseByPC = 62,
+  DampenSound = 63,
+  DoorCutting = 64,
+  DoorSabering = 65,
   Droid_Repair_Kit = 58,
   Enhancement = 5,
   EnhancementAlignmentGroup = 6,

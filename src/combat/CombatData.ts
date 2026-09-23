@@ -1,4 +1,4 @@
-import type { ModuleCreature, ModuleObject } from "@/module";
+import type { ModuleCreature, ModuleItem, ModuleObject } from "@/module";
 import type { TalentFeat, TalentSpell } from "@/talents";
 import { ICombatAction } from "@/interface/combat/ICombatAction";
 import { AttackResult } from "@/enums/combat/AttackResult";
@@ -29,6 +29,8 @@ export class CombatData {
   lastCombatFeatUsed: TalentFeat;
   lastForcePowerUsed: TalentSpell;
   lastAttackResult: AttackResult;
+  /** The weapon of the most recent attack roll; undefined for an unarmed strike. */
+  lastWeaponUsed: ModuleItem | undefined;
   combatQueue: ICombatAction[] = [];
   combatAction: ICombatAction;
   lastAttackObject: ModuleObject;

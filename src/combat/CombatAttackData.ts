@@ -11,7 +11,12 @@ import { CombatFeatType } from "@/enums/combat/CombatFeatType";
 import { WeaponWield } from "@/enums/combat/WeaponWield";
 import { Dice } from "@/utility/Dice";
 import { DiceType } from "@/enums/combat/DiceType";
-import { WeaponType } from "@/enums/combat/WeaponType";
+import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
+import { abilityModifier, NO_AUTO_BALANCE, strengthAddsToDamage } from "@/combat/TSLCombatRules";
+import { reduceDamageList, resolveStructureDamage } from "@/engine/interaction/StructureDamageRules";
+import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
+import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
+import { BitWise } from "@/utility/BitWise";
 
 /**
  * CombatAttackData class.
@@ -42,6 +47,9 @@ export class CombatAttackData {
    * The attack result for the attack
    */
   attackResult: AttackResult = AttackResult.MISS;
+
+  /** The equipment slot the attacking weapon is in; decides the off-hand blaster Strength rule. */
+  attackSlot: ModuleCreatureArmorSlot | undefined = undefined;
 
   /**
    * The reaction object for the attack
@@ -170,21 +178,46 @@ export class CombatAttackData {
    * @param feat - The feat that is being used for the attack
    */
   calculateDamage(creature: ModuleCreature, isCritial: boolean = false, feat?: TalentFeat){
+    // TSL damage (see TSLCombatRules): an autobalanced enemy's weapon dice are
+    // multiplied by its set's damage multiplier; Strength, bonuses and
+    // penalties are added after; a critical hit multiplies all of it. The
+    // Mining Laser's "Damage Penalty -1" and the melee-only Strength rule were
+    // both missing, and Strength went to piercing weapons, ranged included.
+    const autoBalance = creature.getAutoBalanceBonuses?.() ?? NO_AUTO_BALANCE;
+    const strengthModifier = abilityModifier(creature.getSTR());
+
     /**
      * Unarmed Strike
      */
     if(!this.attackWeapon){
       const damageMultiplier = isCritial ? 2.0 : 1.0;
-      const nDamage = Dice.roll(1, DiceType.d4);
+      const nDamage = Math.max(1, Dice.roll(1, DiceType.d4) * autoBalance.damageMultiplier + strengthModifier);
       this.damageList[DamageType.BLUDGEONING].addDamage(nDamage * damageMultiplier);
-
+      if(this.getTotalDamage() >= this.reactObject.getHP()){
+        this.killingBlow = true;
+      }
       return;
     };
 
     const damageMultiplier = isCritial ? this.attackWeapon.baseItem.criticalHitMultiplier : 1.0;
+    // Off-hand means a second weapon: a mining droid carries its only weapon in
+    // the left-hand slot, and that is not an off-hand blaster.
+    const offHandBlasterPistol = this.attackSlot == ModuleCreatureArmorSlot.LEFTHAND &&
+      !!creature.equipment?.RIGHTHAND &&
+      this.attackWeapon.getWeaponWield() == WeaponWield.BLASTER_PISTOL;
+    const strengthDamage = strengthAddsToDamage({
+      ranged: !!this.attackWeapon.isRangedWeapon(),
+      offHandBlasterPistol,
+    }) ? strengthModifier : 0;
+    const weaponDamage = (dice: number) => Math.max(1,
+      dice * autoBalance.damageMultiplier + strengthDamage - this.attackWeapon.getDamagePenalty());
 
-    if(!creature.isSimpleCreature()){
-      this.damageList[this.attackWeapon.getBaseDamageType()].addDamage(this.attackWeapon.getBaseDamage() * damageMultiplier);
+    // Monster damage belongs to creature weapons (claws, bites), which carry it
+    // as an item property. A simple creature attacking with an ordinary held
+    // weapon — a mining droid's Mining Laser — has no such property, and
+    // reading it would deal 0; it uses the weapon's own dice like anyone else.
+    if(!creature.isSimpleCreature() || !this.attackWeapon.hasMonsterDamage()){
+      this.damageList[this.attackWeapon.getBaseDamageType()].addDamage(weaponDamage(this.attackWeapon.getBaseDamage()) * damageMultiplier);
       if(this.attackWeapon.hasDamageBonus()){
         this.damageList[this.attackWeapon.getDamageBonusType()].addDamage(this.attackWeapon.getDamageBonus() * damageMultiplier);
       }
@@ -216,15 +249,10 @@ export class CombatAttackData {
       }
 
     }else{
-      this.damageList[this.attackWeapon.getBaseDamageType()].addDamage(this.attackWeapon.getMonsterDamage() * damageMultiplier);
+      this.damageList[this.attackWeapon.getBaseDamageType()].addDamage(weaponDamage(this.attackWeapon.getMonsterDamage()) * damageMultiplier);
       if(this.attackWeapon.hasDamageBonus()){
         this.damageList[this.attackWeapon.getDamageBonusType()].addDamage(this.attackWeapon.getDamageBonus() * damageMultiplier);
       }
-    }
-
-    //Add strength MOD to melee damage
-    if(this.attackWeapon.getWeaponType() == WeaponType.PIERCING){
-      this.damageList[DamageType.PHYSICAL].addDamage( Math.floor(( creature.getSTR() - 10) / 2) );
     }
 
     if(this.getTotalDamage() >= this.reactObject.getHP()){
@@ -281,6 +309,7 @@ export class CombatAttackData {
    */
   applyDamageEffectToCreature(owner: ModuleCreature, target: ModuleCreature){
     if(!target) return;
+    this.applyStructureHardness(target);
     const damageEffect = new EffectDamage();
     damageEffect.setCreator(owner);
 
@@ -290,6 +319,25 @@ export class CombatAttackData {
     }
 
     target.addEffect(damageEffect, GameEffectDurationType.INSTANT);
+  }
+
+  /**
+   * A door or placeable absorbs damage up to its hardness, unless the weapon
+   * cuts doors (the Plasma Torch) or sabers through them. See
+   * StructureDamageRules.
+   */
+  private applyStructureHardness(target: ModuleObject){
+    const isStructure = BitWise.InstanceOfObject(target, ModuleObjectType.ModuleDoor) ||
+      BitWise.InstanceOfObject(target, ModuleObjectType.ModulePlaceable);
+    if(!isStructure) return;
+    const weapon = this.attackWeapon;
+    const cutsThrough = !!weapon?.properties?.some((property) =>
+      property.isUseable() && (property.is(ModuleItemProperty.DoorCutting) || property.is(ModuleItemProperty.DoorSabering)));
+    const total = this.getTotalDamage();
+    const remaining = resolveStructureDamage({ damage: total, hardness: (target as any).hardness, cutsThrough });
+    if(remaining >= total) return;
+    const reduced = reduceDamageList(this.damageList.map((damage) => damage.damageValue), total - remaining);
+    reduced.forEach((value, i) => { this.damageList[i].damageValue = value; });
   }
 
   /**

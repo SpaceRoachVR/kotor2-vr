@@ -71,6 +71,10 @@ export class SWBaseItem {
 
   postProcess(){
     switch(this.dieToRoll){
+      // Stun batons roll 1d1; see BaseItem.postProcess.
+      case 1:
+        this.die = DiceType.d1;
+      break;
       case 2:
         this.die = DiceType.d2;
       break;

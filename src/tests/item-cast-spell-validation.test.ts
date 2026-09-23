@@ -7,7 +7,7 @@ describe("isItemCastSpellSourceUsable", () => {
       properties: [{
         isUseable: () => true,
         is: (propertyType: number) => propertyType === 12,
-        getValue: () => 99,
+        getCastSpellId: () => 99,
       }],
     };
 
@@ -24,7 +24,7 @@ describe("isItemCastSpellSourceUsable", () => {
       properties: [{
         isUseable: () => true,
         is: () => true,
-        getValue: () => 99,
+        getCastSpellId: () => 99,
       }],
     };
 
@@ -42,12 +42,12 @@ describe("isItemCastSpellSourceUsable", () => {
         {
           isUseable: () => false,
           is: () => true,
-          getValue: () => 99,
+          getCastSpellId: () => 99,
         },
         {
           isUseable: () => true,
           is: () => true,
-          getValue: () => 101,
+          getCastSpellId: () => 101,
         },
       ],
     };
@@ -67,7 +67,7 @@ describe("isItemCastSpellSourceUsable", () => {
           throw new Error("corrupt item property");
         },
         is: () => true,
-        getValue: () => 99,
+        getCastSpellId: () => 99,
       }],
     };
 

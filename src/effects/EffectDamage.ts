@@ -41,6 +41,30 @@ export class EffectDamage extends GameEffect {
       this.object.subtractHP(this.getDamageAmount());
       this.object.combatData.lastDamager = this.creator;
       this.object.combatData.lastAttacker = this.creator;
+      // Damage must run the target's OnDamaged script.
+      //
+      // Every combat hit reaches a creature through this effect —
+      // `CombatAttackData.applyDamageEffectToCreature` builds one and applies it
+      // INSTANT — and this was the only damage path that never notified the
+      // object. `ModuleObject.damage()` and `ModuleCreature.damage()` both call
+      // `onDamaged()`; combat never goes through either of them. So no
+      // creature's OnDamaged script has ever run from being attacked.
+      //
+      // Measured in a headset session against the Ebon Hawk training droids:
+      // `subtractHP` fired 54 times while `onDamaged` fired 0 times, no script
+      // instance was ever created, and no signal was ever delivered. That is
+      // why those droids cannot be destroyed — their `k_def_damage01` never
+      // runs, so it never signals the user-defined event that `k_fab_sensor_ud`
+      // is waiting on to lift `Min1HP`.
+      //
+      // Ordered after lastDamager/lastAttacker so the script can read them, and
+      // isolated so a faulting script cannot unwind the damage that was already
+      // applied.
+      try{
+        this.object.onDamaged();
+      }catch(e){
+        console.error('EffectDamage.onApply: OnDamaged script faulted', e);
+      }
     }
   }
 

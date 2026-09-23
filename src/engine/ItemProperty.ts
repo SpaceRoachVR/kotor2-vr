@@ -1,5 +1,6 @@
 import { GameState } from "@/GameState";
 import { ModuleItemCostTable } from "@/enums/module/ModuleItemCostTable";
+import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
 import { GFFField } from "@/resource/GFFField";
 import { GFFStruct } from "@/resource/GFFStruct";
@@ -167,6 +168,27 @@ export class ItemProperty {
       return costTable.rows[randomCostValue];
     }
     return this.getCostTableRow();
+  }
+
+  /**
+   * The spells.2da row a Cast Spell property casts, or -1.
+   *
+   * In KOTOR the property's **subtype is the spell id**. Its cost table is the
+   * charge cost, which `getValue()` resolves through the SpellUse branch and
+   * falls out of as 0 — so every grenade, medpac, stim and droid item that
+   * asked `getValue()` cast spells.2da row 0, FORCE_POWER_MASTER_ALTER_XXX,
+   * and nothing happened. Measured on live retail items: Medpac subtype 64 is
+   * ITEM_ABILITY_MED_PACK (k_sup_healing), Ion Grenade 95 is
+   * ITEM_ABILITY_GRENADE_ION (k_sup_grenade), Droid Deflector Mark I 110 is
+   * DROID_ITEM_ENERGY_SHIELD_1. `iprp_spells.2da` is a leftover NWN table:
+   * its `spellindex` sends the Medpac to FORCE_POWER_INSANITY.
+   */
+  getCastSpellId(): number {
+    if(this.propertyName != ModuleItemProperty.CastSpell) return -1;
+    if(!Number.isSafeInteger(this.subType) || this.subType < 0) return -1;
+    const spells = GameState.TwoDAManager?.datatables?.get('spells');
+    if(spells && !spells.rows?.[this.subType]) return -1;
+    return this.subType;
   }
 
   getValue(){

@@ -1,7 +1,8 @@
 export interface ItemCastSpellPropertySource {
   isUseable(): boolean;
   is(propertyType: number): boolean;
-  getValue(): unknown;
+  /** The spell a Cast Spell property casts. See ItemProperty.getCastSpellId. */
+  getCastSpellId(): unknown;
 }
 
 export interface ItemCastSpellSourceItem {
@@ -50,10 +51,10 @@ export function isItemCastSpellSourceUsable(
       !!property &&
       typeof property.isUseable === "function" &&
       typeof property.is === "function" &&
-      typeof property.getValue === "function" &&
+      typeof property.getCastSpellId === "function" &&
       property.isUseable() &&
       property.is(input.castSpellPropertyType) &&
-      property.getValue() === input.requestedSpellId,
+      property.getCastSpellId() === input.requestedSpellId,
     );
   } catch {
     return false;
