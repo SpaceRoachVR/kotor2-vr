@@ -851,6 +851,60 @@ describe('VRSpike XR loop ownership', () => {
     expect(combatEvents).toEqual([expect.objectContaining({ hand: 'left', input: 'dominant-swing' })]);
   });
 
+  test('ticks the weapon hand once as each combat round opens, including on a buffered release (3.12)', () => {
+    const pulse = jest.fn(async (
+      _session: XRSession,
+      _hand: 'left' | 'right',
+      _pattern: { durationMs: number; amplitude: number },
+    ) => undefined);
+    (VRSpike as any).haptics = { pulse };
+    (VRSpike as any).roundReadyLatched = false;
+    VRSpike.session = { inputSources: [] } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' }, hands: {},
+    };
+    let readiness = 0;
+    let inCombat = true;
+    let released = false;
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat,
+        stanceReadout: '', tempoReadiness: readiness, onCombatSwing: () => undefined,
+      }),
+      serviceCombatSwingBuffer: () => ({ released, armed: false }),
+    };
+    const ticks = () => pulse.mock.calls.filter(([, , pattern]) => pattern.durationMs === 25);
+
+    (VRSpike as any).processCombatInput(1_000);
+    expect(ticks()).toHaveLength(0);
+
+    readiness = 1;
+    (VRSpike as any).processCombatInput(1_016);
+    (VRSpike as any).processCombatInput(1_032);
+    expect(ticks()).toHaveLength(1);
+    expect(ticks()[0][1]).toBe('right');
+
+    // A buffered swing fires the frame the round opens, so the engine owns the
+    // round again before readiness is ever observed at 1. It still ticks.
+    readiness = 0;
+    (VRSpike as any).processCombatInput(1_048);
+    released = true;
+    (VRSpike as any).processCombatInput(1_064);
+    released = false;
+    (VRSpike as any).processCombatInput(1_080);
+    expect(ticks()).toHaveLength(2);
+
+    // Aiming at a hostile outside a fight is not a round opening.
+    inCombat = false;
+    readiness = 1;
+    (VRSpike as any).processCombatInput(1_096);
+    expect(ticks()).toHaveLength(2);
+  });
+
   test('clears a stale soft lock and target-dependent transient state after engine invalidation', () => {
     let targetIsValid = true;
     let invalidated = 0;

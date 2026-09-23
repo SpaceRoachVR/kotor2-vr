@@ -16,6 +16,7 @@ export class VRHiltTimerHost {
   private readonly context: CanvasRenderingContext2D;
   private readonly texture: THREE.CanvasTexture;
   private lastDrawnReadiness = -1;
+  private lastDrawnArmed = false;
 
   constructor(private readonly handAnchor: THREE.Object3D) {
     if (typeof document === 'undefined') throw new Error('VR hilt timer requires a browser document');
@@ -44,17 +45,22 @@ export class VRHiltTimerHost {
     handAnchor.add(this.object);
   }
 
-  /** `readiness` is clamped to [0, 1]; hides the ring entirely at 1 (ready, nothing to show). */
-  present(readiness: number): void {
+  /**
+   * `readiness` is clamped to [0, 1]; hides the ring entirely at 1 (ready,
+   * nothing to show). `armed` (ROADMAP 3.12) draws a full amber ring while a
+   * buffered swing waits for the round to open.
+   */
+  present(readiness: number, armed = false): void {
     const clamped = Number.isFinite(readiness) ? Math.min(1, Math.max(0, readiness)) : 1;
-    if (clamped >= 1) {
+    if (clamped >= 1 && !armed) {
       this.object.visible = false;
       return;
     }
     this.object.visible = true;
-    if (Math.abs(clamped - this.lastDrawnReadiness) < 0.02) return;
+    if (armed === this.lastDrawnArmed && Math.abs(clamped - this.lastDrawnReadiness) < 0.02) return;
     this.lastDrawnReadiness = clamped;
-    this.draw(clamped);
+    this.lastDrawnArmed = armed;
+    this.draw(clamped, armed);
   }
 
   clear(): void {
@@ -68,7 +74,7 @@ export class VRHiltTimerHost {
     this.texture.dispose();
   }
 
-  private draw(readiness: number): void {
+  private draw(readiness: number, armed: boolean): void {
     const size = this.canvas.width;
     const center = size / 2;
     const radius = size * 0.4;
@@ -80,10 +86,11 @@ export class VRHiltTimerHost {
     this.context.arc(center, center, radius, 0, Math.PI * 2);
     this.context.stroke();
 
-    this.context.strokeStyle = readiness >= 1 ? '#5cffb1' : '#62e8ff';
+    const sweep = armed ? 1 : readiness;
+    this.context.strokeStyle = armed ? '#ffb347' : readiness >= 1 ? '#5cffb1' : '#62e8ff';
     this.context.lineWidth = size * 0.12;
     this.context.beginPath();
-    this.context.arc(center, center, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * readiness);
+    this.context.arc(center, center, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * sweep);
     this.context.stroke();
 
     this.texture.needsUpdate = true;

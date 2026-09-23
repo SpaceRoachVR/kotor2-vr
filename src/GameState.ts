@@ -132,6 +132,7 @@ function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
   return vrSwoopGripPoses;
 }
 import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
+import { VRCombatSwingBuffer } from "@/vr/runtime/VRCombatSwingBuffer";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
@@ -596,6 +597,8 @@ function getVRActionIcon(entry: VRActionMenuEntry): string | undefined {
 
 const vrCombatIntentQueue = new VRCombatIntentQueue();
 const vrCombatTempoGate = new VRCombatTempoGate();
+/** ROADMAP 3.12 — one swing held while the round is busy. */
+const vrCombatSwingBuffer = new VRCombatSwingBuffer();
 const vrArmedGrenadeState = new VRArmedGrenadeState();
 /** Scratch vectors for the headset audio listener, reused every frame. */
 const vrAudioListenerPosition = new THREE.Vector3();
@@ -697,6 +700,7 @@ function resolveVRCombatWeaponSignature(actor: ModuleCreature): string {
 
 function resetVREmbodiedCombatState(): void {
   vrCombatIntentQueue.clear();
+  vrCombatSwingBuffer.clear();
   vrArmedGrenadeState.cancel();
   vrCombatQueueActorId = null;
   vrCombatQueueWeaponSignature = null;
@@ -853,6 +857,18 @@ function dispatchVREmbodiedCombatInput(
   const headLabel = head ? `${head.label}(${head.requiredInput},${head.weaponSignature})` : 'none';
   const tempo = getVREmbodiedTempoResult(actor, initialTarget);
   if (!tempo.eligible) {
+    // ROADMAP 3.12: a swing made while the round is busy waits for it to open
+    // instead of being thrown away. Only a swing at a live target in reach is
+    // held; the buffer itself refuses reasons that waiting cannot fix.
+    if (initialTarget && (input === 'dominant-swing' || input === 'dominant-trigger') &&
+      vrCombatSwingBuffer.offer({
+        actorId: String(actor.id),
+        targetId: String(initialTarget.id),
+        input,
+        weaponSignature: resolveVRCombatWeaponSignature(actor),
+      }, tempo.reason)) {
+      return false;
+    }
     let distance = 'n/a';
     try {
       const locked = resolveVRLockedHostile(actor, targetId);
@@ -893,6 +909,47 @@ function dispatchVREmbodiedCombatInput(
     return true;
   }
   return false;
+}
+
+/** Once per drop reason, so a fight cannot flood the console. */
+const reportedVRSwingBufferDrops = new Set<string>();
+
+/**
+ * ROADMAP 3.12. Run once per VR frame: drops a buffered swing that can no
+ * longer be valid, and dispatches it the moment the round opens. Returns
+ * whether a swing was released this frame (the headset pulses for it) and
+ * whether one is still waiting (the hilt shows it as armed).
+ */
+function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean; armed: boolean } {
+  if (!vrCombatSwingBuffer.hasPending) return { released: false, armed: false };
+  // A swing held through a pause would fire on resume with nobody asking.
+  if (GameState.State === EngineState.PAUSED) {
+    vrCombatSwingBuffer.clear();
+    return { released: false, armed: false };
+  }
+  const context = {
+    actorId: String(actor.id),
+    weaponSignature: resolveVRCombatWeaponSignature(actor),
+    inCombat: actor.combatData?.combatState === true,
+    isTargetLive: (targetId: string) => resolveVRLiveCombatTarget(actor, targetId) !== null,
+  };
+  const dropped = vrCombatSwingBuffer.invalidate(context);
+  if (dropped) {
+    if (!reportedVRSwingBufferDrops.has(dropped)) {
+      reportedVRSwingBufferDrops.add(dropped);
+      console.info(`[VR combat swing] buffered swing dropped: ${dropped}`);
+    }
+    return { released: false, armed: false };
+  }
+  const pending = vrCombatSwingBuffer.peek();
+  const target = pending ? resolveVRLiveCombatTarget(actor, pending.targetId) : null;
+  if (!getVREmbodiedTempoResult(actor, target).eligible) {
+    return { released: false, armed: true };
+  }
+  const release = vrCombatSwingBuffer.release(context);
+  if (release.state !== 'released') return { released: false, armed: false };
+  const released = dispatchVREmbodiedCombatInput(actor, release.swing.targetId, release.swing.input);
+  return { released, armed: vrCombatSwingBuffer.hasPending };
 }
 
 function dispatchVRDirectionalForceGesture(
@@ -3045,6 +3102,7 @@ export class GameState implements EngineContext {
           },
           cancel: () => {
             vrCombatIntentQueue.clear();
+            vrCombatSwingBuffer.clear();
             vrArmedGrenadeState.cancel();
             // Cancel now stops creature combat too, not only an endless round
             // against a door. It used to return here for any creature target,
@@ -3073,6 +3131,14 @@ export class GameState implements EngineContext {
             vrCombatIssuedTargetId = null;
           },
         };
+      },
+      serviceCombatSwingBuffer: () => {
+        const actor = GameState.getCurrentPlayer();
+        if (!actor) {
+          vrCombatSwingBuffer.clear();
+          return null;
+        }
+        return serviceVRCombatSwingBuffer(actor);
       },
       getForceContext: (aimedTargetId) => {
         const actor = GameState.getCurrentPlayer();

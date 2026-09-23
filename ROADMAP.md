@@ -1278,7 +1278,7 @@ a range, a cost or the 3-second round. It changes what the player feels and
 sees, and which physical input counts. Items are in priority order; 3.12-3.14
 belong together.
 
-- **3.12** ☐ **One-swing buffer plus a round-ready pulse.** Today a swing made while
+- **3.12** ✅ implemented (2026-09-23) / ☐ headset-accepted — **One-swing buffer plus a round-ready pulse.** `VRCombatSwingBuffer` holds the swing; `serviceVRCombatSwingBuffer` in `GameState.ts` drops or releases it each frame; `VRSpike.pulseRoundReady` plays the tick (25 ms, 0.25); the hilt ring turns full amber while a swing is armed. An engine pause (`EngineState.PAUSED`) empties the buffer. The TEMPORARY swing diagnostic stays until the headset settles it. Today a swing made while
   a round is running is refused by `VRCombatTempoGate` (`round-active`) and
   thrown away. That matches the round-5 report "rounds failed several times and
   did not register a swing". Instead, keep one pending swing or trigger pull

@@ -123,6 +123,8 @@ const RECENTER_MIN_HORIZONTAL_FORWARD = 0.26;
 const HEAD_HEIGHT_CALIBRATION_FRAMES = 36;
 /** How far an untargeted presentation shot travels. */
 const PRESENTATION_SHOT_RANGE_METRES = 20;
+/** ROADMAP 3.12 — light enough to sit under the combat feedback 3.13 will add. */
+const ROUND_READY_HAPTIC = { durationMs: 25, amplitude: 0.25 } as const;
 
 const DEFAULT_COMFORT_SETTINGS: VRComfortSettings = {
   locomotionMode: 'smooth',
@@ -343,6 +345,12 @@ export interface VRSpikeHooks {
    * resolution for this frame, for the same reason documented on
    * `getCombatContext`.
    */
+  /**
+   * ROADMAP 3.12 — services the one-swing buffer once per frame. `released`
+   * is true on the frame a buffered swing was dispatched; `armed` while one
+   * is still waiting for the round to open.
+   */
+  serviceCombatSwingBuffer?: () => { readonly released: boolean; readonly armed: boolean } | null;
   getForceContext?: (aimedTargetId: number | null) => { onForceGesture(gesture: VRForceGesture): void } | null;
   /** Clears VR-only lock, queue, and armed-item state on a session lifecycle boundary. */
   resetCombatInteraction?: () => void;
@@ -2285,17 +2293,29 @@ export class VRSpike {
     }
     if (!context) {
       VRSpike.combatCancelHeld = false;
+      VRSpike.roundReadyLatched = false;
       VRSpike.hiltTimerHost?.clear();
       VRSpike.weaponStanceHost?.clear();
       VRSpike.updateCombatTargetHighlight();
       return;
     }
 
+    let swingBuffer: { readonly released: boolean; readonly armed: boolean } | null = null;
+    try {
+      swingBuffer = VRSpike.hooks?.serviceCombatSwingBuffer?.() ?? null;
+    } catch (error) {
+      if (!VRSpike.combatInputErrorReported) {
+        VRSpike.combatInputErrorReported = true;
+        console.error('[VRSpike] combat swing buffer rejected', error);
+      }
+    }
+    VRSpike.pulseRoundReady(session, context, swingBuffer?.released === true);
     VRSpike.updateHiltTimer(
       context.weaponMode,
       context.tempoReadiness ?? 0,
       context.inCombat,
       context.stanceReadout,
+      swingBuffer?.armed === true,
     );
     VRSpike.updateCombatTargetHighlight();
 
@@ -2379,6 +2399,28 @@ export class VRSpike {
     }
   }
 
+  private static roundReadyLatched = false;
+
+  /**
+   * ROADMAP 3.12 — a soft tick on the weapon hand as the round opens, so the
+   * player knows when a swing will count without looking at the hilt. A
+   * buffered swing released this frame counts as the opening too: the round
+   * restarts in the same frame, so readiness alone would never rise.
+   * Only in combat; aiming at a hostile outside a fight is not a round.
+   */
+  private static pulseRoundReady(
+    session: XRSession,
+    context: { readonly inCombat: boolean; readonly tempoReadiness?: number },
+    bufferedSwingReleased: boolean,
+  ): void {
+    const open = context.inCombat === true &&
+      ((context.tempoReadiness ?? 0) >= 1 || bufferedSwingReleased);
+    if (open && !VRSpike.roundReadyLatched) {
+      void VRSpike.haptics.pulse(session, VRSpike.dominantHand, ROUND_READY_HAPTIC);
+    }
+    VRSpike.roundReadyLatched = open;
+  }
+
   /** In combat, or opening it on a hostile the engine has nominated. */
   private static isPresentationShotAllowed(context: {
     readonly inCombat: boolean;
@@ -2424,7 +2466,8 @@ export class VRSpike {
     weaponMode: CombatWeaponMode,
     tempoReadiness: number,
     inCombat: boolean,
-    stanceReadout = ''
+    stanceReadout = '',
+    swingArmed = false,
   ): void {
     // The hilt timer is a diegetic ring on the weapon itself, so it belongs on
     // the grip anchor. The blaster laser is an *aiming* line and must use the
@@ -2445,7 +2488,7 @@ export class VRSpike {
     }
     VRSpike.hiltTimerHost.present(Number.isFinite(tempoReadiness)
       ? Math.min(1, Math.max(0, tempoReadiness))
-      : 0);
+      : 0, swingArmed);
 
     // Same grip anchor as the ring, so the upcoming player-selected action
     // belongs to the equipped weapon rather than a screen-space HUD.
