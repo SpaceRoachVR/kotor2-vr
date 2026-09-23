@@ -47,6 +47,9 @@ const COVERED: [number, string][] = [
   [842, 'GetIsPuppet'], [850, 'ChangeObjectAppearance'], [853, 'ActionSwitchWeapons'],
   [856, 'DisableMap'], [858, 'DisableHealthRegen'], [862, 'SetForceAlwaysUpdate'],
   [869, 'AdjustCreatureSkills'], [870, 'GetSkillRankBase'], [872, 'GetCombatActionsPending'],
+  // 2026-09-22 batch, read off the DeNCS-decompiled retail callers.
+  [144, 'AngleToVector'], [386, 'SetMapPinEnabled'], [389, 'AddMultiClass'],
+  [553, 'FaceObjectAwayFromObject'], [822, 'ForceHeartbeat'], [868, 'RemoveEffectByExactMatch'],
 ];
 
 describe('routine coverage', () => {

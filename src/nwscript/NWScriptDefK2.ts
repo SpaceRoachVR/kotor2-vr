@@ -13,6 +13,9 @@ import { NWScriptInstance } from "@/nwscript/NWScriptInstance";
 import { getRandomWalkableDestination } from "@/nwscript/actions/GetRandomDestination";
 import EngineLocation from "@/engine/EngineLocation";
 import * as THREE from "three";
+import { CreatureClass } from "@/combat/CreatureClass";
+import type { GameEffect } from "@/effects/GameEffect";
+import { angleToVector, canAddMultiClass, effectsMatchExactly, pointFacingAway } from "@/nwscript/TSLRoutineRules";
 
 /**
  * NWScriptDefK2 class.
@@ -1038,7 +1041,10 @@ NWScriptDefK2.Actions = {
     name: 'AngleToVector',
     type: NWScriptDataType.VECTOR,
     args: [ NWScriptDataType.FLOAT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number]){
+      const v = angleToVector(args[0]);
+      return new THREE.Vector3(v.x, v.y, v.z);
+    }
   },
   145: {
     comment: '145: Convert vVector to an angle',
@@ -2760,7 +2766,11 @@ NWScriptDefK2.Actions = {
     name: 'SetMapPinEnabled',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.INTEGER ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject, number]){
+      const pin = args[0];
+      if(!BitWise.InstanceOfObject(pin, ModuleObjectType.ModuleWaypoint)) return;
+      pin.mapNoteEnabled = !!args[1];
+    }
   },
   387: {
     comment: '387: Create a Hit Point Change When Dying effect.\n- fHitPointChangePerRound: this can be positive or negative, but not zero.\n* Returns an effect of type EFFECT_TYPE_INVALIDEFFECT if fHitPointChangePerRound is 0.',
@@ -2781,7 +2791,13 @@ NWScriptDefK2.Actions = {
     name: 'AddMultiClass',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [number, ModuleObject]){
+      const creature = args[1] as ModuleCreature;
+      if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return;
+      const classes = GameState.TwoDAManager.datatables.get('classes');
+      if(!classes || !canAddMultiClass(creature.classes, args[0], classes.RowCount)) return;
+      creature.classes.push(new CreatureClass(args[0]));
+    }
   },
   390: {
     comment: '390: Tests a linked effect to see if the target is immune to it.\nIf the target is imune to any of the linked effect then he is immune to all of it',
@@ -3931,7 +3947,14 @@ NWScriptDefK2.Actions = {
     name: 'FaceObjectAwayFromObject',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject]){
+      const [facer, other] = args;
+      if(!BitWise.InstanceOfObject(facer, ModuleObjectType.ModuleObject) ||
+         !BitWise.InstanceOfObject(other, ModuleObjectType.ModuleObject)) return;
+      if(facer.area !== other.area) return;
+      const point = pointFacingAway(facer.position, other.position);
+      if(point) facer.FacePoint(new THREE.Vector3(point.x, point.y, point.z));
+    }
   },
   554: {
     comment: '554: Spawn in the Death GUI.\nThe default (as defined by BioWare) can be spawned in by PopUpGUIPanel, but\nif you want to turn off the \'Respawn\' or \'Wait for Help\' buttons, this is the\nfunction to use.\n- oPC\n- bRespawnButtonEnabled: if this is TRUE, the \'Respawn\' button will be enabled\n  on the Death GUI.\n- bWaitForHelpButtonEnabled: if this is TRUE, the \'Wait For Help\' button will\n  be enabled on the Death GUI.\n- nHelpStringReference\n- sHelpString',
@@ -5978,7 +6001,13 @@ NWScriptDefK2.Actions = {
     name: 'ForceHeartbeat',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      // Documented as creatures only; the heartbeat is also what refreshes perception.
+      const creature = args[0] as ModuleCreature;
+      if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return;
+      creature.updatePerceptionList();
+      creature.triggerHeartbeat();
+    }
   },
   823: {
     comment: '823\nDJS-OEI 5/5/2004\nCreates a Force Sight effect.',
@@ -6414,7 +6443,12 @@ NWScriptDefK2.Actions = {
     name: 'RemoveEffectByExactMatch',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.EFFECT ],
-    action: undefined
+    action: function(this: NWScriptInstance, args: [ModuleObject, GameEffect]){
+      const object = args[0];
+      if(!BitWise.InstanceOfObject(object, ModuleObjectType.ModuleObject) || !args[1]) return;
+      const match = object.effects.find((effect) => effectsMatchExactly(effect, args[1]));
+      if(match) object.removeEffect(match);
+    }
   },
   869: {
     comment: '869\nDJS-OEI 10/9/2004\nThis function adjusts a creature\'s skills.\noObject is the creature that will have its skill adjusted\nThe following constants are acceptable for the nSkill parameter:\nSKILL_COMPUTER_USE\nSKILL_DEMOLITIONS\nSKILL_STEALTH\nSKILL_AWARENESS\nSKILL_PERSUADE\nSKILL_REPAIR\nSKILL_SECURITY\nSKILL_TREAT_INJURY\nnAmount is the integer value to adjust the stat by (negative values will work).',

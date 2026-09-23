@@ -96,6 +96,8 @@ export class ModuleWaypoint extends ModuleObject {
     gff.RootNode.addField( this.actionQueueToActionList() );
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE,  'Commandable') ).setValue(1);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE,  'HasMapNote') ).setValue(1);
+    // SetMapPinEnabled changes this at runtime; retail waypoint saves carry it.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE,  'MapNoteEnabled') ).setValue(this.mapNoteEnabled ? 1 : 0);
     // Retail saves write the map-note name as a CExoLocString. This wrote the
     // unrelated (and for waypoints undefined) locName as a FLOAT.
     gff.RootNode.addField( new GFFField(GFFDataType.CEXOLOCSTRING, 'LocalizedName') ).setValue(this.localizedName ?? new CExoLocString());
