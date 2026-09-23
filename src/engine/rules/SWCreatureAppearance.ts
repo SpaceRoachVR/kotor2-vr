@@ -126,7 +126,6 @@ export class SWCreatureAppearance {
 
   getBodyModelInfo(bodyVariation: string = '', textureVariation: number = 1): { model: string, texture: string } {
     textureVariation = Math.max(1, textureVariation);
-    console.log('getBodyModelInfo', bodyVariation, textureVariation);
     const defaultModel = this.modela.replace(/\0[\s\S]*$/g,'');
     const defaultTexture = this.texa.replace(/\0[\s\S]*$/g,'');
     let bodyModel = defaultModel; 
@@ -180,13 +179,15 @@ export class SWCreatureAppearance {
       break;
     }
 
-    if(!!bodyTexture){
-      bodyTexture += Utility.PadInt( textureVariation, 2);
+    const resolvedModel = (bodyModel || defaultModel || '').toLowerCase();
+    let resolvedTexture = '';
+    if(bodyTexture && bodyTexture !== '****'){
+      resolvedTexture = (bodyTexture + Utility.PadInt(textureVariation, 2)).toLowerCase();
     }
 
     return {
-      model: !!bodyModel ? bodyModel.toLowerCase() : defaultModel.toLowerCase(), 
-      texture: !!bodyTexture ? bodyTexture.toLowerCase() : defaultTexture.toLowerCase()
+      model: resolvedModel, 
+      texture: resolvedTexture
     };
   }
 

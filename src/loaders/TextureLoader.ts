@@ -140,7 +140,23 @@ export class OdysseyTextureSourceProvider implements TextureSourceProvider<Odyss
       }
       case 'key-bif': {
         const result = await this.tpcLoader.findInKeyTable(resref);
-        return result ? this.loadTpc(result.buffer, resref, result.pack) : undefined;
+        if (result) {
+          return this.loadTpc(result.buffer, resref, result.pack);
+        }
+        // Base-game textures are not all TPC: textures.bif keeps many as TGA
+        // with a sibling TXI (dxn_water03b and 18 other environment maps were
+        // reported missing by tools/parity while retail resolves them here).
+        // Same order the module archives use: TGA first, then TPC.
+        const tgaBuffer = await ResourceLoader.searchKeyTable(ResourceTypes.tga, resref);
+        if (!tgaBuffer?.length) {
+          return undefined;
+        }
+        return this.loadTga(
+          tgaBuffer,
+          resref,
+          await ResourceLoader.searchKeyTable(ResourceTypes.txi, resref),
+          'key-bif-txi',
+        );
       }
     }
   }
@@ -149,7 +165,7 @@ export class OdysseyTextureSourceProvider implements TextureSourceProvider<Odyss
     buffer: Uint8Array | undefined,
     resref: string,
     txiBuffer: Uint8Array | undefined,
-    txiSource: 'override-txi' | 'active-module-txi',
+    txiSource: 'override-txi' | 'active-module-txi' | 'key-bif-txi',
     sourceLayerId?: string,
   ): TextureSourceArtifact<OdysseyTexture> | undefined {
     if (!buffer?.length) {

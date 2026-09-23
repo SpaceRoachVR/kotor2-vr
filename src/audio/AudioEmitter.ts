@@ -38,6 +38,13 @@ export class AudioEmitter {
   sounds: string[] = [];
   isActive: boolean = true;
   isLooping: boolean = false;
+  /**
+   * UTS play style. Looping repeats seamlessly; Continuous repeats on the
+   * interval; neither plays one sound and stops (retail's "once", used by
+   * script-triggered sound objects). Defaults true so emitters that are not
+   * sound objects keep repeating as before.
+   */
+  isContinuous: boolean = true;
   isRandom: boolean = false;
   isRandomPosition: boolean = false;
   randomX: number = 0;
@@ -394,6 +401,12 @@ export class AudioEmitter {
     const canExecuteCallback = !this.currentSound?.loop;
     this.currentSound.onended = canExecuteCallback ? () => {
       if(!!this.currentSound?.loop || !this.isActive || this.isDestroyed){
+        return;
+      }
+      if(!this.isLooping && !this.isContinuous){
+        this.state = AudioEmitterState.STOPPED;
+        this.interationCount = 0;
+        this.disposeCurrentSound();
         return;
       }
       this.getNextSoundIndex();

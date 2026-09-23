@@ -454,7 +454,16 @@ export class ShaderOdysseyModel extends Shader {
         vec2 q = vUv;
         vec2 uv = vUv;
         vec3 oricol = outgoingLight.xyz;
-        vec3 col = texture2D(map, vUv).rgb;
+        // A hologram material with no texture map has no 'map' sampler, and
+        // sampling it anyway failed the whole program: "'map' : undeclared
+        // identifier", then "useProgram: program not valid" every frame - the
+        // Peragus Security Officer's hologram in 'secoff' never drew. Tint the
+        // lit colour instead when there is no map, as the saber fix does.
+        #ifdef USE_MAP
+          vec3 col = texture2D(map, vUv).rgb;
+        #else
+          vec3 col = oricol;
+        #endif
         float gray = dot(col, vec3(0.299, 0.587, 0.114));
   
         col.r = gray * 0.33;

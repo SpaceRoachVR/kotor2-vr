@@ -671,12 +671,9 @@ export class OdysseyModel3D extends OdysseyObject3D {
         this.animationManager.setLastAnimation( this.animationManager.currentAnimation, state )
       }
 
-      const animations2DA = TwoDAManager.datatables.get('animations');
-      for(let i = 0, len = animations2DA.rows.length; i < len; i++){
-        if(animations2DA.rows[i].name == this.animationManager.currentAnimation.name){
-          this.animationManager.currentAnimationState.animation = animations2DA.rows[i];
-          break;
-        }
+      const anim2da = OdysseyModelAnimation.GetAnimation2DA(this.animationManager.currentAnimation.name);
+      if (anim2da) {
+        this.animationManager.currentAnimationState.animation = anim2da;
       }
       return this.animationManager.currentAnimation;
     }

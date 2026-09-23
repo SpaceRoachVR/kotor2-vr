@@ -204,7 +204,7 @@ export class ERFObject {
     const buffer = new Uint8Array(resource.size);
 
     if(this.inMemory){
-      buffer.set(this.buffer.slice(resource.offset, resource.offset + (resource.size - 1)));
+      buffer.set(this.buffer.slice(resource.offset, resource.offset + resource.size));
       return buffer;
     }else{
       const fd = await this.getFileDescription();
@@ -250,7 +250,7 @@ export class ERFObject {
     }
     
     if(this.inMemory){
-        const buffer = new Uint8Array(this.buffer.slice(resource.offset, resource.offset + (resource.size - 1)));
+      const buffer = new Uint8Array(this.buffer.slice(resource.offset, resource.offset + resource.size));
       await GameFileSystem.writeFile(path.join(directory, resref+'.'+ResourceTypes.getKeyByValue(restype)), buffer);
       return buffer;
     }else{

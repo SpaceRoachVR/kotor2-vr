@@ -41,7 +41,7 @@ const saveBody = (name: string): string => {
   expect(start).toBeGreaterThan(-1);
   // Bounded window: long enough to cover the field writes, short enough not to
   // spill into whatever method follows and borrow its text.
-  return source.slice(start, start + 14000);
+  return source.slice(start, start + 16000);
 };
 
 describe('module object saves preserve the blueprint reference', () => {

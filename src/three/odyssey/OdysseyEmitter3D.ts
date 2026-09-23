@@ -1850,7 +1850,20 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
         if(foundGeom) return;
         if(child instanceof THREE.Mesh && child.geometry){
           foundGeom = child.geometry.clone();
-          foundMat = (child.material as THREE.Material).clone();
+          // Material.clone() deep-copies userData through JSON.stringify, and
+          // this engine keeps a back-reference to the owning model there
+          // (userData.textureOwnerModel), which is circular. Every chunk
+          // emitter — junk bins, chunky bits, kolto bubbles — failed with
+          // "Converting circular structure to JSON" and drew nothing, logging a
+          // 16-line trace each time. The clone does not need that reference.
+          const source = child.material as THREE.Material;
+          const userData = source.userData;
+          source.userData = {};
+          try{
+            foundMat = source.clone();
+          }finally{
+            source.userData = userData;
+          }
         }
       });
 

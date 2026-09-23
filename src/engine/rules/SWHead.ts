@@ -12,6 +12,7 @@ import { TwoDAObject } from "@/resource/TwoDAObject";
 export class SWHead {
   id: number;
   head: string;
+  alttexture: string = '';
   headtexvvve: string;
   headtexe: string;
   headtexvve: string;
@@ -22,19 +23,20 @@ export class SWHead {
   getTextureGoodEvil(nGoodEvil: number){
     nGoodEvil = nGoodEvil > 50 ? 50 : nGoodEvil;
     const evilIndex = Math.floor(nGoodEvil/10);
+    const baseTex = this.alttexture && this.alttexture !== '****' ? this.alttexture : '';
     switch(evilIndex){
       case 0:
-        return !!this.headtexvvve?.length ? this.headtexvvve : this.head;
+        return !!this.headtexvvve?.length && this.headtexvvve !== '****' ? this.headtexvvve : baseTex;
       case 1:
-        return !!this.headtexvve?.length ? this.headtexvve : this.head;
+        return !!this.headtexvve?.length && this.headtexvve !== '****' ? this.headtexvve : baseTex;
       case 2:
-        return !!this.headtexve?.length ? this.headtexve : this.head;
+        return !!this.headtexve?.length && this.headtexve !== '****' ? this.headtexve : baseTex;
       case 3:
-        return !!this.headtexe?.length ? this.headtexe : this.head;
+        return !!this.headtexe?.length && this.headtexe !== '****' ? this.headtexe : baseTex;
       case 4:
-        return this.head;
+        return baseTex;
       default:
-        return this.head; 
+        return baseTex; 
     }
   }
 
@@ -42,6 +44,7 @@ export class SWHead {
     const head = new SWHead();
     head.id = TwoDAObject.normalizeValue(row.__index, "number", -1);
     head.head = (TwoDAObject.normalizeValue(row.head, "string", "") as string).replace(/\0[\s\S]*$/g,'').toLowerCase();
+    head.alttexture = (TwoDAObject.normalizeValue(row.alttexture, "string", "") as string).replace(/\0[\s\S]*$/g,'').toLowerCase();
     head.headtexvvve = (TwoDAObject.normalizeValue(row.headtexvvve, "string", "") as string).replace(/\0[\s\S]*$/g,'').toLowerCase();
     head.headtexvve = (TwoDAObject.normalizeValue(row.headtexvve, "string", "") as string).replace(/\0[\s\S]*$/g,'').toLowerCase();
     head.headtexve = (TwoDAObject.normalizeValue(row.headtexve, "string", "") as string).replace(/\0[\s\S]*$/g,'').toLowerCase();

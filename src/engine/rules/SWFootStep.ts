@@ -63,6 +63,7 @@ export class SWFootStep {
         sound = sndIdx == 0 ? this.wood0 : sndIdx == 1 ? this.wood1 : this.wood2;
       break;
       case 6:
+      case 17:
         sound = sndIdx == 0 ? this.water0 : sndIdx == 1 ? this.water1 : this.water2;
       break;
       case 9:
@@ -72,6 +73,7 @@ export class SWFootStep {
         sound = sndIdx == 0 ? this.metal0 : sndIdx == 1 ? this.metal1 : this.metal2;
       break;
       case 11:
+      case 12:
       case 13:
         sound = sndIdx == 0 ? this.puddles0 : sndIdx == 1 ? this.puddles1 : this.puddles2;
       break;
@@ -124,9 +126,9 @@ export class SWFootStep {
     footStep.leaves0 = TwoDAObject.normalizeValue(row.leaves0, 'string', '');
     footStep.leaves1 = TwoDAObject.normalizeValue(row.leaves1, 'string', '');
     footStep.leaves2 = TwoDAObject.normalizeValue(row.leaves2, 'string', '');
-    footStep.force0 = TwoDAObject.normalizeValue(row.force0, 'string', '');
-    footStep.force1 = TwoDAObject.normalizeValue(row.force1, 'string', '');
-    footStep.force2 = TwoDAObject.normalizeValue(row.force2, 'string', '');
+    footStep.force0 = TwoDAObject.normalizeValue(row.force0 !== undefined ? row.force0 : row.force1, 'string', '');
+    footStep.force1 = TwoDAObject.normalizeValue(row.force1 !== undefined && row.force0 !== undefined ? row.force1 : row.force2, 'string', '');
+    footStep.force2 = TwoDAObject.normalizeValue(row.force2 !== undefined && row.force0 !== undefined ? row.force2 : row.force3, 'string', '');
     return footStep;
   }
 }

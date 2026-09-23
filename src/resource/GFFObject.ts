@@ -249,7 +249,7 @@ export class GFFObject {
     let field = new GFFField(f.Type, this.tmpLabelArray[f.Label]);
 
     let data = f.Data;
-    let dataView = new DataView(data.buffer);
+    let dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
     let offset = dataView.getUint32(0, true);
 
     let OriginalPos = this.reader.tell();//Store the original position of the reader object
@@ -605,8 +605,9 @@ export class GFFObject {
       const field = this.exportedFields[i];
       switch(field.getType()){
         case GFFDataType.LIST:
-          if(field.getChildStructs().length > 0)
-            listIndicesSize += 4 + field.getChildStructs().length * 4;
+          // An empty list still gets its zero count, the way BioWare's writer
+          // does. See gff-empty-list-offset.test.ts.
+          listIndicesSize += 4 + field.getChildStructs().length * 4;
           break;
         case GFFDataType.CEXOLOCSTRING:{
           fieldDataSize += 12;
@@ -857,15 +858,12 @@ export class GFFObject {
             this.BWFieldData.writeBytes(field.data);
             break;
           case GFFDataType.LIST:
-            if (field.getChildStructs().length == 0){
-              this.BWFields.writeUInt32(0xFFFFFFFF);
-            }
-            else {
-              this.BWFields.writeUInt32(this.BWListIndicies.position);
-              this.BWListIndicies.writeUInt32(field.getChildStructs().length);
-              for(let i = 0; i < field.getChildStructs().length; i++){
-                this.BWListIndicies.writeUInt32(field.getChildStructs()[i].index);
-              }
+            // Empty lists point at a zero count, never 0xFFFFFFFF: spec readers
+            // (PyKotor, and BioWare's own) reject the sentinel as out of bounds.
+            this.BWFields.writeUInt32(this.BWListIndicies.position);
+            this.BWListIndicies.writeUInt32(field.getChildStructs().length);
+            for(let i = 0; i < field.getChildStructs().length; i++){
+              this.BWListIndicies.writeUInt32(field.getChildStructs()[i].index);
             }
             break;
           case GFFDataType.ORIENTATION:

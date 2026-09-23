@@ -139,6 +139,10 @@ export class ActionParameter {
 
   toStruct(){
     const struct = new GFFStruct(1);
+    // FromStruct keys off 'Type', and retail saves write it (DWORD) on every
+    // parameter. Without it every saved parameter reloaded as a hole, which is
+    // why 3C-FD's ActionPlayAnimation came back with all three params absent.
+    struct.addField(new GFFField(GFFDataType.DWORD, 'Type', this.type));
     switch(this.type){
       case ActionParameterType.INT:
         struct.addField(new GFFField(GFFDataType.INT, 'Value', this.value));
