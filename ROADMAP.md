@@ -1335,7 +1335,7 @@ belong together.
   - **Files:** `VRComfortVignetteHost.ts` (or a sibling), `VRSpike.ts`,
     `VRComfortSettingsHost.ts`.
 
-- **3.15** ☐ **Combat aim follows the dominant hand.** Bug:
+- **3.15** ✅ implemented (2026-09-23) / ☐ headset-accepted — **Combat aim follows the dominant hand.** Fixed in all five places: combat aim, the interaction aim combat consults first, and the panel, overlay and keyboard pointers. Select already worked from either trigger. Original statement: Bug:
   `VRSpike.resolveAimedCombatTargetId` reads `hands.right` whatever
   `VRSpike.dominantHand` is set to, so a left-handed player swings with the
   left hand and aims with the right. The keyboard and overlay pointers at

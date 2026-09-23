@@ -851,6 +851,44 @@ describe('VRSpike XR loop ownership', () => {
     expect(combatEvents).toEqual([expect.objectContaining({ hand: 'left', input: 'dominant-swing' })]);
   });
 
+  test.each([
+    ['right', 42],
+    ['left', 43],
+  ] as const)('combat aim follows the %s dominant hand (3.15)', (dominant, expected) => {
+    const ray = (direction: THREE.Vector3) => ({
+      position: new THREE.Vector3(0, 0, 1),
+      orientation: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction),
+      trackingState: 'tracked',
+    });
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: { pose: ray(new THREE.Vector3(0, 1, 0)), targetRayPose: ray(new THREE.Vector3(0, 1, 0)) },
+        left: { pose: ray(new THREE.Vector3(0, -1, 0)), targetRayPose: ray(new THREE.Vector3(0, -1, 0)) },
+      },
+    };
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatAimCandidates: () => ({
+        actorPosition: new THREE.Vector3(),
+        maxRangeMetres: 15,
+        candidates: [
+          { id: 42, position: new THREE.Vector3(0, 5, 0) },
+          { id: 43, position: new THREE.Vector3(0, -5, 0) },
+        ],
+      }),
+    };
+    VRSpike.setDominantHand(dominant);
+    try {
+      expect((VRSpike as any).resolveAimedCombatTargetId()).toBe(expected);
+    } finally {
+      VRSpike.setDominantHand('right');
+    }
+  });
+
   test('pulses the weapon hand for a melee hit and draws a deflected bolt to the blade (3.13)', () => {
     const pulse = jest.fn(async (
       _session: XRSession,

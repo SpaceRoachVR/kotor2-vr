@@ -1446,7 +1446,8 @@ export class VRSpike {
       // visibly drift away from the cutscene.
       const presentationHost = cutsceneOwnsTheater ? VRSpike.movieHost : VRSpike.panelHost;
       const expectedOwner = cutsceneOwnsTheater ? VRSpike.cutsceneOwner : menu;
-      const dominantHand = VRSpike.latestInputFrame.hands.right;
+      // ROADMAP 3.15: the pointer follows the dominant-hand setting.
+      const dominantHand = VRSpike.latestInputFrame.hands[VRSpike.dominantHand];
       const pointerHit = dominantHand && presentationHost?.owner === expectedOwner && presentationHost.isVisible
         ? VRSpike.panelPointerHost?.update(
           presentationHost.object,
@@ -1521,7 +1522,7 @@ export class VRSpike {
         VRSpike.inGameOverlayPointerHost = new VRPanelPointerHost(worldScene);
       }
       const host = VRSpike.inGameOverlayHost;
-      const hand = inputFrame.hands.right;
+      const hand = inputFrame.hands[VRSpike.dominantHand];
       const pointerHit = hand && host?.isVisible
         ? VRSpike.inGameOverlayPointerHost.update(
           host.object,
@@ -1732,7 +1733,7 @@ export class VRSpike {
 
       // Track the aimed key every frame, not only on press: this is what draws
       // the highlight and the on-plane cursor that make the keyboard aimable.
-      const rayPose = inputFrame.hands.right?.targetRayPose;
+      const rayPose = inputFrame.hands[VRSpike.dominantHand]?.targetRayPose;
       const aimedKey = rayPose && VRSpike.keyboardHost.isVisible
         ? VRSpike.keyboardHost.keyAtRay(rayPose)
         : null;
@@ -1887,7 +1888,10 @@ export class VRSpike {
       VRSpike.interactionTargetSet.synchronize(interactionContext.targets);
       const leftPreview = VRSpike.resolveRayPreview(inputFrame, 'left');
       const rightPreview = VRSpike.resolveRayPreview(inputFrame, 'right');
-      VRSpike.interactionAimedTargetId = VRSpike.parseModuleObjectTargetId(rightPreview?.id ?? null);
+      // ROADMAP 3.15: combat nominates from the weapon hand, so the interaction
+      // aim that combat consults first must come from the same hand.
+      const dominantPreview = VRSpike.dominantHand === 'left' ? leftPreview : rightPreview;
+      VRSpike.interactionAimedTargetId = VRSpike.parseModuleObjectTargetId(dominantPreview?.id ?? null);
 
       const selectedCandidate = selectVRWorldPromptCandidate(
         promptContext.candidates,
@@ -2182,7 +2186,7 @@ export class VRSpike {
    * cache would have to be invalidated on every spawn, death and module load.
    */
   private static resolveAimedCombatTargetId(): number | null {
-    const rayPose = VRSpike.latestInputFrame?.hands.right?.targetRayPose;
+    const rayPose = VRSpike.latestInputFrame?.hands[VRSpike.dominantHand]?.targetRayPose;
     if (!rayPose || rayPose.trackingState !== 'tracked') return null;
     try {
       const context = VRSpike.hooks?.getCombatAimCandidates?.() ?? null;
