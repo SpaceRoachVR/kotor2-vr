@@ -375,6 +375,7 @@ const vrComfortSettings: MutableVRComfortSettings = {
   turnMode: 'smooth',
   snapTurnDegrees: 45,
   vignetteEnabled: false,
+  damageFlashEnabled: true,
 };
 let vrComfortSettingsPanelOpen = false;
 let vrComfortSettingsPausedByVR = false;
@@ -3024,6 +3025,7 @@ export class GameState implements EngineContext {
             attackTargetIsCreature: targetIsCreature,
             attackTargetAimPoint: targetIsCreature ? null : resolveVRStructureAimPoint(target),
             attackTargetId: target && Number.isInteger(target.id) ? target.id : null,
+            hitPoints: typeof creature.getHP === 'function' ? creature.getHP() : null,
           });
         };
         for (const creature of (area.creatures ?? [])) add(creature as ModuleCreature);
@@ -3347,6 +3349,10 @@ export class GameState implements EngineContext {
             label: 'Comfort Vignette',
             value: vrComfortSettings.vignetteEnabled ? 'On' : 'Off',
           },
+          {
+            label: 'Damage Flash',
+            value: vrComfortSettings.damageFlashEnabled !== false ? 'On' : 'Off',
+          },
         ];
         return {
           rows,
@@ -3366,6 +3372,9 @@ export class GameState implements EngineContext {
               }
               case 3:
                 vrComfortSettings.vignetteEnabled = !vrComfortSettings.vignetteEnabled;
+                break;
+              case 4:
+                vrComfortSettings.damageFlashEnabled = vrComfortSettings.damageFlashEnabled === false;
                 break;
             }
           },

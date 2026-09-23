@@ -68,6 +68,8 @@ export interface VRCombatActorSnapshot {
   readonly attackTargetAimPoint?: THREE.Vector3 | null;
   /** The attack's target object id, when it has one (ROADMAP 3.13). */
   readonly attackTargetId?: number | null;
+  /** Current hit points, so the player's own damage can be felt (ROADMAP 3.14). */
+  readonly hitPoints?: number | null;
 }
 
 export interface VRBlasterBoltEvent {

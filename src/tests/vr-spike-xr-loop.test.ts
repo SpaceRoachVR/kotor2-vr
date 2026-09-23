@@ -909,6 +909,70 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).scene = null;
   });
 
+  test('pulses the hand and flashes the edge on the side a hit came from (3.14)', () => {
+    const pulse = jest.fn(async (
+      _session: XRSession,
+      _hand: 'left' | 'right',
+      _pattern: { durationMs: number; amplitude: number },
+    ) => undefined);
+    (VRSpike as any).haptics = { pulse };
+    (VRSpike as any).attackResultObserver.reset();
+    (VRSpike as any).combatVisualObserver.reset();
+    (VRSpike as any).damageTracker.reset();
+    (VRSpike as any).scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    VRSpike.camera = camera;
+    VRSpike.session = { inputSources: [] } as unknown as XRSession;
+    // Facing +Y in KOTOR's Z-up world.
+    (VRSpike as any).latestInputFrame = {
+      head: {
+        position: new THREE.Vector3(),
+        orientation: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 1, 0)),
+        trackingState: 'tracked',
+      },
+      hands: {},
+    };
+    let enemyLanded = false;
+    let playerHitPoints = 40;
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatVisualSnapshots: () => ({
+        localActorId: 7,
+        snapshots: [
+          {
+            id: 7, position: new THREE.Vector3(), isDroid: false, deathStarted: false, attackResultsCalculated: false,
+            attackIsRanged: false, attackResult: 0, attackTargetPosition: null, hitPoints: playerHitPoints,
+          },
+          {
+            id: 42, position: new THREE.Vector3(-2, 0, 0), isDroid: false, deathStarted: false,
+            attackResultsCalculated: enemyLanded, attackIsRanged: false, attackResult: 1,
+            attackTargetPosition: new THREE.Vector3(), attackTargetId: 7,
+          },
+        ],
+      }),
+    };
+
+    (VRSpike as any).updateCombatVisuals(1_000);
+    enemyLanded = true;
+    (VRSpike as any).updateCombatVisuals(1_016);
+    expect(pulse).not.toHaveBeenCalled();
+    playerHitPoints = 33;
+    (VRSpike as any).updateCombatVisuals(1_300);
+
+    expect(pulse).toHaveBeenCalledTimes(1);
+    expect(pulse).toHaveBeenCalledWith(expect.anything(), 'left', { durationMs: 70, amplitude: 0.7 });
+    const flash = (VRSpike as any).damageFlashHost;
+    expect(flash).not.toBeNull();
+    expect(camera.children).toContain(flash.object);
+
+    (VRSpike as any).damageFlashHost = null;
+    VRSpike.camera = null;
+    (VRSpike as any).scene = null;
+  });
+
   test('ticks the weapon hand once as each combat round opens, including on a buffered release (3.12)', () => {
     const pulse = jest.fn(async (
       _session: XRSession,

@@ -1325,7 +1325,7 @@ belong together.
   - **Files:** `VRCombatVisualEvents.ts`, `VRBlasterBoltHost.ts`,
     `VRHapticFeedback.ts`, `VRSpike.ts`.
 
-- **3.14** ☐ **Feel getting hit.** When the controlled creature takes damage, show a
+- **3.14** ✅ implemented (2026-09-23) / ☐ headset-accepted — **Feel getting hit.** Triggered by the controlled creature's own hit points dropping (so mines, grenades and Force damage count too); the side comes from the last attack roll that hit the player within 2 s, else both edges faintly (`VRDamageFeedbackTracker`, `resolveVRDamageSide`). `VRDamageFlashHost` is a sibling of the vignette with one red edge per side; the comfort panel gained a **Damage Flash** row (on by default). The haptic pulse on that side's hand is not behind the toggle. Original statement: When the controlled creature takes damage, show a
   short red flash at the edge of the view on the side the attacker is on, and
   pulse the controller on that side. A critical gets a stronger flash and pulse.
   The vignette host already draws at the edge of the view, so extend it rather

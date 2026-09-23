@@ -32,6 +32,11 @@ export interface VRComfortSettings {
   readonly turnMode: VRTurnMode;
   readonly snapTurnDegrees: number;
   readonly vignetteEnabled: boolean;
+  /**
+   * ROADMAP 3.14 — the red edge flash when the player is hit. On unless the
+   * player turns it off; absent reads as on.
+   */
+  readonly damageFlashEnabled?: boolean;
 }
 export type InteractionMode = 'near-touch' | 'ray' | 'grab';
 export type CombatWeaponMode =

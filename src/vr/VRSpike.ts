@@ -60,6 +60,8 @@ import {
 import { BOLT_TRAVEL_MS, VRBlasterBoltHost } from "./runtime/VRBlasterBoltHost";
 import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
 import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
+import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
+import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
 import type { VRHapticPattern } from "./runtime/VRHapticFeedback";
 import { VRDroidExplosionHost } from "./runtime/VRDroidExplosionHost";
 import {
@@ -131,6 +133,13 @@ const PRESENTATION_SHOT_RANGE_METRES = 20;
 const ROUND_READY_HAPTIC = { durationMs: 25, amplitude: 0.25 } as const;
 /** Engine `AttackResult.DEFLECTED`. */
 const DEFLECTED_ATTACK_RESULT = 9;
+const CRITICAL_ATTACK_RESULT = 2;
+/** HIT_SUCCESSFUL, CRITICAL_HIT, AUTOMATIC_HIT. */
+const HIT_ATTACK_RESULTS: ReadonlySet<number> = new Set([1, 2, 3]);
+/** ROADMAP 3.14. Stronger than anything the player's own attacks produce, bar a critical. */
+const DAMAGE_HAPTIC = { durationMs: 70, amplitude: 0.7 } as const;
+const DAMAGE_CRITICAL_HAPTIC = { durationMs: 120, amplitude: 1 } as const;
+const DAMAGE_UNATTRIBUTED_HAPTIC = { durationMs: 40, amplitude: 0.4 } as const;
 /** How far along the weapon a clash or deflection is drawn, from the grip. */
 const BLADE_CONTACT_DISTANCE_METRES = 0.55;
 const DEFLECTION_REBOUND_METRES = 6;
@@ -537,6 +546,8 @@ export class VRSpike {
   private static readonly combatVisualObserver = new VRCombatVisualEventObserver();
   private static readonly attackResultObserver = new VRCombatAttackResultObserver();
   private static bladeSparkHost: VRBladeSparkHost | null = null;
+  private static readonly damageTracker = new VRDamageFeedbackTracker();
+  private static damageFlashHost: VRDamageFlashHost | null = null;
   private static combatVisualsErrorReported = false;
   private static cutsceneFadeHost: VRCutsceneFadeHost | null = null;
   private static readonly cutsceneFadeEnvelope = new VRCutsceneFadeEnvelope();
@@ -1065,6 +1076,9 @@ export class VRSpike {
     VRSpike.attackResultObserver.reset();
     VRSpike.bladeSparkHost?.dispose();
     VRSpike.bladeSparkHost = null;
+    VRSpike.damageTracker.reset();
+    VRSpike.damageFlashHost?.dispose();
+    VRSpike.damageFlashHost = null;
     VRSpike.cutsceneFadeHost?.dispose();
     VRSpike.cutsceneFadeHost = null;
     VRSpike.cutsceneFadeEnvelope.reset();
@@ -3923,6 +3937,7 @@ export class VRSpike {
       }
       VRSpike.blasterBoltHost?.update(nowMs);
       VRSpike.bladeSparkHost?.update(nowMs);
+      VRSpike.damageFlashHost?.update(nowMs);
       VRSpike.droidExplosionHost?.update(nowMs);
     } catch (error) {
       if (!VRSpike.combatVisualsErrorReported) {
@@ -3947,6 +3962,18 @@ export class VRSpike {
     const session = VRSpike.session;
     if (!session) return;
     for (const event of events) {
+      // ROADMAP 3.14: remember who last hit the player, so the hit-point drop
+      // that follows can be shown on the right side.
+      if (localActorId !== null && event.targetId === localActorId && HIT_ATTACK_RESULTS.has(event.attackResult)) {
+        const attacker = snapshots.find((snapshot) => snapshot.id === event.attackerId);
+        if (attacker?.position) {
+          VRSpike.damageTracker.recordAttack({
+            attackerPosition: attacker.position,
+            critical: event.attackResult === CRITICAL_ATTACK_RESULT,
+            timestampMs: nowMs,
+          });
+        }
+      }
       const feedback = resolveVRCombatFeedback({
         attackerId: event.attackerId,
         targetId: event.targetId,
@@ -3960,6 +3987,41 @@ export class VRSpike {
       if (feedback.effect === 'clash') {
         const bladePoint = VRSpike.resolveBladeContactPoint();
         if (bladePoint) VRSpike.ensureBladeSparkHost(worldScene).spark(bladePoint, nowMs);
+      }
+    }
+
+    const local = localActorId === null ? undefined : snapshots.find((snapshot) => snapshot.id === localActorId);
+    const head = VRSpike.latestInputFrame?.head;
+    const damage = VRSpike.damageTracker.observe({
+      actorId: local ? localActorId : null,
+      hitPoints: typeof local?.hitPoints === 'number' ? local.hitPoints : null,
+      playerPosition: local?.position ?? null,
+      headForward: head ? new THREE.Vector3(0, 0, -1).applyQuaternion(head.orientation) : null,
+      nowMs,
+    });
+    if (damage) VRSpike.presentDamage(session, damage, nowMs);
+  }
+
+  /**
+   * ROADMAP 3.14 — a red edge on the side the hit came from, and a pulse in
+   * that side's hand. Front, behind and unattributed hits use both.
+   */
+  private static presentDamage(session: XRSession, damage: VRDamageEvent, nowMs: number): void {
+    const pattern = damage.side === 'unknown'
+      ? DAMAGE_UNATTRIBUTED_HAPTIC
+      : damage.critical ? DAMAGE_CRITICAL_HAPTIC : DAMAGE_HAPTIC;
+    const hands: XRHandRole[] = damage.side === 'left' ? ['left'] : damage.side === 'right' ? ['right'] : ['left', 'right'];
+    for (const hand of hands) void VRSpike.haptics.pulse(session, hand, pattern);
+
+    const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
+    if (comfort.damageFlashEnabled === false || !VRSpike.camera) return;
+    try {
+      if (!VRSpike.damageFlashHost) VRSpike.damageFlashHost = new VRDamageFlashHost(VRSpike.camera);
+      VRSpike.damageFlashHost.flash(damage.side, damage.critical, nowMs);
+    } catch (error) {
+      if (!VRSpike.combatVisualsErrorReported) {
+        VRSpike.combatVisualsErrorReported = true;
+        console.error('[VRSpike] damage flash rejected', error);
       }
     }
   }
