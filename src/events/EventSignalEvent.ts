@@ -1,4 +1,5 @@
 import { GameEvent } from "@/events/GameEvent";
+import { GameState } from "@/GameState";
 import { GameEventType } from "@/enums/events/GameEventType";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
 import type { NWScriptEvent } from "@/nwscript/events/NWScriptEvent";
@@ -9,6 +10,7 @@ import { BitWise } from "@/utility/BitWise";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import type { ModuleObject } from "@/module/ModuleObject";
 import { ModuleObjectScript, SignalEventType } from "@/enums";
+import { playTrapExplosion, resolveTrapExplosionSound } from "@/module/TrapExplosion";
 
 /**
  * EventSignalEvent class.
@@ -200,19 +202,18 @@ export class EventSignalEvent extends GameEvent {
             instance.run(obj);
           }
         }
+        // The explosion sound comes from traps.2da by trap type, played where
+        // the trap fired; the trigger it used to play on has no emitter.
+        void playTrapExplosion(obj.position, resolveTrapExplosionSound(
+          GameState.TwoDAManager.datatables.get('traps')?.rows as any, (obj as any).trapType,
+        ));
         if(BitWise.InstanceOfObject(obj, ModuleObjectType.ModuleDoor) || BitWise.InstanceOfObject(obj, ModuleObjectType.ModulePlaceable)){
           obj.setHP(-11);
           obj.onDamaged();
           if(obj.linkedToObject){
-            if(obj.linkedToObject.audioEmitter){
-              obj.linkedToObject.audioEmitter.playSound((obj.linkedToObject as any).trapExplosionSound);
-            }
             obj.linkedToObject.destroy();
           }
         }else if (BitWise.InstanceOfObject(obj, ModuleObjectType.ModuleTrigger)){
-          if(obj.audioEmitter){
-            obj.audioEmitter.playSound((obj as any).trapExplosionSound);
-          }
           obj.destroy();
         }
       break;
