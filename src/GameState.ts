@@ -88,6 +88,7 @@ import {
   type VRCombatIntent,
   type VRCombatRequiredInput,
 } from "@/vr/runtime/VRCombatIntentQueue";
+import { formatVRCombatQueueReadout } from "@/vr/runtime/VRWeaponStanceHost";
 import { VRCombatIntentDispatcher } from "@/vr/runtime/VRCombatIntentDispatcher";
 import { VRMiniGameInputController } from "@/vr/runtime/VRMiniGameInputController";
 import {
@@ -3011,16 +3012,13 @@ export class GameState implements EngineContext {
           nominatedTargetId: target ? String(target.id) : null,
           weaponMode: resolveVRCombatWeaponMode(actor),
           inCombat: actor.combatData.combatState === true,
-          // The hilt readout is the next requested action, never a hidden
-          // attack mode. An empty queue deliberately returns to basic attacks.
-          // With more than one entry queued, say so: "Critical Strike +2".
-          // The head alone gave "no way to know if more than one actually
-          // queued" (round 6).
-          stanceReadout: queuedIntent
-            ? queuedIntent.label + (vrCombatIntentQueue.getSnapshot().entries.length > 1
-              ? ` +${vrCombatIntentQueue.getSnapshot().entries.length - 1}`
-              : '')
-            : '',
+          // The hilt readout is every requested action, next first, never a
+          // hidden attack mode. An empty queue deliberately returns to basic
+          // attacks. Round 6 asked to know that more than one was queued; round
+          // 11 (K6) asked to see them all, stacked, rather than "+2".
+          stanceReadout: formatVRCombatQueueReadout(
+            vrCombatIntentQueue.getSnapshot().entries.map((entry) => entry.label),
+          ),
           tempoReadiness: tempo.eligible ? 1 : 0,
           allowDominantTrigger: queuedIntent?.requiredInput === 'dominant-trigger',
           onCombatSwing: (event) => {

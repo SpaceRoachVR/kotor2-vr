@@ -128,3 +128,40 @@ test('the readout names the active stance, and both when a change is queued', ()
   expect(formatVRAttackStanceReadout({ active: FLURRY, pending: null }))
     .toBe('Flurry → Attack');
 });
+
+// Round 11 (K6): "it shows the next special +1 on the hilt when it should show
+// all queued actions in a stack."
+import { formatVRCombatQueueReadout, VR_WEAPON_STANCE_MAX_LINES } from '@/vr/runtime/VRWeaponStanceHost';
+
+test('the queue readout lists every queued action, next first', () => {
+  expect(formatVRCombatQueueReadout(['Critical Strike', 'Power Attack', 'Flurry']))
+    .toBe('Critical Strike\nPower Attack\nFlurry');
+  expect(formatVRCombatQueueReadout(['Critical Strike'])).toBe('Critical Strike');
+  expect(formatVRCombatQueueReadout([])).toBe('');
+});
+
+test('the queue readout skips blanks and never exceeds the queue size', () => {
+  expect(formatVRCombatQueueReadout(['A', '', null, undefined, ' B ', 'C', 'D'])).toBe('A\nB\nC');
+  expect(VR_WEAPON_STANCE_MAX_LINES).toBe(3);
+});
+
+test('the plaque grows a row per queued action and keeps its top edge', () => {
+  const host = new VRWeaponStanceHost(anchor(), renderer());
+  host.present('Critical Strike');
+  const oneRowTop = host.object.position.y + (host.object.geometry.parameters.height * host.object.scale.y) / 2;
+  expect(host.rowCount).toBe(1);
+
+  host.present('Critical Strike\nPower Attack\nFlurry');
+  const threeRowTop = host.object.position.y + (host.object.geometry.parameters.height * host.object.scale.y) / 2;
+  expect(host.rowCount).toBe(3);
+  expect(threeRowTop).toBeCloseTo(oneRowTop, 6);
+  expect(host.object.position.y).toBeLessThan(oneRowTop);
+});
+
+test('the engine feeds the whole queue to the hilt, not the head and a count', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const game = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
+  expect(game).toContain('stanceReadout: formatVRCombatQueueReadout(');
+  expect(game).not.toMatch(/entries\.length - 1\}/);
+});
