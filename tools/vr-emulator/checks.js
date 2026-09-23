@@ -226,6 +226,25 @@ const CHECKS = [
     },
   },
   {
+    id: 'comfort-panel-draws',
+    describe: 'Comfort Settings opens from the wheel and shows every row',
+    // Round 13: six settings rows against a panel fixed at four threw every
+    // frame, and the headset froze with no menu. No route check opened it.
+    run: (m) => {
+      const c = m.comfortPanel;
+      if (!c) return { ok: false, detail: 'metric absent' };
+      if (!c.hooks || !c.entry) return { ok: false, detail: `hooks=${c.hooks} entry=${c.entry}` };
+      if (!c.presenting) return { ok: false, detail: 'inconclusive: not presenting, so the panel was never drawn' };
+      const ok = c.visible === true && c.modelRows > 0 && c.panelRows === c.modelRows &&
+        c.closed === true && c.errors.length === 0;
+      return {
+        ok,
+        detail: `visible=${c.visible} rows=${c.panelRows}/${c.modelRows} closed=${c.closed}` +
+          (c.errors.length ? ` errors=${c.errors.join(' | ').slice(0, 300)}` : ''),
+      };
+    },
+  },
+  {
     id: 'weapon-bash-route',
     describe: 'a weapon swing at a locked object follows its authored Bash, or refuses when there is none',
     // ROADMAP 3.17. The checked module (101PER) has one locked object, the

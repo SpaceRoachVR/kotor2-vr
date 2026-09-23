@@ -403,8 +403,9 @@ export interface VRSpikeHooks {
   /**
    * Comfort settings panel (ROADMAP 2.6) — the settings the
    * ToggleLocomotionMode button alone doesn't reach: turn mode, snap-turn
-   * angle, and the comfort vignette. Opened from the action wheel; always
-   * exactly four rows, matching `VRComfortSettingsHost`'s contract.
+   * angle, the comfort vignette, and since 3.18 Damage Flash and Unpause on
+   * Wheel Close. Opened from the action wheel; the panel lays out one to
+   * `VR_COMFORT_SETTINGS_MAX_ROWS` rows.
    */
   getComfortSettingsPanelContext?: () => {
     readonly rows: readonly VRComfortSettingsRow[];

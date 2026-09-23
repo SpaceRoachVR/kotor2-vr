@@ -728,6 +728,51 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     })()`);
     onProgress('paused wheel');
 
+    // --- Comfort Settings opens from the wheel and draws ---------------------
+    // Round 13: the settings model grew to six rows while the panel stayed
+    // fixed at four, so opening it threw every frame and froze the headset.
+    // Only the frame loop presents the panel, so open it through the wheel's
+    // own entry, let frames run, and look at what the panel actually shows.
+    metrics.comfortPanel = await harness.evaluate(`(async () => {
+      const K = window.KotOR;
+      const hooks = K.VRSpike && K.VRSpike.hooks;
+      if (!hooks || !hooks.createActionWheel || !hooks.getComfortSettingsPanelContext) return { hooks: false };
+      const wheel = hooks.createActionWheel(null);
+      const entry = wheel && wheel.pages.flatMap((page) => page.entries)
+        .find((e) => e.label === 'Comfort Settings');
+      const activate = entry && (entry.activate || (entry.item && entry.item.activate));
+      if (typeof activate !== 'function') return { hooks: true, entry: false };
+      const errors = [];
+      const onError = (event) => errors.push(String(event.message || event.error));
+      window.addEventListener('error', onError);
+      const warn = console.warn, error = console.error;
+      const capture = (...args) => { const text = args.map(String).join(' '); if (/comfort/i.test(text)) errors.push(text); };
+      console.warn = (...a) => { capture(...a); warn.apply(console, a); };
+      console.error = (...a) => { capture(...a); error.apply(console, a); };
+      try {
+        activate();
+        await new Promise((r) => setTimeout(r, 1500));
+        const context = hooks.getComfortSettingsPanelContext();
+        const host = K.VRSpike.comfortSettingsHost;
+        const result = {
+          hooks: true, entry: true,
+          modelRows: context ? context.rows.length : null,
+          panelRows: host ? host.rows : null,
+          visible: !!(host && host.object.visible),
+          presenting: K.VRSpike.isPresenting === true,
+        };
+        if (context) context.close();
+        await new Promise((r) => setTimeout(r, 300));
+        result.closed = !(host && host.object.visible);
+        result.errors = errors.slice(0, 3);
+        return result;
+      } finally {
+        window.removeEventListener('error', onError);
+        console.warn = warn; console.error = error;
+      }
+    })()`, { timeoutMs: 30000 });
+    onProgress('comfort panel');
+
     // --- weapon Bash route (ROADMAP 3.17) -----------------------------------
     // The swing detection is covered by unit tests; what only the live engine
     // can show is that a real locked door or container resolves to the
