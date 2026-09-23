@@ -1622,6 +1622,13 @@ export class ModuleObject {
       onUserDefined = this.scripts[ModuleObjectScript.DoorOnUserDefined];
     }else if(BitWise.InstanceOfObject(this, ModuleObjectType.ModuleTrigger)){
       onUserDefined = this.scripts[ModuleObjectScript.TriggerOnUserDefined];
+    }else if(BitWise.InstanceOfObject(this, ModuleObjectType.ModuleArea)){
+      // Areas were the one object type missing here, so
+      // `SignalEvent(GetArea(oPC), EventUserDefined(n))` silently did nothing.
+      // That is how the Peragus turret (107PER) starts and repeats its Sith
+      // spawns: a_106per_movie signals the area, and the area's OnUserDefined
+      // (a_hangar_timer) creates a trooper and re-signals itself every 2s.
+      onUserDefined = this.scripts[ModuleObjectScript.AreaOnUserDefined];
     }
     
     if(!onUserDefined){ return; }

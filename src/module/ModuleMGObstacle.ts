@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { ModuleObject } from "@/module/ModuleObject";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { ILayoutObstacle } from "@/interface/resource/ILayoutObstacle";
@@ -26,17 +27,44 @@ export class ModuleMGObstacle extends ModuleObject {
   invince_period: number;
   layout: ILayoutObstacle;
 
+  /**
+   * How close the rider must come to count as striking this obstacle.
+   *
+   * Retail ships no radius for an obstacle: the ARE entry carries only a name
+   * and its scripts, and the LYT carries only a name and a position. There is
+   * no obstacle model either - no MDL in the module matches these names, so the
+   * thing the rider sees is baked into the room, and the obstacle is purely a
+   * marker for where that geometry stands. A radius therefore has to be chosen.
+   * This one is a little wider than the swoop's own sphere (2) so that clipping
+   * the edge of a hazard registers, and is a single named constant precisely
+   * because it is a judgement rather than data.
+   */
+  static readonly DEFAULT_RADIUS = 3;
+
+  /** Collision sphere, in the same track space the player moves through. */
+  sphere: THREE.Sphere = new THREE.Sphere(new THREE.Vector3(), ModuleMGObstacle.DEFAULT_RADIUS);
+
   constructor(template: GFFObject, layout: ILayoutObstacle){
     super(template);
     this.objectType |= ModuleObjectType.ModuleMGObstacle;
     this.name = '';
     this.invince = 0;
     this.layout = layout;
+    if(layout?.position){
+      this.sphere.center.copy(layout.position);
+    }
+  }
+
+  /** Whether the rider is inside this obstacle and it is not already spent. */
+  isStruckBy(position: THREE.Vector3): boolean {
+    if(this.invince > 0){ return false; }
+    return this.sphere.containsPoint(position);
   }
 
   setTemplate(template: GFFObject){
     this.template = template;
     this.initProperties();
+    this.loadScripts(); // see ModuleMGPlayer.load
   }
 
   update(delta: number = 0){

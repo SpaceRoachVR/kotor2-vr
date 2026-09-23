@@ -41,3 +41,7 @@ tools/xr-probe/results.jsonl
 # compiles into chrome.dll, which trips GitHub secret scanning. Keep the written
 # acceptance notes beside them instead.
 evidence/**/chrome-*.log
+
+# Empty log files PyKotor drops where it is run from
+logs/
+src/logs/

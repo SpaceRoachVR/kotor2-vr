@@ -177,6 +177,18 @@ export class ModuleCreature extends ModuleObject {
     HIDE: ModuleItem; 
   };
   regenTimer: number;
+  /** PUP_* slot when this creature is a party puppet, else -1. */
+  pupId: number = -1;
+  /** NPC_* the puppet belongs to (AssignPUP), else -1. */
+  pupOwnerNPC: number = -1;
+  /** SetCreatureAILevel / ResetCreatureAILevel (AI_LEVEL_*; -1 is the default). */
+  aiLevel: number = -1;
+  /** SetOrientOnClick: whether the creature turns to face whoever clicks it. */
+  orientOnClick: boolean = true;
+  /** SetFakeCombatState: shows combat posture without being in a real fight. */
+  fakeCombatState: boolean = false;
+  /** SetForceAlwaysUpdate: keep updating while off-screen. */
+  forceAlwaysUpdate: boolean = false;
   regenTimerMax: number;
   excitedDuration: number;
   turning: number;
@@ -827,6 +839,8 @@ export class ModuleCreature extends ModuleObject {
   }
 
   updateRegen(delta = 0){
+    // DisableHealthRegen(TRUE) stops vitality regeneration module-wide; force
+    // regeneration is unaffected, so this gate sits on the vitality half below.
     this.regenTimer -= delta;
     if(this.regenTimer <= 0){
       this.regenTimer = this.regenTimerMax;
@@ -839,7 +853,7 @@ export class ModuleCreature extends ModuleObject {
         }
 
         const regen_health = parseFloat(regen2DA.healthregen);
-        if(!isNaN(regen_health)){
+        if(!isNaN(regen_health) && !GameState.healthRegenDisabled){
           this.addHP(Math.abs(regen_health));
         }
       }
@@ -2438,8 +2452,171 @@ export class ModuleCreature extends ModuleObject {
     return this.race;
   }
 
+  /**
+   * ABILITY_* (0 STR, 1 DEX, 2 CON, 3 INT, 4 WIS, 5 CHA) as nwscript numbers
+   * them, for GetAbilityScore and AdjustCreatureAttributes.
+   */
+  getAbilityScoreByIndex(ability: number): number {
+    switch(ability){
+      case 0: return this.getSTR();
+      case 1: return this.getDEX();
+      case 2: return this.getCON();
+      case 3: return this.getINT();
+      case 4: return this.getWIS();
+      case 5: return this.getCHA();
+    }
+    return 0;
+  }
+
+  /** AdjustCreatureAttributes: a signed change to one ability score. */
+  adjustAbilityScore(ability: number, amount: number): void {
+    const delta = Number.isFinite(amount) ? Math.trunc(amount) : 0;
+    if(!delta) return;
+    switch(ability){
+      case 0: this.str = Math.max(0, this.str + delta); break;
+      case 1: this.dex = Math.max(0, this.dex + delta); break;
+      case 2: this.con = Math.max(0, this.con + delta); break;
+      case 3: this.int = Math.max(0, this.int + delta); break;
+      case 4: this.wis = Math.max(0, this.wis + delta); break;
+      case 5: this.cha = Math.max(0, this.cha + delta); break;
+    }
+  }
+
+  /** AdjustCreatureSkills / GetSkillRankBase: the stored rank, before bonuses. */
+  getSkillRankBase(skill: number): number {
+    const talent = this.skills[skill];
+    return talent && Number.isFinite(talent.rank) ? talent.rank : 0;
+  }
+
+  adjustSkillRank(skill: number, amount: number): void {
+    const talent = this.skills[skill];
+    const delta = Number.isFinite(amount) ? Math.trunc(amount) : 0;
+    if(!talent || !delta) return;
+    talent.rank = Math.max(0, (Number.isFinite(talent.rank) ? talent.rank : 0) + delta);
+  }
+
+  /**
+   * GrantSpell: add a Force power the creature does not have yet. Powers live
+   * on the class, like the ones a UTC's ClassList carries.
+   */
+  grantSpell(id: number): boolean {
+    if(this.getHasSpell(id)) return false;
+    const spell = GameState.SWRuleSet.spells[id];
+    if(!spell) return false;
+    const cls = this.classes[0];
+    if(!cls) return false;
+    cls.addSpell(spell);
+    return true;
+  }
+
+  /**
+   * ActionSwitchWeapons: trade the equipped weapon set for the second one.
+   * Retail keeps two configurations and swaps between them; the slots are the
+   * same pairs the equipment screen shows.
+   */
+  async swapWeaponSets(): Promise<void> {
+    const pairs: [number, number][] = [
+      [ModuleCreatureArmorSlot.RIGHTHAND, ModuleCreatureArmorSlot.RIGHTHAND2],
+      [ModuleCreatureArmorSlot.LEFTHAND, ModuleCreatureArmorSlot.LEFTHAND2],
+    ];
+    for(const [primary, secondary] of pairs){
+      const equipped = this.GetItemInSlot(primary);
+      const stowed = this.GetItemInSlot(secondary);
+      if(!equipped && !stowed) continue;
+      this.unequipSlot(primary, false);
+      this.unequipSlot(secondary, false);
+      if(stowed) await this.equipItem(primary, stowed);
+      if(equipped) await this.equipItem(secondary, equipped);
+    }
+  }
+
+  /**
+   * The animation constants `ModuleObject.animationConstantToAnimation` leaves
+   * unmapped and a creature can answer, because the answer depends on what it
+   * is holding. The 82-module audit listed 26 unmapped constants; these are the
+   * ones with a defensible mapping. See `animation-constant-coverage.test.ts`
+   * for the ones deliberately left alone.
+   *
+   * Combat already composes these names (CombatRound.calculateRoundAnimations):
+   * attack key ('m' melee, 'b' ranged, 'g' unarmed) + weapon wield + 'a'/'r' +
+   * index. Scripts and dialogue reach the same animations through here.
+   */
+  animationConstantToAnimation( animation_constant = 10000 ): ITwoDAAnimation {
+    const wield = this.getCombatAnimationWeaponType();
+    const attackKey = this.getCombatAnimationAttackType();
+    const byName = (name: string): ITwoDAAnimation | undefined =>
+      OdysseyModelAnimation.GetAnimation2DA(name);
+
+    switch(animation_constant){
+      case ModuleCreatureAnimState.ATTACK:
+      case ModuleCreatureAnimState.ATTACK_DUELING: {
+        // The basic attack for the equipped weapon, the same name combat uses.
+        const animation = byName(`${attackKey}${wield}a1`);
+        if(animation) return animation;
+        break;
+      }
+      case ModuleCreatureAnimState.PARRY: {
+        // Weapon-specific parry via combatanimations.2da, falling back to the
+        // simple-creature row when the creature has no wield-specific parry.
+        const animation = this.getParryAnimation(`${attackKey}${wield}a1`);
+        if(animation) return animation;
+        break;
+      }
+      case ModuleCreatureAnimState.DAMAGED:
+      case ModuleCreatureAnimState.DAMAGE2: {
+        const animation = this.getDamageAnimation(`${attackKey}${wield}a1`);
+        if(animation) return animation;
+        break;
+      }
+      case ModuleCreatureAnimState.MELEE_WIELD:
+      case ModuleCreatureAnimState.MELEE_COMBAT_WIELD: {
+        // The ready stance: g<wield>r1, which is what the 2DA calls these rows.
+        const animation = byName(`g${wield}r1`);
+        if(animation) return animation;
+        break;
+      }
+      case ModuleCreatureAnimState.BLASTER_DEFLECTION_1H:
+      case ModuleCreatureAnimState.BLASTER_DEFLECTION_2H: {
+        // TSL ships a single `deflect` animation; the 1H/2H split is the
+        // caller's description of the stance, not two separate rows.
+        const animation = byName('deflect');
+        if(animation) return animation;
+        break;
+      }
+      case ModuleCreatureAnimState.KNEELING: {
+        const animation = byName('kneel');
+        if(animation) return animation;
+        break;
+      }
+      case ModuleCreatureAnimState.CASTOUT1:
+      case ModuleCreatureAnimState.CASTOUT1_LP:
+      case ModuleCreatureAnimState.CASTOUT2:
+      case ModuleCreatureAnimState.CASTOUT2_LP:
+      case ModuleCreatureAnimState.CASTOUT3: {
+        // animations.2da carries two castout sets: 62-67 for humanoids and
+        // 293-295 for simple creatures, which have no looping variants.
+        const rows = GameState.TwoDAManager.datatables.get('animations')?.rows;
+        if(!rows) break;
+        const simple = this.isSimpleCreature();
+        switch(animation_constant){
+          case ModuleCreatureAnimState.CASTOUT1: return simple ? rows[293] : rows[62];
+          case ModuleCreatureAnimState.CASTOUT1_LP: return simple ? rows[293] : rows[63];
+          case ModuleCreatureAnimState.CASTOUT2: return simple ? rows[294] : rows[64];
+          case ModuleCreatureAnimState.CASTOUT2_LP: return simple ? rows[294] : rows[65];
+          case ModuleCreatureAnimState.CASTOUT3: return simple ? rows[295] : rows[66];
+        }
+        break;
+      }
+    }
+
+    return super.animationConstantToAnimation(animation_constant);
+  }
+
   getSubRace(){
-    return this.subrace;
+    // SUBRACE_* comes from the UTC's SubraceIndex (what getHP switches on).
+    // This returned `subrace`, which is only ever set from a 'SubRace' field no
+    // retail template has, so GetSubRace answered 0 for every creature.
+    return this.subraceIndex;
   }
 
   getGender(){
@@ -3712,7 +3889,7 @@ export class ModuleCreature extends ModuleObject {
         this.bodyBag = this.template.getFieldByLabel('BodyBag').getValue();
 
       if(this.template.RootNode.hasField('BodyVariation'))
-        this.bodyBag = this.template.getFieldByLabel('BodyVariation').getValue();
+        this.bodyVariation = this.template.getFieldByLabel('BodyVariation').getValue();
 
       if(this.template.RootNode.hasField('ChallengeRating'))
         this.challengeRating = this.template.getFieldByLabel('ChallengeRating').getValue();
@@ -3809,7 +3986,23 @@ export class ModuleCreature extends ModuleObject {
 
       if(this.template.RootNode.hasField('MaxForcePoints')){
         this.maxForcePoints = this.template.getFieldByLabel('MaxForcePoints').getValue();
+      }else if(this.maxForcePoints === undefined){
+        // Retail UTC templates carry only ForcePoints (base) and CurrentForce;
+        // MaxForcePoints appears in saves. Left undefined, setFP/addFP did
+        // arithmetic on undefined. Base is the maximum until bonuses apply.
+        this.maxForcePoints = this.forcePoints || 0;
       }
+
+      // Template saving-throw bonuses (UTC fortbonus/refbonus/willbonus) were
+      // written by save() but never read back, so every creature lost them.
+      if(this.template.RootNode.hasField('fortbonus'))
+        this.fortbonus = this.template.getFieldByLabel('fortbonus').getValue();
+
+      if(this.template.RootNode.hasField('refbonus'))
+        this.refbonus = this.template.getFieldByLabel('refbonus').getValue();
+
+      if(this.template.RootNode.hasField('willbonus'))
+        this.willbonus = this.template.getFieldByLabel('willbonus').getValue();
 
       if(this.template.RootNode.hasField('Min1HP'))
         this.min1HP = this.template.getFieldByLabel('Min1HP').getValue();
@@ -3865,8 +4058,6 @@ export class ModuleCreature extends ModuleObject {
       if(this.template.RootNode.hasField('SoundSetFile'))
         this.soundSetFile = this.template.RootNode.getFieldByLabel('SoundSetFile').getValue();
     
-      if(this.template.RootNode.hasField('SubRace'))
-        this.subrace = this.template.RootNode.getFieldByLabel('SubRace').getValue();
 
       if(this.template.RootNode.hasField('Tag'))
         this.tag = this.template.getFieldByLabel('Tag').getValue();
@@ -4334,6 +4525,7 @@ export class ModuleCreature extends ModuleObject {
     //gff.RootNode.addField( new GFFField(GFFDataType.DWORD, 'AreaId') ).setValue(1);
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'ArmorClass') ).setValue(this.getAC());
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'BodyBag') ).setValue(this.bodyBag);
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'BodyVariation') ).setValue(this.bodyVariation);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Cha') ).setValue(this.cha);
     gff.RootNode.addField( new GFFField(GFFDataType.FLOAT, 'ChallengeRating') ).setValue(this.challengeRating);
 
@@ -4538,7 +4730,7 @@ export class ModuleCreature extends ModuleObject {
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'StealthMode') ).setValue(0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Str') ).setValue(this.str);
     gff.RootNode.addField( new GFFField(GFFDataType.CEXOSTRING, 'Subrace') ).setValue('');
-    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'SubraceIndex') ).setValue(this.subrace);
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'SubraceIndex') ).setValue(this.subraceIndex);
     gff.RootNode.addField( new GFFField(GFFDataType.CEXOSTRING, 'Tag') ).setValue(this.tag);
     // Blueprint reference; dropped by every save path until now - see ModulePlaceable.save.
     gff.RootNode.addField( new GFFField(GFFDataType.RESREF, 'TemplateResRef') ).setValue(this.templateResRef || '');
@@ -4561,7 +4753,9 @@ export class ModuleCreature extends ModuleObject {
 
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'fortbonus') ).setValue(this.fortbonus);
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'refbonus') ).setValue(this.refbonus);
-    gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'refbonus') ).setValue(this.refbonus);
+    gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'willbonus') ).setValue(this.willbonus);
+    // Retail saves write Hologram (BYTE); it was loaded but never saved.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Hologram') ).setValue(this.isHologram ? 1 : 0);
 
     this.template = gff;
 

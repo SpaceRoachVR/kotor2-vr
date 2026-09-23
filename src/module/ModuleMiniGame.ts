@@ -39,6 +39,8 @@ export class ModuleMiniGame {
 
   enemies: ModuleMGEnemy[] = [];
   obstacles: ModuleMGObstacle[] = [];
+  /** ARE obstacle templates by lowercase name; the LYT places them. */
+  obstacleTemplates: Map<string, GFFObject> = new Map();
   tracks: ModuleMGTrack[] = [];
 
   constructor(struct: GFFStruct){
@@ -65,6 +67,35 @@ export class ModuleMiniGame {
           GFFObject.FromStruct(enemies[i])
         )
       );
+    }
+
+    // Obstacle templates, keyed by name. The obstacles themselves are placed by
+    // the LYT, which carries only a name and a position; the ARE carries the
+    // scripts for the same names. This list was never read at all, so every
+    // obstacle reached the track with no scripts - and 211TEL's six scripted
+    // obstacles (OnHitFollower: spec_obst_hit) did nothing when struck.
+    const obstacles = struct.getFieldByLabel('Obstacles')?.getChildStructs() ?? [];
+    for(let i = 0; i < obstacles.length; i++){
+      const template = GFFObject.FromStruct(obstacles[i]);
+      const name = template.getFieldByLabel('Name')?.getValue();
+      if(!name){ continue; }
+      this.obstacleTemplates.set(String(name).toLowerCase(), template);
+    }
+  }
+
+  /**
+   * Attaches each placed obstacle's template, matched to the LYT by name. The
+   * area builds the obstacles from the layout, so this runs once they exist.
+   * All 105 of 211TEL's placed obstacles match an ARE entry exactly.
+   */
+  applyObstacleTemplates(){
+    for(let i = 0; i < this.obstacles.length; i++){
+      const obstacle = this.obstacles[i];
+      const name = obstacle?.layout?.name;
+      if(!obstacle || !name){ continue; }
+      const template = this.obstacleTemplates.get(String(name).toLowerCase());
+      if(!template){ continue; }
+      obstacle.setTemplate(template);
     }
   }
 
@@ -102,16 +133,26 @@ export class ModuleMiniGame {
     for(let i = 0; i < this.enemies.length; i++){
       if(this.enemies[i]){
         this.enemies[i].onCreate();
+        this.enemies[i].spawned = true;
       }
     }
 
     for(let i = 0; i < this.obstacles.length; i++){
       if(this.obstacles[i]){
         this.obstacles[i].onCreate();
+        this.obstacles[i].spawned = true;
       }
     }
 
-    this.player.onCreate();
+    if(this.player){
+      this.player.onCreate();
+      // `spawned` is the gate on triggerHeartbeat(), and it is only ever set by
+      // onSpawn(), which the area runs for creatures and party members - never
+      // for minigame objects. So no minigame object had a heartbeat, and on the
+      // swoop the heartbeat script *is* the race: the gear countdown, the lap
+      // timer, the engine sound, the finish. This is the minigame's spawn.
+      this.player.spawned = true;
+    }
   }
 
   async loadMGPlayer(): Promise<void> {
@@ -171,10 +212,15 @@ export class ModuleMiniGame {
   }
 
   runMiniGameScripts(){
+    // OnCreate for the player and the obstacles already ran in
+    // initMiniGameObjects(), which runs just before this; only the enemies are
+    // (re)started here.
     for(let i = 0; i < this.enemies.length; i++){
       const enemy = this.enemies[i];
       const onCreate = enemy.scripts[ModuleObjectScript.MGEnemyOnCreate];
-      if(!onCreate){ return; }
+      // `continue`, not `return`: one enemy without an OnCreate used to abort
+      // the loop, so every enemy after it stayed uninitialised too.
+      if(!onCreate){ continue; }
       onCreate.run(enemy, 0);
     }
   }

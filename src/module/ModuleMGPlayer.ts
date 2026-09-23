@@ -63,6 +63,50 @@ export class ModuleMGPlayer extends ModuleObject {
   hit_points: any;
   max_hps: any;
   onCreateRun: boolean;
+
+  /**
+   * When acceleration was last asked for, in milliseconds.
+   *
+   * The swoop used to accelerate every frame for as long as a gear was engaged,
+   * so the throttle could never be let off: once the rider shifted, the bike
+   * climbed to the gear's ceiling and stayed there whatever they did. Nothing in
+   * the engine read whether accelerate was still being held.
+   *
+   * A timestamp rather than a boolean because neither input path has a release
+   * event: the flatscreen KeyMapper only runs its processor while the key is
+   * down, and the VR controller only reports a held trigger. Both simply say
+   * "still accelerating" each frame, and the request goes stale on its own.
+   */
+  accelerationRequestedAt: number = -Infinity;
+
+  /** How long a request stands without renewal. A couple of frames at 30fps. */
+  static readonly ACCELERATION_REQUEST_TTL_MS = 120;
+
+  /** Scratch for the obstacle sweep, which runs every frame. */
+  private static obstacleProbePosition = new THREE.Vector3();
+
+  /**
+   * How fast a hop bleeds away, in units per second per second. 211TEL's jump
+   * script sets a jump speed of 30 through SWMG_SetJumpSpeed, and the tunnel
+   * allows 10 units of height, so this brings that hop back inside the bound.
+   */
+  static readonly JUMP_GRAVITY = 45;
+  static readonly DEFAULT_JUMP_SPEED = 24;
+
+  /** How far either side of the rider to look for the edge of the road. */
+  static readonly LANE_SCAN_REACH = 200;
+  static readonly LANE_SCAN_STEP = 5;
+  static readonly LANE_SCAN_HEIGHT = 60;
+
+  /** The middle of the road, once measured. */
+  laneCentre: number = 0;
+  private laneCentreMeasured: boolean = false;
+
+  /** The course animation every swoop track model carries. */
+  static readonly TRACK_ANIMATION_NAME = 'track';
+
+  /** Whether the course animation has been started on the current track. */
+  trackAnimationPlaying: boolean = false;
   sphere_radius: number;
   invince_period: number;
   bump_damage: any;
@@ -173,6 +217,7 @@ export class ModuleMGPlayer extends ModuleObject {
     }
 
     this.onCreateRun = false;
+    this.trackAnimationPlaying = false;
 
     this._heartbeatTimeout = 0;
 
@@ -190,8 +235,9 @@ export class ModuleMGPlayer extends ModuleObject {
     }
 
     this.sphere.radius = this.sphere_radius;
-    // this.model.parent.getWorldPosition(this.position);
-    this.sphere.center.copy(this.position);
+    // World space, for the same reason as ModuleMGEnemy: the player rides a
+    // track node, so its local position is not where it is.
+    this.container.getWorldPosition(this.sphere.center);
 
     this.sphere_geom.scale.setScalar(this.sphere_radius);
     this.sphere_geom.position.copy(this.sphere.center);
@@ -225,23 +271,46 @@ export class ModuleMGPlayer extends ModuleObject {
             this.speed = this.speed_min;
           }
 
-          this.speed += (this.accel_secs * delta);
+          // Accelerate only while the rider is asking for it. Letting off drops
+          // back towards the gear's floor rather than holding the ceiling; the
+          // gear's own minimum is what keeps a shifted-up bike quick.
+          if(this.isAccelerating()){
+            this.speed += (this.accel_secs * delta);
+          }else{
+            this.speed -= (this.accel_secs * delta);
+            if(this.speed < this.speed_min){
+              this.speed = this.speed_min;
+            }
+          }
 
           if(this.speed_max && (this.speed >= this.speed_max)){
             this.speed = this.speed_max;
           }
 
-          this.forceVector.set( this.lateralForce * delta, this.speed * delta, 0 );
-
-          //this.track.position.y += ;
-          //this.model.position.z = this.jumpVelcolity;
+          this.forceVector.set( this.lateralForce * delta, 0, 0 );
 
         }
 
+        // Ride the authored course. The track model carries an animation named
+        // `track` that sweeps `modelhook` - which the rider is attached to -
+        // along the whole course, and the minigame's MovementPerSec is the
+        // speed that animation was authored at. Advancing it in proportion to
+        // the rider's speed is what makes the bike follow the track.
+        //
+        // Nothing advanced it before: the engine translated the track model in
+        // a straight line along +Y instead, from the world origin, so the bike
+        // left the authored canyon almost immediately. That is why obstacles
+        // (placed in world space along the real course) were never struck, and
+        // why the world ahead turned black - the rider was flying through
+        // unmodelled space beside the level, not running out of draw distance.
+        this.advanceTrackAnimation(delta);
 
         this.track.updateMatrixWorld();
         //this.updateCollision(delta);
-        this.track.position.add(this.forceVector);
+        // Steering is an offset from the hook, not a push on the track itself.
+        this.container.position.add(this.forceVector);
+        this.clampToTunnel();
+        this.checkObstacleCollisions();
         //this.model.box.setFromObject(this.model);
 
         const enemies = GameState.module.area.miniGame.enemies;
@@ -255,10 +324,25 @@ export class ModuleMGPlayer extends ModuleObject {
           }
         }
 
+        // Actually leave the ground. jumpVelcolity was set by the jump script
+        // and then only counted down - nothing ever moved the bike with it, so
+        // every jump was silent whatever button reached it. It is a speed, so
+        // it lifts the rider while it lasts and gravity brings them back; the
+        // tunnel's own z bound is the ceiling on a hop.
         if(this.jumpVelcolity > 0){
-          this.jumpVelcolity -= (2 *delta);
+          this.container.position.z += this.jumpVelcolity * delta;
+          this.jumpVelcolity -= (ModuleMGPlayer.JUMP_GRAVITY * delta);
+          this.falling = false;
         }else{
           this.jumpVelcolity = 0;
+          if(this.container.position.z > 0){
+            this.container.position.z -= ModuleMGPlayer.JUMP_GRAVITY * delta;
+            this.falling = true;
+            if(this.container.position.z < 0){ this.container.position.z = 0; }
+          }else{
+            this.container.position.z = 0;
+            this.falling = false;
+          }
         }
 
         if(this.boostVelocity > 0){
@@ -277,9 +361,7 @@ export class ModuleMGPlayer extends ModuleObject {
       this.gunBanks[i].update(delta);
     }
     
-    // this.model.parent.getWorldPosition(this.position);
-
-    this.sphere.center.copy(this.position);
+    this.container.getWorldPosition(this.sphere.center);
     this.sphere_geom.position.copy(this.sphere.center);
 
     if(this.camera instanceof OdysseyModel3D && this.camera.bonesInitialized && this.camera.visible){
@@ -332,13 +414,187 @@ export class ModuleMGPlayer extends ModuleObject {
     }
   }
 
+  /**
+   * Runs the rider into the track's obstacles.
+   *
+   * Obstacles were inert: the area built them from the LYT and then nothing
+   * touched them again - no model, no collider, no scripts, only an
+   * invulnerability timer counting down against nothing. A rider passed
+   * straight through every hazard on the track.
+   *
+   * Compared in world space, which is where the LYT places them. The player's
+   * own `track.position` is a local offset on the track node - it reads (0,0,0)
+   * while the bike sits at world y -183 - so testing against that matches
+   * almost nothing. The bike's world position comes from its container, the
+   * same source the VR rig and the collision sphere already use. 211TEL places
+   * 105 obstacles between y 93 and y 6006.
+   *
+   * The obstacle's own invulnerability window is what stops one hazard firing
+   * every frame while the bike is still inside it.
+   */
+  checkObstacleCollisions(){
+    if(!this.container){ return; }
+    const obstacles = GameState.module?.area?.miniGame?.obstacles;
+    if(!obstacles?.length){ return; }
+    this.container.getWorldPosition(ModuleMGPlayer.obstacleProbePosition);
+    const position = ModuleMGPlayer.obstacleProbePosition;
+    for(let i = 0, len = obstacles.length; i < len; i++){
+      const obstacle = obstacles[i];
+      if(!obstacle || !obstacle.isStruckBy(position)){ continue; }
+      obstacle.startInvulnerability();
+      obstacle.onHitFollower();
+      this.onHitObstacle(obstacle);
+      // One hazard per frame: a rider clipping two at once is struck by the
+      // first, and the second is still there on the next pass.
+      return;
+    }
+  }
+
+  /**
+   * Advances the track animation by the distance the rider covered.
+   *
+   * `MovementPerSec` is the speed the course animation was authored at, so a
+   * rider travelling at exactly that speed advances it in real time, and one at
+   * twice that covers it in half. The animation loops, which is what
+   * `Num_Loops = -1` on the player asks for and what fires OnTrackLoop.
+   */
+  advanceTrackAnimation(delta: number){
+    const track: any = this.track;
+    if(!track || typeof track.playAnimation !== 'function'){ return; }
+
+    if(!this.trackAnimationPlaying){
+      // The course animation is named for what it is. Absent it, there is
+      // nothing to ride and the bike stays where the hook put it.
+      const started = track.playAnimation(ModuleMGPlayer.TRACK_ANIMATION_NAME, true);
+      if(!started){ return; }
+      this.trackAnimationPlaying = true;
+    }
+
+    const perSecond = GameState.module?.area?.miniGame?.movementPerSec || 0;
+    if(perSecond <= 0){ return; }
+    const scaled = delta * (this.speed / perSecond);
+    if(!(scaled > 0)){ return; }
+
+    // Only the animation, not the whole model. `track.update()` walks a 632
+    // node tree and re-ticks its effects, materials, emitters and child models
+    // - and the bike hangs off this track's modelhook, so it was re-ticking the
+    // rider too, every frame, on top of the engine's own pass. The course needs
+    // exactly two nodes posed: the model root and modelhook.
+    track.animationManager?.update(scaled);
+  }
+
+  /** Whether an acceleration request is still standing. */
+  isAccelerating(): boolean {
+    return (Date.now() - this.accelerationRequestedAt)
+      < ModuleMGPlayer.ACCELERATION_REQUEST_TTL_MS;
+  }
+
+  /** Called every frame the rider holds the throttle, by whichever input path. */
+  requestAcceleration(){
+    this.accelerationRequestedAt = Date.now();
+  }
+
+  /**
+   * The middle of the road, measured rather than assumed.
+   *
+   * The hook drops the rider at world x 0, but that is not the middle of the
+   * track: raycasting the floor across the start line finds surface from about
+   * x -20 to +50, so riding "centred" actually hugs the left edge. The
+   * obstacles bear that out - 211TEL lines them up in rows near x +20 and -30,
+   * which is symmetric about the road rather than about the rider. With the
+   * lane centred on the rider, the right-hand row sat at the very limit of a
+   * +/-20 tunnel and the left-hand row was unreachable, so a rider could ride a
+   * whole course without meeting one.
+   *
+   * Sampled once, from the floor under the start line. A track whose floor
+   * cannot be found keeps the rider's own position as the centre, which is the
+   * behaviour this replaces.
+   */
+  measureLaneCentre(): number {
+    if(this.laneCentreMeasured){ return this.laneCentre; }
+    this.laneCentreMeasured = true;
+    try{
+      const rooms = GameState.module?.area?.rooms || [];
+      const meshes: THREE.Object3D[] = [];
+      for(const room of rooms){
+        if((room as any).model) (room as any).model.traverse((o: THREE.Object3D) => {
+          if((o as THREE.Mesh).isMesh) meshes.push(o);
+        });
+      }
+      if(!meshes.length){ return this.laneCentre; }
+
+      this.container.updateMatrixWorld(true);
+      const origin = new THREE.Vector3();
+      this.container.getWorldPosition(origin);
+      const raycaster = new THREE.Raycaster();
+      const down = new THREE.Vector3(0, 0, -1);
+      let min: number | null = null, max: number | null = null;
+      for(let offset = -ModuleMGPlayer.LANE_SCAN_REACH; offset <= ModuleMGPlayer.LANE_SCAN_REACH; offset += ModuleMGPlayer.LANE_SCAN_STEP){
+        raycaster.set(
+          new THREE.Vector3(origin.x + offset, origin.y, origin.z + ModuleMGPlayer.LANE_SCAN_HEIGHT),
+          down,
+        );
+        raycaster.far = ModuleMGPlayer.LANE_SCAN_HEIGHT * 2;
+        if(!raycaster.intersectObjects(meshes, false).length){
+          // Past the edge of the road. Keep only the stretch touching the rider.
+          if(min !== null && max !== null && offset > 0){ break; }
+          min = null; max = null;
+          continue;
+        }
+        if(min === null){ min = offset; }
+        max = offset;
+      }
+      if(min === null || max === null){ return this.laneCentre; }
+      this.laneCentre = (min + max) / 2;
+    }catch(e){
+      console.warn('ModuleMGPlayer.measureLaneCentre: falling back to the rider position', e);
+    }
+    return this.laneCentre;
+  }
+
+  /**
+   * Keeps the bike inside the track's tunnel.
+   *
+   * The scripts set the bounds and the engine stored them, but only the turret
+   * ever read them - it clamps its rotation. Nothing clamped the swoop's
+   * lateral offset, so a rider who kept steering simply left the track and
+   * drove through the scenery. 211TEL's OnAccelerate sets the bounds the moment
+   * the first gear engages: SWMG_SetPlayerTunnelPos([20,3,10]) and
+   * SWMG_SetPlayerTunnelNeg([-20,3,0]).
+   *
+   * x is the lateral offset and z the hop height; both are meaningful here. The
+   * y bound is the along-track axis the bike advances on, so it is deliberately
+   * not clamped - doing so would stop the race dead.
+   */
+  clampToTunnel(){
+    if(!this.container){ return; }
+    const pos = this.tunnel?.pos, neg = this.tunnel?.neg;
+    if(!pos || !neg){ return; }
+    // The rider's offset from the hook, which is what steering moves, about
+    // the middle of the road rather than the hook's own line.
+    const centre = this.measureLaneCentre();
+    if(pos.x || neg.x){
+      if(this.container.position.x > centre + pos.x) this.container.position.x = centre + pos.x;
+      if(this.container.position.x < centre + neg.x) this.container.position.x = centre + neg.x;
+    }
+    if(pos.z || neg.z){
+      if(this.container.position.z > pos.z) this.container.position.z = pos.z;
+      if(this.container.position.z < neg.z) this.container.position.z = neg.z;
+    }
+  }
+
+  /**
+   * The engine's own hop, for a track that does not script one.
+   *
+   * The old 0.4 was a placeholder from when nothing read this value at all -
+   * against any gravity that brings a rider back down in a reasonable time it
+   * is invisible, a centimetre of lift. 211TEL's own jump script asks for 30
+   * through SWMG_SetJumpSpeed, so the default is in that neighbourhood, and
+   * with JUMP_GRAVITY it clears about 6 units and lands in a second - inside
+   * the 10 units of height the track's tunnel allows.
+   */
   jump(){
-    this.jumpVelcolity = 0.4;
-    /*if(this.gear > -1 && !this.falling){
-      this.jumpVelcolity = 0.4;
-    }else{
-      this.jumpVelcolity = 0;
-    }*/
+    this.jumpVelcolity = ModuleMGPlayer.DEFAULT_JUMP_SPEED;
   }
 
   fire(){
@@ -394,16 +650,33 @@ export class ModuleMGPlayer extends ModuleObject {
 
   }
 
+  /**
+   * Animation names as the lookup key: lower case, trimmed, and with the NUL
+   * padding an Odyssey resref carries stripped off.
+   *
+   * The de-duplication below used to compare a stored animation's raw name
+   * against the caller's string. A stored name is NUL-padded, so it never
+   * matched, nothing was ever replaced, and every play pushed another manager.
+   * The swoop's heartbeat plays the dashboard's timer digits continuously, so
+   * the list grew without bound: measured on 211TEL after a short ride, 3,419
+   * managers costing 9ms a frame to step, still climbing. That is the ride
+   * getting slower and glitchier the longer it goes on.
+   */
+  private static animationKey(name: string): string {
+    return String(name || '').replace(/\0[\s\S]*$/, '').toLowerCase().trim();
+  }
+
   playAnimation(name = '', bLooping = 0, bQueue = 0, bOverlay = 0){
-    // const padding = '                                             ';
-    //console.log(`play: ${name}${padding}`.substring(0, 20), `bLooping: ${bLooping ? 'true' : 'false'}${padding}`.substring(0, 20), `bQueue: ${bQueue ? 'true' : 'false'}${padding}`.substring(0, 20), `bOverlay: ${bOverlay ? 'true' : 'false'}${padding}`.substring(0, 20));
+    const key = ModuleMGPlayer.animationKey(name);
     for(let i = 0; i < this.models.length; i++){
       const model = this.models[i];
-      const anim = model.odysseyAnimationMap.get(name.toLowerCase().trim());
+      const anim = model.odysseyAnimationMap.get(key);
       if(anim){
 
         //Check if this animation has already been applied
-        const existingIndex = this.animationManagers.findIndex( am => am?.currentAnimation?.name == name );
+        const existingIndex = this.animationManagers.findIndex(
+          am => ModuleMGPlayer.animationKey(am?.currentAnimation?.name) == key
+        );
         if(existingIndex >= 0){
           this.animationManagers.splice(existingIndex, 1);
         }
@@ -422,9 +695,10 @@ export class ModuleMGPlayer extends ModuleObject {
   }
 
   removeAnimation(name = ''){
-    // const padding = '                                             ';
-    //console.log( `remove: ${name}${padding}`.substring(0, 20) );
-    const existingIndex = this.animationManagers.findIndex( am => am?.currentAnimation?.name == name );
+    const key = ModuleMGPlayer.animationKey(name);
+    const existingIndex = this.animationManagers.findIndex(
+      am => ModuleMGPlayer.animationKey(am?.currentAnimation?.name) == key
+    );
     if(existingIndex >= 0){
       this.animationManagers.splice(existingIndex, 1);
     }
@@ -696,6 +970,11 @@ export class ModuleMGPlayer extends ModuleObject {
 
   load(){
     this.initProperties();
+    // Without this the script map stays empty and every minigame event -
+    // OnCreate, OnHeartbeat, OnAccelerate, OnBrake, OnFire, OnHitObstacle,
+    // OnTrackLoop, OnDeath - silently does nothing, which is why a swoop race
+    // never started and a turret never fired.
+    this.loadScripts();
     GameState.scene.add(this.sphere_geom);
   }
 
@@ -801,6 +1080,17 @@ export class ModuleMGPlayer extends ModuleObject {
   onAccelerate(){
     const instance = this.scripts[ModuleObjectScript.MGPlayerOnAccelerate];
     if(!instance){ return; }
+    instance.run(this, 0);
+  }
+
+  /**
+   * The brake slot. On the TSL swoop it is not a brake at all: 211TEL maps
+   * OnBrake to `onjump`, which calls SWMG_SetJumpSpeed. Falls back to the
+   * engine's own jump when a module ships no script for it.
+   */
+  onBrake(){
+    const instance = this.scripts[ModuleObjectScript.MGPlayerOnBrake];
+    if(!instance){ this.jump(); return; }
     instance.run(this, 0);
   }
 

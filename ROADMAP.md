@@ -1406,8 +1406,71 @@ First shippable artifact.
 - **7.4** Full playthrough.
 - **7.5** Optional AI-upscaled texture pack support — see below. Blocked on
   usage permission from the mod author.
+- **7.6** Swoop race (211TEL) playable in VR — see below. ✗ still broken in the
+  headset as of 2026-09-21.
 
 M4-78 is out of scope.
+
+### 7.6 — Swoop race playable in VR ✗ still broken in the headset (2026-09-21)
+
+Status in one line: a day of fixes on `parity/retail-tooling` (d44a4027 through
+54259fa9) that each passed their emulator probe, and at the end of it Allen
+reported that **almost everything is still broken in the headset**. Nothing in
+this section should be treated as working until a human has ridden it.
+
+**The main lesson, before any detail: the emulator probes did not predict the
+headset.** `probe-swoop-controls.js`, `probe-swoop-obstacles.js` and
+`probe-swoop-lap.js` drive `VRMiniGameInputController.update()` directly with
+synthetic frames and step `area.update()` by hand. They prove the policy maths
+and the engine hooks, not the real path: real controller tracking and dropout,
+the real XR frame loop, the real hand model, real eye position. Round after
+round a probe passed and the ride failed. The next attempt should start by
+closing that gap - a live CDP capture of the real input frames and bike state
+*while Allen rides*, compared against what the probe assumed - rather than by
+writing more probe-verified fixes.
+
+**Engine faults found and fixed along the way** (real, and independent of the
+VR controls, so worth keeping even if the controls are redone):
+
+- `UpdateMinigame()` never ticked the module, so no minigame ever ran a frame.
+- Minigame objects were never `spawned`, so their heartbeats - the whole race
+  state machine on the swoop - never fired.
+- The pause overlay stole the engine mode and never gave it back.
+- No throttle on any input path; both SWOOPRACE cases were empty stubs.
+- Speed accelerated unconditionally once a gear engaged.
+- The track's tunnel bounds were stored but never applied to the swoop.
+- **NWScript vectors were reversed engine-wide** (first pop is z, not x).
+- The bike did not follow the course: the track model's `track` animation (96s,
+  sweeping `modelhook`) was never advanced; the bike was pushed in a straight
+  line along +Y instead.
+- The ARE `Obstacles` list was never read, so obstacles had no scripts.
+- `ModuleMGPlayer.playAnimation` leaked animation managers without bound
+  (3,419 of them, 9ms a frame) - NUL-padded names never matched.
+- Jump velocity was set and never applied, so the bike could not leave the ground.
+- **Punchthrough never worked anywhere**: TXI writes `blending 2`, the parser
+  only knew the word, and the TPC header float was misused as the cutout
+  threshold. See [[kotor2-vr-texture-alpha-rules]] in memory.
+
+**What is still unverified or known broken** (from Allen's last reports; the
+final run's specifics were not captured):
+- Steering: the model changed four times - rate, relaxing neutral, lean as lane
+  position, roll angle with smoothing. None has been confirmed in the headset.
+- Grips: placed by eye three times (all unreachable), then measured from the
+  authored rider `trider` at (+/-0.103, 1.45, 0.813). Not confirmed reachable.
+- Hand pinning to the bars on squeeze: never observed working in the headset.
+- Jump: never observed working in the headset.
+- Obstacles and boost pads: never observed triggering in the headset. The lane
+  was re-centred on the measured road (x +15) so 50 of 105 are reachable in the
+  emulator; unconfirmed live.
+- Ground: the punchthrough fix changes the grate from blotches to a grid in
+  emulated VR; not confirmed in the headset. The grate is dark by the data.
+- Seat height and facing: corrected from screenshots; not re-confirmed.
+
+**Before the next attempt:** decide with Allen whether to keep iterating on
+lean/grip controls at all, or to fall back to something simpler first (stick
+steering with the bars cosmetic) to get a playable race, then layer the
+physical controls back on. Get one control working end to end in the headset
+before touching the next.
 
 ### 7.5 — Optional AI-upscaled texture pack ☐ blocked on author permission
 

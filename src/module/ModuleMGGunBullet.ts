@@ -78,6 +78,27 @@ export class ModuleMGGunBullet extends ModuleObject {
             break;
           }
         }
+
+        // Not every turret shoots minigame enemies. The Peragus turret (107PER)
+        // carries none at all: its targets are ordinary creatures that
+        // a_hangar_timer spawns at a waypoint, and killing them is what feeds
+        // 107PER_MG_DEAD and decides how many Sith board the Ebon Hawk after.
+        if(this.life != Infinity){
+          const creatures = GameState.module.area.creatures;
+          for(let i = 0, len = creatures.length; i < len; i++){
+            const creature = creatures[i];
+            if(!creature || creature.isDead?.()){ continue; }
+            // Test the segment travelled this frame, not the point it landed
+            // on: a bullet covers ~3.3 units per frame and a trooper is about
+            // one wide, so a point test skips straight over it. The minigame
+            // enemies get away with a point test only because their spheres are
+            // 20-40 units across.
+            if(!ModuleMGGunBullet.hitsCreature(creature, this.directionLine.start, this.directionLine.end)){ continue; }
+            creature.damage(this.damage_amt, this.owner as any);
+            this.life = Infinity;
+            break;
+          }
+        }
       }else{
         const player = GameState.module.area.miniGame.player;
         if(player.sphere.containsPoint(this.position)){
@@ -121,6 +142,33 @@ export class ModuleMGGunBullet extends ModuleObject {
       )
     });
   }
+
+  /**
+   * Whether the bullet is inside the creature's own bounding box, which the
+   * creature keeps up to date from its model. Falls back to a small radius
+   * when the box is empty (a creature whose model has not finished loading).
+   */
+  static hitsCreature(creature: any, start: THREE.Vector3, end: THREE.Vector3): boolean {
+    const box = creature.box;
+    if(box && !box.isEmpty()){
+      // The segment's own bounding box against the creature's. Conservative
+      // for a diagonal shot, which is the right way to be wrong here: a turret
+      // that grazes a target is better than one whose bullets pass through it.
+      ModuleMGGunBullet.segmentBox.makeEmpty();
+      ModuleMGGunBullet.segmentBox.expandByPoint(start);
+      ModuleMGGunBullet.segmentBox.expandByPoint(end);
+      return ModuleMGGunBullet.segmentBox.intersectsBox(box);
+    }
+    const origin = creature.position;
+    if(!origin){ return false; }
+    ModuleMGGunBullet.segment.set(start, end);
+    ModuleMGGunBullet.segment.closestPointToPoint(origin, true, ModuleMGGunBullet.closestPoint);
+    return ModuleMGGunBullet.closestPoint.distanceTo(origin) <= 1.5;
+  }
+
+  private static readonly segmentBox = new THREE.Box3();
+  private static readonly segment = new THREE.Line3();
+  private static readonly closestPoint = new THREE.Vector3();
 
   initProperties(){
     this.model_name = this.template.RootNode.getFieldByLabel('Bullet_Model').getValue();

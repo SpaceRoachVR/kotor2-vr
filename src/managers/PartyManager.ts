@@ -45,6 +45,14 @@ export interface PartyNPCList {
 export interface PartyPuppet {
   available: boolean;
   select: boolean;
+  /** The blueprint AddAvailablePUPBy* stored, as PT_PUPPETS holds it. */
+  template?: GFFObject;
+  /** NPC_* this puppet belongs to, or -1 while unassigned (AssignPUP). */
+  ownerNPC: number;
+  /** The live creature, once SpawnAvailablePUP has made one. */
+  creature?: ModuleCreature;
+  /** Whether AddPartyPuppet has added that creature to the party table. */
+  inParty: boolean;
 }
 
 export interface PartyPuppetList {
@@ -125,7 +133,9 @@ export class PartyManager {
     for(let i = 0; i < PartyManager.MaxPuppetCount; i++){
       GameState.PartyManager.Puppets[i] = {
         available: false,
-        select: true
+        select: true,
+        ownerNPC: -1,
+        inParty: false,
       };
     }
   }
@@ -158,7 +168,9 @@ export class PartyManager {
     for(let i = 0; i < PartyManager.MaxPuppetCount; i++){
       GameState.PartyManager.Puppets[i] = {
         available: false,
-        select: true
+        select: true,
+        ownerNPC: -1,
+        inParty: false,
       };
     }
 
@@ -213,6 +225,23 @@ export class PartyManager {
         GameState.PartyManager.Puppets[i].available = !!avail[i].getFieldByLabel('PT_PUP_AVAIL').getValue();
         GameState.PartyManager.Puppets[i].select = !!avail[i].getFieldByLabel('PT_PUP_SELECT').getValue();
       }
+    }
+
+    //TSL: PT_PUPPETS - the puppets that were in the party when this was saved
+    if(gff.RootNode.hasField('PT_PUPPETS')){
+      const puppets = gff.getFieldByLabel('PT_PUPPETS').getChildStructs();
+      for(let i = 0; i < puppets.length; i++){
+        const struct = puppets[i];
+        const index = struct.hasField('PT_PUP_INDEX') ? struct.getFieldByLabel('PT_PUP_INDEX').getValue() : i;
+        const slot = GameState.PartyManager.Puppets[index];
+        if(!slot) continue;
+        slot.template = GFFObject.FromStruct(struct);
+        slot.inParty = true;
+        if(struct.hasField('PT_PUP_OWNER')){
+          slot.ownerNPC = struct.getFieldByLabel('PT_PUP_OWNER').getValue();
+        }
+      }
+      GameState.PartyManager.PuppetCount = Object.values(GameState.PartyManager.Puppets).filter((p) => p.inParty).length;
     }
 
     //TSL: PT_ITEM_CHEMICAL
@@ -361,7 +390,7 @@ export class PartyManager {
         availNPCSList.addChildStruct(availStruct);
       }
 
-      partytable.RootNode.addField(new GFFField(GFFDataType.INT, 'PT_CHEAT_USED')).setValue(0);
+      partytable.RootNode.addField(new GFFField(GFFDataType.BYTE, 'PT_CHEAT_USED')).setValue(0);
       partytable.RootNode.addField(new GFFField(GFFDataType.INT, 'PT_CONTROLLED_NP')).setValue( GameState.getCurrentPlayer() == GameState.PartyManager.Player ? -1 : GameState.PartyManager.party.indexOf(GameState.getCurrentPlayer()) );
       partytable.RootNode.addField(new GFFField(GFFDataType.LIST, 'PT_COST_MULT_LIS'));
 
@@ -401,6 +430,52 @@ export class PartyManager {
       }
 
       partytable.RootNode.addField(new GFFField(GFFDataType.BYTE, 'PT_NUM_MEMBERS')).setValue(numMembers);
+
+      // TSL influence and puppets, in the shape a retail PARTYTABLE.res uses
+      // (tools/parity/save_schema.py): PT_INFLUENCE is twelve Int32 slots,
+      // PT_AVAIL_PUPS three BYTE pairs, PT_PUPPETS the spawned puppets.
+      if(GameState.GameKey == GameEngineType.TSL){
+        const influenceList = partytable.RootNode.addField(new GFFField(GFFDataType.LIST, 'PT_INFLUENCE'));
+        for(let i = 0; i < PartyManager.MaxPartyCount; i++){
+          const struct = new GFFStruct(0);
+          const value = PartyManager.InfluenceMap.get(i);
+          struct.addField( new GFFField(GFFDataType.INT, 'PT_NPC_INFLUENCE') ).setValue(typeof value === 'number' ? value : -1);
+          influenceList.addChildStruct(struct);
+        }
+
+        const availPupsList = partytable.RootNode.addField(new GFFField(GFFDataType.LIST, 'PT_AVAIL_PUPS'));
+        const puppetsList = partytable.RootNode.addField(new GFFField(GFFDataType.LIST, 'PT_PUPPETS'));
+        let puppetCount = 0;
+        for(let i = 0; i < PartyManager.MaxPuppetCount; i++){
+          const puppet = PartyManager.Puppets[i];
+          const availStruct = new GFFStruct(0);
+          availStruct.addField( new GFFField(GFFDataType.BYTE, 'PT_PUP_AVAIL') ).setValue(puppet?.available ? 1 : 0);
+          availStruct.addField( new GFFField(GFFDataType.BYTE, 'PT_PUP_SELECT') ).setValue(puppet?.select ? 1 : 0);
+          availPupsList.addChildStruct(availStruct);
+
+          if(!puppet?.inParty) continue;
+          // Prefer the live creature: it carries whatever happened in play.
+          const saved = puppet.creature ? puppet.creature.save() : puppet.template;
+          if(!saved) continue;
+          const puppetStruct = saved.RootNode;
+          puppetStruct.addField( new GFFField(GFFDataType.INT, 'PT_PUP_INDEX') ).setValue(i);
+          puppetStruct.addField( new GFFField(GFFDataType.INT, 'PT_PUP_OWNER') ).setValue(puppet.ownerNPC);
+          puppetsList.addChildStruct(puppetStruct);
+          puppetCount++;
+        }
+        partytable.RootNode.addField(new GFFField(GFFDataType.BYTE, 'PT_NUM_PUPPETS')).setValue(puppetCount);
+      }
+
+      // The rest of the party table retail writes and we tracked but dropped:
+      // chemicals, components, swoop upgrades and the PC's name.
+      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_ITEM_CHEMICAL')).setValue(PartyManager.ChemicalCount || 0);
+      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_ITEM_COMPONEN')).setValue(PartyManager.ComponentCount || 0);
+      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP1')).setValue(PartyManager.SwoopUpgrade1 ?? -1);
+      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP2')).setValue(PartyManager.SwoopUpgrade2 ?? -1);
+      partytable.RootNode.addField(new GFFField(GFFDataType.DWORD, 'PT_SWOOP3')).setValue(PartyManager.SwoopUpgrade3 ?? -1);
+      partytable.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'PT_PCNAME')).setValue(
+        GameState.PartyManager.Player?.getName?.() || ''
+      );
 
       /**
        * Pazaak Cards
@@ -725,6 +800,185 @@ export class PartyManager {
    * @param template - The template to add to the list of available PartyMembers
    * @returns boolean
    */
+  // --- Influence (TSL) -------------------------------------------------------
+  // PT_INFLUENCE in the party table: twelve NPC_* slots, each an Int32.
+  // Retail seeds every slot at -1, which GetInfluence reports as "ambivalent";
+  // a recruited companion sits on 0-100.
+
+  /** GetInfluence: 0 when the companion is not an available party member. */
+  static getInfluence(npcId: number): number {
+    if(!PartyManager.isInfluenceSlot(npcId)) return 0;
+    const npc = PartyManager.NPCS[npcId];
+    if(!npc || !npc.available) return 0;
+    const value = PartyManager.InfluenceMap.get(npcId);
+    return typeof value === 'number' ? value : -1;
+  }
+
+  /** SetInfluence: ignored for a companion who is not available, as retail says. */
+  static setInfluence(npcId: number, value: number): void {
+    if(!PartyManager.isInfluenceSlot(npcId)) return;
+    const npc = PartyManager.NPCS[npcId];
+    if(!npc || !npc.available) return;
+    const clamped = Math.max(0, Math.min(100, Math.trunc(Number.isFinite(value) ? value : 0)));
+    PartyManager.InfluenceMap.set(npcId, clamped);
+  }
+
+  /** ModifyInfluence: a signed change, from the ambivalent midpoint when unset. */
+  static modifyInfluence(npcId: number, modifier: number): void {
+    if(!PartyManager.isInfluenceSlot(npcId)) return;
+    const npc = PartyManager.NPCS[npcId];
+    if(!npc || !npc.available) return;
+    const current = PartyManager.InfluenceMap.get(npcId);
+    const base = (typeof current === 'number' && current >= 0) ? current : 50;
+    PartyManager.setInfluence(npcId, base + (Number.isFinite(modifier) ? Math.trunc(modifier) : 0));
+  }
+
+  static isInfluenceSlot(npcId: number): boolean {
+    return Number.isInteger(npcId) && npcId >= 0 && npcId < PartyManager.MaxPartyCount;
+  }
+
+  // --- Puppets (TSL) ---------------------------------------------------------
+  // PUP_* slots (0 sensor ball, 1 and 2 spare) held in PT_AVAIL_PUPS, with the
+  // spawned copies in PT_PUPPETS. A puppet is only "in the party" once
+  // AddPartyPuppet has taken the creature SpawnAvailablePUP produced.
+
+  static isPuppetSlot(pupId: number): boolean {
+    return Number.isInteger(pupId) && pupId >= 0 && pupId < PartyManager.MaxPuppetCount;
+  }
+
+  /** AddAvailablePUPByTemplate: makes a blueprint available; spawns nothing. */
+  static AddAvailablePUPByTemplate(pupId = 0, template: string|GFFObject = ''): boolean {
+    if(!PartyManager.isPuppetSlot(pupId)) return false;
+    const slot = PartyManager.Puppets[pupId];
+    if(!slot) return false;
+    if(typeof template === 'string'){
+      const buffer = ResourceLoader.loadCachedResource(ResourceTypes['utc'], template);
+      if(!buffer){
+        console.error('AddAvailablePUPByTemplate: failed to load', template);
+        return false;
+      }
+      slot.template = new GFFObject(buffer);
+    }else if(template instanceof GFFObject){
+      slot.template = template;
+    }else{
+      return false;
+    }
+    slot.available = true;
+    slot.select = true;
+    return true;
+  }
+
+  /** AddAvailablePUPByObject: the same, from a creature already in the world. */
+  static AddAvailablePUPByObject(pupId = 0, creature: ModuleCreature): boolean {
+    if(!PartyManager.isPuppetSlot(pupId)) return false;
+    if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return false;
+    const slot = PartyManager.Puppets[pupId];
+    if(!slot) return false;
+    slot.template = creature.save();
+    slot.available = true;
+    slot.select = true;
+    return true;
+  }
+
+  /** SavePUPByObject: refresh the stored blueprint from the live puppet. */
+  static SavePUPByObject(pupId = 0, creature: ModuleCreature): boolean {
+    if(!PartyManager.isPuppetSlot(pupId)) return false;
+    if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return false;
+    const slot = PartyManager.Puppets[pupId];
+    if(!slot || !slot.available) return false;
+    slot.template = creature.save();
+    return true;
+  }
+
+  /** AssignPUP: both the puppet and the companion must already be available. */
+  static AssignPUP(pupId = 0, npcId = 0): boolean {
+    if(!PartyManager.isPuppetSlot(pupId) || !PartyManager.isInfluenceSlot(npcId)) return false;
+    const slot = PartyManager.Puppets[pupId];
+    const npc = PartyManager.NPCS[npcId];
+    if(!slot || !slot.available || !npc || !npc.available) return false;
+    slot.ownerNPC = npcId;
+    if(slot.creature) slot.creature.pupOwnerNPC = npcId;
+    return true;
+  }
+
+  /**
+   * SpawnAvailablePUP: build the creature from the stored blueprint and put it
+   * in the area. It is not a party puppet until AddPartyPuppet takes it.
+   */
+  static async SpawnAvailablePUP(pupId = 0, position?: THREE.Vector3, facing = 0): Promise<ModuleCreature|undefined> {
+    const puppet = PartyManager.SpawnAvailablePUPSync(pupId, position, facing);
+    if(!puppet) return undefined;
+    const model = await puppet.loadModel();
+    if(model){
+      model.userData.moduleObject = puppet;
+      model.hasCollision = true;
+    }
+    return puppet;
+  }
+
+  /**
+   * The same spawn, without waiting for the model. SpawnAvailablePUP (routine
+   * 839) has to hand the script an object immediately; the model attaches a
+   * frame or two later, as it does for any other spawn.
+   */
+  static SpawnAvailablePUPSync(pupId = 0, position?: THREE.Vector3, facing = 0): ModuleCreature|undefined {
+    if(!PartyManager.isPuppetSlot(pupId)) return undefined;
+    const slot = PartyManager.Puppets[pupId];
+    if(!slot || !slot.available || !slot.template) return undefined;
+
+    const template = slot.template;
+    template.RootNode.addField( new GFFField(GFFDataType.DWORD, 'ObjectId') ).setValue( GameState.ModuleObjectManager.GetNextPlayerId() );
+    const puppet = new ModuleCreature(template);
+    puppet.pupId = pupId;
+    puppet.pupOwnerNPC = slot.ownerNPC;
+    puppet.load();
+    puppet.clearAllActions();
+    if(position) puppet.position.copy(position);
+    puppet.setFacing(facing, true);
+    GameState.module?.area?.attachObject(puppet);
+    slot.creature = puppet;
+
+    void puppet.loadModel().then((model) => {
+      if(!model) return;
+      model.userData.moduleObject = puppet;
+      model.hasCollision = true;
+    }).catch((): undefined => undefined);
+
+    return puppet;
+  }
+
+  /** AddPartyPuppet: the spawned puppet joins the party table. */
+  static AddPartyPuppet(pupId = 0, creature: ModuleCreature): boolean {
+    if(!PartyManager.isPuppetSlot(pupId)) return false;
+    if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return false;
+    const slot = PartyManager.Puppets[pupId];
+    if(!slot || !slot.available) return false;
+    slot.creature = creature;
+    slot.inParty = true;
+    creature.pupId = pupId;
+    creature.pupOwnerNPC = slot.ownerNPC;
+    PartyManager.PuppetCount = Object.values(PartyManager.Puppets).filter((p) => p.inParty).length;
+    return true;
+  }
+
+  /**
+   * GetIsPuppet: true only for a puppet the party table holds. A puppet that
+   * was spawned but never added reports false, which retail documents.
+   */
+  static GetIsPuppet(creature: ModuleCreature): boolean {
+    if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return false;
+    const slot = PartyManager.Puppets[(creature as any).pupId];
+    return !!slot && slot.inParty && slot.creature === creature;
+  }
+
+  /** GetPUPOwner: the party member the puppet is assigned to, if present. */
+  static GetPUPOwner(creature: ModuleCreature): ModuleCreature|undefined {
+    if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return undefined;
+    const slot = PartyManager.Puppets[(creature as any).pupId];
+    if(!slot || slot.ownerNPC < 0) return undefined;
+    return PartyManager.party.find((member) => member && member.npcId === slot.ownerNPC);
+  }
+
   static AddAvailableNPCByTemplate(npcId = 0, template: string|GFFObject = ''): boolean {
     if(typeof template === 'string'){
       //Load template and merge fields

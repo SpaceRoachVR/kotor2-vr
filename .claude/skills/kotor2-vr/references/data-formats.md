@@ -67,6 +67,15 @@ Options, cheapest first:
 3. **Consult a playthrough.** The user may link a video. Claude cannot watch video —
    say so and ask for the relevant detail in text rather than pretending otherwise.
 
+For bulk checks, `tools/parity/` (see its README) diffs a module's creatures,
+texture routing and sound objects against retail data read through PyKotor, and
+`save_schema.py` diffs our save GFF field types against a retail save. Its first
+run (2026-09-17) found `BodyVariation` loading into `bodyBag`, save bonuses never
+loaded, `willbonus` never saved, empty GFF lists written as `0xFFFFFFFF`, action
+parameters saved without `Type`, sound `Continuous` never loaded, and seven save
+fields with the wrong type. Run it before arguing from memory about what a
+template holds.
+
 Do not rely on recalled plot knowledge. A wrong memory of which character appears in a
 scene once sent this project down a completely dead investigative path.
 

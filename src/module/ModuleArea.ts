@@ -1293,6 +1293,8 @@ export class ModuleArea extends ModuleObject {
         for(let i = 0; i < this.layout.obstacles.length; i++){
           this.miniGame.obstacles.push(new ModuleMGObstacle(undefined, this.layout.obstacles[i]));
         }
+        // The LYT places them; the ARE names their scripts.
+        this.miniGame.applyObstacleTemplates();
       }
     }catch(e){
       console.error(e);
@@ -2055,7 +2057,7 @@ export class ModuleArea extends ModuleObject {
     for(let i = 0; i < this.sounds.length; i++){
       try{
         const sound = this.sounds[i];
-        sound.load();
+        await sound.load();
         await sound.loadSound();
       }catch(e){
         console.error(e);
@@ -2282,9 +2284,12 @@ export class ModuleArea extends ModuleObject {
     struct.addField( new GFFField(GFFDataType.INT, 'MusicNight') ).setValue(this.audio.music.night);
 
     struct.addField( new GFFField(GFFDataType.BYTE, 'RestrictMode') ).setValue(this.restrictMode ? 1 : 0);
+    // Types and fields as a retail SAVEGAME.sav writes them; the values were
+    // hard-coded 0, so a save/load reset the area's stealth XP rules.
     struct.addField( new GFFField(GFFDataType.DWORD, 'StealthXPCurrent') ).setValue(0);
-    struct.addField( new GFFField(GFFDataType.BYTE, 'StealthXPLoss') ).setValue(0);
-    struct.addField( new GFFField(GFFDataType.DWORD, 'StealthXPMax') ).setValue(0);
+    struct.addField( new GFFField(GFFDataType.BYTE, 'StealthXPEnabled') ).setValue(this.stealthXPEnabled ? 1 : 0);
+    struct.addField( new GFFField(GFFDataType.DWORD, 'StealthXPLoss') ).setValue(this.stealthXPLoss || 0);
+    struct.addField( new GFFField(GFFDataType.DWORD, 'StealthXPMax') ).setValue(this.stealthXPMax || 0);
     struct.addField( new GFFField(GFFDataType.DWORD, 'SunFogColor') ).setValue(0);
     
     struct.addField( new GFFField(GFFDataType.BYTE, 'TransPendCurrID') ).setValue(0);
@@ -2327,7 +2332,7 @@ export class ModuleArea extends ModuleObject {
       creatureList.addChildStruct( this.creatures[i].save().RootNode );
     }
 
-    git.RootNode.addField( new GFFField(GFFDataType.LIST, 'CurrentWeather') ).setValue(this.weather.currentWeather);
+    git.RootNode.addField( new GFFField(GFFDataType.BYTE, 'CurrentWeather') ).setValue(this.weather.currentWeather);
 
     const doorList = git.RootNode.addField( new GFFField(GFFDataType.LIST, 'Door List') );
     for(let i = 0; i < this.doors.length; i++){

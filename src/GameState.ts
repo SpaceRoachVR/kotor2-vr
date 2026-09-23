@@ -78,6 +78,47 @@ import {
   type VRCombatRequiredInput,
 } from "@/vr/runtime/VRCombatIntentQueue";
 import { VRCombatIntentDispatcher } from "@/vr/runtime/VRCombatIntentDispatcher";
+import { VRMiniGameInputController } from "@/vr/runtime/VRMiniGameInputController";
+import {
+  attachSwoopGrips, detachSwoopGrips, SWOOP_GRIP_GROUP_NAME,
+} from "@/vr/runtime/VRMiniGameGripHost";
+
+/** The bike the swoop grips are currently attached to, so it is done once. */
+let vrSwoopGripsAttachedTo: THREE.Object3D | null = null;
+
+/** Scratch for the grip poses, which are read every frame while riding. */
+const vrSwoopGripPoses: Record<'left' | 'right', {
+  position: THREE.Vector3; orientation: THREE.Quaternion;
+  linearVelocity: null; angularVelocity: null; trackingState: 'tracked';
+}> = {
+  left: {
+    position: new THREE.Vector3(), orientation: new THREE.Quaternion(),
+    linearVelocity: null, angularVelocity: null, trackingState: 'tracked',
+  },
+  right: {
+    position: new THREE.Vector3(), orientation: new THREE.Quaternion(),
+    linearVelocity: null, angularVelocity: null, trackingState: 'tracked',
+  },
+};
+
+/**
+ * World poses of the swoop's handlebar grips, so a hand that has taken hold of
+ * one can be drawn on it. Null until the grips exist.
+ */
+function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
+  if(!container){ return null; }
+  const grips = container.getObjectByName(SWOOP_GRIP_GROUP_NAME);
+  if(!grips || grips.children.length < 2){ return null; }
+  const roles = ['left', 'right'] as const;
+  for(let i = 0; i < roles.length; i++){
+    const grip = grips.children[i];
+    if(!grip){ return null; }
+    grip.updateWorldMatrix(true, false);
+    grip.getWorldPosition(vrSwoopGripPoses[roles[i]].position);
+    grip.getWorldQuaternion(vrSwoopGripPoses[roles[i]].orientation);
+  }
+  return vrSwoopGripPoses;
+}
 import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
@@ -1617,6 +1658,12 @@ export class GameState implements EngineContext {
   static maxSelectableDistance = 20;
   static maxSelectableDistanceSquared = GameState.maxSelectableDistance * GameState.maxSelectableDistance;
 
+  /** DisableHealthRegen: stops vitality regeneration for everyone. */
+  static healthRegenDisabled: boolean = false;
+  /** DisableMap: hides the map on the in-game overlay and the map screen. */
+  static mapDisabled: boolean = false;
+  /** SetKeepStealthInDialog: stealth survives a conversation instead of dropping. */
+  static keepStealthInDialog: boolean = false;
   static delta: number = 0;
 
   static SaveGame: SaveGame;
@@ -2175,15 +2222,80 @@ export class GameState implements EngineContext {
     GameState.renderPass.needsSwap = false;
     GameState.renderPassGUI.needsSwap = false;
 
+    // Swoop and turret VR input. The controller takes the live minigame through
+    // this provider rather than importing engine state, which keeps the VR
+    // layer independent of GameState (and its tests free of the engine).
+    VRSpike.miniGameInput = VRMiniGameInputController;
+    VRMiniGameInputController.pinHand = (hand, pose) => VRSpike.setPinnedHandPose(hand, pose);
+    VRMiniGameInputController.setProvider(() => {
+      if (GameState.Mode !== EngineMode.MINIGAME) return null;
+      const miniGame: any = GameState.module?.area?.miniGame;
+      const player: any = miniGame?.player;
+      if (!miniGame || !player) return null;
+      // Visible grips for the swoop, sitting on the bike's own handlebars.
+      // Attached once: getObjectByName walks the whole bike, and this provider
+      // runs every frame.
+      if (miniGame.type === 1 && VRSpike.isPresenting) {
+        if (vrSwoopGripsAttachedTo !== player.container) {
+          attachSwoopGrips(player.container);
+          vrSwoopGripsAttachedTo = player.container;
+        }
+      } else if (miniGame.type !== 1 && vrSwoopGripsAttachedTo) {
+        detachSwoopGrips(vrSwoopGripsAttachedTo);
+        vrSwoopGripsAttachedTo = null;
+      }
+      return {
+        type: miniGame.type,
+        lateralAcceleration: player.accel_lateral_secs,
+        setLateralForce: (force: number) => { player.lateralForce = force; },
+        // The track's own tunnel is the width of the lane the rider may use.
+        get lateralLimit(){ return Math.abs(player.tunnel?.pos?.x ?? 0); },
+        // Both sides of this are measured from the middle of the road, which is
+        // not the line the hook drops the rider on.
+        get lateralPosition(){
+          return (player.container?.position?.x ?? 0) - (player.measureLaneCentre?.() ?? 0);
+        },
+        setLateralPosition: (position: number) => {
+          if(!player.container){ return; }
+          player.container.position.x = (player.measureLaneCentre?.() ?? 0) + position;
+          player.clampToTunnel?.();
+        },
+        get gripPoses(){ return readSwoopGripPoses(player.container); },
+        // TSL's swoop keeps its jump script in the OnBrake slot; onBrake()
+        // falls back to the engine's own jump when a module ships none.
+        jump: () => (player.onBrake ? player.onBrake() : player.jump?.()),
+        accelerate: () => {
+          player.requestAcceleration?.();
+          player.onAccelerate?.();
+        },
+        fire: () => player.fire?.(),
+        get pitch(){ return player.rotation?.x ?? 0; },
+        get yaw(){ return player.rotation?.z ?? 0; },
+        rotateBy: (pitchDelta: number, yawDelta: number) => {
+          player.rotate?.('x', pitchDelta);
+          player.rotate?.('z', yawDelta);
+        },
+      };
+    });
+
     /**
      * Phase 0.1 stereo perf spike. Async and deliberately not awaited — it only
      * promotes the GL context and adds a button, and nothing downstream depends
      * on it. If there is no WebXR runtime it logs and does nothing.
      */
     VRSpike.install(GameState.renderer, GameState.scene, {
+
       update: (timestamp, source) => GameState.Update(timestamp, source),
-      getPlayerPosition: () => GameState.getCurrentPlayer()?.position ?? null,
-      getFacing: () => FollowerCamera.facing,
+      getPlayerPosition: () => {
+        const miniGameSeat = GameState.getMiniGameSeat();
+        if (miniGameSeat) return miniGameSeat.position;
+        return GameState.getCurrentPlayer()?.position ?? null;
+      },
+      getFacing: () => {
+        const miniGameSeat = GameState.getMiniGameSeat();
+        if (miniGameSeat) return miniGameSeat.facing;
+        return FollowerCamera.facing;
+      },
       getPlayerFacing: () => GameState.getCurrentPlayer()?.rotation.z ?? null,
       getHeldVisuals: () => {
         const player = GameState.getCurrentPlayer();
@@ -2223,7 +2335,17 @@ export class GameState implements EngineContext {
           FollowerCamera.clearFocusObject();
         }
       },
-      getCurrentRoomWalkmesh: () => GameState.getCurrentPlayer()?.room?.collisionManager?.walkmesh ?? null,
+      // No containment in a minigame: the rider is carried by a vehicle on a
+      // track, not walking a room. Feeding the soft-block a room walkmesh here
+      // ran away - the bike sits far outside any room, so every frame pushed
+      // the rig further to "correct" it, which moved the head further out
+      // still. Measured in-headset on 211TEL: the rig climbed from y 0.47 to
+      // y 1817 in seconds while the bike sat at y -183, which is the flashing,
+      // bike-less view the rider actually saw.
+      getCurrentRoomWalkmesh: () => {
+        if(GameState.Mode == EngineMode.MINIGAME){ return null; }
+        return GameState.getCurrentPlayer()?.room?.collisionManager?.walkmesh ?? null;
+      },
       getComfortSettings: () => ({ ...vrComfortSettings }),
       setComfortSettings: (patch) => Object.assign(vrComfortSettings, patch),
       // Walk/run already exists on the creature: `getMovementSpeed()` picks
@@ -3102,6 +3224,7 @@ export class GameState implements EngineContext {
 
   /** Shows the PAUSE overlay only while paused with the in-game overlay up. */
   static syncPauseOverlay(){
+    const modeBeforeOverlay = GameState.Mode;
     if(GameState.State == EngineState.PAUSED && GameState.MenuManager.InGameOverlay.isVisible()){
       if(!GameState.MenuManager.InGamePause.isVisible())
         GameState.MenuManager.InGamePause.show();
@@ -3109,6 +3232,114 @@ export class GameState implements EngineContext {
       if(GameState.MenuManager.InGamePause.isVisible())
         GameState.MenuManager.InGamePause.hide();
     }
+
+    // The pause overlay draws on top of whichever mode owns the frame; it does
+    // not own that mode. GameMenu.show() assigns the menu's own engineMode, and
+    // InGamePause declares INGAME - so pausing inside a minigame ended the race
+    // outright: MINIGAME stopped being the mode, so the minigame stopped
+    // ticking, and nothing ever set it back on unpause.
+    if(GameState.Mode !== modeBeforeOverlay){
+      GameState.SetEngineMode(modeBeforeOverlay);
+    }
+  }
+
+  /**
+   * Where the rider sits in a minigame, in world space, or null outside one.
+   *
+   * A minigame player rides a track node: its own `position` stays at the local
+   * origin for the whole race while the container's world matrix is what moves.
+   * Anchoring the VR rig to `position` therefore left the rider parked at the
+   * world origin watching the track stream past hundreds of units away, with no
+   * bike anywhere in sight.
+   *
+   * Facing is taken from the container's world +Y axis, which is the direction
+   * of travel (measured on 211TEL: the bike moves +513 on Y with its +Y axis at
+   * yaw pi/2). VRSpike yaws the rig by `facing + pi/2`, matching how KOTOR
+   * renders its camera at bearing + 90 degrees, so the bearing it wants is that
+   * heading minus pi/2.
+   */
+  private static miniGameSeatPosition = new THREE.Vector3();
+  private static miniGameSeatQuaternion = new THREE.Quaternion();
+  private static miniGameSeatScale = new THREE.Vector3();
+  private static miniGameSeatForward = new THREE.Vector3();
+  private static miniGameSeat: { position: THREE.Vector3; facing: number } = {
+    position: new THREE.Vector3(), facing: 0,
+  };
+
+  /**
+   * How far forward of the bike's origin the rider sits, in game units. Taken
+   * from the middle of the authored rider's own span (y 0.12 to 1.65).
+   */
+  static readonly MINIGAME_SEAT_FORWARD_OFFSET = 0.7;
+
+  /**
+   * The body the first-person submission must leave out.
+   *
+   * Ordinarily that is the party leader's model, welded to the rig at eye
+   * height. In a minigame the rider is not the party leader at all: the swoop
+   * carries its own rider, the `trider` node inside v_supertrike01, a 994-vertex
+   * figure seated exactly where the player is. Drawn in first person it reads as
+   * a second pair of arms in front of the player's own hands.
+   *
+   * Cached per model, because this runs once a frame and the lookup walks the
+   * bike's 340 nodes.
+   */
+  private static miniGameRiderCache = new WeakMap<object, THREE.Object3D | null>();
+
+  public static getFirstPersonHiddenBody(): THREE.Object3D | null | undefined {
+    if(GameState.Mode != EngineMode.MINIGAME){
+      return GameState.PartyManager.Player?.model;
+    }
+    const models: any[] = (GameState.module?.area?.miniGame?.player as any)?.models ?? [];
+    for(const model of models){
+      if(!model){ continue; }
+      if(GameState.miniGameRiderCache.has(model)){
+        const cached = GameState.miniGameRiderCache.get(model);
+        if(cached){ return cached; }
+        continue;
+      }
+      let rider: THREE.Object3D | null = null;
+      model.traverse((node: THREE.Object3D) => {
+        if(rider){ return; }
+        if(String(node.name || '').replace(/\0[\s\S]*$/, '') === 'trider'){ rider = node; }
+      });
+      GameState.miniGameRiderCache.set(model, rider);
+      if(rider){ return rider; }
+    }
+    return null;
+  }
+
+  public static getMiniGameSeat(): { position: THREE.Vector3; facing: number } | null {
+    if(GameState.Mode != EngineMode.MINIGAME){ return null; }
+    const container = (GameState.module?.area?.miniGame?.player as any)?.container;
+    if(!container){ return null; }
+    container.updateMatrixWorld(true);
+    container.matrixWorld.decompose(
+      GameState.miniGameSeatPosition,
+      GameState.miniGameSeatQuaternion,
+      GameState.miniGameSeatScale,
+    );
+    GameState.miniGameSeatForward.set(0, 1, 0).applyQuaternion(GameState.miniGameSeatQuaternion);
+
+    // Sit the rider on the saddle rather than behind it. The hook the rider
+    // hangs from is the bike's own origin, which is well aft of the seat: in
+    // the headset that put the player's head behind the seat back, looking
+    // forward at it. The bike's own rider (`trider`) spans y 0.12 to 1.65 from
+    // that origin, so its head sits near the middle of that span.
+    GameState.miniGameSeat.position.copy(GameState.miniGameSeatPosition).addScaledVector(
+      GameState.miniGameSeatForward, GameState.MINIGAME_SEAT_FORWARD_OFFSET,
+    );
+
+    // Face the way the bike travels. VRSpike yaws the rig by `facing + pi/2`,
+    // matching how KOTOR renders its camera at bearing + 90 degrees - but a
+    // minigame rider is welded to a vehicle rather than orbited by a follower
+    // camera, and measured in the headset that convention left the rider facing
+    // 90 degrees left of travel: rig yaw pi against a heading of pi/2. The
+    // second half turn takes that back out.
+    GameState.miniGameSeat.facing = Math.atan2(
+      GameState.miniGameSeatForward.y, GameState.miniGameSeatForward.x,
+    ) - Math.PI;
+    return GameState.miniGameSeat;
   }
 
   public static getCurrentPlayer(): ModuleCreature {
@@ -3659,6 +3890,22 @@ export class GameState implements EngineContext {
     GameState.updateCurrentCameraPosition();
 
     GameState.updateTime(delta);
+
+    // Tick the module, exactly as UpdateInGame does. Without this the swoop and
+    // the turret never ran at all: `ModuleMiniGame.tick()` is only reached from
+    // `ModuleArea.update()`, which is only reached from `Module.tick()`, and the
+    // one engine mode that owns a minigame was the one mode that never called
+    // it. The bike therefore sat on the start line with no heartbeat - and the
+    // heartbeat script is the whole race, from the gear countdown to the lap
+    // timer - while the turret's guns never came alive.
+    if(
+      GameState.State == EngineState.PAUSED || GameState.MenuManager.activeModals.length
+    ){
+      GameState.module.tickPaused(delta);
+    }else{
+      GameState.module.tick(delta);
+    }
+
     GameState.FadeOverlayManager.Update(delta);
     GameState.updateWorldSystems(delta, GameState.getCurrentPlayer());
 
@@ -3702,7 +3949,7 @@ export class GameState implements EngineContext {
       VRSpike.render(
         GameState.currentCamera,
         frameTimestamp,
-        GameState.PartyManager.Player?.model,
+        GameState.getFirstPersonHiddenBody(),
       );
       return;
     }

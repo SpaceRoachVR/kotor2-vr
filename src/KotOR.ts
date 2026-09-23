@@ -75,6 +75,9 @@ export * from "@/engine/menu/ActionMenuManager";
 export * from "@/actions/ActionFactory";
 export * from "@/effects/GameEffectFactory";
 export * from "@/events/GameEventFactory";
+// NWScript events, so the emulated-headset harness can signal one the way a
+// script does (SignalEvent + EventUserDefined) instead of poking handlers.
+export * from "@/nwscript/events";
 
 
 
@@ -92,3 +95,5 @@ export * from "@/engine/interaction/ActionApproachPolicy";
 // semantic actions are bound to physical buttons without reaching into the
 // bundle internals.
 export * from "@/vr/runtime/XRInputRouter";
+export * from "@/vr/runtime/VRMiniGameInputController";
+export * from "@/vr/runtime/VRMiniGameInputPolicy";
