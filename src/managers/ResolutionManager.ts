@@ -82,19 +82,19 @@ export class ResolutionManager {
   }
 
   static getViewportWidth(): number {
-    return this.screenResolution.isDynamicRes ? window.innerWidth : this.screenResolution.width;
+    return (this.screenResolution.isDynamicRes && typeof window !== 'undefined') ? window.innerWidth : this.screenResolution.width;
   }
 
   static getViewportHeight(): number {
-    return this.screenResolution.isDynamicRes ? window.innerHeight : this.screenResolution.height;
+    return (this.screenResolution.isDynamicRes && typeof window !== 'undefined') ? window.innerHeight : this.screenResolution.height;
   }
 
   static getViewportWidthScaled(): number {
-    return this.screenResolution.isDynamicRes ? window.innerWidth : this.screenResolution.width * this.vpScaleFactor;
+    return (this.screenResolution.isDynamicRes && typeof window !== 'undefined') ? window.innerWidth : this.screenResolution.width * this.vpScaleFactor;
   }
 
   static getViewportHeightScaled(): number {
-    return this.screenResolution.isDynamicRes ? window.innerHeight : this.screenResolution.height * this.hpScaleFactor;
+    return (this.screenResolution.isDynamicRes && typeof window !== 'undefined') ? window.innerHeight : this.screenResolution.height * this.hpScaleFactor;
   }
 
   static getWindowWidth(): number {
@@ -106,6 +106,7 @@ export class ResolutionManager {
   }
 
   static recalculate(): void {
+    if (typeof window === 'undefined') return;
     const scaleX = window.innerWidth / this.getViewportWidth();
     const scaleY = window.innerHeight / this.getViewportHeight();
 
@@ -284,8 +285,10 @@ export class ResolutionManager {
 
 }
 
-window.addEventListener('resize', () => {
-  ResolutionManager.windowResolution.width = window.innerWidth;
-  ResolutionManager.windowResolution.height = window.innerHeight;
-  ResolutionManager.recalculate();
-});
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', () => {
+    ResolutionManager.windowResolution.width = window.innerWidth;
+    ResolutionManager.windowResolution.height = window.innerHeight;
+    ResolutionManager.recalculate();
+  });
+}

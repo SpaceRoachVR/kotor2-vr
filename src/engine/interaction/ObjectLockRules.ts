@@ -99,7 +99,13 @@ export function resolveSecurityUnlock(
     throw new RangeError('Security d20 roll must be an integer between 1 and 20');
   }
   const total = roll + abilityModifier(attempt.intelligence) + attempt.securitySkill;
-  return { attempted: true, unlocked: total > attempt.openLockDC, roll, total };
+  // Meets or exceeds, as every d20 check does. The authored locks agree: the
+  // Peragus Security Locker is DC 28, and an untrained Exile (INT 14) with the
+  // Security Tunneler found nearby totals exactly 20 + 2 + 6 = 28. Under a
+  // strict "greater than" that locker could never be opened with the tool the
+  // game hands you for it — reported from the headset as "the security
+  // tunneler seems to be completely broken".
+  return { attempted: true, unlocked: total >= attempt.openLockDC, roll, total };
 }
 
 /** Plot, Min1HP, and NotBlastable objects never expose the generic Bash route. */

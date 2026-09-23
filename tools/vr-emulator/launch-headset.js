@@ -86,6 +86,16 @@ function startAssetService() {
     `--user-data-dir=${profileDir}`,
     '--no-first-run',
     '--no-default-browser-check',
+    // Keep simulating when the window is not on screen. Out of an immersive
+    // session the game runs on requestAnimationFrame, and Chrome stops that
+    // entirely for a hidden or occluded window. Round 6 ended with the page
+    // reporting visibility=hidden and zero frames in two seconds: the game
+    // looked hung, DevTools in the same window stopped responding, and nothing
+    // updated until the window was brought back — in a headset, where the
+    // desktop window is almost never in front.
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-background-timer-throttling',
     // Opening DevTools before the session starts means the console is already
     // capturing if something needs reporting; several open roadmap items are
     // waiting on exactly that evidence.

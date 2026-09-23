@@ -1,4 +1,3 @@
-import { GameState } from "@/GameState";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
 // import { TwoDAManager, TLKManager } from "@/managers";
 import { GFFField } from "@/resource/GFFField";
@@ -8,6 +7,15 @@ import type { TalentSpell } from "@/talents/TalentSpell";
 import { SWSavingThrow } from "@/engine/rules/SWSavingThrow";
 import { SWAttackBonus } from "@/engine/rules/SWAttackBonus";
 import { readFeatClassColumn } from "@/talents/featClassColumns";
+
+const getGameState = (): any => {
+  if ((globalThis as any).KotOR?.GameState) return (globalThis as any).KotOR.GameState;
+  try {
+    return require("@/GameState").GameState;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * CreatureClass class.
@@ -86,16 +94,16 @@ export class CreatureClass {
     this.id = id;
     this.level = 0;
     this.spells = [];
-    if(id >= 0)
-      this.apply2DA(GameState.TwoDAManager.datatables.get('classes').rows[this.id]);
+    if(id >= 0 && getGameState().TwoDAManager?.datatables?.get('classes'))
+      this.apply2DA(getGameState().TwoDAManager.datatables.get('classes').rows[this.id]);
   }
 
   getName(){
-    return GameState.TLKManager.GetStringById(this.name).Value;
+    return getGameState().TLKManager.GetStringById(this.name).Value;
   }
 
   getDescription(){
-    return GameState.TLKManager.GetStringById(this.description).Value;
+    return getGameState().TLKManager.GetStringById(this.description).Value;
   }
 
   setLevel(nLevel = 0){
@@ -111,12 +119,33 @@ export class CreatureClass {
     return this.spells;
   }
 
+  // Row 0 of cls_atk_*.2da and acbonus.2da is level 1. Indexing by level read
+  // the next level's row, so every creature attacked a level above its own —
+  // a level 1 Damaged Mining Droid rolled at +2 instead of +1 (round 9).
   getBaseAttackBonus(){
-    return this.attackBonuses[this.level].bab;
+    return this.attackBonuses[CreatureClass.levelRow(this.level, this.attackBonuses.length)]?.bab ?? 0;
   }
 
   getACBonus(){
-    return this.acbonuses[this.level];
+    return this.acbonuses[CreatureClass.levelRow(this.level, this.acbonuses.length)] ?? 0;
+  }
+
+  getFortitudeSave(): number {
+    return this.savingThrows[CreatureClass.levelRow(this.level, this.savingThrows.length)]?.fortsave ?? 0;
+  }
+
+  getReflexSave(): number {
+    return this.savingThrows[CreatureClass.levelRow(this.level, this.savingThrows.length)]?.refsave ?? 0;
+  }
+
+  getWillSave(): number {
+    return this.savingThrows[CreatureClass.levelRow(this.level, this.savingThrows.length)]?.willsave ?? 0;
+  }
+
+  /** The 2DA row for a class level: level 1 is row 0. */
+  static levelRow(level: number, rows: number): number {
+    const row = Math.floor(Number.isFinite(level) ? level : 1) - 1;
+    return Math.max(0, Math.min(row, Math.max(0, rows - 1)));
   }
 
   /**
@@ -154,7 +183,11 @@ export class CreatureClass {
     return isNaN(status) ? -1 : status;
   }
 
-  getFeatGrantedLevel( feat: any ){
+  getFeatGrantedLevel( feat: any, isPlayerCharacter: boolean = false ){
+    if(isPlayerCharacter){
+      const pcGranted = readFeatClassColumn(feat, this.featstable, 'PcGranted');
+      if(pcGranted !== -1) return pcGranted;
+    }
     return readFeatClassColumn(feat, this.featstable, 'Granted');
   }
 
@@ -171,7 +204,7 @@ export class CreatureClass {
           let spell = undefined;
 
           if(known_spell_struct.hasField('Spell')){
-            spell = new GameState.TalentSpell(
+            spell = new (getGameState().TalentSpell)(
               known_spell_struct.getFieldByLabel('Spell').getValue()
             );
           }
@@ -218,10 +251,10 @@ export class CreatureClass {
       this.featstable = TwoDAObject.normalizeValue(row.featstable, 'string', 'SOL');
 
     if(row.hasOwnProperty('savingthrowtable'))
-      this.savingthrowtable = TwoDAObject.normalizeValue(row.savingthrowtable, 'string', 'CLS_ST_SOL');
+      this.savingthrowtable = TwoDAObject.normalizeValue(row.savingthrowtable, 'string', '');
 
     if(row.hasOwnProperty('skillstable'))
-      this.skillstable = TwoDAObject.normalizeValue(row.skillstable, 'string', 'CLS_SK_SOL');
+      this.skillstable = TwoDAObject.normalizeValue(row.skillstable, 'string', '');
 
     if(row.hasOwnProperty('skillpointbase'))
       this.skillpointbase = TwoDAObject.normalizeValue(row.skillpointbase, 'number', 1);
@@ -266,43 +299,43 @@ export class CreatureClass {
       this.alignrstrcttype = TwoDAObject.normalizeValue(row.alignrstrcttype, 'number', 0);  
 
     if(row.hasOwnProperty('constant'))
-      this.constant = TwoDAObject.normalizeValue(row.constant, 'string', 'CCLASS_SOLDIER');
+      this.constant = TwoDAObject.normalizeValue(row.constant, 'string', '');
 
     if(row.hasOwnProperty('forcedie'))
       this.forcedie = TwoDAObject.normalizeValue(row.forcedie, 'number', 0);
 
     if(row.hasOwnProperty('armorclasscolumn'))
-      this.armorclasscolumn = TwoDAObject.normalizeValue(row.armorclasscolumn, 'string', 'SOL');
+      this.armorclasscolumn = TwoDAObject.normalizeValue(row.armorclasscolumn, 'string', '');
 
     if(row.hasOwnProperty('featgain'))
-      this.featgain = TwoDAObject.normalizeValue(row.featgain, 'string', 'SOL');
+      this.featgain = TwoDAObject.normalizeValue(row.featgain, 'string', '');
 
-    if(this.savingthrowtable){
-      const savingThrows = GameState.TwoDAManager.datatables.get(this.savingthrowtable.toLowerCase());
+    if(this.savingthrowtable && this.savingthrowtable !== '****'){
+      const savingThrows = getGameState()?.TwoDAManager?.datatables?.get(this.savingthrowtable.toLowerCase());
       if(savingThrows){
         this.savingThrows = Object.values(savingThrows.rows).map((row: any) => SWSavingThrow.From2DA(row));
       }
     }
 
     if(this.attackbonustable){
-      const attackBonuses = GameState.TwoDAManager.datatables.get(this.attackbonustable.toLowerCase());
+      const attackBonuses = getGameState()?.TwoDAManager?.datatables?.get(this.attackbonustable.toLowerCase());
       if(attackBonuses){
         this.attackBonuses = Object.values(attackBonuses.rows).map((row: any) => SWAttackBonus.From2DA(row));
       }
     }
 
-    let featGain = GameState.SWRuleSet.featGains;
-    if(featGain){
+    let featGain = getGameState()?.SWRuleSet?.featGains;
+    if(featGain && this.featgain && this.featgain !== '****'){
       this.featGainPoints = featGain.getRegular(this.featgain);
     }
 
-    let spellGain = GameState.SWRuleSet.spellGains;
-    if(spellGain){
+    let spellGain = getGameState()?.SWRuleSet?.spellGains;
+    if(spellGain && this.spellgaintable && this.spellgaintable !== '****'){
       this.spellGainPoints = spellGain.getSpellGain(this.spellgaintable);
     }
 
-    const acbonuses = GameState.TwoDAManager.datatables.get('acbonus');
-    if(acbonuses){
+    const acbonuses = getGameState()?.TwoDAManager?.datatables?.get('acbonus');
+    if(acbonuses && this.armorclasscolumn && this.armorclasscolumn !== '****'){
       this.acbonuses = Object.values(acbonuses.rows).map((row: any) => {
         const col = row[this.armorclasscolumn.toLowerCase()];
         return col ? TwoDAObject.normalizeValue(col, 'number', 0) : 0;

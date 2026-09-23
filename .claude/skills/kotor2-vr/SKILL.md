@@ -10,7 +10,9 @@ room-scale VR mod for **KOTOR II: The Sith Lords** (Steam Legacy PC build).
 
 - Repo: `C:\Users\allen\source\repos\kotor2-vr`
 - Game assets: `D:\SteamLibrary\steamapps\common\Knights of the Old Republic II`
-- Upstream remote is wired as `upstream`. We have not pushed or opened a PR.
+- `origin` is `SpaceRoachVR/kotor2-vr` (pushed; PRs go into `spike/stereo-perf`).
+  `upstream` is `KobaltBlu/KotOR.js` — nothing sent there; upstreaming waits until
+  the full VR project is done.
 - Design decisions: `DESIGN.md`. Phase plan: `ROADMAP.md`.
 
 ## Orient yourself first
@@ -96,6 +98,17 @@ but the *shapes* recur elsewhere in the codebase.
   falsy checks on computed sizes.
 - **Stale cached length across a mutating loop.** An effects loop cached
   `this.effects.length` while effects could remove themselves mid-update.
+- **A missing return value that shifts the stack.** `CALL_ACTION` pushed nothing
+  for an unimplemented non-VOID NWScript action, so every later read in that
+  script frame was one slot off — silent corruption, not a failed query.
+  `IsStealthed` hit it 1,127 times in one session inside AI scripts. Fixed with
+  a per-type default (`unimplementedActionDefault.ts`); suspect the same shape
+  anywhere a VM or queue skips a push or pop on an error branch.
+- **Damage that never notifies.** Combat damage lands through `EffectDamage`,
+  which never called `onDamaged()`, so no creature's OnDamaged script ever ran
+  from an attack — the Ebon Hawk training droids could not die because their
+  release script never fired. When a scripted event "never happens", check that
+  every path to the state change raises the event, not just the obvious one.
 
 ## Where things are
 
@@ -125,13 +138,23 @@ the logic is missing entirely.
 
 ## Current state
 
-Branch `spike/stereo-perf`. Nothing pushed, no PR. The Peragus prologue runs its
-scripted beats, and the VR layer is well past a spike: locomotion, snap turn,
-recenter, blink teleport, an action wheel, comfort settings, and a world-use
-prompt system all exist and are covered by tests.
+Branch `spike/stereo-perf` — Allen calls it "the main KOTOR 2 VR branch"; do not
+target `master` without asking. The Peragus prologue runs its scripted beats,
+and the VR layer is well past a spike: locomotion, snap turn, recenter, blink
+teleport, an action wheel, comfort settings, a world-use prompt system, and
+(since PR #2, 2026-09-12) **embodied combat** — soft target lock, a three-slot
+upcoming-action queue, off-hand grenades, and rigged WebXR hands. Its contract
+is `docs/superpowers/specs/2026-09-12-embodied-vr-combat-design.md`; the runtime
+pieces are `VRCombatTargetLock`, `VRCombatIntentQueue`, `VRCombatTempoGate`,
+`VRArmedGrenadeState` and `hands/` under `src/vr/runtime/`.
 
-Two gates are green and should stay that way: **`npx jest --ci`** and
-**`npm run vr:check`** (22 emulated-headset checks).
+Two gates are green and should stay that way: **`npx jest --ci --silent`** and
+**`npm run vr:check`** (25 emulated-headset checks). Neither is headset
+acceptance.
+
+**Headset acceptance runs as numbered rounds** against one persistent checklist
+artifact that Allen fills in while playing — read "Manual headset rounds" in
+`references/vr-testing.md` before setting one up.
 
 Do not trust this section for specifics — `ROADMAP.md` is the live plan and
 `HEADSET-TEST-PLAN.md` is the live list of what needs a human. Check both.

@@ -35,7 +35,9 @@ export class CharGenQuickOrCustom extends GameMenu {
       this.QUICK_CHAR_BTN.addEventListener('click', (e) => {
         e.stopPropagation();
         try{
-          const class_data = GameState.SWRuleSet.classes[GameState.CharGenManager.selectedClass];
+          const class_data = // By class id, not slot: slot 0 is a Scoundrel in KotOR I, and indexing the
+          // class table by slot applied a Soldier's attributes, saves and feats.
+          GameState.SWRuleSet.classes[GameState.CharGenManager.getSelectedClassId()];
           const saving_throw_label = class_data['savingthrowtable'].toLowerCase();
           const saving_throw_data = GameState.TwoDAManager.datatables.get(saving_throw_label).rows[0];
           const feats_table = GameState.SWRuleSet.feats;
@@ -54,7 +56,7 @@ export class CharGenQuickOrCustom extends GameMenu {
 
           for(let i = 0, len = feats_table.length; i < len; i++){
             const feat_data = feats_table[i];
-            if(feat_data.getGranted(class_data) == 1){
+            if(feat_data.getGranted(class_data, true) == 1){
               GameState.CharGenManager.selectedCreature.feats.push(new TalentFeat(i));
             }
           }

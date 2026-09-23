@@ -1726,14 +1726,45 @@ export class GUIControl {
 
   updateBounds(){
     let worldPosition: THREE.Vector3 = new THREE.Vector3;
-    if(this.list){
+    if(this.parent?.list && this.parent.box){
+      // A control living inside a list ROW — the feat, ability and power icon
+      // buttons — must be measured in the same space as that row.
+      //
+      // This case is tested BEFORE `this.list`, and the order is the whole
+      // point. `setList` recurses into children, so a row's icons carry `.list`
+      // exactly as the row does; testing `this.list` first therefore sent them
+      // down the row branch below, which adds the ROW's widget position but not
+      // the LIST's own offset. That leaves the hit box in a different space
+      // from the row box the hit-test actually matches against.
+      //
+      // Measured live in character creation: a row spanning x -300..-11 centred
+      // at y 394, whose first icon reported a box centred at (-116, 412) —
+      // precisely `icon local + row widget position`, the row branch's formula,
+      // and 155 units from where the icon is drawn. So the pointer could sit on
+      // an icon and hit only the row. Reported from a headset session as
+      // "static icons are un-interactable" and "clicking a new feat does not
+      // select it", with the engine's own diagnostic confirming the click never
+      // arrived: `Select refused — no feat is highlighted`.
+      //
+      // Rows themselves are unaffected: a row's parent is the list, and a list
+      // never has `.list` set on itself, so rows still take the branch below.
+      const centre = new THREE.Vector2(
+        (this.parent.box.min.x + this.parent.box.max.x) / 2 + this.widget.position.x,
+        (this.parent.box.min.y + this.parent.box.max.y) / 2 + this.widget.position.y,
+      );
+      this.box.setFromCenterAndSize(centre, new THREE.Vector2(this.extent.width * this.menu.scale, this.extent.height * this.menu.scale));
+
+      for(let i = 0; i < this.children.length; i++){
+        this.children[i].updateBounds();
+      }
+    }else if(this.list){
       worldPosition.copy(this.parent.widget.position.clone());
       //console.log('worldPos', worldPosition);
       this.box.min.x = this.widget.position.x - this.extent.width/2 + worldPosition.x;
       this.box.min.y = this.widget.position.y - this.extent.height/2 + worldPosition.y;
       this.box.max.x = this.widget.position.x + this.extent.width/2 + worldPosition.x;
       this.box.max.y = this.widget.position.y + this.extent.height/2 + worldPosition.y;
-      
+
       for(let i = 0; i < this.children.length; i++){
         this.children[i].updateBounds();
       }

@@ -312,10 +312,27 @@ export class ModuleObjectManager {
     let result: any;
     let count = results.length;
 
+    // The leader is the reference point for every test below. Immediately after
+    // a module transition it can be a placed-but-unpositioned placeholder — the
+    // Exile on arrival at Peragus — and asking the whole area for line of sight
+    // to something that is not anywhere yet is both meaningless and, before the
+    // guard in hasLineOfSight, fatal to the frame. Nothing is interactable until
+    // the leader is real.
+    const leader: any = PartyManager.party[0];
+    if(!leader || !leader.position) return undefined;
+
     for(let i = 0; i < count; i++){
       result = results[i];
-      if( result != PartyManager.party[0] && result.isOnScreen() && result.isUseable() ){
-        if( result.hasLineOfSight( PartyManager.party[0] ) ){
+      // Area collections can carry an entry that is not a live object yet.
+      if( !result || result == leader || !result.position ||
+          typeof result.isOnScreen !== 'function' ||
+          typeof result.isUseable !== 'function' ||
+          typeof result.hasLineOfSight !== 'function' ){
+        result = undefined;
+        continue;
+      }
+      if( result.isOnScreen() && result.isUseable() ){
+        if( result.hasLineOfSight( leader ) ){
           break;
         }
       }

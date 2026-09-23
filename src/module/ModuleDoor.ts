@@ -37,6 +37,7 @@ import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { resolveSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 import { Dice } from "@/utility/Dice";
 import { synchronizeDoorWalkmeshCollisionState } from "@/module/DoorWalkmeshCollisionState";
+import { capStructureCurrentHP } from "@/engine/interaction/StructureDamageRules";
 
 interface AnimStateInfo {
   lastAnimState: ModuleDoorAnimState;
@@ -1128,6 +1129,10 @@ export class ModuleDoor extends ModuleObject {
         
     if(this.template.RootNode.hasField('HP'))
       this.hp = this.template.RootNode.getFieldByLabel('HP').getValue();
+
+    // Current hit points above the authored maximum are capped: the Peragus
+    // Damaged Door ships CurrentHP 45 against HP 15. See StructureDamageRules.
+    this.currentHP = capStructureCurrentHP(this.currentHP, this.hp);
 
     if(this.template.RootNode.hasField('Hardness'))
       this.hardness = this.template.RootNode.getFieldByLabel('Hardness').getValue();

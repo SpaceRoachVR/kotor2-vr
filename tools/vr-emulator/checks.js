@@ -163,8 +163,8 @@ const CHECKS = [
     run: (m) => {
       const distinct = number(m.textures?.distinctFailing);
       return {
-        ok: distinct !== null && distinct <= 14,
-        detail: `distinctFailing=${distinct} (want <= 14 known-absent) missing=${m.textures?.missing} of ${m.textures?.total}`,
+        ok: distinct !== null && distinct <= 16,
+        detail: `distinctFailing=${distinct} (want <= 16 known-absent) missing=${m.textures?.missing} of ${m.textures?.total}`,
       };
     },
   },

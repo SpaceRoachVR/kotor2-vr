@@ -96,8 +96,28 @@ describe('first-person body suppression is wired to the right render', () => {
     expect(spike.slice(movieAt, movieEnd)).not.toContain('hidePlayerBodyForFirstPerson');
   });
 
+  /**
+   * This test's rule was right and its assertion was not: it pinned
+   * `PartyManager.Player`, which is the *fixed* main-PC slot — the very thing
+   * the title forbids. The rig is welded to whichever creature the player is
+   * driving, i.e. `party[0]`, and the main-PC slot stops tracking that the
+   * moment the party leader changes. Reported from a headset session: switching
+   * to 3C-FD made T3-M4 — standing across the room — turn invisible, while the
+   * controlled droid was drawn into the player's face.
+   */
   test('the engine passes the controlled character, not a fixed one', () => {
     const game = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
-    expect(game).toContain('GameState.PartyManager.Player?.model');
+    const at = game.indexOf('VRSpike.render(');
+    expect(at).toBeGreaterThan(-1);
+    const call = game.slice(at, game.indexOf(');', at));
+    // The call delegates to getFirstPersonHiddenBody() (a minigame hides the
+    // vehicle's rider instead); outside a minigame that is the controlled
+    // character.
+    expect(call).toContain('GameState.getFirstPersonHiddenBody()');
+    expect(call).not.toContain('PartyManager.Player');
+    const helperAt = game.indexOf('public static getFirstPersonHiddenBody()');
+    const helper = game.slice(helperAt, game.indexOf('public static getMiniGameSeat()', helperAt));
+    expect(helper).toContain('GameState.getCurrentPlayer()?.model');
+    expect(helper).not.toContain('PartyManager.Player');
   });
 });

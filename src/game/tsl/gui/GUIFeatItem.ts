@@ -67,7 +67,6 @@ export class GUIFeatItem extends GUIProtoItem {
         let hasPrereqfeat2 = (!Number.isInteger(prereqFeat2) || prereqFeat2 < 0 || actor.getHasFeat(prereqFeat2));
         let hasFeat = actor.getHasFeat(featId);
 
-        console.log(feat.constant, hasPrereqfeat1, hasPrereqfeat2);
 
         let locked = !hasFeat || (!hasPrereqfeat1 || !hasPrereqfeat2);
         if(locked){ continue; }
@@ -116,8 +115,27 @@ export class GUIFeatItem extends GUIProtoItem {
           this.list?.markListRttDirty?.();
         });
 
+        // K1's GUIFeatItem reports the feat under the pointer to its menu; this
+        // one only stopped propagation, so in TSL — the game this project
+        // targets — clicking a feat selected nothing and hovering filled in no
+        // description. Reported from a headset session as "adding feats in
+        // character creation is entirely broken" and, from the Abilities
+        // screen, "unselectable and no descriptions".
+        //
+        // `CharGenFeats` inherits `highlightFeat` and `describeFeat` from its K1
+        // counterpart. The Abilities menu had neither, so on that screen these
+        // handlers still did nothing until MenuAbilities gained them. Resolved
+        // through the menu rather than by importing it, so the item stays
+        // ignorant of which menu it is in — the same contract K1's copy keeps.
         buttonIcon.addEventListener('click', (e) => {
           e.stopPropagation();
+          const highlight = (this.menu as any)?.highlightFeat;
+          if(typeof highlight === 'function') highlight.call(this.menu, feat);
+        });
+
+        buttonIcon.addEventListener('hover', () => {
+          const describe = (this.menu as any)?.describeFeat;
+          if(typeof describe === 'function') describe.call(this.menu, feat);
         });
 
         /**

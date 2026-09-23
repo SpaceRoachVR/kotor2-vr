@@ -14,9 +14,12 @@
  *   `attackCreature`, and VR combat targeting already owns that interaction
  *   with its own reticle and stance handling. A competing "Talk" prompt there
  *   would offer an affordance combat then overrides.
- * - **A dead creature is a container.** `onClick` routes to `actionUseObject`,
- *   so the prompt is offered whenever the corpse is useable — this is the
- *   loot route, and it is the one case where hostility does not disqualify.
+ * - **A dead creature is a container while it holds something.** `onClick`
+ *   routes to `actionUseObject`, and `ModuleCreature.use` opens the loot
+ *   screen only when the corpse has inventory — so an empty corpse offered a
+ *   "Use" that did nothing at all. Round 8: "Mining droids with no items to
+ *   take should not show the option to use." This is the loot route, and the
+ *   one case where hostility does not disqualify.
  * - **Everything else needs a conversation.** `onClick` only acts on a living
  *   non-hostile creature when it has one, so offering a prompt without one
  *   would produce a trigger press that visibly does nothing.
@@ -32,11 +35,13 @@ export interface VRCreaturePromptState {
   readonly isHostile: boolean;
   readonly hasConversation: boolean;
   readonly isUseable: boolean;
+  /** Whether the creature carries anything to take; only read for corpses. */
+  readonly hasLoot: boolean;
 }
 
 export function hasCreatureWorldPromptAction(state: VRCreaturePromptState): boolean {
   if (!state || state.isSelf) return false;
-  if (state.isDead) return state.isUseable === true;
+  if (state.isDead) return state.isUseable === true && state.hasLoot === true;
   if (state.isHostile) return false;
   return state.hasConversation === true;
 }
@@ -55,6 +60,7 @@ export function readVRCreaturePromptState(
     isHostile?: (actor: unknown) => unknown;
     isUseable?: () => unknown;
     getConversation?: () => { resref?: unknown } | null | undefined;
+    hasInventory?: () => unknown;
   },
 ): VRCreaturePromptState {
   return {
@@ -66,6 +72,11 @@ export function readVRCreaturePromptState(
       const conversation = target.getConversation?.();
       const resref = conversation?.resref;
       return typeof resref === 'string' && resref.length > 0;
+    }),
+    hasLoot: safeFlag(() => {
+      // ModuleCreature.hasInventory returns the item count, not a boolean.
+      const held = target.hasInventory?.();
+      return typeof held === 'number' ? held > 0 : held === true;
     }),
   };
 }

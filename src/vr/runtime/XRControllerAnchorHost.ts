@@ -31,6 +31,83 @@ export interface HeldItemVisualDescriptor {
   readonly baseItemClass: string;
   readonly authoredGripNode?: THREE.Object3D | null;
   readonly classFallback: HeldItemClassFallbackTransform;
+  /**
+   * A ranged weapon: the hand's gameplay ray leaves its muzzle along its
+   * barrel instead of along the controller's own target ray. See
+   * {@link XRControllerAnchorHost.getAimPose}.
+   */
+  readonly aimsAlongBarrel?: boolean;
+}
+
+/** A held weapon's muzzle and barrel direction, in its grip anchor's space. */
+export interface HeldItemBarrel {
+  readonly origin: THREE.Vector3;
+  readonly direction: THREE.Vector3;
+}
+
+/**
+ * Below this a model has no barrel worth aiming along — an empty or degenerate
+ * mesh — and the controller's own ray is the better answer.
+ */
+const MINIMUM_BARREL_LENGTH_METRES = 0.05;
+
+const CONTROLLER_RAY_FORWARD = new THREE.Vector3(0, 0, -1);
+
+/**
+ * Finds a held weapon's barrel from its own geometry, in grip space.
+ *
+ * Odyssey weapon models are authored axis-aligned, and a gun's longest extent
+ * is its barrel. The grip origin sits in the handle, so the barrel reaches much
+ * further toward the muzzle than behind it; that side is the muzzle. Measured
+ * on the Mining Laser held in the headset: grip-space bounds y -0.304..0.068,
+ * z -0.146..0.067, x -0.055..0.075 — barrel along -Y, muzzle 30 cm out.
+ *
+ * Measured rather than tabled because the same half-turn fallback serves every
+ * weapon class and a per-class table would silently drift from the model.
+ */
+export function measureHeldItemBarrel(visual: THREE.Object3D): HeldItemBarrel | null {
+  visual.updateMatrix();
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  const vertex = new THREE.Vector3();
+  const toAnchor = new THREE.Matrix4();
+  let sampled = 0;
+  visual.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    const positions = (mesh as { isMesh?: boolean }).isMesh
+      ? mesh.geometry?.getAttribute?.('position')
+      : undefined;
+    if (!positions) return;
+    // Composed from each link's own `matrix`, never recomputed: the
+    // presentation clone's meshes carry hand-set matrices with
+    // `matrixAutoUpdate` off, and `updateMatrix()` would reset them to identity.
+    toAnchor.copy(visual.matrix);
+    const chain: THREE.Object3D[] = [];
+    for (let current: THREE.Object3D | null = mesh; current && current !== visual; current = current.parent) {
+      chain.unshift(current);
+    }
+    for (const link of chain) toAnchor.multiply(link.matrix);
+    for (let index = 0; index < positions.count; index++) {
+      vertex.fromBufferAttribute(positions as THREE.BufferAttribute, index).applyMatrix4(toAnchor);
+      min.min(vertex);
+      max.max(vertex);
+      sampled++;
+    }
+  });
+  if (sampled === 0) return null;
+
+  const extent = new THREE.Vector3().subVectors(max, min);
+  const axis: 'x' | 'y' | 'z' = extent.x >= extent.y && extent.x >= extent.z
+    ? 'x'
+    : extent.y >= extent.z ? 'y' : 'z';
+  if (!(extent[axis] >= MINIMUM_BARREL_LENGTH_METRES)) return null;
+
+  const towardMax = Math.abs(max[axis]) >= Math.abs(min[axis]);
+  const origin = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
+  origin[axis] = towardMax ? max[axis] : min[axis];
+  const direction = new THREE.Vector3();
+  direction[axis] = towardMax ? 1 : -1;
+  return { origin, direction };
 }
 
 /**
@@ -93,6 +170,7 @@ export class XRControllerAnchorHost {
   /** Sources are cached so an equipped model is cloned only when equipment changes. */
   private readonly heldSources: Record<XRHandRole, THREE.Object3D | null> = { left: null, right: null };
   private readonly heldDescriptorKeys: Record<XRHandRole, string | null> = { left: null, right: null };
+  private readonly heldBarrels: Record<XRHandRole, HeldItemBarrel | null> = { left: null, right: null };
   private readonly disposableGeometries: THREE.BufferGeometry[] = [];
   private readonly disposableMaterials: THREE.Material[] = [];
 
@@ -212,6 +290,20 @@ export class XRControllerAnchorHost {
     }
   }
 
+  /**
+   * Hides everything drawn at the controllers — hands, held weapons, the hilt
+   * ring and controller rays — while poses keep updating, so anchors still
+   * report correct world positions to anything that reads them. Set while a
+   * movie, cutscene, conversation or menu owns the view (round 6: "player
+   * hands and pointer should be invisible during cut scenes, interactions,
+   * and movies").
+   */
+  setPresentationSuppressed(suppressed: boolean): void {
+    this.presentationSuppressed = suppressed === true;
+  }
+
+  private presentationSuppressed = false;
+
   update(inputFrame: XRInputFrame | null): void {
     this.rig.updateWorldMatrix(true, false);
     const inverseRigOrientation = this.rig
@@ -233,8 +325,9 @@ export class XRControllerAnchorHost {
       }
       this.applyWorldPose(anchor, pose, inverseRigOrientation);
       this.applyWorldPose(rayAnchor, targetRayPose, inverseRigOrientation);
-      anchor.visible = true;
-      rayAnchor.visible = targetRayPose.trackingState !== 'unavailable' && this.heldVisuals[hand] === null;
+      anchor.visible = !this.presentationSuppressed;
+      rayAnchor.visible = !this.presentationSuppressed &&
+        targetRayPose.trackingState !== 'unavailable' && this.heldVisuals[hand] === null;
     }
     this.updateHandPoses(inputFrame);
   }
@@ -256,6 +349,7 @@ export class XRControllerAnchorHost {
     if (existing) anchor.remove(existing);
     this.heldSources[hand] = descriptor?.model ?? null;
     this.heldDescriptorKeys[hand] = descriptorKey;
+    this.heldBarrels[hand] = null;
     if (!descriptor) {
       this.heldVisuals[hand] = null;
       return;
@@ -267,6 +361,39 @@ export class XRControllerAnchorHost {
     if (!authoredGripNode) this.applyClassFallback(visual, descriptor.classFallback);
     anchor.add(visual);
     this.heldVisuals[hand] = visual;
+    // Measured once per equip, not per frame: the clone never changes shape.
+    this.heldBarrels[hand] = descriptor.aimsAlongBarrel === true ? measureHeldItemBarrel(visual) : null;
+  }
+
+  /**
+   * Where this hand's gameplay ray points while it holds a ranged weapon: out
+   * of the muzzle, along the barrel, composed onto the hand's grip pose.
+   *
+   * A pistol sits in the fist along the grip, and on Touch controllers the grip
+   * is pitched about 45 degrees from the target ray, so the barrel pointed well
+   * below the pointer that actually aimed. Round 7: "weapon grip/character hand
+   * angle is not the same as the pointer angle, which makes for confusing
+   * shooting. The ray pointers should be adjusted to match the angle the
+   * blasters point at." The weapon and hand stay as they are; the ray follows
+   * them.
+   *
+   * Null without a ranged weapon, or when its barrel cannot be measured — the
+   * controller ray stands in unchanged.
+   */
+  getAimPose(hand: XRHandRole, gripPose: XRWorldPose | null | undefined): XRWorldPose | null {
+    const barrel = this.heldBarrels[hand];
+    if (!barrel || !gripPose || gripPose.trackingState === 'unavailable') return null;
+    const position = barrel.origin.clone().applyQuaternion(gripPose.orientation).add(gripPose.position);
+    const orientation = gripPose.orientation.clone()
+      .multiply(new THREE.Quaternion().setFromUnitVectors(CONTROLLER_RAY_FORWARD, barrel.direction))
+      .normalize();
+    return {
+      position,
+      orientation,
+      linearVelocity: gripPose.linearVelocity,
+      angularVelocity: gripPose.angularVelocity,
+      trackingState: gripPose.trackingState,
+    };
   }
 
   clear(): void {
@@ -350,7 +477,8 @@ export class XRControllerAnchorHost {
     const position = fallback.position ? `${fallback.position.x},${fallback.position.y},${fallback.position.z}` : '';
     const rotation = fallback.rotation ? `${fallback.rotation.x},${fallback.rotation.y},${fallback.rotation.z},${fallback.rotation.order}` : '';
     const scale = fallback.scale ?? '';
-    return `${descriptor.baseItemClass.trim()}|${descriptor.authoredGripNode?.uuid ?? ''}|${position}|${rotation}|${scale}`;
+    const barrel = descriptor.aimsAlongBarrel === true ? 'barrel' : '';
+    return `${descriptor.baseItemClass.trim()}|${descriptor.authoredGripNode?.uuid ?? ''}|${position}|${rotation}|${scale}|${barrel}`;
   }
 
   private applyWorldPose(

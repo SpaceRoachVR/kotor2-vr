@@ -6,6 +6,7 @@ import { CollisionManager } from "@/engine/CollisionManager";
 import { CombatData } from "@/combat/CombatData";
 import type { EffectLink } from "@/effects";
 import type { GameEffect } from "@/effects/GameEffect";
+import { applyEffectDuration, inheritLinkDuration } from "@/effects/GameEffectDuration";
 import EngineLocation from "@/engine/EngineLocation";
 import { ActionParameterType } from "@/enums/actions/ActionParameterType";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
@@ -502,8 +503,10 @@ export class ModuleObject {
 
     //Loop through and update the effects
     if(!this.deferEventUpdate){
-      for(let i = 0, len = this.effects.length; i < len; i++){
-        this.effects[i].update(delta);
+      //Length is re-read each pass: a TEMPORARY effect removes itself when it
+      //expires, and a cached length then reads past the end and throws.
+      for(let i = 0; i < this.effects.length; i++){
+        this.effects[i]?.update(delta);
       }
     }
 
@@ -881,8 +884,24 @@ export class ModuleObject {
         return ModuleCreatureAnimState.KNEEL_TALK_ANGRY;
       case 32: //KNEEL_TALK_SAD
         return ModuleCreatureAnimState.KNEEL_TALK_SAD;
+      case 33: //CHECK_BODY
+        return ModuleCreatureAnimState.TREAT_INJURED;
+      case 34: //UNLOCK_DOOR
+        return ModuleCreatureAnimState.UNLOCK_DOOR;
       case 35: //MEDITATE LOOP
         return ModuleCreatureAnimState.MEDITATE;
+      case 36: //SIT_CHAIR
+        return ModuleCreatureAnimState.SIT_CHAIR;
+      case 37: //SIT_CHAIR_DRINK
+        return ModuleCreatureAnimState.SIT_CHAIR_DRUNK;
+      case 38: //SIT_CHAIR_PAZAK
+        return ModuleCreatureAnimState.SIT_CHAIR_PAZAAK;
+      case 39: //SIT_CHAIR_COMP1
+        return ModuleCreatureAnimState.SIT_CHAIR_COMP1;
+      case 40: //SIT_CHAIR_COMP2
+        return ModuleCreatureAnimState.SIT_CHAIR_COMP2;
+      case 44: //STEALTH
+        return ModuleCreatureAnimState.WALK_STEALTH;
       case 100: //HEAD_TURN_LEFT
         return ModuleCreatureAnimState.HEAD_TURN_LEFT;
       case 101: //HEAD_TURN_RIGHT
@@ -923,8 +942,12 @@ export class ModuleObject {
         return ModuleCreatureAnimState.CUSTOM01;
       case 120: //TREAT_INJURED
         return ModuleCreatureAnimState.TREAT_INJURED;
+      case 121: //FORCE_CAST
+        return ModuleCreatureAnimState.CASTOUT1;
       case 123: //DIVE_ROLL
         return ModuleCreatureAnimState.DIVE_ROLL;
+      case 124: //SCREAM
+        return ModuleCreatureAnimState.HORROR;
 
       // Placeable animation constants
       case 200: 
@@ -1009,6 +1032,7 @@ export class ModuleObject {
       }
       
       switch( animation_constant ){
+        case ModuleCreatureAnimState.IDLE:
         case ModuleCreatureAnimState.PAUSE:
         case ModuleCreatureAnimState.PAUSE_ALT:
           if(this.isPoisoned() || this.isDiseased()) return animations2DA.rows[15];
@@ -1112,6 +1136,7 @@ export class ModuleObject {
           }
         break;
         case ModuleCreatureAnimState.WALKING:
+        case ModuleCreatureAnimState.WALKING_BACK:
           if(this.isSimpleCreature()){
             if(this.getHP()/this.getMaxHP() > .20){
               return animations2DA.rows[253];
@@ -1203,6 +1228,13 @@ export class ModuleObject {
             return animations2DA.rows[302];
           }
         break;
+        case ModuleCreatureAnimState.PARRY:
+          if(this.isSimpleCreature()){
+            return animations2DA.rows[281];
+          }else{
+            return animations2DA.rows[301];
+          }
+        break;
         case ModuleCreatureAnimState.SPASM:
           if(this.isSimpleCreature()){
             return animations2DA.rows[268];
@@ -1250,6 +1282,9 @@ export class ModuleObject {
         case ModuleCreatureAnimState.BOW:
           return animations2DA.rows[19];
         break;
+        case ModuleCreatureAnimState.WORSHIP:
+          return animations2DA.rows[23];
+        break;
         case ModuleCreatureAnimState.VICTORY:
           if(this.isSimpleCreature()){
             return animations2DA.rows[260];
@@ -1295,7 +1330,35 @@ export class ModuleObject {
           return animations2DA.rows[37];
         break;
         case ModuleCreatureAnimState.DAMAGE:
-          return animations2DA.rows[303];
+        case ModuleCreatureAnimState.DAMAGE2:
+          if(this.isSimpleCreature()){
+            return animations2DA.rows[280];
+          }else{
+            return animations2DA.rows[303];
+          }
+        break;
+        case ModuleCreatureAnimState.DAMAGED:
+          if(this.isSimpleCreature()){
+            return animations2DA.rows[280];
+          }else{
+            switch(this.getCombatAnimationWeaponType()){
+              case 2:
+                return animations2DA.rows[124];
+              case 3:
+                return animations2DA.rows[165];
+              case 4:
+                return animations2DA.rows[206];
+              case 5:
+                return animations2DA.rows[220];
+              case 6:
+                return animations2DA.rows[234];
+              case 7:
+              case 9:
+                return animations2DA.rows[242];
+              default:
+                return animations2DA.rows[303];
+            }
+          }
         break;
         case ModuleCreatureAnimState.USE_COMPUTER_LP:
           return animations2DA.rows[44];
@@ -1404,24 +1467,31 @@ export class ModuleObject {
           return animations2DA.rows[69];
         break;
         case ModuleCreatureAnimState.KNEEL_TALK_ANGRY:
+        case ModuleCreatureAnimState.KID_TALK_ANGRY:
           return animations2DA.rows[384];
         break;
         case ModuleCreatureAnimState.KNEEL_TALK_SAD:
+        case ModuleCreatureAnimState.KID_TALK_SAD:
           return animations2DA.rows[385];
         break;
         case ModuleCreatureAnimState.KNOCKED_DOWN:
-          return animations2DA.rows[85];
-        break;
         case ModuleCreatureAnimState.KNOCKED_DOWN2:
           return animations2DA.rows[85];
+        break;
+        case ModuleCreatureAnimState.KNOCKED_DOWN_LP:
+        case ModuleCreatureAnimState.KNOCKED_DOWN2_LP:
+          if(this.isSimpleCreature()){
+            return animations2DA.rows[271];
+          }else{
+            return animations2DA.rows[84];
+          }
         break;
         case ModuleCreatureAnimState.DEAD_PRONE:
           return animations2DA.rows[375];
         break;
         case ModuleCreatureAnimState.KNEEL:
-          return animations2DA.rows[23];
-        break;
         case ModuleCreatureAnimState.KNEEL1:
+        case ModuleCreatureAnimState.KNEELING:
           return animations2DA.rows[23];
         break;
         case ModuleCreatureAnimState.FLOURISH:
@@ -1539,6 +1609,126 @@ export class ModuleObject {
         // the looping `meditate`; rows 457/458 are the sit and stand variants.
         case ModuleCreatureAnimState.MEDITATE:
           return animations2DA.rows[24];
+        break;
+
+        case ModuleCreatureAnimState.CASTOUT1:
+          return animations2DA.rows[62];
+        break;
+        case ModuleCreatureAnimState.CASTOUT1_LP:
+          return animations2DA.rows[63];
+        break;
+        case ModuleCreatureAnimState.CASTOUT2:
+          return animations2DA.rows[64];
+        break;
+        case ModuleCreatureAnimState.CASTOUT2_LP:
+          return animations2DA.rows[65];
+        break;
+        case ModuleCreatureAnimState.CASTOUT3:
+          return animations2DA.rows[66];
+        break;
+
+        case ModuleCreatureAnimState.POWER_ATTACK_SS:
+          return animations2DA.rows[115];
+        break;
+        case ModuleCreatureAnimState.CRITICAL_STRIKE2_SS:
+          return animations2DA.rows[392];
+        break;
+        case ModuleCreatureAnimState.CRITICAL_STRIKE3_SS:
+          return animations2DA.rows[393];
+        break;
+
+        case ModuleCreatureAnimState.BLASTER_DEFLECTION_1H:
+          switch(this.getCombatAnimationWeaponType()){
+            case 2:
+              return animations2DA.rows[109];
+            case 3:
+              return animations2DA.rows[150];
+            case 4:
+              return animations2DA.rows[191];
+            default:
+              return animations2DA.rows[455];
+          }
+        break;
+        case ModuleCreatureAnimState.BLASTER_DEFLECTION_2H:
+          switch(this.getCombatAnimationWeaponType()){
+            case 2:
+              return animations2DA.rows[110];
+            case 3:
+              return animations2DA.rows[151];
+            case 4:
+              return animations2DA.rows[192];
+            default:
+              return animations2DA.rows[455];
+          }
+        break;
+
+        case ModuleCreatureAnimState.MELEE_WIELD:
+          switch(this.getCombatAnimationWeaponType()){
+            case 2:
+              return animations2DA.rows[377];
+            case 3:
+              return animations2DA.rows[378];
+            case 4:
+              return animations2DA.rows[376];
+            case 5:
+              return animations2DA.rows[473];
+            case 6:
+              return animations2DA.rows[474];
+            case 7:
+              return animations2DA.rows[475];
+            case 9:
+              return animations2DA.rows[476];
+            default:
+              return animations2DA.rows[378];
+          }
+        break;
+        case ModuleCreatureAnimState.MELEE_COMBAT_WIELD:
+          switch(this.getCombatAnimationWeaponType()){
+            case 1:
+              return animations2DA.rows[91];
+            case 2:
+              return animations2DA.rows[132];
+            case 3:
+              return animations2DA.rows[173];
+            case 4:
+              return animations2DA.rows[214];
+            case 5:
+              return animations2DA.rows[222];
+            case 6:
+              return animations2DA.rows[236];
+            case 7:
+              return animations2DA.rows[244];
+            default:
+              return animations2DA.rows[132];
+          }
+        break;
+
+        case ModuleCreatureAnimState.ATTACK:
+        case ModuleCreatureAnimState.ATTACK_DUELING:
+          if(this.isSimpleCreature()){
+            return animations2DA.rows[276];
+          }else{
+            switch(this.getCombatAnimationWeaponType()){
+              case 2:
+                return animations2DA.rows[94];
+              case 3:
+                return animations2DA.rows[135];
+              case 4:
+                return animations2DA.rows[176];
+              case 5:
+                return animations2DA.rows[217];
+              case 6:
+                return animations2DA.rows[231];
+              case 7:
+                return animations2DA.rows[239];
+              case 8:
+                return animations2DA.rows[247];
+              case 9:
+                return animations2DA.rows[352];
+              default:
+                return animations2DA.rows[300];
+            }
+          }
         break;
 
       }
@@ -2538,7 +2728,7 @@ export class ModuleObject {
    * Get the fortitude save
    * @returns 
    */
-  getFortitudeSave(){
+  getFortitudeSave(_saveType = 0){
     return this.fortitudeSaveThrow;
   }
 
@@ -2546,7 +2736,7 @@ export class ModuleObject {
    * Get the reflex save
    * @returns 
    */
-  getReflexSave(){
+  getReflexSave(_saveType = 0){
     return this.reflexSaveThrow;
   }
 
@@ -2557,11 +2747,17 @@ export class ModuleObject {
    * @param oVersus 
    * @returns 
    */
+  /** Saves bonus from a creature's autobalance set; objects have none. */
+  getAutoBalanceSaveBonus(): number {
+    return 0;
+  }
+
+  // Saves succeed when the total meets the DC, as every d20 check does.
   fortitudeSave(nDC = 0, nSaveType = 0, oVersus: any = undefined){
     let roll = Dice.roll(1, DiceType.d20);
-    let bonus = CombatRound.GetMod(this.getCON());
+    let bonus = CombatRound.GetMod(this.getCON()) + this.getAutoBalanceSaveBonus();
     
-    if((roll + this.getFortitudeSave() + bonus) > nDC){
+    if((roll + this.getFortitudeSave(nSaveType) + bonus) >= nDC){
       return 1
     }
 
@@ -2585,9 +2781,9 @@ export class ModuleObject {
    */
   reflexSave(nDC = 0, nSaveType = 0, oVersus: any = undefined){
     let roll = Dice.roll(1, DiceType.d20);
-    let bonus = CombatRound.GetMod(this.getDEX());
+    let bonus = CombatRound.GetMod(this.getDEX()) + this.getAutoBalanceSaveBonus();
     
-    if((roll + this.getReflexSave() + bonus) > nDC){
+    if((roll + this.getReflexSave(nSaveType) + bonus) >= nDC){
       return 1
     }
 
@@ -2606,7 +2802,7 @@ export class ModuleObject {
    * Get the will save
    * @returns 
    */
-  getWillSave(){
+  getWillSave(_saveType = 0){
     return this.willSaveThrow;
   }
 
@@ -2619,9 +2815,9 @@ export class ModuleObject {
    */
   willSave(nDC = 0, nSaveType = 0, oVersus: any = undefined){
     let roll = Dice.roll(1, DiceType.d20);
-    let bonus = CombatRound.GetMod(this.getWIS());
+    let bonus = CombatRound.GetMod(this.getWIS()) + this.getAutoBalanceSaveBonus();
 
-    if((roll + this.getWillSave() + bonus) > nDC){
+    if((roll + this.getWillSave(nSaveType) + bonus) >= nDC){
       return 1
     }
 
@@ -2687,30 +2883,26 @@ export class ModuleObject {
   /**
    * Add an effect to the object
    * @param effect - The effect to add
-   * @param type - The type of effect
-   * @param duration - The duration of the effect
+   * @param type - The duration type to apply it with; omitted keeps the effect's own
+   * @param duration - The duration in seconds; omitted keeps the effect's own
    */
-  addEffect(effect: GameEffect, type = 0, duration = 0){
+  addEffect(effect: GameEffect, type?: number, duration?: number){
     if(!effect){
       console.warn('AddEffect', 'Invalid GameEffect', effect);
       return;
     }
 
-    if(effect.type == GameEffectType.EffectLink){
-      const e1 = (effect as EffectLink).effect1;
-      const e2 = (effect as EffectLink).effect2;
-      //EFFECT LEFT
-      if(e1){
-        e1.setDurationType(type);
-        e1.setDuration(duration);
-        this.addEffect(e1, type, duration);
-      }
+    // Before onApply, so effects that spawn children from their own lifetime
+    // (EffectPoison, EffectForceShield) hand those children a real expiry.
+    applyEffectDuration(effect, type, duration, GameState.module?.timeManager);
 
-      //EFFECT RIGHT
-      if(e2){
-        e2.setDurationType(type);
-        e2.setDuration(duration);
-        this.addEffect(e2, type, duration);
+    if(effect.type == GameEffectType.EffectLink){
+      // The link is never attached; its children are. They take the link's
+      // lifetime whole — expiry included, or a TEMPORARY child never counts down.
+      for(const child of [(effect as EffectLink).effect1, (effect as EffectLink).effect2]){
+        if(!child){ continue; }
+        inheritLinkDuration(effect, child);
+        this.addEffect(child);
       }
       return;
     }
@@ -3360,6 +3552,24 @@ export class ModuleObject {
       return false;
     }
 
+    // A party slot can hold a creature that exists but is not placed yet — on
+    // arrival at Peragus `PartyManager.party[0]` is the Exile as an empty-tag
+    // placeholder with no position. `instanceof` passes for it, and the copy
+    // below then threw on `undefined`.
+    //
+    // That throw was not survivable where it happened. CursorManager asks
+    // GetNearestInteractableObject for a target every frame, so this ran inside
+    // GameState.Update inside the XR frame callback: Update aborted before
+    // anything cleared the fade overlay, leaving a fully loaded 101PER behind an
+    // opaque black screen with no error visible in the headset. Reported as
+    // "it tried to load the next scene, but I'm stuck in a black screen".
+    //
+    // No line of sight to something that is not anywhere yet, so answer false
+    // rather than throw.
+    if(!this.position || !oTarget.position){
+      return false;
+    }
+
     this.#tmpPositionA.copy(this.position);
     this.#tmpPositionB.copy(oTarget.position);
     this.#tmpPositionA.z += 1;
@@ -3383,13 +3593,24 @@ export class ModuleObject {
     GameState.raycaster.ray.direction.copy(this.#tmpDirection);
     GameState.raycaster.far = distance;
 
-    for(let j = 0, jl = this.area.doors.length; j < jl; j++){
-      const door = this.area.doors[j];
+    // The same placeholder can have a position but no area yet. Reading
+    // `this.area.doors` then threw on every frame from inside GameState.Update,
+    // which aborted before anything was drawn: arriving on Peragus showed a
+    // black screen (the XR runtime logged frames "without drawing anything")
+    // until switching leader with Y put a real creature in party[0]. Logged as
+    // "Cannot read properties of undefined (reading 'doors')". Fall back to the
+    // module's area, and without one there is nothing to block the ray.
+    const area = this.area ?? GameState.module?.area;
+    const doors = area?.doors ?? [];
+
+    for(let j = 0, jl = doors.length; j < jl; j++){
+      const door = doors[j];
       if(!door || door == (this as any) || door.isOpen()) continue;
       const box3 = door.box;
       if(!box3) continue;
       if(GameState.raycaster.ray.intersectsBox(box3) || box3.containsPoint(this.#tmpPositionA)){
-        const intersects = door.collisionManager.walkmesh.raycast(GameState.raycaster, door.collisionManager.walkmesh.faces);
+        const walkmesh = door.collisionManager?.walkmesh;
+        const intersects = walkmesh ? walkmesh.raycast(GameState.raycaster, walkmesh.faces) : null;
         if(intersects){
           for(let k = 0; k < intersects.length; k++){
             if(intersects[k].distance < distance){

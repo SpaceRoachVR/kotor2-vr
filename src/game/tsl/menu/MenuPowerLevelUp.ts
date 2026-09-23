@@ -37,6 +37,8 @@ export class MenuPowerLevelUp extends K1_MenuPowerLevelUp {
     await super.menuControlInitializer(true);
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
+      // super was called with skipInit, so the base class wired nothing.
+      this.wirePowerControls();
       resolve();
     });
   }

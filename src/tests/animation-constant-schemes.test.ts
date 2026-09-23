@@ -63,4 +63,57 @@ describe('animation constant schemes', () => {
     expect(at).toBeGreaterThan(-1);
     expect(source.slice(at, at + 120)).toContain('animations2DA.rows[24]');
   });
+
+  test('all named creature animation constants have explicit cases in ModuleObject', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'module', 'ModuleObject.ts'), 'utf8',
+    );
+    const missing: string[] = [];
+    for (const [key, value] of Object.entries(ModuleCreatureAnimState)) {
+      if (typeof value === 'number' && value >= 10000) {
+        const casePattern = `case ModuleCreatureAnimState.${key}:`;
+        if (!source.includes(casePattern)) {
+          missing.push(key);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test.each([
+    ['PARRY', 'animations2DA.rows[301]'],
+    ['CASTOUT1', 'animations2DA.rows[62]'],
+    ['CASTOUT2', 'animations2DA.rows[64]'],
+    ['CASTOUT3', 'animations2DA.rows[66]'],
+    ['POWER_ATTACK_SS', 'animations2DA.rows[115]'],
+    ['CRITICAL_STRIKE2_SS', 'animations2DA.rows[392]'],
+    ['CRITICAL_STRIKE3_SS', 'animations2DA.rows[393]'],
+    ['WORSHIP', 'animations2DA.rows[23]'],
+    ['KNEELING', 'animations2DA.rows[23]'],
+    ['KID_TALK_ANGRY', 'animations2DA.rows[384]'],
+    ['KID_TALK_SAD', 'animations2DA.rows[385]'],
+  ])('%s resolves to expected 2DA row %s', (constantName, expectedRow) => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'module', 'ModuleObject.ts'), 'utf8',
+    );
+    const at = source.indexOf(`case ModuleCreatureAnimState.${constantName}:`);
+    expect(at).toBeGreaterThan(-1);
+    expect(source.slice(at, at + 250)).toContain(expectedRow);
+  });
+
+  test('getAnimationNameById maps NWScript constants to creature states', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'module', 'ModuleObject.ts'), 'utf8',
+    );
+    expect(source).toContain('case 36: //SIT_CHAIR');
+    expect(source).toContain('return ModuleCreatureAnimState.SIT_CHAIR;');
+    expect(source).toContain('case 37: //SIT_CHAIR_DRINK');
+    expect(source).toContain('return ModuleCreatureAnimState.SIT_CHAIR_DRUNK;');
+    expect(source).toContain('case 44: //STEALTH');
+    expect(source).toContain('return ModuleCreatureAnimState.WALK_STEALTH;');
+    expect(source).toContain('case 121: //FORCE_CAST');
+    expect(source).toContain('return ModuleCreatureAnimState.CASTOUT1;');
+    expect(source).toContain('case 124: //SCREAM');
+    expect(source).toContain('return ModuleCreatureAnimState.HORROR;');
+  });
 });

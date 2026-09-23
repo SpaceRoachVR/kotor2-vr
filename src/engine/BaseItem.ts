@@ -83,6 +83,10 @@ export class BaseItem {
 
   postProcess(){
     switch(this.dieToRoll){
+      // Stun batons roll 1d1. With no case the die stayed a d8, so they did 1-8.
+      case 1:
+        this.die = DiceType.d1;
+      break;
       case 2:
         this.die = DiceType.d2;
       break;

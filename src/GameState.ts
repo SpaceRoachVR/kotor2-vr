@@ -9,7 +9,7 @@ import {
 import type { SWRuleSet } from "@/engine/rules/SWRuleSet";
 
 import type { TalentObject, TalentFeat, TalentSkill, TalentSpell } from "@/talents";
-import type { ModuleObject, ModuleCreature, Module, ModuleDoor, ModuleItem } from "@/module";
+import type { ModuleObject, ModuleCreature, Module, ModuleDoor, ModuleItem, ModuleRoom } from "@/module";
 import type { NWScript } from "@/nwscript/NWScript";
 import type { SaveGame } from "@/engine/SaveGame";
 import type { GameEffectFactory } from "@/effects/GameEffectFactory";
@@ -17,6 +17,7 @@ import type { GameEventFactory } from "@/events/GameEventFactory";
 
 import type { ActionMenuManager } from "@/engine/menu/ActionMenuManager";
 import type { ActionFactory } from "@/actions/ActionFactory";
+import type { Action } from "@/actions/Action";
 
 import { IngameControls } from "@/controls/IngameControls";
 import { Mouse } from "@/controls/Mouse";
@@ -42,8 +43,11 @@ import { FollowerCamera } from "@/engine/FollowerCamera";
 import { OdysseyShaderPass } from "@/shaders/pass/OdysseyShaderPass";
 import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
+import { CutsceneMode } from "@/enums/dialog/CutsceneMode";
 import { EngineFrameSource, shouldProcessEngineFrame } from "@/vr/XRFrameCadence";
 import { CreatureLocomotionAdapter } from "@/vr/runtime/CreatureLocomotionAdapter";
+import type { VRCombatAimCandidate } from "@/vr/runtime/VRCombatAimResolver";
+import type { VRCombatActorSnapshot } from "@/vr/runtime/VRCombatVisualEvents";
 import { TURN_SPEED_FAST } from "@/engine/TurnSpeeds";
 import {
   LegacyGUIVRPointerAdapter,
@@ -56,6 +60,13 @@ import {
   describeDirectVRWorldUse,
   getVRInteractionRange,
 } from "@/vr/runtime/VRWorldUseAdapter";
+import { createFloorWalkableQuery } from "@/vr/runtime/VRWallSoftBlock";
+import {
+  resolveVRCutscenePresentation,
+  type VRCutscenePresentation,
+} from "@/vr/runtime/VRCutscenePresentationPolicy";
+import { CameraMode } from "@/enums/dialog/CameraMode";
+import { DLGConversationType } from "@/enums/dialog/DLGConversationType";
 import {
   EngineInteractableObject,
   resolveVRInteractionAnchor,
@@ -144,6 +155,7 @@ import {
   snapshotVRActionMenuPanelEntries,
 } from "@/vr/runtime/VRActionMenuEngineBridge";
 import { VR_POINTER_HIT_PADDING, setPointerHitPadding } from "@/gui/PointerHitPadding";
+import type { GameMenu } from "@/gui/GameMenu";
 import type {
   VRActionMenuBridgeDependencies,
   VRActionMenuPanel,
@@ -184,7 +196,6 @@ import {
   RendererDepthMode,
 } from "@/utility/RendererOptions";
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
-import { shouldAutoCancelNonCreatureCombat } from "@/engine/interaction/CombatCancellationRules";
 
 export interface GameStateInitializeOptions {
   Game: GameEngineType,
@@ -198,7 +209,148 @@ const namedGroup = (name: string = 'na'): THREE.Group => {
   return group;
 }
 
-const vrCreatureLocomotionAdapter = new CreatureLocomotionAdapter(TURN_SPEED_FAST);
+/**
+ * In-place skill actions, by the parameter that holds their target. These are
+ * short jobs done where the player already stands — VR never walks them there —
+ * so a stick nudge while one runs should not throw it away.
+ */
+const VR_IN_PLACE_SKILL_ACTION_TARGET_PARAMETER: ReadonlyMap<number, number> = new Map([
+  [ActionType.ActionUnlockObject, 0],
+  [ActionType.ActionDisarmMine, 0],
+  [ActionType.ActionRecoverMine, 0],
+  [ActionType.ActionFlagMine, 0],
+  [ActionType.ActionExamineMine, 0],
+  [ActionType.ActionSetMine, 1],
+]);
+
+/** How far past its use range the player may drift before walking away cancels the job. */
+const VR_IN_PLACE_SKILL_ACTION_LEASH_METRES = 1.0;
+
+/**
+ * Whether moving the controlled actor should leave its queue alone: only when
+ * everything queued is an in-place skill action and the actor is still within
+ * reach of each target. Walking off cancels exactly as it does on desktop, and
+ * any other queued action (a walk, an attack, a conversation) keeps the desktop
+ * rule of cancelling on movement.
+ *
+ * Found in a headset session (round 7): pressing Security on a Low Security
+ * Door and nudging the stick during the 1.5 s pick cleared the unlock with no
+ * sound, no failure and the door still locked — repeated a dozen times. Proved
+ * in the emulator: a 0.2 s stick deflection 0.6 s into the pick emptied the
+ * queue through CreatureLocomotionAdapter.apply.
+ */
+function retainVRInPlaceSkillActionsWhileMoving(actor: ModuleCreature): boolean {
+  const queue = actor.actionQueue;
+  if (!queue || queue.length === 0) return false;
+  for (const action of Array.from(queue) as Action[]) {
+    const targetParameter = VR_IN_PLACE_SKILL_ACTION_TARGET_PARAMETER.get(action?.type);
+    if (targetParameter === undefined) return false;
+    const target = action.getParameter<ModuleObject>(targetParameter);
+    if (!target?.position || !actor.position) return false;
+    const reach = getVRInteractionRange(target.objectType) + VR_IN_PLACE_SKILL_ACTION_LEASH_METRES;
+    if (distance2D(actor.position, target.position) > reach) return false;
+  }
+  return true;
+}
+
+/**
+ * The conversation that has already put a shot on the theater, so its later
+ * placed-camera shots stay there. Compared by identity; a new DLG resets it.
+ */
+let vrTheaterConversation: object | null = null;
+
+/**
+ * Where the current conversation shot belongs in VR. See
+ * resolveVRCutscenePresentation for the rule and why.
+ */
+function resolveCurrentVRCutscenePresentation(): VRCutscenePresentation {
+  const cutscene = GameState.CutsceneManager;
+  const dialog = (cutscene.dialog ?? null) as object | null;
+  if (vrTheaterConversation !== dialog) vrTheaterConversation = null;
+  const player = GameState.getCurrentPlayer();
+  const cameraState = cutscene.cameraState;
+  const cameraKind = cameraState?.mode === CameraMode.ANIMATED
+    ? 'animated'
+    : cameraState?.mode === CameraMode.PLACEABLE ? 'placeable' : 'dialog';
+  const camera = GameState.currentCamera;
+  const cameraPosition = cameraKind === 'placeable' && camera
+    ? camera.getWorldPosition(new THREE.Vector3())
+    : null;
+  const participantPositions: THREE.Vector3[] = [];
+  for (const participant of [cameraState?.speaker?.participant, cameraState?.listener?.participant]) {
+    if (!participant || participant === player || !participant.position) continue;
+    participantPositions.push(participant.position);
+  }
+  const playerRoom = player?.room ?? null;
+  const presentation = resolveVRCutscenePresentation({
+    animatedCutscene: cutscene.cutsceneMode === CutsceneMode.ANIMATED,
+    cameraKind,
+    cameraPosition,
+    participantPositions,
+    playerPosition: player?.position ?? null,
+    isOverPlayerRoom: playerRoom
+      ? (point) => {
+        const room = findVRRoomUnderPoint(point);
+        return room ? room === playerRoom : null;
+      }
+      : null,
+    theaterAlreadyShown: dialog !== null && vrTheaterConversation === dialog,
+  });
+  if (presentation === 'theater' && dialog) vrTheaterConversation = dialog;
+  return presentation;
+}
+
+let vrRoomUnderPointCache: { area: unknown; x: number; y: number; z: number; room: ModuleRoom | null } | null = null;
+
+/**
+ * The room whose walkable floor lies under a point, nearest below it; null when
+ * no floor is under it (a camera outside the hull, say). A room's bounding box
+ * cannot stand in for this — see VRCutsceneShot.isOverPlayerRoom. Cached for
+ * the last point asked about, since a placed camera holds still for its shot
+ * and this is asked several times a frame.
+ */
+function findVRRoomUnderPoint(point: THREE.Vector3): ModuleRoom | null {
+  const area = GameState.module?.area ?? null;
+  const cached = vrRoomUnderPointCache;
+  if (cached && cached.area === area && cached.x === point.x && cached.y === point.y && cached.z === point.z) {
+    return cached.room;
+  }
+  let found: ModuleRoom | null = null;
+  let nearestGap = Number.POSITIVE_INFINITY;
+  const onFloor = new THREE.Vector3();
+  for (const room of (area?.rooms ?? []) as ModuleRoom[]) {
+    const faces = room?.collisionManager?.walkmesh?.walkableFaces;
+    if (!faces) continue;
+    for (let i = 0, len = faces.length; i < len; i++) {
+      const triangle = faces[i]?.triangle;
+      if (!triangle || !triangle.containsPoint(point)) continue;
+      triangle.closestPointToPoint(point, onFloor);
+      // A floor above the point is a different deck, not what it stands over.
+      const gap = point.z - onFloor.z;
+      if (gap < -0.25 || gap >= nearestGap) continue;
+      nearestGap = gap;
+      found = room;
+    }
+  }
+  vrRoomUnderPointCache = { area, x: point.x, y: point.y, z: point.z, room: found };
+  return found;
+}
+
+/** A spoken conversation (not a computer terminal) being held in the world. */
+function isVRWorldDialogue(menu: unknown): boolean {
+  return !!menu && menu === GameState.MenuManager.InGameDialog &&
+    GameState.CutsceneManager.active && VRSpike.isPresenting &&
+    GameState.CutsceneManager.dialog?.getConversationType() !== DLGConversationType.COMPUTER &&
+    resolveCurrentVRCutscenePresentation() === 'world';
+}
+
+/** Below the eyeline: the top of the dialogue sits a little under straight ahead. */
+const VR_WORLD_DIALOGUE_VERTICAL_OFFSET_METRES = -0.35;
+
+const vrCreatureLocomotionAdapter = new CreatureLocomotionAdapter<ModuleCreature>(
+  TURN_SPEED_FAST,
+  retainVRInPlaceSkillActionsWhileMoving,
+);
 let vrCombatIssuedTargetId: number | null = null;
 /** Phase G1: the object id VR last selected through CursorManager, if any. */
 let vrCursorSelectedTargetId: number | null = null;
@@ -240,6 +392,46 @@ function isVRCombatTarget(actor: ModuleCreature, candidate: ModuleObject | null 
     (candidate.objectType & ModuleObjectType.ModuleCreature) !== 0 &&
     typeof candidate.isDead === 'function' && !candidate.isDead() &&
     typeof candidate.isHostile === 'function' && candidate.isHostile(actor);
+}
+
+/**
+ * TEMPORARY diagnostic for headset R6: "the wheel brings up Attacks on the
+ * first try, but the tab does not appear in subsequent tries".
+ *
+ * The Attacks wedge exists only when createActionWheel resolves a combat
+ * target. The builder-side diagnostic could never see this case: it fires only
+ * once a target is hostile, and on the failing opens there was no target at
+ * all. This reports which of isVRCombatTarget's conditions failed, plus whether
+ * a valid hostile was selectable at that moment — which separates "the aim
+ * missed" from "the droid stopped qualifying". Once per distinct shape. Remove
+ * once the cause is settled.
+ */
+const reportedVRWheelTargetMisses = new Set<string>();
+function reportVRWheelTargetMissOnce(
+  actor: ModuleCreature,
+  aimedTargetId: number | null,
+  candidate: ModuleObject | null,
+): void {
+  let reason: string;
+  if (aimedTargetId === null) reason = 'nothing aimed';
+  else if (!candidate) reason = 'aimed id not among playerSelectableObjects';
+  else if ((candidate.objectType & ModuleObjectType.ModuleCreature) === 0) reason = 'aimed object is not a creature';
+  else if (candidate === actor) reason = 'aimed at the controlled actor';
+  else if (typeof candidate.isDead === 'function' && candidate.isDead()) reason = 'aimed creature is dead';
+  else if (typeof candidate.isHostile === 'function' && !candidate.isHostile(actor)) {
+    reason = 'aimed creature is not hostile to the controlled actor';
+  } else reason = 'unknown';
+  const selectableHostiles = GameState.ModuleObjectManager.playerSelectableObjects
+    .filter((object) => isVRCombatTarget(actor, object)).length;
+  const key = `${reason}|${selectableHostiles > 0}`;
+  if (reportedVRWheelTargetMisses.has(key)) return;
+  reportedVRWheelTargetMisses.add(key);
+  console.warn(
+    `[VRActionWheel] TEMPORARY: wheel opened with no combat target — ${reason}` +
+    ` (aimedTargetId=${aimedTargetId}, candidate=${candidate?.getName?.() ?? 'none'},` +
+    ` selectableHostiles=${selectableHostiles}, actor=${actor.getTag?.()},` +
+    ` party0=${GameState.PartyManager.party[0]?.getTag?.() ?? 'none'})`
+  );
 }
 
 /**
@@ -290,14 +482,62 @@ function findVREditableControl(menu: unknown): VRKeyboardCapableControl | null {
  * that walk-to branch entirely rather than trying to interrupt it afterwards.
  */
 function resolveVRCombatRange(actor: ModuleCreature): number {
-  return actor.isRangedEquipped() ? 15.0 : 2.0;
+  // Melee carries half a metre of VR allowance over the engine's 2.0. The
+  // engine measures centre to centre from an avatar the player cannot see;
+  // the player measures from their own hand, which reaches past that centre,
+  // and an enemy that shuffles as it fights crosses a hard 2.0 line constantly.
+  // TalentFeat.inRange already allows 2.25 for the same reason. The approach
+  // walk the note above guards against is suppressed for the VR player, so the
+  // allowance cannot drag anyone.
+  //
+  // Ranged uses the flatscreen targeting distance rather than the 15 m walk-to
+  // threshold: flatscreen can target anything selectable and walks into 15 m,
+  // and VR does not walk the player, so 15 m read as "the range is too short,
+  // it needs to target from the same range as the flat version" (round 6).
+  return actor.isRangedEquipped() ? GameState.maxSelectableDistance : VR_MELEE_REACH_METRES;
 }
 
-function isWithinVRCombatRange(actor: ModuleCreature, target: ModuleObject): boolean {
+const VR_MELEE_REACH_METRES = 2.5;
+
+/**
+ * How far away a hostile may be soft-locked, whatever is in the player's hand.
+ *
+ * Locking and attacking are different questions. The weapon reach above used
+ * to answer both, so with a Vibroblade nothing more than 2 m away could be
+ * locked at all, a lock was dropped the instant a droid stepped across that
+ * line — the ring flicked between grouped enemies as each crossed it — and a
+ * grenade or Force power aimed at anything further could never be committed.
+ * The lock now follows what the player points at; reach is checked only when a
+ * swing or shot is actually dispatched.
+ */
+// Getter, not a constant: GameState is not initialised when this module loads.
+// It matches the engine's selectable distance, so anything the player can
+// point at and select can be locked.
+function vrCombatLockRangeMetres(): number {
+  return GameState.maxSelectableDistance;
+}
+
+function distanceVRCombat2D(actor: ModuleCreature, target: ModuleObject): number {
   return Math.hypot(
     actor.position.x - target.position.x,
     actor.position.y - target.position.y
-  ) <= resolveVRCombatRange(actor);
+  );
+}
+
+function isWithinVRCombatRange(actor: ModuleCreature, target: ModuleObject): boolean {
+  return distanceVRCombat2D(actor, target) <= resolveVRCombatRange(actor);
+}
+
+function isWithinVRCombatLockRange(actor: ModuleCreature, target: ModuleObject): boolean {
+  return distanceVRCombat2D(actor, target) <= vrCombatLockRangeMetres();
+}
+
+/** A live hostile the player may hold a lock on — no weapon-reach test. */
+function resolveVRLockedHostile(actor: ModuleCreature, targetId: string | null): ModuleObject | null {
+  const parsedId = targetId === null ? Number.NaN : Number(targetId);
+  if (!Number.isSafeInteger(parsedId)) return null;
+  const target = resolveVRAimedObject(parsedId);
+  return isVRCombatTarget(actor, target) && isWithinVRCombatLockRange(actor, target) ? target : null;
 }
 
 function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null {
@@ -379,6 +619,17 @@ const VR_GRENADE_BASE_ITEM_IDS = new Set<number>([
   BaseItemType.ION_GRENADE,
 ]);
 
+/**
+ * `racialtypes.2da` row for droids.
+ *
+ * Measured from the live game rather than inferred: row 5 is Droid and row 6 is
+ * Human (HK-50 and the astromech both report 5; a human NPC reports 6). Worth
+ * stating because TSL's equipment screen gates on `getRace() == 6`, which reads
+ * like a droid check and is in fact a *human* check — using it here would have
+ * exploded every person and no droid.
+ */
+const VR_RACE_DROID = 5;
+
 /** Melee and ranged attack-mode feat categories in `feat.2da`. */
 const VR_MELEE_ATTACK_FEAT_CATEGORY = 0x1104;
 const VR_RANGED_ATTACK_FEAT_CATEGORY = 0x1111;
@@ -387,6 +638,45 @@ function isVRAttackModeFeat(talent: unknown): talent is TalentFeat {
   const category = (talent as { category?: unknown } | null)?.category;
   return category === VR_MELEE_ATTACK_FEAT_CATEGORY ||
     category === VR_RANGED_ATTACK_FEAT_CATEGORY;
+}
+
+/**
+ * Plays the equipped blaster's shot sound, as named by `ammunitiontypes.2da`
+ * (`shotsound0` — "cb_sh_blast1" for an ordinary blaster). The engine has no
+ * working weapon-fire sound at all (`ModuleItem.castAmmunitionAtTarget` is an
+ * empty stub), so this is the only place a shot is heard.
+ */
+function playVRBlasterShotSound(actor: ModuleCreature, slot?: 'LEFTHAND'): void {
+  try {
+    const weapon = slot === 'LEFTHAND'
+      ? actor.equipment?.LEFTHAND
+      : actor.equipment?.RIGHTHAND ?? actor.equipment?.LEFTHAND;
+    const ammunitionType = weapon?.baseItem?.ammunitionType ?? -1;
+    if (ammunitionType < 1) return;
+    const row = GameState.TwoDAManager.datatables.get('ammunitiontypes')?.rows?.[ammunitionType];
+    const resref = typeof row?.shotsound0 === 'string' ? row.shotsound0 : '';
+    if (!resref || resref === '****') return;
+    actor.audioEmitter?.playSoundFireAndForget(resref);
+  } catch {
+    // A missing sound must never interrupt combat input.
+  }
+}
+
+/**
+ * The centre of a door's or placeable's bounds, where a Bash bolt should land.
+ * Creature bolts aim at chest height, which clears a footlocker entirely.
+ */
+function resolveVRStructureAimPoint(target: ModuleObject): THREE.Vector3 | null {
+  try {
+    const box = target.box;
+    if (box && !box.isEmpty()) {
+      const centre = box.getCenter(new THREE.Vector3());
+      if (Number.isFinite(centre.x) && Number.isFinite(centre.y) && Number.isFinite(centre.z)) return centre;
+    }
+  } catch {
+    // Fall through to the origin estimate.
+  }
+  return target.position ? target.position.clone().setZ(target.position.z + 0.5) : null;
 }
 
 function resolveVRCombatWeaponSignature(actor: ModuleCreature): string {
@@ -467,7 +757,7 @@ function describeVRGrenadeInventory(actor: ModuleCreature): readonly VRGrenadeIn
       const property = properties[propertyIndex];
       try {
         if (!property?.isUseable?.() || !property.is(ModuleItemProperty.CastSpell)) continue;
-        const spellId = property.getValue();
+        const spellId = property.getCastSpellId();
         if (!Number.isSafeInteger(spellId) || spellId < 0) continue;
         const itemIdentity = getVRGrenadeInventoryIdentity(item);
         descriptions.push({
@@ -493,11 +783,20 @@ function findVRArmedGrenade(actor: ModuleCreature, sourceKey: string): VRGrenade
   return describeVRGrenadeInventory(actor).find((entry) => entry.descriptor.sourceKey === sourceKey);
 }
 
-function getVREmbodiedTempoResult(actor: ModuleCreature, target: ModuleObject | null) {
+function getVREmbodiedTempoResult(
+  actor: ModuleCreature,
+  target: ModuleObject | null,
+  // Grenades and Force powers are range-checked by their own spell, not by the
+  // weapon in hand; only a swing or shot needs the target inside weapon reach.
+  reach: 'weapon' | 'lock' = 'weapon',
+) {
   const round = actor.combatRound;
+  const withinReach = !!target && (reach === 'weapon'
+    ? isWithinVRCombatRange(actor, target)
+    : isWithinVRCombatLockRange(actor, target));
   return vrCombatTempoGate.evaluate({
     actorCanAct: typeof actor.isDead === 'function' && !actor.isDead(),
-    hasLiveTarget: !!target && isVRCombatTarget(actor, target) && isWithinVRCombatRange(actor, target),
+    hasLiveTarget: !!target && isVRCombatTarget(actor, target) && withinReach,
     combatRound: round ? {
       roundStarted: round.roundStarted === true,
       roundPaused: round.roundPaused === true,
@@ -517,13 +816,48 @@ function resolveVRLiveCombatTarget(actor: ModuleCreature, targetId: string | nul
   return isVRCombatTarget(actor, target) && isWithinVRCombatRange(actor, target) ? target : null;
 }
 
+/**
+ * TEMPORARY diagnostic for headset round 5: "rounds failed several times and
+ * did not register a swing", "choosing Critical Strike resulted in a frozen
+ * queue", "queued but never used".
+ *
+ * Driven through the real wheel route on the live page, the queue dispatched
+ * Critical Strike on the next swing and consumed it — so the queue itself is
+ * sound, and the failures sit in whatever stopped a physical swing reaching it.
+ * Every rejected or deferred swing now names its reason — out of weapon reach
+ * (with the distance), which tempo gate was shut, or which dispatcher state the
+ * queue head produced. Once per distinct shape so a fight cannot flood the
+ * console. Remove once the next headset run has settled it.
+ */
+const reportedVRSwingOutcomes = new Set<string>();
+
+function reportVRSwingOutcomeOnce(shape: string, detail: string): void {
+  if (reportedVRSwingOutcomes.has(shape)) return;
+  reportedVRSwingOutcomes.add(shape);
+  console.info(`[VR combat swing] TEMPORARY ${shape} || ${detail}`);
+}
+
 function dispatchVREmbodiedCombatInput(
   actor: ModuleCreature,
   targetId: string | null,
   input: VRCombatRequiredInput,
 ): boolean {
   const initialTarget = resolveVRLiveCombatTarget(actor, targetId);
-  if (!getVREmbodiedTempoResult(actor, initialTarget).eligible) return false;
+  const head = vrCombatIntentQueue.getHead();
+  const headLabel = head ? `${head.label}(${head.requiredInput},${head.weaponSignature})` : 'none';
+  const tempo = getVREmbodiedTempoResult(actor, initialTarget);
+  if (!tempo.eligible) {
+    let distance = 'n/a';
+    try {
+      const locked = resolveVRLockedHostile(actor, targetId);
+      if (locked) distance = distanceVRCombat2D(actor, locked).toFixed(1);
+    } catch { /* diagnostic only */ }
+    reportVRSwingOutcomeOnce(
+      `refused input=${input} reason=${tempo.reason} head=${head ? head.label : 'none'}`,
+      `target=${targetId} distance=${distance} reach=${resolveVRCombatRange(actor)} weapon=${resolveVRCombatWeaponSignature(actor)} head=${headLabel}`,
+    );
+    return false;
+  }
 
   const dispatcher = new VRCombatIntentDispatcher<ModuleObject, VRCombatIntent>(vrCombatIntentQueue, {
     resolveLiveTarget: () => resolveVRLiveCombatTarget(actor, targetId) ?? undefined,
@@ -542,6 +876,10 @@ function dispatchVREmbodiedCombatInput(
     currentWeaponSignature: resolveVRCombatWeaponSignature(actor),
     input,
   });
+  reportVRSwingOutcomeOnce(
+    `dispatch input=${input} state=${result.state}${'reason' in result ? ' reason=' + result.reason : ''} head=${head ? head.label : 'none'}`,
+    `target=${targetId} weapon=${resolveVRCombatWeaponSignature(actor)} head=${headLabel} queueAfter=${vrCombatIntentQueue.getSnapshot().entries.length}`,
+  );
   if (result.state === 'basic-dispatched' || result.state === 'intent-dispatched' ||
     result.state === 'intent-skipped-invalid' || result.state === 'deferred-input-mismatch' ||
     result.state === 'deferred-weapon-mismatch') {
@@ -561,40 +899,69 @@ function dispatchVRDirectionalForceGesture(
     !new RegExp(`\\b${gestureKind}\\b`, 'i').test(intent.label)) {
     return false;
   }
-  const target = resolveVRLiveCombatTarget(actor, targetId);
-  if (!target || !getVREmbodiedTempoResult(actor, target).eligible) return false;
+  const target = resolveVRLockedHostile(actor, targetId);
+  if (!target || !getVREmbodiedTempoResult(actor, target, 'lock').eligible) return false;
   if (!dispatchVRCombatIntent(actor, target, intent)) return false;
   vrCombatIntentQueue.consumeHead();
   vrCombatIssuedTargetId = target.id;
   return true;
 }
 
+/** TEMPORARY (round 6): "grenades are still entirely broken". Names each refusal once. */
+const reportedVRGrenadeOutcomes = new Set<string>();
+function reportVRGrenadeOutcomeOnce(shape: string, detail = ''): void {
+  if (reportedVRGrenadeOutcomes.has(shape)) return;
+  reportedVRGrenadeOutcomes.add(shape);
+  console.info(`[VR grenade] TEMPORARY ${shape}${detail ? ' || ' + detail : ''}`);
+}
+
 function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): boolean {
   const request = vrArmedGrenadeState.requestCommit();
-  if (request.state !== 'armed') return false;
+  if (request.state !== 'armed') {
+    reportVRGrenadeOutcomeOnce('trigger with nothing armed');
+    return false;
+  }
   const source = findVRArmedGrenade(actor, request.grenade.sourceKey);
-  const target = resolveVRLiveCombatTarget(actor, targetId);
+  // The lock, not weapon reach: holding a Vibroblade used to cap every throw
+  // at 2 m, so a grenade armed at a droid across the room could never leave
+  // the hand. The spell's own inRange check below decides the throw distance.
+  const target = resolveVRLockedHostile(actor, targetId);
   // A trigger pulled at empty space is a miss-aim, not an invalid target: keep
   // the grenade armed. A locked target that became invalid is cancelled by
   // onCombatTargetInvalidated instead. `resolveVRLiveCombatTarget` returns
   // null (never undefined), so this must be an explicit null check — the
   // earlier `!== undefined` treated "no target" as available.
-  if (source !== undefined && target === null) return false;
+  if (source !== undefined && target === null) {
+    reportVRGrenadeOutcomeOnce('refused: no locked hostile', `targetId=${targetId}`);
+    return false;
+  }
   // Out of throw range also keeps it armed. In VR the engine may not walk the
   // player into range (ActionApproachPolicy), so committing now would only
   // spend the arm on a cast ActionItemCastSpell is bound to reject.
   if (source !== undefined && target !== null) {
     try {
-      if (!new GameState.TalentSpell(source.spellId).inRange(target, actor)) return false;
-    } catch {
+      if (!new GameState.TalentSpell(source.spellId).inRange(target, actor)) {
+        reportVRGrenadeOutcomeOnce('refused: out of throw range',
+          `spell=${source.spellId} distance=${distanceVRCombat2D(actor, target).toFixed(1)}`);
+        return false;
+      }
+    } catch (error) {
+      reportVRGrenadeOutcomeOnce('refused: range check threw', String(error));
       return false;
     }
   }
   const eligibility = resolveVRArmedGrenadeCommitEligibility({
     sourceAvailable: source !== undefined,
     targetAvailable: target !== null,
-    tempoEligible: source !== undefined && target !== null && getVREmbodiedTempoResult(actor, target).eligible,
+    // A throw is scheduled into the combat round like flatscreen's, and the
+    // engine plays it at the next opening. Requiring the round to be idle at
+    // the instant of the trigger pull dropped the throw silently whenever a
+    // round was running — which in a fight is almost always.
+    tempoEligible: source !== undefined && target !== null,
   });
+  if (eligibility !== 'commit') {
+    reportVRGrenadeOutcomeOnce(`refused: ${eligibility}`, `sourceAvailable=${source !== undefined}`);
+  }
   if (eligibility === 'cancel-invalid') {
     vrArmedGrenadeState.cancel();
     return false;
@@ -617,8 +984,10 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
     }
     vrArmedGrenadeState.completeCommit({ sourceKey: source.descriptor.sourceKey, engineAccepted: true });
     vrCombatIssuedTargetId = target.id;
+    reportVRGrenadeOutcomeOnce('thrown: scheduled into the combat round', `spell=${source.spellId}`);
     return true;
-  } catch {
+  } catch (error) {
+    reportVRGrenadeOutcomeOnce('refused: scheduling threw', String(error));
     // A construction failure is not a timing deferral. The still-visible item
     // could never be thrown from this trigger, so remove the stale off-hand
     // presentation rather than leaving a dead armed state behind.
@@ -870,6 +1239,15 @@ function buildVRWorldActionPromptFor(
         if (!isLiveVRWorldPromptCandidate(actor, target, candidate)) return 1;
         const livePanels = refreshVRWorldPromptPanels(actor, target);
         return livePanels ? countVRWorldPromptTargetActions(livePanels.targetPanels) : 1;
+      },
+      // Resolved the same way the engine resolves it in
+      // `ModulePlaceable.attemptUnlockWithKey` — by tag, against the party
+      // inventory — and re-read at each boundary, so a key spent or dropped
+      // between opening the prompt and pressing it refuses again.
+      actorHoldsRequiredKey: () => {
+        const keyName = (target as { keyName?: unknown }).keyName;
+        if (typeof keyName !== 'string' || !keyName.length) return false;
+        return !!GameState.InventoryManager.getItemByTag(keyName);
       },
     });
     if (descriptor) {
@@ -1149,6 +1527,24 @@ interface VRWorldPromptActorActionState {
   readonly authoredInventorySourceKey: string;
 }
 
+/**
+ * Whether the party is actually carrying the key a locked object demands.
+ *
+ * Resolved by tag against the party inventory, exactly as the engine resolves
+ * it in `ModulePlaceable.attemptUnlockWithKey` and as the direct-use safety
+ * gate already does — so candidacy and activation cannot disagree about
+ * whether the key is in hand.
+ */
+function actorHoldsVRWorldPromptKey(target: { keyName?: unknown }): boolean {
+  try {
+    const keyName = target.keyName;
+    if (typeof keyName !== 'string' || !keyName.length) return false;
+    return !!GameState.InventoryManager.getItemByTag(keyName);
+  } catch {
+    return false;
+  }
+}
+
 function hasPotentialVRWorldPromptActions(
   actor: ModuleCreature,
   actorState: VRWorldPromptActorActionState,
@@ -1179,6 +1575,15 @@ function hasPotentialVRWorldPromptActions(
       return isDirectVRWorldUseTarget(target);
     }
     if (!Boolean(lockTarget.notBlastable)) return true;
+    // A key-required lock is refused by Security (`canAttemptSecurityUnlock` is
+    // `locked && !keyRequired`) and, when NotBlastable, by Bash as well. So for
+    // a player who is actually holding the key, this branch is the only thing
+    // between them and the container — and returning false here drops the
+    // object from candidacy before any prompt is built, which reads in the
+    // headset as a locker offering no options whatsoever. Reported for the
+    // cargo-bay locker after taking the key from Kreia's body; the console
+    // recorded `hasActions=false locked=1 keyRequired=1 notBlastable=true`.
+    if (actorHoldsVRWorldPromptKey(lockTarget)) return true;
     // Use the shared rule, not a local copy. This branch previously inlined
     // `lockable && !keyRequired`, which survived the ObjectLockRules fix and
     // kept vetoing on `lockable` — a field that means "can be re-locked" in
@@ -1300,7 +1705,10 @@ function readScriptIdentityState(scripts: unknown): string {
 function readVRWorldPromptActorActionState(
   actor: ModuleCreature,
 ): VRWorldPromptActorActionState {
-  const securitySkill = readVRActorSkill(actor, SkillType.SECURITY);
+  // Trained ranks, matching the action menu's Security gate: a tunneler's
+  // temporary bonus must neither expose a bare Security entry nor rebuild the
+  // prompt when it is applied and again when it expires.
+  const securitySkill = readVRActorTrainedSkillRank(actor, SkillType.SECURITY);
   const securityActionIcon = readVRActorSecurityActionIcon(actor);
   const demolitionsSkill = readVRActorSkill(actor, SkillType.DEMOLITIONS);
   try {
@@ -1353,6 +1761,15 @@ function readVRActorSkill(actor: ModuleCreature, skill: SkillType): number {
   try {
     const value = actor.getSkillLevel(skill);
     return Number.isFinite(value) ? value : -1;
+  } catch {
+    return -1;
+  }
+}
+
+function readVRActorTrainedSkillRank(actor: ModuleCreature, skill: SkillType): number {
+  try {
+    const value = actor.skills?.[skill]?.rank;
+    return typeof value === 'number' && Number.isFinite(value) ? value : -1;
   } catch {
     return -1;
   }
@@ -1423,37 +1840,75 @@ export interface VRHeldItemEquipment {
   readonly RIGHTHAND?: VREquippedHeldItem | null;
 }
 
-function resolveHeldItemClassFallback(item: VREquippedHeldItem): HeldItemClassFallbackTransform {
-  const baseItemId = typeof item.baseItemId === 'number' ? item.baseItemId : -1;
-  const itemClass = typeof item.baseItem?.itemClass === 'string'
-    ? item.baseItem.itemClass.toLocaleLowerCase()
-    : '';
-  const isLightsaber = baseItemId === BaseItemType.LIGHTSABER ||
-    baseItemId === BaseItemType.DOUBLE_BLADED_LIGHTSABER ||
-    baseItemId === BaseItemType.SHORT_LIGHTSABER ||
-    itemClass.includes('lghtsbr');
-  const isBlaster = item.baseItem?.rangedWeapon === true || itemClass.includes('blaster') ||
-    (baseItemId >= BaseItemType.BLASTER_PISTOL && baseItemId <= BaseItemType.HEAVY_REPEATING_BLASTER) ||
-    baseItemId === BaseItemType.BLASTER_RIFLE;
+/**
+ * How an engine weapon model sits in a WebXR grip space.
+ *
+ * One transform for every weapon class, because every weapon is authored in the
+ * same frame: the creature's hand bone. Measured live on retail models, not
+ * assumed — a Vibroblade (`w_vbroshort_001`) and a Short Sword run their handle
+ * along -Z and their blade out to +0.88 m along +Z with the flat across Y, and a
+ * Blaster Pistol (`w_blstrpstl_001`) and T3's Hold-Out Blaster run the barrel
+ * along +Y with the handle on Z. Both sit at world scale 1: Odyssey models are
+ * authored in metres.
+ *
+ * WebXR grip space runs a held rod along -Z toward the thumb, and the hand
+ * poser closes the fist around a rod through the grip origin. A half turn about
+ * X therefore puts the handle in the fist, the blade out past the thumb and the
+ * barrel along -Y, the direction the knuckles face.
+ *
+ * The previous per-class fallbacks scaled every model by 0.01 — a one-metre
+ * blade drawn one centimetre long — which is why no weapon was ever visible in
+ * the headset ("the weapon model never showed for any character").
+ */
+/**
+ * Eye height above the feet for the character the player drives.
+ *
+ * Measured on live models rather than tabled: the Exile's `headhook` sits
+ * 1.52 m above the feet with the head top at 1.78 m, and eyes sit roughly
+ * 12 cm above the hook. T3-M4 and the mining droids have no headhook and a top
+ * at 0.90 m; the droid view reads right with the camera just above that dome —
+ * the 1.08 m the player reported as "T3 camera height is correct". Cached per
+ * model, because the bounds walk is not free and a model's height does not
+ * change while it is the same model.
+ */
+const vrEyeHeightByModel = new WeakMap<object, number>();
 
-  if (isLightsaber) {
-    return {
-      position: new THREE.Vector3(0, -0.015, -0.065),
-      rotation: new THREE.Euler(0, 0, -Math.PI / 2),
-      scale: 0.012,
-    };
+function resolveVRCharacterEyeHeight(actor: ModuleCreature | null | undefined): number | null {
+  const model = actor?.model as (THREE.Object3D & { headhook?: THREE.Object3D | null }) | undefined;
+  if (!actor?.position || !model) return null;
+  const cached = vrEyeHeightByModel.get(model);
+  if (cached !== undefined) return cached;
+  try {
+    model.updateMatrixWorld(true);
+    let eye: number | null = null;
+    if (model.headhook) {
+      eye = model.headhook.getWorldPosition(new THREE.Vector3()).z - actor.position.z + 0.12;
+    } else {
+      let top = -Infinity;
+      const box = new THREE.Box3();
+      model.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        if (!mesh.geometry.boundingBox) return;
+        box.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+        top = Math.max(top, box.max.z);
+      });
+      if (Number.isFinite(top)) eye = top - actor.position.z + 0.15;
+    }
+    if (eye === null || !Number.isFinite(eye) || eye < 0.5 || eye > 2.4) return null;
+    vrEyeHeightByModel.set(model, eye);
+    return eye;
+  } catch {
+    return null;
   }
-  if (isBlaster) {
-    return {
-      position: new THREE.Vector3(0.035, -0.02, -0.09),
-      rotation: new THREE.Euler(0, Math.PI / 2, 0),
-      scale: 0.012,
-    };
-  }
+}
+
+function resolveHeldItemClassFallback(_item: VREquippedHeldItem): HeldItemClassFallbackTransform {
   return {
-    position: new THREE.Vector3(0, -0.02, -0.06),
-    rotation: new THREE.Euler(0, 0, 0),
-    scale: 0.01,
+    position: new THREE.Vector3(0, 0, 0),
+    rotation: new THREE.Euler(Math.PI, 0, 0),
+    scale: 1,
   };
 }
 
@@ -1478,6 +1933,8 @@ function describeHeldItemVisual(item: VREquippedHeldItem | null | undefined): He
     baseItemClass,
     authoredGripNode: findHeldItemGripNode(model),
     classFallback: resolveHeldItemClassFallback(item),
+    // Blasters and rifles; grenades are not ranged weapons in baseitems.2da.
+    aimsAlongBarrel: item.baseItem?.rangedWeapon === true,
   };
 }
 
@@ -1493,6 +1950,38 @@ export function describeVRHeldItemVisuals(
     left: describeHeldItemVisual(equipment?.LEFTHAND),
     right: describeHeldItemVisual(equipment?.RIGHTHAND),
   };
+}
+
+/**
+ * Every visible GUI root except the one the VR panel is presenting.
+ *
+ * The panel composites the whole legacy GUI scene, so without this a menu
+ * opened over the in-game HUD arrived in the headset with the entire 2D
+ * interface drawn behind it. Collected from the menu manager rather than by
+ * walking the scene, so non-menu children — the cursor and the GUI ambient
+ * light — are never candidates for hiding.
+ */
+function getOccludedGuiRoots(keep: GameMenu): readonly THREE.Object3D[] {
+  const roots: THREE.Object3D[] = [];
+  const seen = new Set<GameMenu>();
+  const collect = (menus: readonly GameMenu[] | undefined) => {
+    if (!Array.isArray(menus)) return;
+    for (const menu of menus) {
+      if (!menu || menu === keep || seen.has(menu)) continue;
+      seen.add(menu);
+      if (!menu.bVisible) continue;
+      const root = menu.tGuiPanel?.getControl?.();
+      if (root) roots.push(root);
+    }
+  };
+  collect(GameState.MenuManager.activeMenus as unknown as GameMenu[]);
+  collect(GameState.MenuManager.activeModals as unknown as GameMenu[]);
+  const overlay = GameState.MenuManager.InGameOverlay;
+  if (overlay && overlay !== keep && overlay.bVisible && !seen.has(overlay)) {
+    const root = overlay.tGuiPanel?.getControl?.();
+    if (root) roots.push(root);
+  }
+  return roots;
 }
 
 function getLegacyGUIVRPointerSemanticTargets(): readonly LegacyGUIVRPointerSemanticTarget[] {
@@ -1656,6 +2145,12 @@ export class GameState implements EngineContext {
   static AlphaTest = 0.5;
   static noClickTimer = 0;
   static maxSelectableDistance = 20;
+  /**
+   * True while VR shows a conversation in the world rather than on the
+   * theater; the dialogue menu drops its letterbox bars so the panel reads as
+   * clean subtitles.
+   */
+  static vrDialogWorldPresentation = false;
   static maxSelectableDistanceSquared = GameState.maxSelectableDistance * GameState.maxSelectableDistance;
 
   /** DisableHealthRegen: stops vitality regeneration for everyone. */
@@ -2318,10 +2813,11 @@ export class GameState implements EngineContext {
       loadHandModel: loadGenericHandModel,
       getAvatarPresentation: () => {
         const player = GameState.getCurrentPlayer();
-        // KotOR's own inventory rules reserve race 6 for droids (see
-        // InventoryManager.isItemUsableBy). A droid retains its controller-
-        // stabilized weapon/ability model but must never inherit humanoid arms.
-        return { humanoidHands: Boolean(player && player.getRace() !== 6) };
+        // A droid keeps its controller-stabilized weapon model but never gets
+        // humanoid hands. racialtypes.2da row 5 is Droid; row 6 is Human. This
+        // used to test `!== 6`, which gave every droid hands and took them from
+        // every human — reported from the headset as exactly that inversion.
+        return { humanoidHands: Boolean(player && player.getRace() !== VR_RACE_DROID) };
       },
       resetCombatInteraction: () => {
         resetVREmbodiedCombatState();
@@ -2346,12 +2842,23 @@ export class GameState implements EngineContext {
         if(GameState.Mode == EngineMode.MINIGAME){ return null; }
         return GameState.getCurrentPlayer()?.room?.collisionManager?.walkmesh ?? null;
       },
+      getSoftBlockFloor: (floorZ) => {
+        // Same reason as above: a rider on a track has no room floor.
+        if(GameState.Mode == EngineMode.MINIGAME){ return null; }
+        const room = GameState.getCurrentPlayer()?.room;
+        if (!room) return null;
+        return createFloorWalkableQuery(
+          [room, ...(room.linkedRoomsArray ?? [])].map((candidate) => candidate?.collisionManager?.walkmesh ?? null),
+          floorZ,
+        );
+      },
       getComfortSettings: () => ({ ...vrComfortSettings }),
       setComfortSettings: (patch) => Object.assign(vrComfortSettings, patch),
       // Walk/run already exists on the creature: `getMovementSpeed()` picks
       // between the walkrate and runrate columns of creaturespeed.2da based on
       // `isWalking()`. VR simply had no route to the flag.
       getControlledActor: () => GameState.getCurrentPlayer(),
+      getEyeHeight: () => resolveVRCharacterEyeHeight(GameState.getCurrentPlayer()),
       toggleWalkRun: () => {
         const player = GameState.getCurrentPlayer();
         if (!player) return;
@@ -2395,6 +2902,77 @@ export class GameState implements EngineContext {
         // out-of-range objects, and targets without line of sight.
         targets: GameState.ModuleObjectManager.playerSelectableObjects,
       }),
+      /**
+       * Aim candidates for combat only — see the hook's own note for why this
+       * cannot share `getInteractionContext`'s already-range-filtered set.
+       *
+       * Drawn from the same `playerSelectableObjects` the engine has already
+       * filtered for line of sight and usability, then narrowed to live
+       * hostile creatures by `isVRCombatTarget`. The range cap is applied by
+       * the resolver using `resolveVRCombatRange`, so it agrees exactly with
+       * `isWithinVRCombatRange` in `getCombatContext` — the wheel must never
+       * offer an attack the combat bridge then refuses to nominate.
+       */
+      getCombatAimCandidates: () => {
+        const actor = GameState.getCurrentPlayer();
+        if (!actor?.position) return null;
+        const candidates: VRCombatAimCandidate[] = [];
+        for (const object of GameState.ModuleObjectManager.playerSelectableObjects) {
+          if (!isVRCombatTarget(actor, object) || !object.position) continue;
+          candidates.push({ id: object.id, position: object.position });
+        }
+        return {
+          actorPosition: actor.position,
+          maxRangeMetres: vrCombatLockRangeMetres(),
+          candidates,
+        };
+      },
+      /**
+       * Combat state for the VR-authored visuals — see the hook's own note.
+       *
+       * Covers area creatures AND party members, deduplicated by id: a party
+       * member firing is exactly the case the player is most likely to be
+       * looking at, and the two collections overlap.
+       */
+      getCombatVisualSnapshots: () => {
+        const area = GameState.module?.area;
+        if (!area) return null;
+        const snapshots: VRCombatActorSnapshot[] = [];
+        const seen = new Set<number>();
+        const add = (creature: ModuleCreature | undefined) => {
+          if (!creature?.position || !Number.isInteger(creature.id)) return;
+          if (seen.has(creature.id)) return;
+          seen.add(creature.id);
+          const action = creature.combatRound?.action;
+          const target = action?.target;
+          const targetIsCreature = !target ||
+            (target.objectType & ModuleObjectType.ModuleCreature) !== 0;
+          snapshots.push({
+            id: creature.id,
+            position: creature.position,
+            isDroid: typeof creature.getRace === 'function' && creature.getRace() === VR_RACE_DROID,
+            deathStarted: creature.deathStarted === true,
+            isDead: typeof creature.isDead === 'function' && creature.isDead(),
+            attackResultsCalculated: action?.resultsCalculated === true,
+            attackIsRanged: typeof creature.isRangedEquipped === 'function' &&
+              creature.isRangedEquipped(),
+            attackResult: typeof action?.attackResult === 'number' ? action.attackResult : 0,
+            attackTargetPosition: target?.position ?? null,
+            attackTargetIsCreature: targetIsCreature,
+            attackTargetAimPoint: targetIsCreature ? null : resolveVRStructureAimPoint(target),
+          });
+        };
+        for (const creature of (area.creatures ?? [])) add(creature as ModuleCreature);
+        for (const member of GameState.PartyManager.party) add(member);
+        const localActor = GameState.getCurrentPlayer();
+        return {
+          localActorId: localActor && Number.isInteger(localActor.id) ? localActor.id : null,
+          snapshots,
+          playLocalShotSound: () => {
+            if (localActor) playVRBlasterShotSound(localActor);
+          },
+        };
+      },
       getWorldActionPromptContext: () => {
         const actor = GameState.getCurrentPlayer() ?? null;
         return {
@@ -2416,7 +2994,9 @@ export class GameState implements EngineContext {
         }
         observeVREmbodiedCombatActor(actor);
         const candidate = resolveVRAimedObject(aimedTargetId);
-        const target = isVRCombatTarget(actor, candidate) && isWithinVRCombatRange(actor, candidate)
+        // Nominated at lock range; weapon reach is enforced at dispatch. See
+        // vrCombatLockRangeMetres.
+        const target = isVRCombatTarget(actor, candidate) && isWithinVRCombatLockRange(actor, candidate)
           ? candidate
           : null;
         const tempo = getVREmbodiedTempoResult(actor, target);
@@ -2428,7 +3008,14 @@ export class GameState implements EngineContext {
           inCombat: actor.combatData.combatState === true,
           // The hilt readout is the next requested action, never a hidden
           // attack mode. An empty queue deliberately returns to basic attacks.
-          stanceReadout: queuedIntent?.label ?? '',
+          // With more than one entry queued, say so: "Critical Strike +2".
+          // The head alone gave "no way to know if more than one actually
+          // queued" (round 6).
+          stanceReadout: queuedIntent
+            ? queuedIntent.label + (vrCombatIntentQueue.getSnapshot().entries.length > 1
+              ? ` +${vrCombatIntentQueue.getSnapshot().entries.length - 1}`
+              : '')
+            : '',
           tempoReadiness: tempo.eligible ? 1 : 0,
           allowDominantTrigger: queuedIntent?.requiredInput === 'dominant-trigger',
           onCombatSwing: (event) => {
@@ -2440,14 +3027,30 @@ export class GameState implements EngineContext {
           onGrenadeTrigger: () => {
             commitVRArmedGrenade(actor, target ? String(target.id) : null);
           },
+          // Chest height on the target, matching the engine-derived bolts.
+          nominatedTargetAimPoint: target?.position
+            ? target.position.clone().setZ(target.position.z + 1.0)
+            : null,
+          playShotSound: () => playVRBlasterShotSound(actor),
+          // A grenade armed from the wheel keeps the off-hand trigger for the
+          // throw; otherwise an off-hand blaster shoots like the main one.
+          offhandShotAvailable: actor.equipment?.LEFTHAND?.baseItem?.rangedWeapon === true &&
+            !vrArmedGrenadeState.getSnapshot().armed,
+          playOffhandShotSound: () => playVRBlasterShotSound(actor, 'LEFTHAND'),
           onCombatTargetInvalidated: () => {
             vrArmedGrenadeState.cancel();
           },
           cancel: () => {
             vrCombatIntentQueue.clear();
             vrArmedGrenadeState.cancel();
-            const combatTarget = actor.combatData?.lastAttackTarget;
-            if (!shouldAutoCancelNonCreatureCombat(combatTarget)) return;
+            // Cancel now stops creature combat too, not only an endless round
+            // against a door. It used to return here for any creature target,
+            // so pressing cancel mid-fight cleared the upcoming actions and left
+            // the fight and its music running — reported from the headset as
+            // "combat and combat music persist". The engine still re-enters
+            // combat on its own if a hostile keeps attacking or can see the
+            // player (perception re-arms excitedDuration), which is retail.
+            //
             // NO `vrCombatIssuedTargetId === null` GUARD. That guard meant
             // "only cancel combat VR itself started", but combat is far more
             // often entered through the world prompt's authored Bash route,
@@ -2563,6 +3166,7 @@ export class GameState implements EngineContext {
         if (!actor) return null;
         const candidate = resolveVRAimedObject(aimedTargetId);
         const target = isVRCombatTarget(actor, candidate) ? candidate : null;
+        if (!target) reportVRWheelTargetMissOnce(actor, aimedTargetId, candidate);
         try {
           GameState.ActionMenuManager.SetPC(actor);
           if (target) GameState.ActionMenuManager.SetTarget(target);
@@ -2619,6 +3223,8 @@ export class GameState implements EngineContext {
            * seventh top-level item that would force the wheel to paginate.
            */
           openMenu: () => GameState.MenuManager.MenuCharacter.open(),
+          canSwapWeapons: typeof actor.hasAlternateWeaponSet === 'function' && actor.hasAlternateWeaponSet(),
+          swapWeapons: () => actor.swapWeaponSets(),
           // BTN_CLEARALL's exact behaviour, offered only when there is
           // something to clear.
           canClearActions: actor.actionQueue.length > 0 ||
@@ -2725,6 +3331,15 @@ export class GameState implements EngineContext {
         const menu = foregroundMenu?.bVisible && foregroundMenu !== GameState.MenuManager.InGameOverlay
           ? foregroundMenu
           : null;
+        // A conversation held in the world shows only its dialogue, in the
+        // lower part of the view, so the player can see who they are talking
+        // to (round 7: direct interactions "should only show dialogue on the
+        // bottom half of the screen"). The fade quad is left out of it: fades
+        // belong to authored shots, which the theater shows, and composited
+        // here they turned the dialogue into a black slab on every
+        // {Fade out} node — the "black screen" of the same report.
+        const worldDialogue = isVRWorldDialogue(menu);
+        const occludedGuiRoots = menu ? getOccludedGuiRoots(menu) : [];
         return {
           menu,
           guiScene: GameState.scene_gui,
@@ -2732,6 +3347,15 @@ export class GameState implements EngineContext {
           viewportWidth: GameState.ResolutionManager.getViewportWidth(),
           viewportHeight: GameState.ResolutionManager.getViewportHeight(),
           pointerSink: vrLegacyGUIPointerAdapter,
+          occludedGuiRoots: worldDialogue
+            ? [...occludedGuiRoots, GameState.FadeOverlayManager.plane]
+            : occludedGuiRoots,
+          presentOptions: worldDialogue
+            ? {
+              region: GameState.MenuManager.InGameDialog.getVRWorldDialogueRegion(),
+              verticalOffsetMetres: VR_WORLD_DIALOGUE_VERTICAL_OFFSET_METRES,
+            }
+            : undefined,
         };
       },
       getMovieContext: () => GameState.VideoManager.isMoviePlaying()
@@ -2758,8 +3382,18 @@ export class GameState implements EngineContext {
         const computerOwnsInput = GameState.MenuManager.InGameComputer?.isVisible() &&
           (GameState.CutsceneManager.currentReplies || [])
             .some((reply) => !reply.isContinueDialog());
+        // Direct conversations are held in the world with the dialogue on a
+        // panel (round 6); shots of anything the player cannot see from where
+        // they stand go to the theater (round 7). Decided per shot — see
+        // resolveVRCutscenePresentation.
+        const presentation: VRCutscenePresentation = GameState.CutsceneManager.active
+          ? resolveCurrentVRCutscenePresentation()
+          : 'world';
+        GameState.vrDialogWorldPresentation = GameState.CutsceneManager.active && VRSpike.isPresenting &&
+          presentation === 'world';
         return GameState.CutsceneManager.active && !computerOwnsInput
           ? {
+            presentation,
             canSkip: currentEntry?.skippable === true,
             skip: () => {
               if (currentEntry) GameState.CutsceneManager.playerSkipEntry(currentEntry);
@@ -3288,7 +3922,9 @@ export class GameState implements EngineContext {
 
   public static getFirstPersonHiddenBody(): THREE.Object3D | null | undefined {
     if(GameState.Mode != EngineMode.MINIGAME){
-      return GameState.PartyManager.Player?.model;
+      // The controlled character (party[0]), not the fixed main-PC slot: after
+      // a party swap the slot points at someone standing across the room.
+      return GameState.getCurrentPlayer()?.model;
     }
     const models: any[] = (GameState.module?.area?.miniGame?.player as any)?.models ?? [];
     for(const model of models){
@@ -3685,11 +4321,16 @@ export class GameState implements EngineContext {
     if(GameState.Mode == EngineMode.MOVIE || GameState.VideoManager.isMoviePlaying()){
       GameState.Mode = EngineMode.MOVIE;
       GameState.UpdateMovie(delta, timestamp);
+      // A movie frame is a finished frame too. Returning past the terminator at
+      // the end of this method kept the startup trace logging two lines every
+      // frame for as long as a movie played after entering VR.
+      VRSpike.completeStartupTrace();
       return;
     }
 
     if(GameState.Mode == EngineMode.LEGAL){
       GameState.UpdateLegal(delta);
+      VRSpike.completeStartupTrace();
       return;
     }
 
@@ -3946,6 +4587,17 @@ export class GameState implements EngineContext {
      * framebuffer, which is not the one XR presents. Bypass it while presenting.
      */
     if(VRSpike.isPresenting){
+      // The body to hide is the one the rig is welded to — the creature the
+      // player is actually driving, which is `party[0]`. The main-PC slot stays
+      // pointed at the story protagonist even after the leader changes, so
+      // using it made the renderer hide the character standing across the room
+      // while drawing the controlled one into the player's face. Reported from
+      // a headset session: switching party member to 3C-FD turned T3-M4
+      // invisible. `getControlledActor` already carries this exact meaning.
+      //
+      // Kept out of the argument list: the suppression test reads this call's
+      // text to prove the fixed slot is not used, and prose naming it there
+      // would satisfy the search for the very thing it forbids.
       VRSpike.render(
         GameState.currentCamera,
         frameTimestamp,

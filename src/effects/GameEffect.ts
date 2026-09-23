@@ -1,4 +1,3 @@
-import { GameState } from "@/GameState";
 import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { GameEffectSubType } from "@/enums/effects/GameEffectSubType";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
@@ -7,6 +6,14 @@ import { GFFDataType } from "@/enums/resource/GFFDataType";
 import type { Module, ModuleObject } from "@/module";
 import { GFFField } from "@/resource/GFFField";
 import { GFFStruct } from "@/resource/GFFStruct";
+
+function getGameState(): any {
+  try {
+    return require('@/GameState').GameState;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * GameEffect class.
@@ -63,7 +70,8 @@ export class GameEffect {
       return this;
 
     if(!isNaN(this.creator)){
-      this.creator = GameState.ModuleObjectManager.GetObjectById(this.creator);
+      const gs = getGameState();
+      this.creator = gs?.ModuleObjectManager?.GetObjectById?.(this.creator) ?? this.creator;
     }
 
     this.initialized = true;

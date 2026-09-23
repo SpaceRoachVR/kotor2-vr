@@ -12,6 +12,7 @@ import {
   seamBridgeOffsets,
   SEAM_HEIGHT_TOLERANCE,
 } from "@/engine/collision/WalkmeshSeamRules";
+import { getChokeSlideVelocity } from "@/engine/collision/ChokeSlideRules";
 
 // =============================================
 // TYPE DEFINITIONS
@@ -214,6 +215,8 @@ export class CollisionManager {
   /**
    * Apply multi-edge collide and slide response for corner/complex collision scenarios
    */
+  public static getChokeSlideVelocity = getChokeSlideVelocity;
+
   private tmpNormal1 = new THREE.Vector3();
   private applyCollideAndSlide(collisions: ProcessedCollision[]): void {
     if (collisions.length === 0) return;
@@ -236,8 +239,14 @@ export class CollisionManager {
           const intoFirst = velocity.dot(n1) < 0;
           const intoSecond = velocity.dot(n2) < 0;
           if (intoFirst && intoSecond) {
-            this.object.forceVector.set(0, 0, 0);
-            return;
+            const slideVelocity = getChokeSlideVelocity(n1, n2, velocity);
+            if (slideVelocity) {
+              finalVelocity.copy(slideVelocity);
+            } else {
+              // True dead-end apex: both forward slide directions penetrate an opposing wall
+              this.object.forceVector.set(0, 0, 0);
+              return;
+            }
           }
         }
       }

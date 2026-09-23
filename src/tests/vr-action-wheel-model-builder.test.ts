@@ -100,6 +100,29 @@ function findSubmenu(menu: VRRadialMenuDefinition, id: string): VRRadialSubmenuI
   return item;
 }
 
+test('Swap Weapons leads the Attacks page in a fight without adding a top-level wedge', () => {
+  const swapWeapons = jest.fn();
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    targetActions: [engineAction('attack', 'Attack', { panelIndex: 0 })],
+    canSwapWeapons: true,
+    swapWeapons,
+  }));
+
+  expect(contentIds(menu)).not.toContain('action:swap-weapons');
+  const attacks = findSubmenu(menu, 'submenu:attacks').buildMenu();
+  expect(contentIds(attacks)[0]).toBe('action:swap-weapons');
+  findAction(attacks, 'action:swap-weapons').activate();
+  expect(swapWeapons).toHaveBeenCalledTimes(1);
+});
+
+test('Swap Weapons sits on the root wheel outside a fight, and only with a second set', () => {
+  expect(contentIds(buildVRActionWheel(context({ canSwapWeapons: true, swapWeapons: jest.fn() }))))
+    .toContain('action:swap-weapons');
+  expect(contentIds(buildVRActionWheel(context({ canSwapWeapons: false, swapWeapons: jest.fn() }))))
+    .not.toContain('action:swap-weapons');
+});
+
 /**
  * ROADMAP 4.8. The combat top level is exactly six items and must never
  * paginate: pagination mid-fight is the failure this redesign exists to remove,

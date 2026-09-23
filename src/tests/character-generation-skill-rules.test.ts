@@ -144,4 +144,78 @@ describe('recommended character-generation skill allocation', () => {
 
     expect(result).toEqual({ ranks: [0, 0], remainingPoints: 5 });
   });
+
+  test('restricts droids from purchasing droid-restricted skills', () => {
+    const stealthRow = { droidcanuse: '0', drc_class: '0' };
+    const allocation = resolveCharGenSkillAllocation({
+      skillRow: stealthRow,
+      classSkillColumn: 'drc_class',
+      level: 1,
+      currentRank: 0,
+      availablePoints: 10,
+      isDroid: true,
+    });
+
+    expect(allocation).toEqual({
+      kind: 'unavailable',
+      rankCost: 0,
+      maximumRank: 0,
+      canIncrease: false,
+      reason: 'droid-restricted',
+    });
+  });
+
+  test('allows class-skill feats to convert cross-class skills to class skills', () => {
+    const demoRow = { jcn_class: '0', droidcanuse: '1' };
+    // Normally Demolitions is cross-class for Consular
+    const normal = resolveCharGenSkillAllocation({
+      skillRow: demoRow,
+      classSkillColumn: 'jcn_class',
+      level: 1,
+      currentRank: 0,
+      availablePoints: 10,
+    });
+    expect(normal.kind).toBe('cross-class');
+    expect(normal.rankCost).toBe(2);
+    expect(normal.maximumRank).toBe(2);
+
+    // With Class Skill: Demolitions feat
+    const withFeat = resolveCharGenSkillAllocation({
+      skillRow: demoRow,
+      classSkillColumn: 'jcn_class',
+      level: 1,
+      currentRank: 0,
+      availablePoints: 10,
+      hasClassSkillFeat: true,
+    });
+    expect(withFeat.kind).toBe('class');
+    expect(withFeat.rankCost).toBe(1);
+    expect(withFeat.maximumRank).toBe(4);
+  });
+
+  test('all 15 class column codes evaluate class vs cross-class correctly', () => {
+    const classCodes = ['sol', 'sct', 'scd', 'jgd', 'jcn', 'jsn', 'drc', 'drx', 'tec', 'jwm', 'jma', 'jwa', 'sma', 'sld', 'sas'];
+    for (const code of classCodes) {
+      const col = `${code}_class`;
+      const classAlloc = resolveCharGenSkillAllocation({
+        skillRow: { [col]: '1', droidcanuse: '1' },
+        classSkillColumn: col,
+        level: 1,
+        currentRank: 0,
+        availablePoints: 5,
+      });
+      expect(classAlloc.kind).toBe('class');
+      expect(classAlloc.rankCost).toBe(1);
+
+      const crossAlloc = resolveCharGenSkillAllocation({
+        skillRow: { [col]: '0', droidcanuse: '1' },
+        classSkillColumn: col,
+        level: 1,
+        currentRank: 0,
+        availablePoints: 5,
+      });
+      expect(crossAlloc.kind).toBe('cross-class');
+      expect(crossAlloc.rankCost).toBe(2);
+    }
+  });
 });

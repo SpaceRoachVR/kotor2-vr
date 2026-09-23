@@ -64,6 +64,7 @@ export class MenuManager {
   static MenuInventory: KOTOR.MenuInventory;
   static MenuJournal: KOTOR.MenuJournal;
   static MenuLevelUp: KOTOR.MenuLevelUp;
+  static MenuPowerLevelUp: KOTOR.MenuPowerLevelUp;
   static MenuMap: KOTOR.MenuMap;
   static MenuMessages: KOTOR.MenuMessages;
   static MenuOptions: KOTOR.MenuOptions;
@@ -418,6 +419,28 @@ export class MenuManager {
     }catch(e){
       console.error(e);
     }
+  }
+
+  /**
+   * The screens a level-up steps through, loaded the first time one starts.
+   *
+   * Attributes, Skills and Feats are character creation's screens, which a
+   * save loaded from the main menu never loaded; the Force Powers screen was
+   * never loaded by anything. Only those four are loaded here, not the rest of
+   * character creation.
+   */
+  static async LoadLevelUpMenus(){
+    const tsl = GameState.GameKey == GameEngineType.TSL;
+    const [abilities, skills, feats, powers] = await Promise.all([
+      MenuManager.CharGenAbilities ?? MenuManager.GameMenuLoader(tsl ? TSL.CharGenAbilities : KOTOR.CharGenAbilities),
+      MenuManager.CharGenSkills ?? MenuManager.GameMenuLoader(tsl ? TSL.CharGenSkills : KOTOR.CharGenSkills),
+      MenuManager.CharGenFeats ?? MenuManager.GameMenuLoader(tsl ? TSL.CharGenFeats : KOTOR.CharGenFeats),
+      MenuManager.MenuPowerLevelUp ?? MenuManager.GameMenuLoader(tsl ? TSL.MenuPowerLevelUp : KOTOR.MenuPowerLevelUp),
+    ]);
+    MenuManager.CharGenAbilities = abilities as KOTOR.CharGenAbilities;
+    MenuManager.CharGenSkills = skills as KOTOR.CharGenSkills;
+    MenuManager.CharGenFeats = feats as KOTOR.CharGenFeats;
+    MenuManager.MenuPowerLevelUp = powers as KOTOR.MenuPowerLevelUp;
   }
 
   static #ingameMenusLoaded = false;

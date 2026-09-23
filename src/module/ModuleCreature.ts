@@ -9,7 +9,7 @@ import { AudioEmitter } from "@/audio/AudioEmitter";
 import { CreatureClass } from "@/combat/CreatureClass";
 import { EffectRacialType } from "@/effects";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
-import { resolveEffectiveSkillRank } from "@/engine/interaction/SkillEffectRules";
+import { resolveEffectiveSkillRank, resolveFeatSkillBonus } from "@/engine/interaction/SkillEffectRules";
 import { resolveSavedCreatureName } from "@/module/CreatureNamePersistence";
 import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
@@ -29,6 +29,19 @@ import { OdysseyModel, OdysseyModelAnimation } from "@/odyssey";
 import { resolveEquipmentSlotRule } from "@/module/CreatureEquipmentSlots";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
 import { CREATURE_EQUIPMENT_PERSISTENCE_SLOTS } from "@/module/creature/CreatureEquipmentPersistence";
+import { selectCorpseLoot } from "@/module/creature/CorpseLoot";
+import { MenuSaveLoadMode } from "@/enums/gui/MenuSaveLoadMode";
+
+/** How long nobody standing must be in combat before a downed party member gets up. */
+const DOWNED_PARTY_REVIVE_DELAY_SECONDS = 3;
+
+function isKnockoutEligible(creature: any): boolean {
+  return !!GameState.module?.readyToProcessEvents &&
+    creature?.spawned === true &&
+    !!creature.position &&
+    typeof creature.getMaxHP === 'function' && creature.getMaxHP() > 0;
+}
+import { PartyDefeatScreenTimer } from "@/module/creature/PartyDefeatScreenTimer";
 import { LIPObject } from "@/resource/LIPObject";
 import { Utility } from "@/utility/Utility";
 import { EngineMode } from "@/enums/engine/EngineMode";
@@ -58,6 +71,7 @@ import { AudioPriorityGroup } from "@/enums/audio/AudioPriorityGroup";
 import { CombatActionType } from "@/enums/combat/CombatActionType";
 import { CombatRoundAction } from "@/combat";
 import { GameEffectFactory } from "@/effects/GameEffectFactory";
+import { applyEffectDuration } from "@/effects/GameEffectDuration";
 import type { Action } from "@/actions/Action";
 import { ModuleTriggerType } from "@/enums/module/ModuleTriggerType";
 import { EngineDebugType } from "@/enums/engine/EngineDebugType";
@@ -66,7 +80,17 @@ import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { ExperienceType } from "@/enums/engine/ExperienceType";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { resolveKillExperience } from "@/combat/killExperience";
+import {
+  abilityModifier,
+  isAutoBalanceSet,
+  NO_AUTO_BALANCE,
+  resolveAttackAbilityModifier,
+  resolveAutoBalanceBonuses,
+  resolveAutoBalancedMaxVitality,
+  type AutoBalanceBonuses,
+} from "@/combat/TSLCombatRules";
 import { shouldAutoQueueControlledBasicAttack } from "@/vr/runtime/VRCombatAutoQueuePolicy";
+import { resolveBaseSavingThrow, savingThrowEffectBonus, SavingThrow, SAVING_THROW_TYPE_ALL, type SavingThrowEffect } from "@/combat/SavingThrows";
 
 /**
 * ModuleCreature class.
@@ -121,6 +145,13 @@ export class ModuleCreature extends ModuleObject {
   lastName: string;
   maxHitPoints: number;
   naturalAC: number;
+  /** autobalance.2da set from the UTC `MultiplierSet`; 0 does not autobalance. */
+  multiplierSet: number = 0;
+  /**
+   * The main character level this creature was balanced against when it
+   * spawned. Saved as `AutoBalanceLevel` so a load keeps the same enemy.
+   */
+  autoBalanceMainLevel: number | undefined = undefined;
   noPermDeath: number;
   notReorienting: number;
   palletID: number;
@@ -458,7 +489,7 @@ export class ModuleCreature extends ModuleObject {
 
     if(GameState.Mode == EngineMode.INGAME || GameState.Mode == EngineMode.MINIGAME || GameState.Mode == EngineMode.DIALOG){
 
-      if(this.animationState.index == ModuleCreatureAnimState.IDLE){
+      if(this.animationState.index == ModuleCreatureAnimState.IDLE && this.footstepEmitter){
         this.footstepEmitter.isLooping = false;
         this.footstepEmitter.stop();
       }
@@ -576,6 +607,7 @@ export class ModuleCreature extends ModuleObject {
           this.deathStarted = true;
           this.clearAllActions();
           this.onDeath();
+          this.leaveCorpseLoot();
           this.playSoundSet(SSFType.DEAD);
           this.resetOverlayAnimationState();
           this.setAnimationState(ModuleCreatureAnimState.DIE);
@@ -627,16 +659,16 @@ export class ModuleCreature extends ModuleObject {
       if(!this.forceVector.length()){
         this.forceVector.x = ( Math.cos(this.rotation.z + Math.PI/2) * forceDelta );
         this.forceVector.y = ( Math.sin(this.rotation.z + Math.PI/2) * forceDelta );
-        if(this.forceVector.length()){
-          if(this.animSpeed > 0.75){
-            this.setAnimationState(ModuleCreatureAnimState.RUNNING);
-          }else{
-            this.setAnimationState(ModuleCreatureAnimState.WALKING);
-          }
-        }
         //this.forceVector.z = gravityDelta;
       }else{
         this.forceVector.multiplyScalar(forceDelta);
+      }
+
+      if(this.forceVector.length()){
+        const targetState = this.animSpeed > 0.75 ? ModuleCreatureAnimState.RUNNING : ModuleCreatureAnimState.WALKING;
+        if(this.animationState.index !== targetState){
+          this.setAnimationState(targetState);
+        }
       }
 
       if(this.force < 1){
@@ -651,6 +683,11 @@ export class ModuleCreature extends ModuleObject {
         this.setAnimationState(ModuleCreatureAnimState.IDLE);
         this.speed = 0;
         this.force = 0;
+      }
+
+      if(this.footstepEmitter?.isLooping && this.animationState.index !== ModuleCreatureAnimState.RUNNING && this.animationState.index !== ModuleCreatureAnimState.WALKING){
+        this.footstepEmitter.stop();
+        this.footstepEmitter.isLooping = false;
       }
 
       //-----------------------//
@@ -830,6 +867,7 @@ export class ModuleCreature extends ModuleObject {
     }
 
     this.updateRegen(delta);
+    this.updateDownedPartyMember(delta);
 
     this.collisionTimer -= delta;
     if(this.collisionTimer < 0)
@@ -838,7 +876,71 @@ export class ModuleCreature extends ModuleObject {
     this.force = 0;
   }
 
+  /**
+   * Retail party knock-out: a party member reduced to 0 HP stays down until
+   * the fight is over, then gets up with 1 HP. Only a party with nobody left
+   * standing is a defeat.
+   *
+   * None of this existed. A downed Exile stayed a corpse, and worse, the
+   * regeneration below kept healing the corpse out of combat until its HP crept
+   * back over zero — it stood up, was struck, and fell again. Reported from the
+   * headset once enemies could finally land hits: "the main character seems to
+   * be repeatedly falling prone". Measured on the live page: the Exile at
+   * -9.5 of 27.5 HP, dead, with control passed to T3-M4 on 1 HP.
+   */
+  downedCalmSeconds: number = 0;
+  static readonly partyDefeatScreen = new PartyDefeatScreenTimer();
+
+  updateDownedPartyMember(delta = 0){
+    // Only a real, placed, initialised creature can be knocked out. While a
+    // module loads, a party slot can hold a placeholder with no stats yet (the
+    // Exile on arrival at Peragus has an empty tag and no position), and 0 HP
+    // there is "not loaded", not "down". Treating it as down would declare the
+    // whole party defeated and open Load Game over a loading game.
+    if(!this.isDead() || !this.isPartyMember() || !isKnockoutEligible(this)){
+      this.downedCalmSeconds = 0;
+      if(!this.isDead() && isKnockoutEligible(this) && this.isPartyMember()){
+        ModuleCreature.partyDefeatScreen.reset();
+      }
+      return;
+    }
+    const standing = GameState.PartyManager.party.filter((member) => member && !(isKnockoutEligible(member) && member.isDead()));
+    if(!standing.length){
+      // One downed member drives the screen, or two would count each frame twice.
+      const firstDown = GameState.PartyManager.party.find((member) => member && isKnockoutEligible(member) && member.isDead());
+      if(firstDown !== this) return;
+      const screen = ModuleCreature.partyDefeatScreen.defeated(delta);
+      if(screen){
+        console.warn(screen === 'reopen'
+          ? '[Party] the party is still defeated; reopening Load Game'
+          : '[Party] every party member is down; opening Load Game (the game-over screen is not wired yet)');
+        try{
+          GameState.MenuManager.MenuSaveLoad.mode = MenuSaveLoadMode.LOADGAME;
+          GameState.MenuManager.MenuSaveLoad.open();
+        }catch(e){
+          console.error(e);
+        }
+      }
+      return;
+    }
+    ModuleCreature.partyDefeatScreen.reset();
+    // Still fighting while anyone standing is in combat; a hostile that can see
+    // the party keeps combatState armed through excitedDuration.
+    if(standing.some((member) => member.combatData?.combatState)){
+      this.downedCalmSeconds = 0;
+      return;
+    }
+    this.downedCalmSeconds += delta;
+    if(this.downedCalmSeconds < DOWNED_PARTY_REVIVE_DELAY_SECONDS) return;
+    this.downedCalmSeconds = 0;
+    // Set HP to exactly 1 whatever the subrace HP formula; the alive branch of
+    // update() then plays GET_UP_DEAD on its own.
+    this.addHP(1 - this.getHP(), true);
+  }
+
   updateRegen(delta = 0){
+    // The dead do not regenerate. See updateDownedPartyMember.
+    if(this.isDead()) return;
     // DisableHealthRegen(TRUE) stops vitality regeneration module-wide; force
     // regeneration is unaffected, so this gate sits on the vitality half below.
     this.regenTimer -= delta;
@@ -913,10 +1015,12 @@ export class ModuleCreature extends ModuleObject {
     if(this.isDead())
       return true;
 
-    if(this.room){
-      if(!this.room.model.visible){
-        return;
-      }
+    // A room can have no model (001EBO's 001ebo17 has none), and a stale room
+    // from a replaced area has had its model disposed. Reading `.visible` off
+    // either threw every frame and aborted the rest of the area update — doors,
+    // rooms and every spell in flight — behind it.
+    if(this.room?.model && !this.room.model.visible){
+      return;
     }
 
     if(!this.spawned || !GameState.module.readyToProcessEvents){
@@ -1549,6 +1653,40 @@ export class ModuleCreature extends ModuleObject {
     };
   }
 
+  /** Whether a second weapon configuration exists to swap to (TSL). */
+  hasAlternateWeaponSet(): boolean {
+    return !!(this.equipment.RIGHTHAND2 || this.equipment.LEFTHAND2);
+  }
+
+  /**
+   * Swaps the primary and secondary weapon sets — TSL's weapon configuration
+   * swap. Moved here verbatim from MenuEquipment's BTN_SWAPWEAPONS handler so
+   * the VR action wheel can offer it without opening the equipment screen.
+   * `onEquipped` runs after each re-equip resolves.
+   */
+  swapWeaponSets(onEquipped?: () => void){
+    const done = () => { if(onEquipped) onEquipped(); };
+    const right_1 = this.equipment.RIGHTHAND;
+    const right_2 = this.equipment.RIGHTHAND2;
+    this.equipment.RIGHTHAND = undefined;
+    this.equipment.RIGHTHAND2 = undefined;
+
+    if(right_1) right_1.destroy();
+
+    if(right_1) this.equipItem(ModuleCreatureArmorSlot.RIGHTHAND2, right_1).then(done);
+    if(right_2) this.equipItem(ModuleCreatureArmorSlot.RIGHTHAND,  right_2).then(done);
+
+    const left_1 = this.equipment.LEFTHAND;
+    const left_2 = this.equipment.LEFTHAND2;
+    this.equipment.LEFTHAND = undefined;
+    this.equipment.LEFTHAND2 = undefined;
+
+    if(left_1) left_1.destroy();
+
+    if(left_1) this.equipItem(ModuleCreatureArmorSlot.LEFTHAND2, left_1).then(done);
+    if(left_2) this.equipItem(ModuleCreatureArmorSlot.LEFTHAND,  left_2).then(done);
+  }
+
   cancelCombat(){
     this.clearTarget();
     this.combatData.combatState = false;
@@ -1943,8 +2081,9 @@ export class ModuleCreature extends ModuleObject {
 
     if(footstepSoundResRef && footstepIsLooping && !this.footstepEmitter.isPlayingSound(footstepSoundResRef)){
       console.log('Playing rolling sound', footstepSoundResRef);
+      this.footstepEmitter.isLooping = true;
       this.footstepEmitter.playSound(footstepSoundResRef);
-    }else if(footstepSoundResRef){
+    }else if(footstepSoundResRef && !footstepIsLooping){
       this.footstepEmitter.playSoundFireAndForget(footstepSoundResRef);
     }
 
@@ -2300,6 +2439,23 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
+  /**
+   * Reduces a dead creature's inventory to what retail leaves on the corpse.
+   * Runs after OnDeath, so treasure a death script creates is kept. Party
+   * members are exempt: they are knocked out, not looted.
+   */
+  leaveCorpseLoot(){
+    if(GameState.PartyManager.party.includes(this)) return;
+    const loot = selectCorpseLoot(this.inventory, this.equipment as unknown as Record<string, ModuleItem>);
+    this.inventory.length = 0;
+    this.inventory.push(...loot.inventory);
+    for(const slot of loot.droppedEquipmentSlots){
+      const item = (this.equipment as any)[slot] as ModuleItem;
+      (this.equipment as any)[slot] = undefined;
+      if(item && !this.inventory.includes(item)) this.inventory.push(item);
+    }
+  }
+
   hasInventory(){
     return this.inventory.length;
   }
@@ -2507,27 +2663,6 @@ export class ModuleCreature extends ModuleObject {
     if(!cls) return false;
     cls.addSpell(spell);
     return true;
-  }
-
-  /**
-   * ActionSwitchWeapons: trade the equipped weapon set for the second one.
-   * Retail keeps two configurations and swaps between them; the slots are the
-   * same pairs the equipment screen shows.
-   */
-  async swapWeaponSets(): Promise<void> {
-    const pairs: [number, number][] = [
-      [ModuleCreatureArmorSlot.RIGHTHAND, ModuleCreatureArmorSlot.RIGHTHAND2],
-      [ModuleCreatureArmorSlot.LEFTHAND, ModuleCreatureArmorSlot.LEFTHAND2],
-    ];
-    for(const [primary, secondary] of pairs){
-      const equipped = this.GetItemInSlot(primary);
-      const stowed = this.GetItemInSlot(secondary);
-      if(!equipped && !stowed) continue;
-      this.unequipSlot(primary, false);
-      this.unequipSlot(secondary, false);
-      if(stowed) await this.equipItem(primary, stowed);
-      if(equipped) await this.equipItem(secondary, equipped);
-    }
   }
 
   /**
@@ -2835,7 +2970,142 @@ export class ModuleCreature extends ModuleObject {
 
     let dexBonus = Math.floor((this.getDEX() - 10) / 2);
 
-    return baseac + classBonus + armorAC + dexBonus;
+    // Natural defense (HK-47 has some) and the autobalance set's defense bonus,
+    // which TSL adds to the class bonus.
+    const naturalAC = Number.isFinite(this.naturalAC) ? this.naturalAC : 0;
+    return baseac + classBonus + armorAC + dexBonus + naturalAC + this.getAutoBalanceBonuses().defenseBonus;
+  }
+
+  getAutoBalanceSaveBonus(): number {
+    return this.getAutoBalanceBonuses().saveBonus;
+  }
+
+  /**
+   * Saving throws the way retail derives them (see combat/SavingThrows.ts):
+   * class base saves + template bonus + saving-throw effects. The ability
+   * modifier and autobalance bonus are added by ModuleObject's save rolls.
+   *
+   * These used to return the stored FortSaveThrow/RefSaveThrow/WillSaveThrow,
+   * which is 0 on every template and, in a save, a total that already holds
+   * the ability modifier.
+   */
+  getFortitudeSave(saveType: number = SAVING_THROW_TYPE_ALL): number {
+    return this.getBaseSavingThrow(SavingThrow.FORTITUDE, saveType);
+  }
+
+  getReflexSave(saveType: number = SAVING_THROW_TYPE_ALL): number {
+    return this.getBaseSavingThrow(SavingThrow.REFLEX, saveType);
+  }
+
+  getWillSave(saveType: number = SAVING_THROW_TYPE_ALL): number {
+    return this.getBaseSavingThrow(SavingThrow.WILL, saveType);
+  }
+
+  private getBaseSavingThrow(save: SavingThrow, saveType: number): number {
+    const classSaves = this.classes.map((cls) =>
+      save === SavingThrow.FORTITUDE ? cls.getFortitudeSave()
+        : save === SavingThrow.REFLEX ? cls.getReflexSave() : cls.getWillSave());
+    const templateBonus = save === SavingThrow.FORTITUDE ? this.fortbonus
+      : save === SavingThrow.REFLEX ? this.refbonus : this.willbonus;
+    const effects: SavingThrowEffect[] = [];
+    for (const effect of this.effects) {
+      if (!effect) continue;
+      const sign = effect.type === GameEffectType.EffectSavingThrowIncrease ? 1
+        : effect.type === GameEffectType.EffectSavingThrowDecrease ? -1 : 0;
+      if (!sign) continue;
+      effects.push({ amount: sign * effect.getInt(0), save: effect.getInt(1), saveType: effect.getInt(2) });
+    }
+    return resolveBaseSavingThrow({
+      classSaves, templateBonus, effectBonus: savingThrowEffectBonus(effects, save, saveType),
+    });
+  }
+
+  /** The total a retail save stores in FortSaveThrow/RefSaveThrow/WillSaveThrow. */
+  getSavingThrowTotal(save: SavingThrow): number {
+    const ability = save === SavingThrow.FORTITUDE ? this.getCON()
+      : save === SavingThrow.REFLEX ? this.getDEX() : this.getWIS();
+    return this.getBaseSavingThrow(save, SAVING_THROW_TYPE_ALL)
+      + abilityModifier(ability) + this.getAutoBalanceSaveBonus();
+  }
+
+  // An autobalanced enemy takes its numbers from the main character's level
+  // when it spawns, before its OnSpawn script can read them.
+  onSpawn(runScript = true){
+    this.getAutoBalanceBonuses();
+    super.onSpawn(runScript);
+  }
+
+  /**
+   * The main character's level, which TSL scales autobalanced enemies from —
+   * even when the main character is not in the active party. Undefined until a
+   * main character exists (area creatures can load before the party does).
+   */
+  static getMainCharacterLevel(): number | undefined {
+    const main = GameState.PartyManager?.Player ?? GameState.PartyManager?.party?.[0];
+    const level = typeof main?.getTotalClassLevel === 'function' ? main.getTotalClassLevel() : undefined;
+    return Number.isFinite(level) && level > 0 ? level : undefined;
+  }
+
+  /**
+   * This creature's autobalance bonuses (StrategyWiki's TSL Autobalance rules).
+   * Party members and set 0 never autobalance. The main level is fixed the
+   * first time it is needed, which is when the creature spawns — and then its
+   * maximum vitality is set from its base vitality the same way.
+   *
+   * Round 9: every Damaged Mining Droid on Peragus is Set 2, and nothing read
+   * MultiplierSet, so enemies kept their level-1 template numbers at any level.
+   */
+  getAutoBalanceBonuses(): AutoBalanceBonuses {
+    if(!isAutoBalanceSet(this.multiplierSet) || this.isPartyMember()) return NO_AUTO_BALANCE;
+    if(this.autoBalanceMainLevel === undefined){
+      const main = ModuleCreature.getMainCharacterLevel();
+      if(main === undefined) return NO_AUTO_BALANCE;
+      this.autoBalanceMainLevel = main;
+      this.applyAutoBalancedVitality();
+    }
+    return resolveAutoBalanceBonuses(this.multiplierSet, this.autoBalanceMainLevel);
+  }
+
+  /**
+   * Maximum vitality from base vitality × the set multiplier + level × (CON +
+   * Toughness). Only the maximum changes: the HP model is max + current − base,
+   * so damage already taken is kept.
+   */
+  private applyAutoBalancedVitality(){
+    let toughness = 0;
+    if(this.getHasFeat(CombatFeatType.IMPROVED_TOUGHNESS)) toughness = 2;
+    else if(this.getHasFeat(CombatFeatType.TOUGHNESS)) toughness = 1;
+    const max = resolveAutoBalancedMaxVitality({
+      baseVitality: this.hitPoints,
+      set: this.multiplierSet,
+      mainLevel: this.autoBalanceMainLevel,
+      classLevel: this.getTotalClassLevel(),
+      constitutionModifier: abilityModifier(this.getCON()),
+      toughness,
+    });
+    if(max !== null) this.maxHitPoints = max;
+  }
+
+  /**
+   * The attack bonus for one weapon: class base attack bonus, the autobalance
+   * set's bonus, the weapon's own bonus, and Strength for melee or Dexterity
+   * for ranged (Finesse feats let a higher Dexterity stand in for melee).
+   * Two-weapon penalties are the combat round's.
+   */
+  getAttackBonusFor(weapon?: ModuleItem): number {
+    let bab = 0;
+    for(let i = 0, len = this.classes.length; i < len; i++){
+      bab += this.classes[i].getBaseAttackBonus();
+    }
+    const ability = resolveAttackAbilityModifier({
+      ranged: !!weapon?.isRangedWeapon?.(),
+      lightsaber: !!weapon?.isLightsaber?.(),
+      strengthModifier: abilityModifier(this.getSTR()),
+      dexterityModifier: abilityModifier(this.getDEX()),
+      finesseMelee: this.getHasFeat(CombatFeatType.FINESSE_MELEE_WEAPONS),
+      finesseLightsaber: this.getHasFeat(CombatFeatType.FINESSE_LIGHTSABERS),
+    });
+    return bab + ability + (weapon?.getAttackBonus?.() || 0) + this.getAutoBalanceBonuses().attackBonus;
   }
 
   /**
@@ -3286,9 +3556,14 @@ export class ModuleCreature extends ModuleObject {
    * `intList[0]` is the skill id and `intList[1]` the amount, matching how
    * `ActionUnlockObject` and the effect factory populate them. Clamped at zero:
    * a decrease may cancel a skill but never invert it.
+   *
+   * Skill feats (Gear Head, Caution, Empathy and their tiers) count too; see
+   * resolveFeatSkillBonus for the High Security Cylinder they decide.
    */
   getSkillLevel(value: number){
-    return resolveEffectiveSkillRank(this.skills[value].rank, this.effects, value);
+    const rank = this.skills[value].rank;
+    const featBonus = resolveFeatSkillBonus(value, rank, (featId) => this.getHasFeat(featId));
+    return resolveEffectiveSkillRank(rank + featBonus, this.effects, value);
   }
 
   getHasSpell(id = 0){
@@ -4010,6 +4285,27 @@ export class ModuleCreature extends ModuleObject {
       if(this.template.RootNode.hasField('NaturalAC'))
         this.naturalAC = this.template.getFieldByLabel('NaturalAC').getValue();
 
+      if(this.template.RootNode.hasField('MultiplierSet'))
+        this.multiplierSet = this.template.getFieldByLabel('MultiplierSet').getValue();
+
+      // Retail saves record the main character's level at spawn as PCLevelAtSpawn.
+      // AutoBalanceLevel is what earlier builds of this engine wrote; still read it.
+      if(this.template.RootNode.hasField('PCLevelAtSpawn') && this.template.getFieldByLabel('PCLevelAtSpawn').getValue() > 0)
+        this.autoBalanceMainLevel = this.template.getFieldByLabel('PCLevelAtSpawn').getValue();
+      else if(this.template.RootNode.hasField('AutoBalanceLevel'))
+        this.autoBalanceMainLevel = this.template.getFieldByLabel('AutoBalanceLevel').getValue();
+
+      // Template saving-throw bonuses (UTC fortbonus/refbonus/willbonus) were
+      // written by save() but never read back, so every creature lost them.
+      if(this.template.RootNode.hasField('fortbonus'))
+        this.fortbonus = this.template.getFieldByLabel('fortbonus').getValue();
+
+      if(this.template.RootNode.hasField('refbonus'))
+        this.refbonus = this.template.getFieldByLabel('refbonus').getValue();
+
+      if(this.template.RootNode.hasField('willbonus'))
+        this.willbonus = this.template.getFieldByLabel('willbonus').getValue();
+
       if(this.template.RootNode.hasField('NoPermDeath'))
         this.noPermDeath = this.template.getFieldByLabel('NoPermDeath').getValue();
 
@@ -4149,6 +4445,11 @@ export class ModuleCreature extends ModuleObject {
           for(let i = 0; i < effects.length; i++){
             let effect = GameEffectFactory.EffectFromStruct(effects[i]);
             if(effect){
+              // Saves written before addEffect stamped expiries hold TEMPORARY
+              // effects with none — linked children, tunneler Security bonuses —
+              // which never count down. Give them one so a poisoned save heals.
+              // Anything saved with an expiry, retail saves included, is untouched.
+              applyEffectDuration(effect, undefined, undefined, GameState.module?.timeManager);
               effect.setAttachedObject(this);
               effect.loadModel();
               //console.log('attached');
@@ -4173,6 +4474,9 @@ export class ModuleCreature extends ModuleObject {
             }else{
               equipped_item = new GameState.Module.ModuleArea.ModuleItem(GFFObject.FromStruct(strt));
             }
+            // Dropable lives on this list entry, not in the item's .uti; a
+            // missing flag is 0. See CorpseLoot.
+            equipped_item.dropable = strt.hasField('Dropable') ? strt.getFieldByLabel('Dropable').getValue() : 0;
             
             switch(slot_type){
               case ModuleCreatureArmorSlot.HEAD:
@@ -4237,7 +4541,11 @@ export class ModuleCreature extends ModuleObject {
       if(this.template.RootNode.hasField('ItemList')){
         const inventory = this.template.RootNode.getFieldByLabel('ItemList').getChildStructs();
         for(let i = 0; i < inventory.length; i++){
-          this.loadItem(GFFObject.FromStruct(inventory[i]));
+          // Dropable lives on this list entry, not in the item's .uti; a
+          // missing flag is 0. A stack is droppable if any unit of it was.
+          const listDropable = inventory[i].hasField('Dropable') ? inventory[i].getFieldByLabel('Dropable').getValue() : 0;
+          const item = this.loadItem(GFFObject.FromStruct(inventory[i]));
+          if(item) item.dropable = (item.dropable === 1 || listDropable) ? 1 : 0;
         }
       }
       this.loadSoundSet();
@@ -4609,7 +4917,7 @@ export class ModuleCreature extends ModuleObject {
     // the name chosen in character generation on the first save.
     gff.RootNode.addField( new GFFField(GFFDataType.CEXOLOCSTRING, 'FirstName') ).setValue( resolveSavedCreatureName( this.firstName, this.template.RootNode.getFieldByLabel('FirstName') ) );
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'ForcePoints') ).setValue(this.forcePoints);
-    gff.RootNode.addField( new GFFField(GFFDataType.CHAR, 'FortSaveThrow') ).setValue(this.fortitudeSaveThrow);
+    gff.RootNode.addField( new GFFField(GFFDataType.CHAR, 'FortSaveThrow') ).setValue(this.getSavingThrowTotal(SavingThrow.FORTITUDE));
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Gender') ).setValue(this.gender);
     gff.RootNode.addField( new GFFField(GFFDataType.DWORD, 'Gold') ).setValue(0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'GoodEvil') ).setValue(this.goodEvil);
@@ -4639,6 +4947,10 @@ export class ModuleCreature extends ModuleObject {
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Min1HP') ).setValue(this.min1HP);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'MovementRate') ).setValue(0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NaturalAC') ).setValue(this.naturalAC);
+    // Field names and types as a retail SAVEGAME.sav writes them
+    // (tools/parity/save_schema.py). 0 means "not fixed yet" to the loader.
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'MultiplierSet') ).setValue(this.multiplierSet || 0);
+    gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PCLevelAtSpawn') ).setValue(this.autoBalanceMainLevel ?? 0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'NotReorienting') ).setValue(this.notReorienting);
 
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'PM_IsDisguised') ).setValue( this.hasEffect(GameEffectType.EffectDisguise) ? 1 : 0 );
@@ -4666,7 +4978,7 @@ export class ModuleCreature extends ModuleObject {
     gff.RootNode.addField( new GFFField(GFFDataType.WORD, 'PortraitId') ).setValue(this.portraitId);
     gff.RootNode.addField( new GFFField(GFFDataType.SHORT, 'PregameCurrent') ).setValue(28);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Race') ).setValue(this.race);
-    gff.RootNode.addField( new GFFField(GFFDataType.CHAR, 'RefSaveThrow') ).setValue(this.reflexSaveThrow);
+    gff.RootNode.addField( new GFFField(GFFDataType.CHAR, 'RefSaveThrow') ).setValue(this.getSavingThrowTotal(SavingThrow.REFLEX));
 
     let swVarTable = gff.RootNode.addField( new GFFField(GFFDataType.STRUCT, 'SWVarTable') );
     swVarTable.addChildStruct( this.getSWVarTableSaveStruct() );
@@ -4737,7 +5049,7 @@ export class ModuleCreature extends ModuleObject {
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Tail') ).setValue(0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'UseBackupHead') ).setValue(0);
     let varTable = gff.RootNode.addField( new GFFField(GFFDataType.LIST, 'VarTable') );
-    gff.RootNode.addField( new GFFField(GFFDataType.CHAR, 'WillSaveThrow') ).setValue(this.willSaveThrow);
+    gff.RootNode.addField( new GFFField(GFFDataType.CHAR, 'WillSaveThrow') ).setValue(this.getSavingThrowTotal(SavingThrow.WILL));
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Wings') ).setValue(0);
     gff.RootNode.addField( new GFFField(GFFDataType.BYTE, 'Wis') ).setValue(this.wis);
 

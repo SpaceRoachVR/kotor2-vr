@@ -9,6 +9,8 @@
  * @enum
  */
 export enum DiceType {
+  /** A one-sided die: stun batons deal a flat 1 per die (baseitems.2da dietoroll 1). */
+  d1 = 'd1',
   d2 = 'd2',
   d3 = 'd3',
   d4 = 'd4',

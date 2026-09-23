@@ -380,7 +380,12 @@ export class TwoDAObject {
       break;
       case 'boolean':
         if(typeof default_value === 'undefined') default_value = false;
-        if(value === '****') return default_value;
+        if(value === '****' || value === undefined || value === null) return default_value;
+        if(typeof value === 'string'){
+          const trimmed = value.trim().toLowerCase();
+          if(trimmed === '0' || trimmed === 'false' || trimmed === '') return false;
+          if(trimmed === '1' || trimmed === 'true') return true;
+        }
         return !!value;
       break;
     }

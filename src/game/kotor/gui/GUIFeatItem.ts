@@ -85,9 +85,24 @@ export class GUIFeatItem extends GUIProtoItem {
         let hasPrereqfeat2 = (!Number.isInteger(prereqFeat2) || prereqFeat2 < 0 || actor.getHasFeat(prereqFeat2));
         let hasFeat = actor.getHasFeat(featId);
 
-        console.log(feat.constant, hasPrereqfeat1, hasPrereqfeat2);
 
-        let locked = !hasFeat || (!hasPrereqfeat1 || !hasPrereqfeat2);
+        // On a SELECTION screen the menu decides how a feat reads — see
+        // CharGenFeats.getFeatPresentation. Without that contract this keeps its
+        // original meaning: the Abilities screen reviews what a character holds,
+        // so "not held" genuinely is not shown there.
+        const presentation = typeof (this.menu as any)?.getFeatPresentation === 'function'
+          ? (this.menu as any).getFeatPresentation(feat)
+          : null;
+        let locked = presentation
+          ? false
+          : (!hasFeat || (!hasPrereqfeat1 || !hasPrereqfeat2));
+        // Dimmed rather than hidden. A feat that cannot be taken yet still has
+        // to be visible, or the grid shows only what is already owned and there
+        // is nothing to choose between.
+        const iconOpacity = presentation
+          ? (presentation.state === 'unavailable' ? 0.25 : 1.0)
+          : 1.0;
+        const marksOwned = !!presentation && presentation.state === 'owned';
 
         let buttonIcon = new GUIButton(this.menu, this.control, this, this.scale);
         buttonIcon.setText('');
@@ -151,18 +166,57 @@ export class GUIFeatItem extends GUIProtoItem {
           GUIFeatItem.showFill(this.highlight.fill.material);
           if(locked){
             (buttonIcon.getFill().material as THREE.ShaderMaterial).uniforms.opacity.value = 0.00;
+          }else{
+            (buttonIcon.getFill().material as THREE.ShaderMaterial).uniforms.opacity.value = iconOpacity;
+            // A feat the character already holds keeps its frame drawn, so
+            // "taken" reads differently from "available to take".
+            if(marksOwned) buttonIcon.showBorder();
           }
           this.list?.markListRttDirty?.();
         });
 
-        // Clicking a feat highlights it; the Select button then acts on that
-        // choice. Reported the same way as hover so the description panel and
+        // On a selection screen a click selects (see
+        // CharGenFeats.selectFeatFromList). Elsewhere a click highlights the
+        // feat, reported the same way as hover so the description panel and
         // the Select button can never be looking at different feats.
         buttonIcon.addEventListener('click', (e) => {
           e.stopPropagation();
+          const select = (this.menu as any)?.selectFeatFromList;
+          if(typeof select === 'function'){
+            // Deferred: selecting rebuilds the whole grid, which would destroy
+            // this control while its own click event is still dispatching.
+            const menu = this.menu;
+            setTimeout(() => select.call(menu, feat), 0);
+            return;
+          }
           const highlight = (this.menu as any)?.highlightFeat;
           if(typeof highlight === 'function') highlight.call(this.menu, feat);
         });
+
+        // Selection state frame. TSL ships no `lbl_indent`, so the authored
+        // border that K1 uses to mark an owned feat never draws there, and the
+        // grid gave no sign of which feat was chosen or already held —
+        // reported as needing "a highlight to show the selected feat" and "a
+        // different highlight for already owned feats". Drawn from primitives
+        // so it does not depend on any texture: gold for the feat last clicked,
+        // green for a pick made on this screen, steel blue for a feat held.
+        if(presentation){
+          const frameColour = presentation.highlighted ? 0xf2c14e
+            : presentation.picked ? 0x46c46e
+            : presentation.state === 'owned' ? 0x6f8fb0
+            : null;
+          if(frameColour !== null){
+            const frameSize = (buttonIcon.extent.width || 56) + 8;
+            const frame = new THREE.Mesh(
+              new THREE.PlaneGeometry(frameSize, frameSize),
+              new THREE.MeshBasicMaterial({ color: frameColour, transparent: true, opacity: presentation.highlighted ? 0.95 : 0.8, depthTest: false }),
+            );
+            frame.name = 'FEAT_SELECTION_FRAME';
+            frame.position.z = 4;
+            frame.renderOrder = 4;
+            _buttonIconWidget.add(frame);
+          }
+        }
 
         // The feats screen has a Description panel and a name label that
         // nothing ever wrote to. Report the feat under the pointer so the menu
@@ -191,6 +245,10 @@ export class GUIFeatItem extends GUIProtoItem {
           this.widget.userData.iconSprite.scale.y = buttonIcon.extent.height || 32;
           if(locked){
             this.widget.userData.iconMaterial.opacity = 0.00;
+          }else{
+            // A selection screen dims what cannot be taken yet instead of
+            // hiding it, so "available" and "already taken" are both legible.
+            this.widget.userData.iconMaterial.opacity = iconOpacity;
           }
           this.widget.userData.iconMaterial.transparent = true;
           this.widget.userData.iconMaterial.needsUpdate = true;

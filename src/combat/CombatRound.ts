@@ -23,6 +23,7 @@ import type { CombatRoundAction } from "@/combat/CombatRoundAction";
 import { GameState } from "@/GameState";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
 import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
+import { resolveAttackRoll } from "@/combat/TSLCombatRules";
 
 /**
  * CombatRound class.
@@ -421,6 +422,26 @@ export class CombatRound {
         if(creature.equipment.CLAW3){
           this.calculateWeaponAttack(creature, creature.equipment.CLAW3, ModuleCreatureArmorSlot.CLAW3, combatAction);
         }
+
+        // "Simple" is the appearance's model type (S/L), not a statement that
+        // the creature fights with claws. Peragus' Damaged Mining Droids are
+        // simple and carry their Mining Laser in LEFTHAND with no claw at all,
+        // so this branch rolled zero attacks: the attack animation played every
+        // round, nothing was ever rolled, and no combat log line was ever
+        // written. Reported from the headset as "they never landed a single
+        // attack, despite their attack animation happening". A simple creature
+        // with no claw fights with whatever it holds, like anyone else.
+        if(this.currentAttack == 0){
+          if(creature.equipment.RIGHTHAND){
+            this.calculateWeaponAttack(creature, creature.equipment.RIGHTHAND, ModuleCreatureArmorSlot.RIGHTHAND, combatAction);
+          }
+          if(creature.equipment.LEFTHAND){
+            this.calculateWeaponAttack(creature, creature.equipment.LEFTHAND, ModuleCreatureArmorSlot.LEFTHAND, combatAction);
+          }
+          if(this.currentAttack == 0){
+            this.calculateWeaponAttack(creature, undefined, ModuleCreatureArmorSlot.RIGHTHAND, combatAction);
+          }
+        }
       }
     }
 
@@ -477,7 +498,7 @@ export class CombatRound {
    * @returns The attack roll
    */
   calculateAttackRoll(creature: ModuleCreature, weapon: ModuleItem){
-    return Dice.roll(1, DiceType.d20, creature.getBaseAttackBonus() + (weapon?.getAttackBonus() || 0));
+    return Dice.roll(1, DiceType.d20, creature.getAttackBonusFor(weapon));
   }
 
   /**
@@ -566,19 +587,32 @@ export class CombatRound {
    * @param combatAction - The combat action to calculate the attack for
    */
   calculateWeaponAttack(creature: ModuleCreature, weapon: ModuleItem | undefined = undefined, weaponSlot: ModuleCreatureArmorSlot, combatAction: CombatRoundAction) {
-    //Roll to hit
-    let attackRoll = this.calculateAttackRoll(creature, weapon);
+    // For GetLastWeaponUsed: the weapon of the attack being rolled now.
+    creature.combatData.lastWeaponUsed = weapon;
+    let attackBonus = creature.getAttackBonusFor(weapon);
     const isDualWielding = this.isDualWielding(creature);
     const isMainHand = weapon && weaponSlot == ModuleCreatureArmorSlot.RIGHTHAND;
     const isOffHand = weapon && weaponSlot == ModuleCreatureArmorSlot.LEFTHAND;
     if(isDualWielding && (isMainHand || isOffHand)){
-      const penalty = this.calculateTwoWeaponPenalty(creature, weaponSlot);
-      attackRoll -= penalty;
+      attackBonus -= this.calculateTwoWeaponPenalty(creature, weaponSlot);
     }
-    const isCritical = this.isCritical(attackRoll, weapon);
+    // TSL's attack roll (see TSLCombatRules): meet defense to hit, natural 1
+    // misses, natural 20 hits, and a threat needs a second roll to become a
+    // critical. This used to add bonuses before testing the threat range, hit
+    // only on beating defense, and make every threat an automatic critical hit.
+    const roll = resolveAttackRoll({
+      natural: Dice.roll(1, DiceType.d20),
+      attackBonus,
+      defense: combatAction.target.getAC(),
+      threatRangeMin: weapon ? weapon.getCriticalThreatRangeMin() + 1 : 20,
+      threatNatural: Dice.roll(1, DiceType.d20),
+    });
+    const attackRoll = roll.total;
+    const isCritical = roll.critical;
     const hasAssuredHit = creature.hasEffect(GameEffectType.EffectAssuredHit);
     const attack = this.attackList[this.currentAttack];
-    if(hasAssuredHit || isCritical || attackRoll > combatAction.target.getAC()){
+    attack.attackSlot = weaponSlot;
+    if(hasAssuredHit || roll.hit){
       if(this.tryBlasterDeflection(creature, weapon, attackRoll, combatAction, attack)){
         combatAction.attackResult = AttackResult.DEFLECTED;
       }else{

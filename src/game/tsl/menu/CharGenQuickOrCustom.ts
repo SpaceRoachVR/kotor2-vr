@@ -33,7 +33,8 @@ export class CharGenQuickOrCustom extends K1_CharGenQuickOrCustom {
       this.QUICK_CHAR_BTN.addEventListener('click', (e) => {
         e.stopPropagation();
         try{
-          const creatureClass = GameState.SWRuleSet.classes[GameState.CharGenManager.selectedClass];
+          const creatureClass = // By class id, not slot; see CharGenManager.getCharGenClass.
+          GameState.SWRuleSet.classes[GameState.CharGenManager.getSelectedClassId()];
           const saving_throw_label = creatureClass['savingthrowtable'].toLowerCase();
           const saving_throw_data = GameState.TwoDAManager.datatables.get(saving_throw_label).rows[0];
           const feats_table = GameState.SWRuleSet.feats;
@@ -52,7 +53,7 @@ export class CharGenQuickOrCustom extends K1_CharGenQuickOrCustom {
 
           for(let i = 0, len = feats_table.length; i < len; i++){
             const feat_data = feats_table[i];
-            if(feat_data.getGranted(creatureClass) == 1){
+            if(feat_data.getGranted(creatureClass, true) == 1){
               GameState.CharGenManager.selectedCreature.feats.push(new TalentFeat(i));
             }
           }

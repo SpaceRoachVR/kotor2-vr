@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { GameEffectType } from '@/enums/effects/GameEffectType';
 import { SkillType } from '@/enums/nwscript/SkillType';
-import { resolveEffectiveSkillRank } from '@/engine/interaction/SkillEffectRules';
+import { resolveEffectiveSkillRank, resolveFeatSkillBonus } from '@/engine/interaction/SkillEffectRules';
 import { resolveSecurityUnlock } from '@/engine/interaction/ObjectLockRules';
 
 /**
@@ -152,9 +152,96 @@ describe('ModuleCreature.getSkillLevel', () => {
     expect(method).toContain('this.effects');
   });
 
-  test('imports the rule', () => {
+  test('adds the bonus from the creature\'s own skill feats', () => {
+    const body = source.slice(source.search(/getSkillLevel\(value: number\)\s*\{/));
+    const method = body.slice(0, body.indexOf('\n  }'));
+    expect(method).toContain('resolveFeatSkillBonus');
+    expect(method).toContain('getHasFeat');
+  });
+
+  test('imports the rules', () => {
     expect(source).toMatch(
-      /import\s*\{\s*resolveEffectiveSkillRank\s*\}\s*from\s*"@\/engine\/interaction\/SkillEffectRules"/,
+      /import\s*\{\s*resolveEffectiveSkillRank,\s*resolveFeatSkillBonus\s*\}\s*from\s*"@\/engine\/interaction\/SkillEffectRules"/,
     );
+  });
+});
+
+/** feat.2da ids, as named by the in-game descriptions. */
+const GEAR_HEAD = 12;
+const IMPROVED_GEAR_HEAD = 119;
+const MASTER_GEAR_HEAD = 120;
+const CAUTION = 7;
+const EMPATHY = 10;
+const feats = (...ids: number[]) => (id: number) => ids.includes(id);
+
+describe('resolveFeatSkillBonus', () => {
+  test.each([
+    [SkillType.SECURITY], [SkillType.REPAIR], [SkillType.COMPUTER_USE],
+  ])('Gear Head adds 1 to trained skill %s', (skill) => {
+    expect(resolveFeatSkillBonus(skill, 1, feats(GEAR_HEAD))).toBe(1);
+  });
+
+  test('Gear Head does not reach an untrained skill', () => {
+    expect(resolveFeatSkillBonus(SkillType.SECURITY, 0, feats(GEAR_HEAD))).toBe(0);
+  });
+
+  test('each tier replaces the one below rather than stacking', () => {
+    expect(resolveFeatSkillBonus(SkillType.SECURITY, 4, feats(GEAR_HEAD, IMPROVED_GEAR_HEAD))).toBe(2);
+    expect(resolveFeatSkillBonus(SkillType.SECURITY, 8, feats(GEAR_HEAD, IMPROVED_GEAR_HEAD, MASTER_GEAR_HEAD))).toBe(3);
+  });
+
+  test('Caution covers Demolitions and Stealth only', () => {
+    expect(resolveFeatSkillBonus(SkillType.STEALTH, 1, feats(CAUTION))).toBe(1);
+    expect(resolveFeatSkillBonus(SkillType.SECURITY, 1, feats(CAUTION))).toBe(0);
+  });
+
+  test('Empathy needs no trained rank', () => {
+    expect(resolveFeatSkillBonus(SkillType.TREAT_INJURY, 0, feats(EMPATHY))).toBe(1);
+  });
+});
+
+/**
+ * The authored locks, with the authored characters, as the headset reached
+ * them in round 8. T3-M4 (p_t3m4): INT 16, Security 6, Gear Head. The Exile:
+ * INT 14, Security 0. The basic Security Tunneler (g_i_secspike01) is +6.
+ * Every DC here is exactly the total the game expects, which is why the check
+ * must succeed on a tie.
+ */
+describe('round 8 locks with the authored feats and tunneler', () => {
+  const take20 = () => 20;
+  const TUNNELER = 6;
+  function t3Security(withGearHead: boolean, tunneler: number) {
+    const rank = 6;
+    const bonus = resolveFeatSkillBonus(SkillType.SECURITY, rank, feats(...(withGearHead ? [GEAR_HEAD] : [])));
+    const effects = tunneler
+      ? [skillEffect(GameEffectType.EffectSkillIncrease, SkillType.SECURITY, tunneler)]
+      : [];
+    return resolveEffectiveSkillRank(rank + bonus, effects, SkillType.SECURITY);
+  }
+  function attempt(securitySkill: number, intelligence: number, openLockDC: number) {
+    return resolveSecurityUnlock({
+      locked: true, lockable: false, keyRequired: false,
+      securitySkill, intelligence, inCombat: false, openLockDC,
+    }, take20);
+  }
+
+  test('T3 opens the High Security Cylinder (DC 36) with Gear Head and one tunneler', () => {
+    expect(attempt(t3Security(true, TUNNELER), 16, 36)).toMatchObject({ unlocked: true, total: 36 });
+  });
+
+  test('without Gear Head the same attempt totals 35, as the headset logged five times', () => {
+    expect(attempt(t3Security(false, TUNNELER), 16, 36)).toMatchObject({ unlocked: false, total: 35 });
+  });
+
+  test('T3 still needs the tunneler for the Metal Box (DC 33)', () => {
+    expect(attempt(t3Security(true, 0), 16, 33).unlocked).toBe(false);
+    expect(attempt(t3Security(true, TUNNELER), 16, 33).unlocked).toBe(true);
+  });
+
+  test('the Exile opens the Peragus Security Locker (DC 28) with one tunneler', () => {
+    const exileSecurity = resolveEffectiveSkillRank(
+      0, [skillEffect(GameEffectType.EffectSkillIncrease, SkillType.SECURITY, TUNNELER)], SkillType.SECURITY,
+    );
+    expect(attempt(exileSecurity, 14, 28)).toMatchObject({ unlocked: true, total: 28 });
   });
 });

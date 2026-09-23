@@ -70,6 +70,34 @@ describe('CreatureLocomotionAdapter', () => {
     expect(creature.setFacing).not.toHaveBeenCalled();
   });
 
+  test('keeps queued actions when the retention policy says the job is in place and in reach', () => {
+    const creature = target();
+    const adapter = new CreatureLocomotionAdapter(Math.PI * 3, () => true);
+
+    adapter.apply(creature, locomotion());
+
+    expect(creature.clearAllActions).not.toHaveBeenCalled();
+    expect(creature.force).toBe(1);
+  });
+
+  test('cancels queued actions as desktop does when the policy declines', () => {
+    const creature = target();
+    const adapter = new CreatureLocomotionAdapter(Math.PI * 3, () => false);
+
+    adapter.apply(creature, locomotion());
+
+    expect(creature.clearAllActions).toHaveBeenCalledWith(true);
+  });
+
+  test('a throwing retention policy falls back to cancelling', () => {
+    const creature = target();
+    const adapter = new CreatureLocomotionAdapter(Math.PI * 3, () => { throw new Error('bad policy'); });
+
+    adapter.apply(creature, locomotion());
+
+    expect(creature.clearAllActions).toHaveBeenCalledWith(true);
+  });
+
   test('rejects a zero movement vector', () => {
     expect(() => CreatureLocomotionAdapter.directionToCreatureFacing(0, 0)).toThrow(
       'finite and non-zero'

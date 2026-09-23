@@ -3,7 +3,6 @@ import type { GUILabel } from "@/gui";
 import { TextureLoader } from "@/loaders";
 import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 import { OdysseyModel3D } from "@/three/odyssey";
-import { CharGenClasses } from "@/game/CharGenClasses";
 import { GameState } from "@/GameState";
 
 /**
@@ -144,12 +143,29 @@ export class CharGenMain extends GameMenu {
     }
     this.LBL_NAME.setText(GameState.CharGenManager.selectedCreature.firstName);
     this.LBL_CLASS.setText(
-      GameState.TLKManager.TLKStrings[CharGenClasses[GameState.CharGenManager.selectedClass].strings.name].Value
+      GameState.TLKManager.TLKStrings[GameState.CharGenManager.getCharGenClass().strings.name].Value
     )
+    this.updateAttributes();
   }
 
+  /**
+   * The summary column beside the model: the six scores and starting vitality.
+   * This was an empty method, so the column showed only its captions, and
+   * nothing showed that Constitution changes vitality. Refreshed on show,
+   * which includes returning from the Attributes step.
+   */
   updateAttributes() {
-
+    const creature = GameState.CharGenManager.selectedCreature;
+    if(!creature) return;
+    const rows: [GUILabel | undefined, number][] = [
+      [this.STR_AB_LBL, creature.str], [this.DEX_AB_LBL, creature.dex], [this.CON_AB_LBL, creature.con],
+      [this.INT_AB_LBL, creature.int], [this.WIS_AB_LBL, creature.wis], [this.CHA_AB_LBL, creature.cha],
+    ];
+    for(const [label, score] of rows){
+      label?.setText(String(score));
+    }
+    const start = GameState.CharGenManager.getStartingVitality(creature);
+    if(start) this.LBL_VIT?.setText(String(start.hitPoints));
   }
   
 }

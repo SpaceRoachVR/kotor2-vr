@@ -105,9 +105,37 @@ export class PathPoint {
       if(obj == owner)
         continue;
 
+      // Dead creatures (corpses) do not block movement or LOS
+      if(typeof obj.isDead === 'function' && obj.isDead())
+        continue;
+
+      // The creature being approached/departed does not block LOS to itself
+      const hitDist = typeof obj.getHitDistance === 'function' ? obj.getHitDistance() : 1;
+      if(point_b.vector.distanceTo(obj.position) <= hitDist ||
+         this.vector.distanceTo(obj.position) <= hitDist)
+        continue;
+
       if(obj.checkLineIntersectsObject(path_line))
         return false;
     }
+
+    /**
+     * Check line intersects locked doors
+     */
+    if (Array.isArray(this.area.doors)) {
+      for (let j = 0, len = this.area.doors.length; j < len; j++) {
+        const door = this.area.doors[j];
+        if (!door || door == owner) continue;
+        if (typeof door.isOpen === 'function' && door.isOpen()) continue;
+        if (typeof door.isDead === 'function' && door.isDead()) continue;
+        if (typeof door.isLocked === 'function' && door.isLocked()) {
+          if (typeof door.checkLineIntersectsObject === 'function' && door.checkLineIntersectsObject(path_line)) {
+            return false;
+          }
+        }
+      }
+    }
+
     return true;
   }
 

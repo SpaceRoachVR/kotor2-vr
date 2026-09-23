@@ -1,6 +1,6 @@
-import { CombatRound } from "@/combat/CombatRound";
 import { type CreatureClass } from "@/combat/CreatureClass";
-import { EffectACDecrease, EffectAttackDecrease } from "@/effects";
+import { EffectACDecrease } from "@/effects/EffectACDecrease";
+import { EffectAttackDecrease } from "@/effects/EffectAttackDecrease";
 import { ModuleObjectType, TalentObjectType } from "@/enums";
 import { GameEffectDurationType } from "@/enums/effects";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
@@ -11,9 +11,12 @@ import { GFFStruct } from "@/resource/GFFStruct";
 import { TwoDAObject } from "@/resource/TwoDAObject";
 import { BitWise } from "@/utility/BitWise";
 import { TalentObject } from "@/talents/TalentObject";
-import { readFeatClassColumn } from '@/talents/featClassColumns';
+import { readFeatClassColumn, readGrantedFeatLevel } from '@/talents/featClassColumns';
 
-const FEAT_PENALTY_DURATION = CombatRound.ROUND_LENGTH;
+// Effect durations count down in seconds; ROUND_LENGTH is milliseconds. The
+// penalty never expired before addEffect stamped TEMPORARY effects, so passing
+// 3000 here went unnoticed — it would now read as a 50-minute penalty.
+const FEAT_PENALTY_DURATION = 3.0; // CombatRound.ROUND_LENGTH / 1000;
 
 /**
  * TalentFeat class.
@@ -123,8 +126,9 @@ export class TalentFeat extends TalentObject {
     this.objectType = TalentObjectType.TalentObject | TalentObjectType.TalentFeat;
 
     //Merge the feat properties from the feat.2da row with this feat
-    if(TwoDAManager.datatables.get('feat').rows[this.id]){
-      this.apply2DA(TwoDAManager.datatables.get('feat').rows[this.id]);
+    const featTable = TwoDAManager.datatables?.get('feat');
+    if(featTable?.rows?.[this.id]){
+      this.apply2DA(featTable.rows[this.id]);
     }
 
   }
@@ -132,8 +136,9 @@ export class TalentFeat extends TalentObject {
   setId( value = 0 ){
     this.id = value;
     //Merge the feat properties from the feat.2da row with this feat
-    if(TwoDAManager.datatables.get('feat').rows[this.id]){
-      this.apply2DA(TwoDAManager.datatables.get('feat').rows[this.id]);
+    const featTable = TwoDAManager.datatables?.get('feat');
+    if(featTable?.rows?.[this.id]){
+      this.apply2DA(featTable.rows[this.id]);
     }
   }
 
@@ -214,6 +219,9 @@ export class TalentFeat extends TalentObject {
       case 28: //CRITICAL STRIKE
       case 19: //IMPROVED CRITICAL STRIKE
       case 81: //MASTER CRITICAL STRIKE
+      case 31: //SNIPER SHOT
+      case 20: //IMPROVED SNIPER SHOT
+      case 77: //MASTER SNIPER SHOT
         return 5;
     }
     return 0;
@@ -279,8 +287,8 @@ export class TalentFeat extends TalentObject {
    * logic and was previously three copies of a switch that silently returned
    * -1 for every class — see that file for what that broke.
    */
-  getGranted(classData: CreatureClass): number {
-    return readFeatClassColumn(this, classData?.skillstable, 'Granted');
+  getGranted(classData: CreatureClass, isPlayerCharacter: boolean = false): number {
+    return readGrantedFeatLevel(this, classData?.skillstable, isPlayerCharacter);
   }
 
   getRecom(classData: CreatureClass): number {

@@ -10,6 +10,7 @@ import { NW_FALSE, NW_TRUE } from "@/nwscript/NWScriptConstants";
 import type { INWScriptStoreState } from "@/interface/nwscript/INWScriptStoreState";
 import type { NWScriptInstruction } from "@/nwscript/NWScriptInstruction";
 import { GameState } from "@/GameState";
+import { defaultValueForUnimplementedAction } from "@/nwscript/unimplementedActionDefault";
 
 /**
  * CALL_CPDOWNSP
@@ -124,6 +125,8 @@ export const CALL_CONST = function( this: NWScriptInstance, instruction: NWScrip
   }
 }
 
+const reportedUnimplementedActions = new Set<string>();
+
 /**
  * CALL_ACTION
  * 
@@ -185,13 +188,31 @@ export const CALL_ACTION = function( this: NWScriptInstance, instruction: NWScri
   if(typeof action_definition.action === 'function'){
     const actionValue = action_definition.action.call(this, args);
     if(action_definition.type != NWScriptDataType.VOID){
-      if(typeof actionValue == 'undefined' && action_definition.type != NWScriptDataType.OBJECT){
+      // Undefined is the legitimate "none" for engine types — OBJECT_INVALID,
+      // and the end of GetFirstEffect/GetNextEffect iteration. Warning for
+      // those flooded the console: "GetNextEffect returned undefined" was the
+      // most frequent line in the round-5 and round-6 logs. Only a scalar
+      // return that comes back undefined is a real defect.
+      const scalarReturn = action_definition.type == NWScriptDataType.INTEGER ||
+        action_definition.type == NWScriptDataType.FLOAT ||
+        action_definition.type == NWScriptDataType.STRING;
+      if(typeof actionValue == 'undefined' && scalarReturn){
         console.warn(`${action_definition.name} returned undefined`);
       }
       this.stack.push( actionValue, action_definition.type );
     }
   }else{
-    console.warn(`NWScript Action ${action_definition.name} not found`, action_definition);
+    // Warned once per action: IsStealthed alone fired 1,127 times in one session.
+    if(!reportedUnimplementedActions.has(action_definition.name)){
+      reportedUnimplementedActions.add(action_definition.name);
+      console.warn(`NWScript Action ${action_definition.name} not found`, action_definition);
+    }
+    // The script reads a non-VOID return back at a fixed offset regardless, so
+    // pushing nothing misaligned every later read in the frame. See
+    // defaultValueForUnimplementedAction.
+    if(action_definition.type != NWScriptDataType.VOID){
+      this.stack.push( defaultValueForUnimplementedAction(action_definition.type), action_definition.type );
+    }
   }
 
 }

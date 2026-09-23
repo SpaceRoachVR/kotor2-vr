@@ -205,7 +205,15 @@ describe('the wall soft-block stands down in a minigame', () => {
   test('VRSpike still applies a correction when one is offered', () => {
     const spike = read('vr/VRSpike.ts');
     expect(spike).toMatch(/getCurrentRoomWalkmesh\?\.\(\)/);
-    expect(spike).toMatch(/resolveWallSoftBlockCorrection\(headPosition, walkmesh\)/);
+    expect(spike).toMatch(/resolveWallSoftBlockCorrection\(probe, floor\)/);
+  });
+
+  // The floor query is tried before the walkmesh, so it must stand down too or
+  // the minigame rig runs away exactly as it did before the walkmesh guard.
+  test('the walkable-floor query stands down in a minigame as well', () => {
+    const floorAt = gameState.indexOf('getSoftBlockFloor: (floorZ) =>');
+    expect(floorAt).toBeGreaterThan(-1);
+    expect(gameState.slice(floorAt, floorAt + 240)).toMatch(/GameState\.Mode == EngineMode\.MINIGAME[\s\S]*return null/);
   });
 });
 
@@ -259,8 +267,10 @@ describe('the bike rider is not drawn in first person', () => {
     expect(body).toMatch(/'trider'/);
   });
 
-  test('ordinary play still hides the party leader', () => {
-    expect(body).toMatch(/GameState\.Mode != EngineMode\.MINIGAME[\s\S]*PartyManager\.Player\?\.model/);
+  test('ordinary play still hides the controlled character', () => {
+    // Not the fixed main-PC slot: see vr-first-person-body.test.ts.
+    expect(body).toMatch(/GameState\.Mode != EngineMode\.MINIGAME[\s\S]*GameState\.getCurrentPlayer\(\)\?\.model/);
+    expect(body).not.toMatch(/PartyManager\.Player/);
   });
 
   test('the render call asks for it rather than the party leader directly', () => {

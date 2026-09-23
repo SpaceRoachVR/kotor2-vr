@@ -1,6 +1,7 @@
 import {
   createVRActionSourceKey,
 } from './VRActionWheelModelBuilder';
+import { classifyVRForcePower } from './VRForcePowerClassification';
 import type {
   VRActionMenuEntry,
   VRActionWheelEngineAction,
@@ -82,6 +83,10 @@ export function snapshotVRActionMenuPanelEntries<TActor extends object, TTarget 
         // wheel can route Attack and attack-mode feats (panel 0) apart from
         // Force powers (panel 1) instead of flattening both into one list.
         panelIndex,
+        // ...but panel 1 is every spell with a hostile variant, not only Force
+        // powers, so each entry also says whether it is one by the Abilities
+        // screen's rule. See VRActionWheelEngineAction.isForcePower.
+        isForcePower: classifyVRForcePower(entry.talent, dependencies.logger),
         revalidate: () => refreshActionSource(
           snapshot.actor,
           target,

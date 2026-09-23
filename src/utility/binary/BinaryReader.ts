@@ -29,7 +29,7 @@ export class BinaryReader {
     //variables
     this.position = 0;
     this.buffer = reader;
-    this.bufferView = new DataView(reader.buffer);
+    this.bufferView = new DataView(reader.buffer, reader.byteOffset, reader.byteLength);
     this.endians = endians;
     this.isLE = endians == Endians.LITTLE;
 
@@ -338,7 +338,7 @@ export class BinaryReader {
   reuse(buffer: Uint8Array){
     this.position = 0;
     this.buffer = buffer;
-    this.bufferView = new DataView(buffer.buffer);
+    this.bufferView = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   }
 
   /**
@@ -347,7 +347,7 @@ export class BinaryReader {
   dispose(){
     this.position = 0;
     this.buffer = new Uint8Array(0);
-    this.bufferView = new DataView(this.buffer.buffer);
+    this.bufferView = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength);
   }
 
 }

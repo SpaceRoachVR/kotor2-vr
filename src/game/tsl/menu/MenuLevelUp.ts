@@ -40,6 +40,8 @@ export class MenuLevelUp extends K1_MenuLevelUp {
     await super.menuControlInitializer(true);
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
+      // super was called with skipInit, so the base class wired nothing.
+      this.wireLevelUpPanel();
       resolve();
     });
   }

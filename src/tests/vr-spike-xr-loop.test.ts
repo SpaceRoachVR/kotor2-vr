@@ -1,5 +1,7 @@
 import { VRSpike } from "@/vr/VRSpike";
 import * as THREE from 'three';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { XRCoordinateConverter } from '@/vr/runtime/XRCoordinateConverter';
 import {
   LocomotionController,
@@ -257,6 +259,53 @@ describe('VRSpike XR loop ownership', () => {
     }
   });
 
+  // Round 8, S5: "ray pointer stays frozen in time after making choices on
+  // interaction scenes". A reply choice hands input to the next skippable
+  // line, panel input stops running, and the ray hung where the click was.
+  test('a line that takes input from the panel takes the panel pointer down with it', async () => {
+    const harness = createXRLoopHarness();
+    const pointerSink = { setPointerPosition: jest.fn() };
+    await VRSpike.enter();
+    VRSpike.hooks = basicHooks({
+      getCutsceneContext: () => ({ presentation: 'world', canSkip: true, skip: (): void => undefined }),
+      getPanelContext: () => ({ menu: {}, viewportWidth: 640, viewportHeight: 480, pointerSink }),
+    });
+    const pointerHost = { clear: jest.fn(), update: jest.fn() };
+    (VRSpike as any).panelPointerHost = pointerHost;
+    (VRSpike as any).latestPanelPointerPosition = new THREE.Vector2(320, 240);
+
+    harness.invokeXRFrame(4000, {} as XRFrame);
+
+    expect(pointerHost.update).not.toHaveBeenCalled();
+    expect(pointerHost.clear).toHaveBeenCalled();
+    expect((VRSpike as any).latestPanelPointerPosition).toBeNull();
+    expect(pointerSink.setPointerPosition).toHaveBeenCalledWith(null);
+  });
+
+  test('a panel whose surface is not yet this menu keeps no stale pointer', () => {
+    const pointerSink = { setPointerPosition: jest.fn() };
+    const menu = {};
+    VRSpike.scene = new THREE.Scene();
+    VRSpike.session = { inputSources: [] } as unknown as XRSession;
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() },
+      hands: { right: { targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion() } } },
+    };
+    // The panel on screen still belongs to the previous menu.
+    (VRSpike as any).panelHost = { owner: {}, isVisible: true, object: new THREE.Group() };
+    const pointerHost = { clear: jest.fn(), update: jest.fn() };
+    (VRSpike as any).panelPointerHost = pointerHost;
+    VRSpike.hooks = basicHooks({
+      getPanelContext: () => ({ menu, viewportWidth: 640, viewportHeight: 480, pointerSink }),
+    });
+
+    (VRSpike as any).processPanelInput();
+
+    expect(pointerHost.update).not.toHaveBeenCalled();
+    expect(pointerHost.clear).toHaveBeenCalled();
+    expect((VRSpike as any).latestPanelPointerPosition).toBeNull();
+  });
+
   test('restores the XR render target after legacy GUI rendering resets it', async () => {
     const harness = createXRLoopHarness();
     VRSpike.scene = {} as never;
@@ -365,6 +414,19 @@ describe('VRSpike XR loop ownership', () => {
     expect((VRSpike as any).movieHost?.isVisible).toBe(true);
     expect((VRSpike as any).panelHost).toBeNull();
     expect(renderTarget).toBe(xrRenderTarget);
+
+    // Round 8: "the first interaction with Kreia rendered a black box" — the
+    // conversation cut from an authored shot back to one held in the world,
+    // and nothing on the world path took the theater down, so its last frame
+    // (black, after the shot's fade) stayed in front of the player.
+    VRSpike.rig = new THREE.Group();
+    VRSpike.followCamera = false;
+    VRSpike.hooks = basicHooks({
+      getCutsceneContext: () => ({ presentation: 'world', canSkip: false, skip: (): void => undefined }),
+    });
+    VRSpike.render(worldCamera, 1100);
+
+    expect((VRSpike as any).movieHost?.isVisible).toBe(false);
   });
 
   test('routes a Quest B press to a skippable movie exactly once', () => {
@@ -481,7 +543,10 @@ describe('VRSpike XR loop ownership', () => {
     expect(skipCount).toBe(1);
   });
 
-  test('aborts an authored unskippable dialogue entry instead of leaving it stuck', () => {
+  test('a tap on an unskippable dialogue entry does nothing; only a deliberate hold abandons it', () => {
+    // A tap is the press a player makes to move past a scripted beat. Treating
+    // it as "abandon the conversation" is what aborted the Galaxy Map outro
+    // and skipped the script that starts the travel to Peragus.
     const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
     let skipCount = 0;
     let abortCount = 0;
@@ -499,10 +564,23 @@ describe('VRSpike XR loop ownership', () => {
         abort: () => { abortCount += 1; },
       }),
     };
+    (VRSpike as any).cutsceneAbortHoldGate.reset();
+    (VRSpike as any).cutsceneAbortNeedsFreshPress = false;
+    (VRSpike as any).movieCancelHeld = false;
 
     buttons[0] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processMovieInput();
-    (VRSpike as any).processMovieInput();
+    (VRSpike as any).processMovieInput(undefined, 1_000);
+    (VRSpike as any).processMovieInput(undefined, 1_100);
+    buttons[0] = { pressed: false, touched: false, value: 0 };
+    (VRSpike as any).processMovieInput(undefined, 1_150);
+    expect(abortCount).toBe(0);
+
+    buttons[0] = { pressed: true, touched: true, value: 1 };
+    (VRSpike as any).processMovieInput(undefined, 2_000);
+    (VRSpike as any).processMovieInput(undefined, 3_000);
+    expect(abortCount).toBe(0);
+    (VRSpike as any).processMovieInput(undefined, 3_600);
+    (VRSpike as any).processMovieInput(undefined, 4_000);
 
     expect(skipCount).toBe(0);
     expect(abortCount).toBe(1);
@@ -845,6 +923,114 @@ describe('VRSpike XR loop ownership', () => {
     buttons[0] = { pressed: true, touched: true, value: 1 };
     (VRSpike as any).processCombatInput(3_000);
     expect(combatEvents).toHaveLength(1);
+  });
+
+  describe('blaster presentation shot', () => {
+    function armBlaster(context: { nominatedTargetId: string | null; inCombat: boolean }) {
+      const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+      const fired: number[] = [];
+      VRSpike.session = {
+        inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+      } as unknown as XRSession;
+      (VRSpike as any).latestInputFrame = {
+        head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+        hands: {
+          right: {
+            pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(), trackingState: 'tracked' },
+            targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+          },
+        },
+      };
+      VRSpike.hooks = {
+        update: () => undefined,
+        getPlayerPosition: () => null,
+        getFacing: () => 0,
+        getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+        getCombatContext: () => ({
+          actorId: '7', weaponMode: 'blaster', stanceReadout: '', ...context,
+          onCombatSwing: () => undefined,
+        }),
+      };
+      (VRSpike as any).combatInputController.reset();
+      (VRSpike as any).dominantShotTriggerHeld = false;
+      jest.spyOn(VRSpike as any, 'firePresentationShot').mockImplementation((_context: unknown, timestamp: unknown) => {
+        fired.push(timestamp as number);
+      });
+      return { buttons, fired };
+    }
+
+    test('a pull out of combat with nothing hostile nominated is not a shot', () => {
+      const { buttons, fired } = armBlaster({ nominatedTargetId: null, inCombat: false });
+      buttons[0] = { pressed: true, touched: true, value: 1 };
+      (VRSpike as any).processCombatInput(1_000);
+      expect(fired).toEqual([]);
+    });
+
+    test('a pull at a nominated hostile opens combat with a shot', () => {
+      const { buttons, fired } = armBlaster({ nominatedTargetId: '42', inCombat: false });
+      buttons[0] = { pressed: true, touched: true, value: 1 };
+      (VRSpike as any).processCombatInput(1_000);
+      expect(fired).toEqual([1_000]);
+    });
+
+    test('every fresh pull in combat is a shot, target or not', () => {
+      const { buttons, fired } = armBlaster({ nominatedTargetId: null, inCombat: true });
+      buttons[0] = { pressed: true, touched: true, value: 1 };
+      (VRSpike as any).processCombatInput(1_000);
+      buttons[0] = { pressed: false, touched: false, value: 0 };
+      (VRSpike as any).processCombatInput(1_100);
+      buttons[0] = { pressed: true, touched: true, value: 1 };
+      (VRSpike as any).processCombatInput(1_200);
+      expect(fired).toEqual([1_000, 1_200]);
+    });
+
+    // Round 8, T3: "should also work with offhand when offhand ranged weapon
+    // is equipped". Quest button 0 is the trigger on either controller.
+    function withOffhandTrigger(offhandShotAvailable: boolean) {
+      const armed = armBlaster({ nominatedTargetId: '42', inCombat: true });
+      const leftButtons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+      const grenades: number[] = [];
+      const swings: string[] = [];
+      (VRSpike.session as any).inputSources.push(
+        { handedness: 'left', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons: leftButtons } },
+      );
+      const base = VRSpike.hooks!.getCombatContext!;
+      VRSpike.hooks!.getCombatContext = (id) => ({
+        ...base(id)!,
+        offhandShotAvailable,
+        allowDominantTrigger: true,
+        onGrenadeTrigger: () => { grenades.push(1); },
+        onCombatSwing: (event) => { swings.push(event.input); },
+      });
+      (VRSpike as any).offhandGrenadeTriggerHeld = false;
+      return { ...armed, leftButtons, grenades, swings };
+    }
+
+    test('an off-hand blaster pull is a shot that completes the round', () => {
+      const { leftButtons, fired, grenades, swings } = withOffhandTrigger(true);
+      leftButtons[0] = { pressed: true, touched: true, value: 1 };
+      (VRSpike as any).processCombatInput(1_000);
+      expect(fired).toEqual([1_000]);
+      expect(grenades).toEqual([]);
+      expect(swings).toEqual(['dominant-trigger']);
+    });
+
+    test('an armed grenade keeps the off-hand trigger for the throw', () => {
+      const { leftButtons, fired, grenades } = withOffhandTrigger(false);
+      leftButtons[0] = { pressed: true, touched: true, value: 1 };
+      (VRSpike as any).processCombatInput(1_000);
+      expect(grenades).toEqual([1]);
+      expect(fired).toEqual([]);
+    });
+
+    test('a trigger that picked a reply or opened a container does not shoot when the world gets it back', () => {
+      const { buttons, fired } = armBlaster({ nominatedTargetId: '42', inCombat: true });
+      buttons[0] = { pressed: true, touched: true, value: 1 };
+      // The press landed on a panel or prompt, so only the latch saw it.
+      (VRSpike as any).captureWeaponActionLatch();
+      (VRSpike as any).processCombatInput(1_000);
+      expect(fired).toEqual([]);
+    });
   });
 
   test('does not invoke combat processing without a nominated hostile target', () => {
@@ -1953,7 +2139,10 @@ describe('VRSpike XR loop ownership', () => {
 
   test.each([
     { label: 'skippable dialogue', canSkip: true, expectedDispatch: 'skip' as const },
-    { label: 'unskippable dialogue', canSkip: false, expectedDispatch: 'abort' as const },
+    // A tap on an unskippable line no longer abandons the conversation — only a
+    // deliberate hold does (see the processMovieInput hold test). A fresh press
+    // here is a tap, so it must dispatch nothing and leave the dialogue running.
+    { label: 'unskippable dialogue', canSkip: false, expectedDispatch: 'none' as const },
   ])('$label entry latches held input before dispatch and requires a fresh press', ({
     canSkip,
     expectedDispatch,
@@ -2028,8 +2217,9 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).frame(1_064, {} as XRFrame);
     (VRSpike as any).frame(1_080, {} as XRFrame);
     expect(skipCount).toBe(expectedDispatch === 'skip' ? 1 : 0);
-    expect(abortCount).toBe(expectedDispatch === 'abort' ? 1 : 0);
-    expect(cutsceneActive).toBe(false);
+    expect(abortCount).toBe(0);
+    // A skip ends the context; a tap on an unskippable line leaves it running.
+    expect(cutsceneActive).toBe(expectedDispatch === 'none');
     expect(activate).not.toHaveBeenCalled();
     expect(createActionWheel).toHaveBeenCalledTimes(1);
   });
@@ -2548,8 +2738,25 @@ describe('GameState proactive world-prompt assembly', () => {
     expect(descriptors.right?.model).toBe(t3IntegratedBlasterModel);
     expect(descriptors.right?.baseItemClass).toBe('t3_integrated_blaster');
     expect(descriptors.right?.authoredGripNode).toBe(grip);
-    expect(descriptors.right?.classFallback.rotation?.y).toBeCloseTo(Math.PI / 2);
-    expect(descriptors.right?.classFallback.position?.toArray()).toEqual([0.035, -0.02, -0.09]);
+    // Every weapon class shares the hand-bone frame, so one transform places
+    // them all: full size (Odyssey models are metres — the old 0.01 drew a
+    // one-metre blade one centimetre long) and a half turn about X into grip
+    // space.
+    for (const descriptor of [descriptors.left, descriptors.right]) {
+      expect(descriptor?.classFallback.scale).toBe(1);
+      expect(descriptor?.classFallback.rotation?.x).toBeCloseTo(Math.PI);
+      expect(descriptor?.classFallback.position?.toArray()).toEqual([0, 0, 0]);
+    }
+  });
+
+  test('humanoid hands are withheld from droids, not from humans', () => {
+    // racialtypes.2da: 5 = Droid, 6 = Human. The hook tested `!== 6`, which
+    // put hands on T3-M4 and took them from the Exile.
+    const source = readFileSync(join(__dirname, '..', 'GameState.ts'), 'utf8');
+    const hook = source.slice(source.indexOf('getAvatarPresentation: () => {'));
+    const body = hook.slice(0, hook.indexOf('},'));
+    expect(body).toMatch(/getRace\(\) !== VR_RACE_DROID/);
+    expect(body).not.toMatch(/getRace\(\) !== 6/);
   });
 
   test('describes an unlocked door without using it during model creation', () => {
@@ -2694,7 +2901,11 @@ describe('GameState proactive world-prompt assembly', () => {
   test.each([
     ['key-required', { keyRequired: true }],
     ['story-script-owned', { storyScript: true }],
-  ] as const)('does not add direct use for an unlocked %s object', (_reason, safetyState) => {
+  ] as const)('adds direct use for an unlocked %s object, matching flatscreen', (_reason, safetyState) => {
+    // A key requirement and an OnFailToOpen script only govern a LOCKED
+    // object; an unlocked one cannot fail to open. Refusing it stranded the
+    // player at Peragus' holding cell, unlocked by the story with
+    // KeyRequired=1, no KeyName and OnFailToOpen=a_compdlg.
     const harness = createGameStateWorldPromptHarness();
     const door = harness.target({
       id: 16,
@@ -2704,7 +2915,30 @@ describe('GameState proactive world-prompt assembly', () => {
     });
     harness.setTarget(door, []);
 
-    expect(harness.buildPrompt('module-object:16')).toBeNull();
+    const [useAction] = flattenPromptActions(harness.buildPrompt('module-object:16'));
+    expect(useAction.label).toBe('Use: Authored Door');
+    expect(door.use).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['key-required', { keyRequired: true }],
+    ['story-script-owned', { storyScript: true }],
+  ] as const)('still refuses direct use for a locked, unblastable %s object without its key', (_reason, safetyState) => {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 26,
+      name: 'Sealed Door',
+      objectType: harness.objectTypes.ModuleDoor,
+      locked: true,
+      notBlastable: true,
+      ...safetyState,
+    });
+    harness.setTarget(door, []);
+    harness.setHeldKeys([]);
+
+    const model = harness.buildPrompt('module-object:26');
+    const labels = model ? flattenPromptActions(model).map((a) => a.label) : [];
+    expect(labels).not.toContain('Use: Sealed Door');
     expect(door.use).not.toHaveBeenCalled();
   });
 
@@ -2872,6 +3106,27 @@ describe('GameState proactive world-prompt assembly', () => {
     },
   );
 
+  // Round 8: the Exile (Security 0) saw a bare "Security" entry for the few
+  // seconds a tunneler's +6 lasted, and choosing it rolled with no bonus.
+  test('a temporary Security bonus does not admit an untrained actor to the security route', () => {
+    const harness = createGameStateWorldPromptHarness();
+    const door = harness.target({
+      id: 36,
+      name: 'Security Locker',
+      objectType: harness.objectTypes.ModuleDoor,
+      locked: true,
+      notBlastable: true,
+      lockable: false,
+      keyRequired: false,
+    });
+    harness.setTargets([door], []);
+    harness.setTrainedSecurity(0, 6);
+
+    const [candidate] = harness.buildCandidates();
+
+    expect(candidate?.hasActions).toBe(false);
+  });
+
   test('changes candidate state when an authored inventory source identity changes', () => {
     const harness = createGameStateWorldPromptHarness();
     const door = harness.target({
@@ -2975,6 +3230,10 @@ function createGameStateWorldPromptHarness(): {
   setTarget(target: GameStatePromptTestTarget, actions: readonly Record<string, unknown>[]): void;
   setTargets(targets: readonly GameStatePromptTestTarget[], actions: readonly Record<string, unknown>[]): void;
   setInventory(items: readonly Record<string, unknown>[]): void;
+  /** Trained Security ranks, and the effective level including temporary bonuses. */
+  setTrainedSecurity(rank: number, effective: number): void;
+  /** Key tags the party is carrying, as `InventoryManager.getItemByTag` sees them. */
+  setHeldKeys(tags: readonly string[]): void;
   setActionMenuFailure(error: Error | null): void;
   createEngineGroup(): THREE.Group;
   buildCandidates(): readonly any[];
@@ -3034,6 +3293,9 @@ function createGameStateWorldPromptHarness(): {
     position: new engineThree.Vector3(0, 0, 0),
     clearAllActions: jest.fn(),
     getSkillLevel: () => 1,
+    // Trained ranks: the Security route is gated on these, not on the
+    // effective level a tunneler's temporary bonus raises.
+    skills: Array.from({ length: 8 }, () => ({ rank: 1 })) as Array<{ rank: number }>,
     getInventory: () => inventory,
   };
   const actionPanels = {
@@ -3109,6 +3371,19 @@ function createGameStateWorldPromptHarness(): {
       actionPanels.targetPanels = [{ actions, selectedIndex: 0 }];
     },
     setInventory: (items) => { inventory = items; },
+    setTrainedSecurity: (rank, effective) => {
+      actor.skills[6] = { rank };
+      actor.getSkillLevel = () => effective;
+    },
+    // `@/managers` is Proxy-mocked, so InventoryManager has no real lookup.
+    // Both the candidacy rule and the direct-use safety gate resolve a required
+    // key by tag through it, so a test that wants to model "the player is
+    // holding the key" has to supply that lookup.
+    setHeldKeys: (tags) => {
+      GameState.InventoryManager = {
+        getItemByTag: (tag: string) => (tags.includes(tag) ? { getTag: () => tag } : undefined),
+      };
+    },
     setActionMenuFailure: (error) => { actionMenuFailure = error; },
     createEngineGroup: () => new engineThree.Group(),
     buildCandidates: () => buildVRWorldPromptCandidates(
@@ -3168,9 +3443,67 @@ describe('world prompt rule against the real Ebon Hawk door profiles', () => {
     expect(doorLabels({ locked: true, keyRequired: true, notBlastable: true }, [])).toBeNull();
   });
 
-  test('an unlocked key-required door offers no direct use', () => {
-    // Main Hold Door: key-required but not locked. Direct use fails closed.
-    expect(doorLabels({ keyRequired: true }, [])).toBeNull();
+  test('a key-required lock offers a prompt once the player carries the key', () => {
+    // Reported from a headset session: the cargo-bay locker gave no options at
+    // all while holding the key taken from Kreia's body. Security refuses a key
+    // lock (`canAttemptSecurityUnlock` is `locked && !keyRequired`) and Bash
+    // refuses a NotBlastable one, so candidacy dropped the object before any
+    // prompt was built. The console recorded exactly that:
+    // `hasActions=false locked=1 keyRequired=1 notBlastable=true`.
+    const harness = createGameStateWorldPromptHarness();
+    // `target()` has no keyName of its own; it returns a plain object.
+    const locker = {
+      ...harness.target({
+        id: 78,
+        name: 'Locker',
+        objectType: harness.objectTypes.ModulePlaceable,
+        locked: true,
+        keyRequired: true,
+        notBlastable: true,
+      }),
+      keyName: 'kreia_key',
+    };
+    harness.setTargets([locker], []);
+
+    // Without the key it must still offer nothing — the rule that keeps plot
+    // locks shut has to survive this change.
+    harness.setHeldKeys([]);
+    expect(harness.buildPrompt('module-object:78')).toBeNull();
+
+    harness.setHeldKeys(['kreia_key']);
+    expect(harness.buildPrompt('module-object:78')).not.toBeNull();
+  });
+
+  test('the cargo locker opens with its key despite its authored failure script', () => {
+    // 001EBO `locker_locked` (g_tresmilhig007): Locked, KeyRequired,
+    // KeyName=key_locker, Plot, NotBlastable, OnFailToOpen=a_compdlg. The key
+    // is the authored way in; without it nothing may be offered.
+    const harness = createGameStateWorldPromptHarness();
+    const locker = harness.target({
+      id: 79,
+      name: 'Cargo Locker',
+      objectType: harness.objectTypes.ModulePlaceable,
+      locked: true,
+      keyRequired: true,
+      plot: true,
+      notBlastable: true,
+      storyScript: true,
+    });
+    (locker as { keyName?: string }).keyName = 'key_locker';
+    harness.setTargets([locker], []);
+
+    harness.setHeldKeys([]);
+    expect(harness.buildPrompt('module-object:79')).toBeNull();
+
+    harness.setHeldKeys(['key_locker']);
+    const labels = flattenPromptActions(harness.buildPrompt('module-object:79')).map((a) => a.label);
+    expect(labels).toEqual(['Use: Cargo Locker']);
+  });
+
+  test('an unlocked key-required door offers a direct use, as flatscreen does', () => {
+    // Once unlocked, the key requirement no longer governs anything — clicking
+    // the door on flatscreen opens it.
+    expect(doorLabels({ keyRequired: true }, [])).toEqual(['Use: Door']);
   });
 
   test('a locked bashable door lets the player simply try it, not only bash it', () => {

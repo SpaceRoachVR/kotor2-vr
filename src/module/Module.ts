@@ -3,6 +3,10 @@ import { buildRecoveryIndex, recoverTemplateResRef, type GitInstance, type Prist
 import * as path from "path";
 import { AudioEmitter } from "@/audio/AudioEmitter";
 import { GameEffect } from "@/effects";
+import type { EffectLink } from "@/effects";
+import { applyEffectDuration, inheritLinkDuration } from "@/effects/GameEffectDuration";
+import { GameEffectType } from "@/enums/effects/GameEffectType";
+import { LocationEffectHost } from "@/module/LocationEffectHost";
 import EngineLocation from "@/engine/EngineLocation";
 import { GameState } from "@/GameState";
 import { CExoLocString } from "@/resource/CExoLocString";
@@ -65,6 +69,8 @@ export class Module {
 
   archives: (RIMObject|ERFObject)[] = [];
   effects: GameEffect[] = [];
+  /** The host each effect applied at a location lives on; see addEffect. */
+  locationEffectHosts: Map<GameEffect, LocationEffectHost> = new Map();
   eventQueue: GameEvent[] = [];
   customTokens: Map<number, string>;
   transition: any;
@@ -350,40 +356,72 @@ export class Module {
       this.nextObjId1 = ifo.getFieldByLabel('Mod_NextObjId1').getValue();
   }
 
-  addEffect(effect?: GameEffect, lLocation?: EngineLocation){
+  /**
+   * Apply an effect at a location (`ApplyEffectAtLocation`).
+   * @param type - The duration type to apply it with; omitted keeps the effect's own
+   * @param duration - The duration in seconds; omitted keeps the effect's own
+   */
+  addEffect(effect?: GameEffect, lLocation?: EngineLocation, type?: number, duration?: number){
     if(!(effect instanceof GameEffect)){ return; }
+    if(!lLocation?.position){
+      console.warn('Module.addEffect', 'An effect applied at a location needs a location', effect);
+      return;
+    }
+
+    // Same lifetime rules as ModuleObject.addEffect: without an expiry a
+    // TEMPORARY effect never counts down, and nothing stamped one here.
+    applyEffectDuration(effect, type, duration, this.timeManager);
+
+    const position = lLocation.position;
+    const audioEmitter = new AudioEmitter(AudioEngine.GetAudioEngine());
+    audioEmitter.maxDistance = 50;
+    audioEmitter.type = AudioEmitterType.POSITIONAL;
+    audioEmitter.setPriorityGroupId(AudioPriorityGroup.NORMAL_SPELL_EFFECTS);
+    audioEmitter.load();
+    audioEmitter.setPosition(position.x, position.y, position.z);
+
+    const host = new LocationEffectHost(position, GameState.group?.effects, audioEmitter);
+    this.attachLocationEffect(effect, host);
+    // A link with no children leaves nothing to carry.
+    if(!host.effects.length){ host.dispose(); }
+  }
+
+  private attachLocationEffect(effect: GameEffect, host: LocationEffectHost){
+    if(effect.type == GameEffectType.EffectLink){
+      // As on objects, the link is never attached; its children are, with the
+      // link's lifetime. Pushing the link itself meant its children were
+      // never applied at all.
+      for(const child of [(effect as EffectLink).effect1, (effect as EffectLink).effect2]){
+        if(!(child instanceof GameEffect)){ continue; }
+        inheritLinkDuration(effect, child);
+        this.attachLocationEffect(child, host);
+      }
+      return;
+    }
 
     effect.loadModel();
-    const object: any = {
-      model: new THREE.Object3D(),
-      position: lLocation.position,
-      dispose: function(){
-        this.onRemove();
-        this.removeEffect(this);
-      },
-      removeEffect: function(effect: GameEffect){
-        let index = this.effects.indexOf(effect);
-        if(index >= 0){
-          this.effects.splice(index, 1);
-        }
-      }
-    };
-
-    object.audioEmitter = new AudioEmitter(AudioEngine.GetAudioEngine());
-    object.audioEmitter.maxDistance = 50;
-    object.audioEmitter.type = AudioEmitterType.POSITIONAL;
-    object.audioEmitter.setPriorityGroupId(AudioPriorityGroup.NORMAL_SPELL_EFFECTS);
-    object.audioEmitter.load();
-    object.audioEmitter.setPosition(lLocation.position.x, lLocation.position.y, lLocation.position.z);
-
-    object.model.position.copy(lLocation.position);
-
-    effect.setCreator(object);
+    effect.setCreator(host as any);
     effect.setAttachedObject(this);
-    effect.onApply(object);
+    host.track(effect);
+    this.locationEffectHosts.set(effect, host);
+    effect.onApply(host as any);
     this.effects.push(effect);
+  }
 
-    GameState.group.effects.add(object.model);
+  /**
+   * Remove an effect applied at a location. `GameEffect.onDurationEnd` calls
+   * this on the object an effect is attached to — which for a location effect
+   * is the module, and the module had no such method, so an expiring location
+   * effect would have thrown inside `tick` every frame.
+   */
+  removeEffect(effect: GameEffect){
+    const index = this.effects.indexOf(effect);
+    if(index == -1){ return; }
+    this.effects.splice(index, 1);
+    effect.onRemove();
+    const host = this.locationEffectHosts.get(effect);
+    this.locationEffectHosts.delete(effect);
+    host?.release(effect);
   }
 
   addEvent(event: GameEvent){
@@ -531,6 +569,11 @@ export class Module {
         this.effects[0].dispose();
         this.effects.shift();
       }
+      //Their hosts' scene nodes and emitters outlive the module otherwise.
+      for(const host of new Set(this.locationEffectHosts.values())){
+        host.dispose();
+      }
+      this.locationEffectHosts.clear();
     }
 
     //Dispose only resources owned by the departing module generation. Shared

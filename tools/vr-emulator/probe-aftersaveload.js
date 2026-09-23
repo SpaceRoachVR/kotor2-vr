@@ -38,6 +38,33 @@ async function main() {
     })()`);
     console.log('gameinprogress before save load:', JSON.stringify(before));
 
+    // Catch whoever writes into gameinprogress during the save load, with a
+    // stack. GetModuleRim reads gameinprogress/<module>.sav from disk, so the
+    // file exists at that moment even though a listing either side shows none.
+    const hooked = await harness.evaluate(`(() => {
+      const FS = window.KotOR.GameFileSystem;
+      if (!FS || typeof FS.writeFile !== 'function') return 'no writeFile';
+      if (FS.__writeTraced) return 'already';
+      const original = FS.writeFile.bind(FS);
+      window.__fsWrites = [];
+      FS.writeFile = function (filepath, data) {
+        try {
+          window.__fsWrites.push({
+            path: String(filepath),
+            bytes: data && data.length ? data.length : null,
+            stack: String(new Error('write').stack || ''),
+          });
+        } catch (e) { /* never break the write */ }
+        return original(filepath, data);
+      };
+      FS.__writeTraced = true;
+      return 'traced';
+    })()`);
+    console.log('write hook:', hooked);
+    if (hooked !== 'traced' && hooked !== 'already') {
+      throw new Error('cannot trace filesystem writes: ' + hooked);
+    }
+
     await harness.evaluate(`(async () => {
       await window.KotOR.SaveGame.GetSaveGames();
       const gs = window.KotOR.GameState;
@@ -118,6 +145,35 @@ async function main() {
             return out;
           } catch (e) { return 'threw: ' + String(e && e.message || e); }
         })(),
+        // Why do placeables fail to match where doors succeed? Compare the keys
+        // each side actually exposes.
+        matchKeys: await (async () => {
+          try {
+            const M = K.GameState.Module;
+            const rim = await M.GetModuleRimA('001EBO');
+            const info = rim && rim.getResourceInfo(String(area.name || ''), 2023);
+            const buf = info ? await rim.getResourceBuffer(info) : null;
+            const pristine = buf ? new K.GFFObject(buf) : null;
+            const dump = (gff, label, n) => {
+              if (!gff || !gff.RootNode.hasField(label)) return 'no list';
+              const structs = gff.RootNode.getFieldByLabel(label).getChildStructs();
+              return structs.slice(0, n).map((st) => ({
+                tag: st.hasField('Tag') ? String(st.getFieldByLabel('Tag').getValue()) : '(none)',
+                x: st.hasField('X') ? st.getFieldByLabel('X').getValue()
+                   : (st.hasField('XPosition') ? st.getFieldByLabel('XPosition').getValue() : '(no X)'),
+                resref: st.hasField('TemplateResRef')
+                  ? String(st.getFieldByLabel('TemplateResRef').getValue()) : '(none)',
+                fields: st.getFields().length,
+              }));
+            };
+            return {
+              savedPlaceables: dump(area.git, 'Placeable List', 2),
+              pristinePlaceables: dump(pristine, 'Placeable List', 2),
+              savedDoors: dump(area.git, 'Door List', 1),
+              pristineDoors: dump(pristine, 'Door List', 1),
+            };
+          } catch (e) { return 'threw: ' + String(e && e.message || e); }
+        })(),
         routedGit: await (async () => {
           try {
             const buf = await K.ResourceLoader.loadResource(2023, String(area.name || ''));
@@ -129,6 +185,16 @@ async function main() {
       };
     })()`, { timeoutMs: 120000 });
     console.log('AFTER SAVE LOAD:', JSON.stringify(report, null, 1));
+
+    const writes = await harness.evaluate(`(window.__fsWrites || []).map((w) => ({
+      path: w.path, bytes: w.bytes,
+      stack: w.stack.split(String.fromCharCode(10)).slice(1, 7).map((l) => l.trim()).join(' | '),
+    }))`, { timeoutMs: 60000 });
+    console.log('WRITES during save load:');
+    for (const w of writes) {
+      console.log(`  ${w.path}  ${w.bytes} bytes`);
+      if (/\.sav$/i.test(w.path)) console.log(`     ${w.stack}`);
+    }
   } finally {
     await harness.close();
   }

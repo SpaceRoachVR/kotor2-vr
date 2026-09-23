@@ -517,6 +517,28 @@ export class GFFField {
           this.value = new Uint8Array(val);
         }
       break;
+      // As in the constructor: a vector or orientation lives in `vector` /
+      // `orientation`, which is what the writer serialises. These used to fall
+      // through to `value`, so ModuleCamera.save() wrote every static camera
+      // at (0,0,0) facing nowhere; after any save/load the Ebon Hawk security
+      // console's camera views rendered empty space from the world origin
+      // (round 8, T5: "security console videos did not show at all").
+      case GFFDataType.VECTOR:
+        if(val && typeof val.x == 'number' && typeof val.y == 'number' && typeof val.z == 'number'){
+          this.vector = {x: val.x, y: val.y, z: val.z};
+        }else{
+          console.error(`Field.setValue VECTOR expects {x, y, z} label='${this.label}'`, val);
+        }
+        this.value = 0;
+      break;
+      case GFFDataType.ORIENTATION:
+        if(val && typeof val.x == 'number' && typeof val.y == 'number' && typeof val.z == 'number' && typeof val.w == 'number'){
+          this.orientation = {x: val.x, y: val.y, z: val.z, w: val.w};
+        }else{
+          console.error(`Field.setValue ORIENTATION expects {x, y, z, w} label='${this.label}'`, val);
+        }
+        this.value = 0;
+      break;
       default:
         this.value = val;
       break;

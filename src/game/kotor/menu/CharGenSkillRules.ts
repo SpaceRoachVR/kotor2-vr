@@ -3,7 +3,8 @@ export type CharGenSkillKind = 'class' | 'cross-class' | 'unavailable';
 export type CharGenSkillAllocationReason =
   | 'invalid-table-data'
   | 'insufficient-points'
-  | 'rank-cap';
+  | 'rank-cap'
+  | 'droid-restricted';
 
 export interface CharGenSkillAllocationInput {
   readonly skillRow: Record<string, unknown> | undefined;
@@ -11,6 +12,8 @@ export interface CharGenSkillAllocationInput {
   readonly level: number | undefined;
   readonly currentRank: number | undefined;
   readonly availablePoints: number | undefined;
+  readonly isDroid?: boolean;
+  readonly hasClassSkillFeat?: boolean;
 }
 
 export interface CharGenSkillAllocation {
@@ -33,6 +36,8 @@ export interface CharGenRecommendedSkillAllocationInput {
   readonly ranks: ReadonlyArray<number>;
   readonly availablePoints: number | undefined;
   readonly recommendedOrder: ReadonlyArray<number>;
+  readonly isDroid?: boolean;
+  readonly hasClassSkillFeatByRow?: Readonly<Record<number, boolean>>;
 }
 
 export interface CharGenRecommendedSkillAllocation {
@@ -78,8 +83,18 @@ export function resolveCharGenSkillAllocation(
     return unavailableAllocation();
   }
 
+  if (input.isDroid && (input.skillRow.droidcanuse === '0' || input.skillRow.droidcanuse === 0)) {
+    return {
+      kind: 'unavailable',
+      rankCost: 0,
+      maximumRank: 0,
+      canIncrease: false,
+      reason: 'droid-restricted',
+    };
+  }
+
   const classSkillValue = input.skillRow[input.classSkillColumn];
-  const kind: CharGenSkillKind = classSkillValue === '1'
+  let kind: CharGenSkillKind = classSkillValue === '1'
     ? 'class'
     : classSkillValue === '0'
       ? 'cross-class'
@@ -87,6 +102,10 @@ export function resolveCharGenSkillAllocation(
 
   if (kind === 'unavailable') {
     return unavailableAllocation();
+  }
+
+  if (kind === 'cross-class' && input.hasClassSkillFeat) {
+    kind = 'class';
   }
 
   const rankCost = kind === 'class' ? 1 : 2;
@@ -179,6 +198,8 @@ export function allocateRecommendedCharGenSkills(
         level: input.level,
         currentRank: nextRanks[skillRow],
         availablePoints: nextRemainingPoints,
+        isDroid: input.isDroid,
+        hasClassSkillFeat: Boolean(input.hasClassSkillFeatByRow?.[skillRow]),
       });
       if (!result.canIncrease) continue;
 

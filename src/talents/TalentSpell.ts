@@ -12,6 +12,7 @@ import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState"
 import { CombatActionType } from "@/enums/combat/CombatActionType";
 import { TalentObjectType } from "@/enums/engine/TalentObjectType";
 import { TwoDAObject } from "@/resource/TwoDAObject";
+import { calculateForcePointCost } from "@/talents/forcePowerCostRules";
 
 const underscoreParser = (value: string = ''): number[] => {
   return value.split('_').map((val) => {
@@ -247,6 +248,16 @@ export class TalentSpell extends TalentObject {
       case 'W': //Throw
         return 15;
     }
+  }
+
+  getForcePointCost(casterAlignment: number = 50, charismaModifier: number = 0, activeForms: number[] = []): number {
+    return calculateForcePointCost({
+      baseForcePoints: this.forcepoints,
+      powerAlignment: this.goodEvil,
+      casterAlignment,
+      charismaModifier,
+      activeForms,
+    });
   }
 
   static From2DA( row: any ){

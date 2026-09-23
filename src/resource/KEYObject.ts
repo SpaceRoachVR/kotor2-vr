@@ -87,7 +87,7 @@ export class KEYObject {
     for(let i = 0; i < this.keys.length; i++){
       const key = this.keys[i];
       this._keyByResIdType.set(`${key.resId}:${key.resType}`, key);
-      this._keyByRefType.set(`${key.resRef}:${key.resType}`, key);
+      this._keyByRefType.set(KEYObject.refTypeKey(key.resRef, key.resType), key);
     }
   }
 
@@ -103,7 +103,18 @@ export class KEYObject {
   }
 
   getFileKey(ResRef: string, ResType: number): IKEYEntry | null {
-    return this._keyByRefType.get(`${ResRef}:${ResType}`) ?? null;
+    return this._keyByRefType.get(KEYObject.refTypeKey(ResRef, ResType)) ?? null;
+  }
+
+  /**
+   * Resrefs are case-insensitive in the original engine, and the data mixes
+   * case freely: Peragus' doors ask for `dr_PER01` while chitin.key lists
+   * `dr_per01` in sounds.bif. A case-sensitive lookup missed it, the loose
+   * StreamSounds fallback had no such file, and every door opened in silence
+   * (round 9: "the lack of audio for the doors").
+   */
+  static refTypeKey(resRef: string, resType: number): string {
+    return `${String(resRef ?? '').toLowerCase()}:${resType}`;
   }
 
   getFileKeyByRes(Res: IBIFResource): IKEYEntry {

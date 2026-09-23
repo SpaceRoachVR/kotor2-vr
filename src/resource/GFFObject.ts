@@ -249,7 +249,7 @@ export class GFFObject {
     let field = new GFFField(f.Type, this.tmpLabelArray[f.Label]);
 
     let data = f.Data;
-    let dataView = new DataView(data.buffer);
+    let dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
     let offset = dataView.getUint32(0, true);
 
     let OriginalPos = this.reader.tell();//Store the original position of the reader object

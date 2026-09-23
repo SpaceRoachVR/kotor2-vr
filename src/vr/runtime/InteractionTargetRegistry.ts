@@ -50,6 +50,18 @@ export class InteractionTargetRegistry {
     this.targets.clear();
   }
 
+  getTargets(): readonly InteractionTarget[] {
+    return Array.from(this.targets.values());
+  }
+
+  getTarget(targetId: string): InteractionTarget | undefined {
+    return this.targets.get(targetId);
+  }
+
+  getTargetCount(): number {
+    return this.targets.size;
+  }
+
   resolveRay(
     origin: THREE.Vector3,
     direction: THREE.Vector3,

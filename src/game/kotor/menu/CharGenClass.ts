@@ -4,7 +4,6 @@ import { TextureLoader } from "@/loaders";
 import type { ModulePlayer } from "@/module";
 import { OdysseyModel3D } from "@/three/odyssey";
 import * as THREE from "three";
-import { CharGenClasses } from "@/game/CharGenClasses";
 import { GameState } from "@/GameState";
 
 /**
@@ -303,8 +302,8 @@ export class CharGenClass extends GameMenu {
         modelControl.resizeControl();
       }
       if (this.textNeedsUpdate) {
-        this.LBL_DESC.setText(GameState.TLKManager.TLKStrings[CharGenClasses[GameState.CharGenManager.hoveredClass].strings.description].Value);
-        this.LBL_CLASS.setText(GameState.TLKManager.TLKStrings[CharGenClasses[GameState.CharGenManager.hoveredClass].strings.gender].Value + ' ' + GameState.TLKManager.TLKStrings[CharGenClasses[GameState.CharGenManager.hoveredClass].strings.name].Value);
+        this.LBL_DESC.setText(GameState.TLKManager.TLKStrings[GameState.CharGenManager.getCharGenClass(GameState.CharGenManager.hoveredClass).strings.description].Value);
+        this.LBL_CLASS.setText(GameState.TLKManager.TLKStrings[GameState.CharGenManager.getCharGenClass(GameState.CharGenManager.hoveredClass).strings.gender].Value + ' ' + GameState.TLKManager.TLKStrings[GameState.CharGenManager.getCharGenClass(GameState.CharGenManager.hoveredClass).strings.name].Value);
         this.textNeedsUpdate = false;
       }
     } catch (e: any) {
