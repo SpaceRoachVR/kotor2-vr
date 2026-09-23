@@ -13,8 +13,29 @@ const {
   createEngineIdentity,
   identifyServingBundle,
   createSnapshotArtifact,
+  awaitBootReadyForNewGame,
 } = require('./engine-snapshot');
 const freshState = { module: '101per', loadedFromSave: false, bootstrap: 'new-game-ui', playerName: 'T3-M4', partySize: 1 };
+
+test('fresh bootstrap waits for a delayed visible EULA and accepts it before engine readiness', async () => {
+  const events = [];
+  let eulaReady = false;
+  const harness = {
+    waitFor: async (expression) => {
+      if (expression.includes('eulaVisible')) eulaReady = true;
+      else assert.equal(eulaReady, true, 'engine readiness must follow the EULA wait');
+      events.push(expression.includes('eulaVisible') ? 'eula-ready' : 'engine-ready');
+    },
+    evaluate: async (expression) => {
+      assert.equal(eulaReady, true, 'the EULA must not be inspected before it appears');
+      if (expression.includes('return { x:')) return { x: 20, y: 30 };
+      return true;
+    },
+    cdp: { send: async (_method, input) => { events.push(input.type); } },
+  };
+  await awaitBootReadyForNewGame(harness, () => {});
+  assert.deepStrictEqual(events, ['eula-ready', 'mousePressed', 'mouseReleased', 'engine-ready']);
+});
 
 test('capture identity rejects save-derived canonical evidence', () => {
   assert.throws(() => createCaptureIdentity({

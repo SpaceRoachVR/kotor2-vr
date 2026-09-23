@@ -24,6 +24,7 @@ const path = require('path');
 const { VrHarness } = require('../vr-emulator/harness');
 const { startAssetService } = require('../vr-emulator/asset-service');
 const { waitForMenu, newGameThroughCharacterCreation } = require('../vr-emulator/playthrough-steps');
+const { clickButtonByText, TIMEOUTS } = require('../vr-emulator/playthrough');
 const { assertCanonicalEngineState } = require('./canonical-state');
 
 const OUT_DIR = path.join(__dirname, 'out');
@@ -101,15 +102,31 @@ function createEngineIdentity(state, metadata) {
  * save-derived state can make an unvisited target look clean while preserving
  * a foreign party and globals.
  */
+async function awaitBootReadyForNewGame(harness, log) {
+  await harness.waitFor(`(() => {
+    const eulaVisible = Array.from(document.querySelectorAll('button')).some((button) =>
+      (button.textContent || '').trim() === 'OK' &&
+      button.getBoundingClientRect().width > 0 && button.getBoundingClientRect().height > 0
+    );
+    const menus = window.KotOR && window.KotOR.GameState && window.KotOR.GameState.MenuManager;
+    return eulaVisible || !!(menus && menus.MainMenu && menus.MainMenu.bVisible);
+  })()`, 90_000);
+  const eulaVisible = await harness.evaluate(`Array.from(document.querySelectorAll('button')).some((button) =>
+    (button.textContent || '').trim() === 'OK' &&
+    button.getBoundingClientRect().width > 0 && button.getBoundingClientRect().height > 0
+  )`);
+  if (eulaVisible) {
+    await clickButtonByText(harness, 'OK');
+    log('EULA accepted for fresh new-game bootstrap');
+  }
+  await harness.waitFor(
+    `document.querySelector('#vr-spike-button') && !document.querySelector('#vr-spike-button').disabled`,
+    TIMEOUTS.boot, 2000,
+  );
+}
+
 async function bootstrapFreshNewGame(harness, log) {
-  const accepted = await harness.evaluate(`(() => {
-    const button = Array.from(document.querySelectorAll('button')).find((candidate) => (candidate.textContent || '').trim() === 'OK');
-    if (!button) return false;
-    button.click();
-    return true;
-  })()`);
-  if (accepted) log('EULA accepted for fresh new-game bootstrap');
-  await harness.waitFor(`document.querySelector('#vr-spike-button') !== null`, 90_000, 500);
+  await awaitBootReadyForNewGame(harness, log);
   await waitForMenu(harness, 'MainMenu', 90_000);
   await newGameThroughCharacterCreation(harness);
   const provenance = await harness.evaluate(`(() => {
@@ -445,6 +462,7 @@ module.exports = {
   buildSnapshotSource,
   createEngineIdentity,
   bootstrapFreshNewGame,
+  awaitBootReadyForNewGame,
   identifyServingBundle,
   createSnapshotArtifact,
   parseArgs,
