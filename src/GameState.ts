@@ -376,6 +376,7 @@ const vrComfortSettings: MutableVRComfortSettings = {
   snapTurnDegrees: 45,
   vignetteEnabled: false,
   damageFlashEnabled: true,
+  unpauseOnWheelClose: false,
 };
 let vrComfortSettingsPanelOpen = false;
 let vrComfortSettingsPausedByVR = false;
@@ -3016,6 +3017,14 @@ export class GameState implements EngineContext {
         if (!player) return;
         player.walk = !player.walk;
       },
+      // ROADMAP 3.18. A pause the *player* asked for. The comfort panel pauses
+      // the game behind itself too; that is its own and is not reported here,
+      // so it neither shows the pause plate nor gets resumed by the wheel.
+      isPaused: () => GameState.State === EngineState.PAUSED && !vrComfortSettingsPausedByVR,
+      setPaused: (paused: boolean) => {
+        if (vrComfortSettingsPausedByVR) return;
+        GameState.State = paused ? EngineState.PAUSED : EngineState.RUNNING;
+      },
       togglePause: () => {
         GameState.State = GameState.State === EngineState.PAUSED
           ? EngineState.RUNNING
@@ -3455,6 +3464,10 @@ export class GameState implements EngineContext {
             label: 'Damage Flash',
             value: vrComfortSettings.damageFlashEnabled !== false ? 'On' : 'Off',
           },
+          {
+            label: 'Unpause on Wheel Close',
+            value: vrComfortSettings.unpauseOnWheelClose === true ? 'On' : 'Off',
+          },
         ];
         return {
           rows,
@@ -3477,6 +3490,9 @@ export class GameState implements EngineContext {
                 break;
               case 4:
                 vrComfortSettings.damageFlashEnabled = vrComfortSettings.damageFlashEnabled === false;
+                break;
+              case 5:
+                vrComfortSettings.unpauseOnWheelClose = vrComfortSettings.unpauseOnWheelClose !== true;
                 break;
             }
           },

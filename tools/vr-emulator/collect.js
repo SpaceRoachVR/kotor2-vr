@@ -703,6 +703,31 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     })()`);
     onProgress('renderer configuration');
 
+    // --- the wheel plans while paused (ROADMAP 3.18) ------------------------
+    // A pause is only useful mid-fight if the action wheel still builds and
+    // its entries still revalidate with the engine frozen.
+    metrics.pausedWheel = await harness.evaluate(`(() => {
+      const K = window.KotOR;
+      const hooks = K.VRSpike && K.VRSpike.hooks;
+      if (!hooks || typeof hooks.setPaused !== 'function' || typeof hooks.isPaused !== 'function') {
+        return { hooks: false };
+      }
+      const wasPaused = hooks.isPaused();
+      hooks.setPaused(true);
+      let entries = null;
+      let error = null;
+      try {
+        const wheel = hooks.createActionWheel ? hooks.createActionWheel(null) : null;
+        entries = wheel ? wheel.pages.flatMap((page) => page.entries).map((entry) => entry.label) : null;
+      } catch (e) {
+        error = String(e);
+      }
+      const reportedPaused = hooks.isPaused();
+      hooks.setPaused(wasPaused);
+      return { hooks: true, reportedPaused, resumed: hooks.isPaused() === wasPaused, entries, error };
+    })()`);
+    onProgress('paused wheel');
+
     // --- weapon Bash route (ROADMAP 3.17) -----------------------------------
     // The swing detection is covered by unit tests; what only the live engine
     // can show is that a real locked door or container resolves to the

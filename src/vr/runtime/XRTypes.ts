@@ -37,6 +37,11 @@ export interface VRComfortSettings {
    * player turns it off; absent reads as on.
    */
   readonly damageFlashEnabled?: boolean;
+  /**
+   * ROADMAP 3.18 — closing the action wheel while paused resumes the game.
+   * Off unless the player turns it on; absent reads as off.
+   */
+  readonly unpauseOnWheelClose?: boolean;
 }
 export type InteractionMode = 'near-touch' | 'ray' | 'grab';
 export type CombatWeaponMode =

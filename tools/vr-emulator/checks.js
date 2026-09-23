@@ -211,6 +211,21 @@ const CHECKS = [
     }),
   },
   {
+    id: 'wheel-builds-while-paused',
+    describe: 'with the game paused, the action wheel still builds',
+    // ROADMAP 3.18: the pause is for planning, which means the wheel.
+    run: (m) => {
+      const p = m.pausedWheel || {};
+      return {
+        ok: p.hooks === true && p.reportedPaused === true && p.resumed === true &&
+          Array.isArray(p.entries) && p.entries.length > 0 && !p.error,
+        detail: `paused=${p.reportedPaused} resumed=${p.resumed} ` +
+          `entries=${Array.isArray(p.entries) ? p.entries.join('|') : p.entries}` +
+          (p.error ? ` error=${p.error}` : ''),
+      };
+    },
+  },
+  {
     id: 'weapon-bash-route',
     describe: 'a weapon swing at a locked object follows its authored Bash, or refuses when there is none',
     // ROADMAP 3.17. The checked module (101PER) has one locked object, the

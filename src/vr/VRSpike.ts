@@ -62,6 +62,7 @@ import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
 import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
 import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
+import { VRPauseIndicatorHost } from "./runtime/VRPauseIndicatorHost";
 import type { VRHapticPattern } from "./runtime/VRHapticFeedback";
 import { VRDroidExplosionHost } from "./runtime/VRDroidExplosionHost";
 import {
@@ -200,6 +201,9 @@ export interface VRSpikeHooks {
   toggleWalkRun?: () => void;
   /** Toggles the engine's own pause, as the flatscreen pause control does. */
   togglePause?: () => void;
+  /** ROADMAP 3.18 — true while the player has the game paused. */
+  isPaused?: () => boolean;
+  setPaused?: (paused: boolean) => void;
   /**
    * Cycles the party leader to the next member. The action wheel's Party
    * submenu remains the way to pick a specific one.
@@ -564,6 +568,9 @@ export class VRSpike {
   private static bladeSparkHost: VRBladeSparkHost | null = null;
   private static readonly damageTracker = new VRDamageFeedbackTracker();
   private static damageFlashHost: VRDamageFlashHost | null = null;
+  private static pauseIndicatorHost: VRPauseIndicatorHost | null = null;
+  /** The wheel was open during a player pause, for the unpause-on-close option. */
+  private static radialOpenWhilePaused = false;
   private static combatVisualsErrorReported = false;
   private static cutsceneFadeHost: VRCutsceneFadeHost | null = null;
   private static readonly cutsceneFadeEnvelope = new VRCutsceneFadeEnvelope();
@@ -1095,6 +1102,9 @@ export class VRSpike {
     VRSpike.damageTracker.reset();
     VRSpike.damageFlashHost?.dispose();
     VRSpike.damageFlashHost = null;
+    VRSpike.pauseIndicatorHost?.dispose();
+    VRSpike.pauseIndicatorHost = null;
+    VRSpike.radialOpenWhilePaused = false;
     VRSpike.cutsceneFadeHost?.dispose();
     VRSpike.cutsceneFadeHost = null;
     VRSpike.cutsceneFadeEnvelope.reset();
@@ -1223,6 +1233,7 @@ export class VRSpike {
         else VRSpike.processCombatInput(timestamp);
       }
     }
+    VRSpike.updatePauseState(foregroundSurfaceOwnsInput, radialOwnsInput);
     // The engine tick is the last thing the XR callback does, and an exception
     // escaping here does not just skip a frame — it propagates out of the
     // requestAnimationFrame callback and the session stops presenting, so the
@@ -2348,6 +2359,21 @@ export class VRSpike {
       return;
     }
 
+    // ROADMAP 3.18. While the player has the game paused, swings, trigger
+    // pulls, Force flicks and grenade throws do nothing: a pause is for
+    // planning. The target ring and the queue on the hilt stay up, so the
+    // plan can be read. Latching the triggers now means a trigger held through
+    // the pause does not fire the moment it ends.
+    if (VRSpike.isPlayerPaused()) {
+      VRSpike.updateHiltTimer(context.weaponMode, 0, context.inCombat, context.stanceReadout, false);
+      VRSpike.updateCombatTargetHighlight();
+      VRSpike.roundReadyLatched = false;
+      VRSpike.combatInputController.reset();
+      VRSpike.forceGestureController.reset();
+      VRSpike.captureWeaponActionLatch();
+      return;
+    }
+
     let swingBuffer: { readonly released: boolean; readonly armed: boolean } | null = null;
     try {
       swingBuffer = VRSpike.hooks?.serviceCombatSwingBuffer?.() ?? null;
@@ -2481,6 +2507,50 @@ export class VRSpike {
     VRSpike.reportSwingMisses();
     if (events.some((event) => event.input === 'dominant-swing')) bash.bash();
   }
+
+  private static isPlayerPaused(): boolean {
+    try {
+      return VRSpike.hooks?.isPaused?.() === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * ROADMAP 3.18 — shows the pause, and resumes it when the wheel closes if
+   * the player turned that option on. Never pauses anything by itself.
+   */
+  private static updatePauseState(foregroundSurfaceOwnsInput: boolean, radialOwnsInput: boolean): void {
+    const paused = VRSpike.isPlayerPaused();
+    if (paused && radialOwnsInput) {
+      VRSpike.radialOpenWhilePaused = true;
+    } else if (!radialOwnsInput && VRSpike.radialOpenWhilePaused) {
+      VRSpike.radialOpenWhilePaused = false;
+      // A wheel entry that opened a menu or the comfort panel leaves the game
+      // paused behind it: the player is still planning.
+      const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
+      if (paused && !foregroundSurfaceOwnsInput && comfort.unpauseOnWheelClose === true) {
+        try {
+          VRSpike.hooks?.setPaused?.(false);
+        } catch (error) {
+          console.error('[VRSpike] unpause on wheel close rejected', error);
+        }
+      }
+    }
+    if (!paused && !VRSpike.pauseIndicatorHost) return;
+    if (!VRSpike.camera) return;
+    try {
+      if (!VRSpike.pauseIndicatorHost) VRSpike.pauseIndicatorHost = new VRPauseIndicatorHost(VRSpike.camera);
+      VRSpike.pauseIndicatorHost.present(VRSpike.isPlayerPaused());
+    } catch (error) {
+      if (!VRSpike.pauseIndicatorErrorReported) {
+        VRSpike.pauseIndicatorErrorReported = true;
+        console.error('[VRSpike] pause indicator rejected', error);
+      }
+    }
+  }
+
+  private static pauseIndicatorErrorReported = false;
 
   private static reportedSwingMisses = 0;
 

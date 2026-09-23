@@ -937,6 +937,95 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).interactionAimedTargetId = null;
   });
 
+  test('while the player has paused, a swing does nothing, and it counts again on resume (3.18)', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    (VRSpike as any).combatInputController.reset();
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: {
+          pose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(0, 2, 0), trackingState: 'tracked' },
+          targetRayPose: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+        },
+      },
+    };
+    let paused = true;
+    const swings: unknown[] = [];
+    const bufferServiced = jest.fn(() => ({ released: false, armed: false }));
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      isPaused: () => paused,
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat: true, stanceReadout: '',
+        onCombatSwing: (event) => swings.push(event),
+      }),
+      serviceCombatSwingBuffer: bufferServiced,
+    };
+
+    (VRSpike as any).processCombatInput(1_000);
+    expect(swings).toHaveLength(0);
+    expect(bufferServiced).not.toHaveBeenCalled();
+
+    paused = false;
+    (VRSpike as any).processCombatInput(1_200);
+    expect(swings).toHaveLength(1);
+  });
+
+  test('shows the pause and, only when the option is on, resumes when the wheel closes (3.18)', () => {
+    const camera = new THREE.PerspectiveCamera();
+    VRSpike.camera = camera;
+    (VRSpike as any).radialOpenWhilePaused = false;
+    let paused = true;
+    let unpauseOnWheelClose = false;
+    const setPaused = jest.fn((value: boolean) => { paused = value; });
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      isPaused: () => paused,
+      setPaused,
+      getComfortSettings: () => ({
+        locomotionMode: 'smooth', turnMode: 'smooth', snapTurnDegrees: 45, vignetteEnabled: false,
+        unpauseOnWheelClose,
+      }),
+    };
+    const update = (foreground: boolean, radial: boolean) =>
+      (VRSpike as any).updatePauseState(foreground, radial);
+
+    update(false, false);
+    const indicator = (VRSpike as any).pauseIndicatorHost;
+    expect(indicator.isVisible).toBe(true);
+    expect(camera.children).toContain(indicator.object);
+
+    // Option off: open and close the wheel, still paused.
+    update(false, true);
+    update(false, false);
+    expect(setPaused).not.toHaveBeenCalled();
+
+    // Option on, but the wheel opened a menu: stay paused behind it.
+    unpauseOnWheelClose = true;
+    update(false, true);
+    update(true, false);
+    expect(setPaused).not.toHaveBeenCalled();
+
+    // Option on, wheel closed back to the world: resume.
+    update(false, true);
+    update(false, false);
+    expect(setPaused).toHaveBeenCalledWith(false);
+    update(false, false);
+    expect(indicator.isVisible).toBe(false);
+
+    (VRSpike as any).pauseIndicatorHost = null;
+    VRSpike.camera = null;
+  });
+
   test('pulses the weapon hand for a melee hit and draws a deflected bolt to the blade (3.13)', () => {
     const pulse = jest.fn(async (
       _session: XRSession,

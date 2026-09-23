@@ -1363,7 +1363,7 @@ belong together.
   - **Done when:** swinging at a lockable Peragus container bashes it with the
     same result as the prompt's Bash.
 
-- **3.18** ☐ **A pause that works for combat.** A pause already exists: the dominant `B`
+- **3.18** ✅ implemented (2026-09-23) / ☐ headset-accepted — **A pause that works for combat.** New `isPaused`/`setPaused` hooks report only a *player* pause (the comfort panel's own pause is excluded). While paused, `processCombatInput` stops before any swing, trigger, Force flick, grenade throw or presentation shot, but keeps the target ring and hilt queue up and latches the triggers so a held one does not fire on resume. `VRPauseIndicatorHost` dims the world under every VR surface and shows a PAUSED plate low in view. New comfort row **Unpause on Wheel Close** (off by default) resumes the game when the wheel closes back to the world, but not when a wheel entry opened a menu. The wheel was already processed while paused; the `wheel-builds-while-paused` emulator check proves it builds, though in 101PER only Menu and Comfort Settings are on offer, so queuing attacks and party orders while paused is for the headset. Original statement: A pause already exists: the dominant `B`
   (`SemanticXRAction.Pause`, button 5) calls `togglePause`, which sets
   `EngineState.PAUSED`. Make it useful mid-fight the way retail's is:
   - While paused, the action wheel opens and queues attacks, Force powers,
