@@ -7,8 +7,11 @@ export interface VRComfortSettingsRow {
 }
 
 const PANEL_WIDTH_METRES = 0.9;
-const PANEL_HEIGHT_METRES = 0.5;
-const ROW_COUNT = 4;
+/** Each row keeps the size the original four-row, 0.5 m panel gave it. */
+const ROW_HEIGHT_METRES = 0.125;
+const ROW_HEIGHT_PIXELS = 125;
+/** The panel grows with its settings, up to this many rows. */
+export const VR_COMFORT_SETTINGS_MAX_ROWS = 8;
 
 /**
  * Comfort settings surface (ROADMAP 2.6) — the settings VRSpike's own
@@ -25,12 +28,19 @@ export class VRComfortSettingsHost {
   private readonly texture: THREE.CanvasTexture;
   private positioned = false;
   private lastDrawnRows: readonly VRComfortSettingsRow[] | null = null;
+  /**
+   * Rows currently laid out. The panel was fixed at four and threw on anything
+   * else; 3.18 added Damage Flash and Unpause on Wheel Close, the model handed
+   * it six, and every frame threw with the panel owning input and never drawn,
+   * which froze the game with no menu (round 13).
+   */
+  private rowCount = 4;
 
   constructor(scene: THREE.Scene) {
     if (typeof document === 'undefined') throw new Error('VR comfort settings requires a browser document');
     this.canvas = document.createElement('canvas');
     this.canvas.width = 900;
-    this.canvas.height = 500;
+    this.canvas.height = ROW_HEIGHT_PIXELS * this.rowCount;
     const context = this.canvas.getContext('2d');
     if (!context) throw new Error('VR comfort settings canvas context unavailable');
     this.context = context;
@@ -43,16 +53,17 @@ export class VRComfortSettingsHost {
       })
     );
     this.object.name = 'Kotor2VR.ComfortSettings';
-    this.object.scale.set(PANEL_WIDTH_METRES, PANEL_HEIGHT_METRES, 1);
+    this.object.scale.set(PANEL_WIDTH_METRES, ROW_HEIGHT_METRES * this.rowCount, 1);
     this.object.visible = false;
     this.object.renderOrder = 1_000_004;
     scene.add(this.object);
   }
 
   present(head: XRWorldPose, rows: readonly VRComfortSettingsRow[]): void {
-    if (rows.length !== ROW_COUNT) {
-      throw new RangeError(`VR comfort settings requires exactly ${ROW_COUNT} rows`);
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > VR_COMFORT_SETTINGS_MAX_ROWS) {
+      throw new RangeError(`VR comfort settings needs 1 to ${VR_COMFORT_SETTINGS_MAX_ROWS} rows`);
     }
+    if (rows.length !== this.rowCount) this.layoutRows(rows.length);
     if (!this.positioned) {
       this.place(head);
       this.positioned = true;
@@ -85,10 +96,25 @@ export class VRComfortSettingsHost {
     this.object.updateWorldMatrix(true, false);
     const hit = this.raycaster.intersectObject(this.object, false)[0];
     if (!hit?.uv) return null;
-    const rowHeight = 1 / ROW_COUNT;
+    const rowHeight = 1 / this.rowCount;
     // Canvas row 0 is drawn at the top, but UV.y = 0 is the plane's bottom.
     const rowFromTop = Math.floor((1 - hit.uv.y) / rowHeight);
-    return Math.min(ROW_COUNT - 1, Math.max(0, rowFromTop));
+    return Math.min(this.rowCount - 1, Math.max(0, rowFromTop));
+  }
+
+  /** Rows the panel is laid out for. */
+  get rows(): number {
+    return this.rowCount;
+  }
+
+  /** Resizes the canvas and the panel for `count` rows and forces a redraw. */
+  private layoutRows(count: number): void {
+    this.rowCount = count;
+    this.canvas.height = ROW_HEIGHT_PIXELS * count;
+    this.object.scale.set(PANEL_WIDTH_METRES, ROW_HEIGHT_METRES * count, 1);
+    // A resized canvas needs a fresh GPU upload, and the old image is gone.
+    this.texture.dispose();
+    this.lastDrawnRows = null;
   }
 
   private place(head: XRWorldPose): void {
@@ -110,7 +136,7 @@ export class VRComfortSettingsHost {
   private draw(rows: readonly VRComfortSettingsRow[]): void {
     const width = this.canvas.width;
     const height = this.canvas.height;
-    const rowHeight = height / ROW_COUNT;
+    const rowHeight = height / this.rowCount;
     this.context.fillStyle = 'rgba(2, 12, 16, 0.94)';
     this.context.fillRect(0, 0, width, height);
     this.context.font = 'bold 34px Arial';
