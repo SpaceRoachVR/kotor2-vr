@@ -1,274 +1,147 @@
-# KotOR.js
-![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)
-![JavaScript](https://img.shields.io/badge/JavaScript-323330?style=for-the-badge&logo=javascript&logoColor=F7DF1E)
-![THREE JS](https://img.shields.io/badge/ThreeJs-black?style=for-the-badge&logo=three.js&logoColor=white)
-![Electron](https://img.shields.io/badge/Electron-2B2E3A?style=for-the-badge&logo=electron&logoColor=9FEAF9)
-![Node JS](https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
-![NPM](https://img.shields.io/badge/npm-CB3837?style=for-the-badge&logo=npm&logoColor=white)
-![Webpack](https://img.shields.io/badge/Webpack-8DD6F9?style=for-the-badge&logo=Webpack&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+# KOTOR II VR
 
-![KotOR.js](https://raw.githubusercontent.com/KobaltBlu/KotOR.js/master/src/assets/icons/icon.png)
+Star Wars: Knights of the Old Republic II: The Sith Lords, in first-person VR.
 
-**A remake of the Odyssey Game Engine that powered KotOR I &amp; II written in JS (TypeScript)**
+Not a flat screen floating in front of your face. You stand on Peragus as the Exile, walk around at your own height, swing a lightsaber with your actual arm, and aim blasters down the barrel. The story, the dialogue, the stats and the dice rolls are all still KOTOR II. You're just inside it now.
 
-KotOR.js is a TypeScript-based reimplementation of the Odyssey Game Engine that powered the original Star Wars: Knights of the Old Republic (KotOR) and its sequel, KotOR II: The Sith Lords (TSL). The project aims to support the complete feature set of the original engine. While still in the early stages of development, many systems are already online in some form or fashion.
+**This is a work in progress and it is not ready to play yet.** There's no release, no installer, and a lot is still broken. If you want to follow along or poke at it, read on.
 
-In addition to the game engine, the project includes an early attempt at a modding suite called KotOR Forge. 
+## Built on KotOR.js by KobaltBlu
 
-## Technologies
-- The code has been re-written in TypeScript and compiles down into JavaScript. 
-- THREE.js is used for the base of the rendering engine. 
-- Electron is used to package and publish a desktop application. 
+This whole project is a fork of [KotOR.js](https://github.com/KobaltBlu/KotOR.js) by [KobaltBlu](https://github.com/KobaltBlu). KotOR.js is a rebuild of the Odyssey engine (the engine behind KOTOR 1 and 2) written from scratch in TypeScript. It reads your own game files and runs the game in a browser or desktop app.
 
-[Discussion Thread](https://deadlystream.com/topic/6608-wip-kotor-js-a-game-engine-for-k1-k2-written-in-javascript/)  
-[KotOR.js Youtube Channel](https://www.youtube.com/channel/UC7b4RL2mj0WJ7fEvbJePDbA)
+None of this VR stuff would exist without it. KobaltBlu spent years getting that engine to the point where you can load TSL and actually play it, and every hour of VR work here is sitting on top of that. Seriously, go check out the original project, the [online demo](https://play.swkotor.net/), the [Deadly Stream thread](https://deadlystream.com/topic/6608-wip-kotor-js-a-game-engine-for-k1-k2-written-in-javascript/) and the [KotOR.js YouTube channel](https://www.youtube.com/channel/UC7b4RL2mj0WJ7fEvbJePDbA).
 
-[![OpenKotOR Discord](https://discordapp.com/api/guilds/739590575359262792/widget.png?style=banner2)](https://discord.gg/cxuF4xRD66)
+A lot of what I've fixed along the way isn't VR at all. It's plain engine bugs (merchants that never loaded, save files dropping data, script functions that weren't implemented yet). The plan is to offer those fixes back to KotOR.js once the VR project is done and I can show they actually help. I also keep pulling in KobaltBlu's updates so we're not fixing the same bugs twice.
 
-## Supported Games
-The following games are currently supported:
-- [x] [Star Wars: Knights of the Old Republic (PC)](https://en.wikipedia.org/wiki/Star_Wars:_Knights_of_the_Old_Republic)
-- [x] [Star Wars: Knights of the Old Republic II The Sith Lords (PC)](https://en.wikipedia.org/wiki/Star_Wars_Knights_of_the_Old_Republic_II:_The_Sith_Lords)
+## You bring the game
 
-## Requirements
-You will need a valid copy of either KotOR I or KotOR II installed on your system if you want to use KotOR.js to interface with the files of either game. No game files are distributed with this project.
+No game files are included here, and none ever will be. You need your own copy of KOTOR II. I use the Steam version on PC. The mod reads your install and never writes to it. Saves, settings and logs go to their own folder (`%LOCALAPPDATA%\Kotor2VR`), so your normal game stays exactly how it was.
 
-## Web Compatibility (NEW)
+## What works right now
 
-[Browser Compatibility Table](https://github.com/KobaltBlu/KotOR.js/wiki/Browser-Support)
+Everything below is built and has been through real headset testing, but "built" doesn't mean "done." I've been doing numbered test rounds in the headset (13 so far), and every round turns up new stuff.
 
-The recent transition to TypeScript has brought many improvements to the codebase, including Chrome support. When the project is compiled, the contents of the `dist` folder can be uploaded to a web server. The only requirement is that the site must be accessed from behind a valid SSL certificate. Using the latest version of Chrome is recommended.
+**Getting around**
+- Smooth locomotion and smooth turning by default. Snap turn, teleport and a comfort vignette are there if you want them.
+- Roomscale by default, seated works too.
+- Walk into a wall and it gently pushes you back instead of letting you clip through.
+- Comfort settings you can change from inside the headset.
 
+**Combat**
+- It's still the KOTOR d20 system under the hood. Your stats decide whether you hit and how hard. Your swing decides *when* you attack. No swing, no attack.
+- The swing has to actually reach the enemy to count. Swing a little early and it'll queue up for the next round instead of doing nothing.
+- One-handed and two-handed lightsaber grips. Grab with your off hand for two-handed.
+- Blasters aim wherever the barrel points, with a laser sight. Pull the trigger to fire.
+- Force push and pull are hand flicks.
+- A timer in the lightsaber hilt shows when your next attack round is ready.
+- Haptics for your own rolls and for getting hit, including which side it came from.
+- An optional pause you can call up to plan a fight. It never kicks in on its own.
+- Swing at a locked door or container to bash it open.
+- Party members fight on their own when they're in range, but any orders you gave them come first.
 
-[![Demo Icon]][Demo Link]
+**Menus and interacting**
+- Hold X for an action wheel. Inventory, character sheet, map, party orders, comfort settings and everything else live there.
+- Walk up to a door, container, mine or console and the options pop up right there. No more getting dragged across the room to use something.
+- The regular game menus float in front of you as panels.
 
-[Demo Link]: https://play.swkotor.net/ 'Online Playable Demo'
-[Demo Icon]: https://img.shields.io/badge/Online_Playable_Demo-37a779?style=for-the-badge&logoColor=white&logo=google-chrome
+**Story stuff**
+- Dialogue happens in the world with the characters, with the text in the lower half of your view.
+- Cutscenes from places you can't see (security cameras, other rooms, logs) and the pre-rendered movies play on a big theater screen instead of yanking your head around.
+- Fades between camera cuts so it doesn't make you sick.
 
-## Getting Started (Developer)
+**Performance**
+- The target is a steady 50 FPS or better on an RTX 3060 streaming to a Quest 3 over Virtual Desktop. It's hitting that now. 72 FPS is the stretch goal.
 
-### Prerequisites
-1. Download and install [Node.js / npm](https://www.npmjs.com/get-npm).
-2. Clone the KotOR.js repository.
-3. Install dependencies:
+## What's still broken or missing
 
-```bash
-npm install
-```
+Being straight with y'all, this list is long.
 
----
+- **You can't play the whole game yet.** Peragus (the mining station prologue) is where all the testing happens. I've got an automated run that goes almost all the way through it, but a clean start-to-finish run in the headset hasn't happened yet.
+- **Swoop racing is broken in VR.** A bunch of fixes looked good in testing and then didn't hold up in the headset.
+- **Around 40 of the game's script functions still aren't implemented.** Most are rare, but a few matter, like the dueling ring rules and some mines that get placed by scripts.
+- **No physical inventory yet.** The inventory is a floating menu for now.
+- **Memory creeps up** the more areas you load. Long sessions can get sluggish.
+- **The galaxy map** needs another look.
+- **Geometry fixes.** Some spots were built for a camera floating behind your shoulder, not for someone standing in them. Those need to be fixed area by area.
+- WebGL 2 mode renders a green screen. Stick with the default.
 
-### Running the App
+## Where it's headed
 
-#### Option A — Desktop app (Electron) — most common
-This compiles the TypeScript and launches the Electron desktop window. Run this if you just want to play/test the game locally.
+Roughly in this order:
 
-```bash
-npm run start
-```
+1. **Peragus fully playable in VR.** That's the first real release. The goal is that someone who isn't me can put on a headset and play through the prologue.
+2. **The full campaign.** Start to finish, every planet. No cutting it down to a demo.
+3. **TSLRCM support**, since most people play with the Restored Content Mod anyway.
+4. **Optional HD texture packs.** Old textures look way rougher when your face is 6 inches from a wall. You'll always download these yourself from the mod authors.
+5. **A proper install.** Right now running it takes developer tools. That needs to go away before release.
+6. **Maybe a native Quest 3 version** down the road. For now it's PC VR streamed to the headset.
+7. **Sending engine fixes back to KotOR.js** once it's all done.
 
-> **Hot-reload variant:** Watches for TypeScript changes and auto-restarts Electron on save:
-> ```bash
-> npm run start-watch
-> ```
+M4-78 is out of scope.
 
----
+The day-to-day plan with all the details lives in [ROADMAP.md](ROADMAP.md), and the design reasoning is in [DESIGN.md](DESIGN.md).
 
-#### Option B — Browser / web dev (HMR dev server)
-Use this when you're working on the web frontend (Launcher, Game, Forge, Debugger views) and want to open them in Chrome.
+## Trying it yourself (for the brave)
 
-**Start the dev server** (builds, serves, and hot-reloads on save):
+Heads up, this is still a developer setup, not a mod install. You need a Windows PC, Chrome or Edge, and a headset connected with Virtual Desktop using its VDXR runtime (SteamVR doesn't need to be running). The Electron desktop app can't do VR, so VR runs in the browser.
 
-```bash
-npm run dev
-```
+1. Install [Node.js](https://nodejs.org/).
+2. Clone this repo and install everything:
 
-This runs webpack-dev-server on **http://localhost:8080** with HMR and React Fast Refresh. It compiles five bundles in parallel:
-- `KotOR.js` — core engine library
-- `dist/launcher/` — game launcher UI
-- `dist/game/` — in-browser game client
-- `dist/forge/` — KotOR Forge modding tool
-- `dist/debugger/` — script debugger
+   ```bash
+   npm install
+   ```
 
-React app code hot-updates without a full page reload. Changes to the engine bundle (`KotOR.js`) trigger a targeted page reload.
+3. Build it:
 
-| URL | What it is |
-|---|---|
-| http://localhost:8080 | Redirects to Launcher |
-| http://localhost:8080/launcher/ | Game Launcher |
-| http://localhost:8080/game/?key=kotor | KotOR I in-browser |
-| http://localhost:8080/game/?key=tsl | KotOR II in-browser |
-| http://localhost:8080/forge/ | KotOR Forge modding tool |
-| http://localhost:8080/debugger/ | Script debugger |
+   ```bash
+   npm run webpack:dev
+   ```
 
-For build-to-disk without a server (CI, quick compiles):
+4. Start Virtual Desktop with VDXR selected, then launch:
 
-```bash
-npm run webpack:dev-watch
-```
+   ```bash
+   npm run vr:play
+   ```
 
-For the KOTOR II VR browser path, build to `dist` and start the authenticated
-loopback asset service instead of exposing the retail directory through the dev
-server:
+That starts a small local server that reads your game files and opens a fresh browser window pointed at it. Hit Enter VR once it's loaded.
 
-```powershell
-npm run webpack:dev
-node tools/asset-http/asset-server.js `
-  --game "D:\SteamLibrary\steamapps\common\Knights of the Old Republic II" `
-  --user "$env:LOCALAPPDATA\Kotor2VR"
-```
-
-Open the one-time `/launch?token=...` URL printed by the service in a fresh
-Chrome or Edge process. It selects the TSL profile automatically. Retail assets
-are read-only; saves, configuration, screenshots, caches, and logs are routed
-to the user-data root. Stop the service with `Ctrl+C` when the browser session
-ends.
-
-#### Renderer launch options
-
-Three settings are fixed when the renderer is built and so cannot be in-game
-options. Append them to the launch URL. The engine logs which values it started
-with — check those lines before trusting a measurement.
-
-| Option | Default | Effect |
-|---|---|---|
-| `gl=webgl2` | `webgl1` | Creates the context at WebGL 2. **Currently broken:** WebGL 2 renders the startup screens flat green (see `tools/vr-emulator/evidence/greenscreen-webgl{1,2}.png`). The loader is not at fault — textures still resolve and decode; they are not drawn. Kept so the fault can be investigated. |
-| `depth=linear` | `logarithmic` | Turns off `logarithmicDepthBuffer`. The logarithmic path writes `gl_FragDepthEXT` in every fragment shader, defeating early depth rejection — expensive, and worst on a tile-based headset GPU. Whether ordinary depth has enough precision across the camera's 0.05–15000 range is a question for the headset, not for reasoning: see H7/H8 in `HEADSET-TEST-PLAN.md`. |
-| `xrscale=<0.5–2.0>` | `1.0` | Scales the XR framebuffer. Fill rate goes roughly with the square, so `0.8` is about a third less work per eye. Clamped, not rejected, outside the range. |
-
-#### Optional user-supplied texture layers
-
-The asset service can merge one or more external, read-only mod layers into its virtual
-`Override` directory. Download and extract mods yourself; the project does not download,
-bundle, or redistribute them. Each `--mod` argument names the directory that directly
-contains an `Override` folder. Layers are supplied from lowest to highest priority, so the
-last layer wins; any external layer always wins over the retail `Override` directory.
-
-For [Ultimate Character Overhaul Redux by ShiningRedHD](https://www.nexusmods.com/kotor2/mods/1060),
-download the archive from its author and extract its compressed **TPC** variant to:
-
-```text
-%LOCALAPPDATA%\Kotor2VR\mods\01-uco-redux\Override
-```
-
-The optional [Vanilla Planets HD by Saul0097](https://www.nexusmods.com/kotor2/mods/1369)
-base archive belongs in:
-
-```text
-%LOCALAPPDATA%\Kotor2VR\mods\02-vanilla-planets-hd\Override
-```
-
-If the retail installation contains TSLRCM, add each author's TSLRCM compatibility
-patch to the corresponding layer after its base archive. Do not put a patch, archive,
-or any extracted mod files in the retail game directory.
-
-Then launch the browser service with that layer:
-
-```powershell
-npm run webpack:dev
-node tools/asset-http/asset-server.js `
-  --game "D:\SteamLibrary\steamapps\common\Knights of the Old Republic II" `
-  --user "$env:LOCALAPPDATA\Kotor2VR" `
-  --mod "$env:LOCALAPPDATA\Kotor2VR\mods\01-uco-redux" `
-  --mod "$env:LOCALAPPDATA\Kotor2VR\mods\02-vanilla-planets-hd"
-```
-
-Use additional `--mod` arguments only for user-supplied packs, in increasing priority order.
-The resolver chooses a higher layer before it chooses a format, then prefers `.tpc` over
-`.tga` within that same layer. UCO improves character, creature, droid, and equipment
-textures; it does not replace world geometry, environmental art, or unrelated GUI assets.
-Vanilla Planets HD is intentionally later in this baseline, so it wins for any shared
-resource; inspect the resolver's layer diagnostics before adding more packs. Keep every
-mod's original credit and permissions with your local install.
-
----
-
-#### Option C — VS Code launch configurations
-If you're using VS Code, press **F5** (Run & Debug) and pick a configuration. VS Code will automatically start the HMR dev server and open Chrome pointed at the right URL:
-
-- **KotOR Launcher** — opens the launcher at localhost:8080
-- **KotOR** — opens the KotOR I game client
-- **TSL** — opens the KotOR II game client
-- **KotOR Forge** — opens the Forge modding tool
-- **KotOR Debugger** — opens the script debugger
-- **Dev: HMR (Launcher)** — starts the dev server and opens the launcher
-
-> Or run `npm run dev` manually, then open any of the URLs above in Chrome.
-
----
-
-### Docker
-
-This project can be containerized as a static web app.
-
-Build the image:
+Right now `vr:play` expects the game at `D:\SteamLibrary\steamapps\common\Knights of the Old Republic II` because that's where mine is. If yours lives somewhere else, start the server yourself and open the link it prints in a fresh Chrome or Edge window:
 
 ```bash
-docker build -t kotor-js-web .
+node tools/asset-http/asset-server.js --game "C:\path\to\Knights of the Old Republic II"
 ```
 
-Run it:
+**Don't use `npm run dev` with the desktop app.** It breaks the file paths and you'll just get a black window.
 
-```bash
-docker run --rm -p 8080:80 kotor-js-web
-```
+### Texture mods
 
-Then open:
+You can layer texture mods on top without touching your game folder. Drop each one in its own numbered folder under `%LOCALAPPDATA%\Kotor2VR\mods\`, each with an `Override` folder inside. Higher numbers win. What I've been testing with:
 
-- `http://localhost:8080/` (Launcher)
+- `01-uco-redux` for [Ultimate Character Overhaul Redux](https://www.nexusmods.com/kotor2/mods/1060) by ShiningRedHD (grab the TPC version)
+- `02-vanilla-planets-hd` for [Vanilla Planets HD](https://www.nexusmods.com/kotor2/mods/1369) by Saul0097
+- `03-tslrcm` for [TSLRCM](https://steamcommunity.com/sharedfiles/filedetails/?id=485537937) from the Steam Workshop
 
-Notes:
+Download them from their authors yourself. Nothing here bundles or re-uploads anybody's mod.
 
-- The Docker image uses a multi-stage build (`node:alpine` -> `nginx:alpine`).
-- It runs the same production build as local web output: `npm run webpack:prod`.
+### KotOR.js stuff
 
----
+All the regular KotOR.js tools (the launcher, KOTOR 1 support, KotOR Forge, the script debugger) are still in here. For how those work, check the [original KotOR.js README](https://github.com/KobaltBlu/KotOR.js#readme).
 
-### Other Commands
+## Credits
 
-| Command | What it does |
-|---|---|
-| `npm run dev` | HMR dev server on http://localhost:8080 |
-| `npm run webpack:dev` | One-shot development build (no watch) |
-| `npm run webpack:dev-watch` | Watch-mode development build (no dev server) |
-| `npm run webpack:prod` | Production build (minified, no source maps) |
-| `npm run electron:compile` | Compile only the Electron main process TypeScript |
-| `npm run test` | Run the Jest test suite |
-| `npm run typedoc` | Generate API docs into the `wiki/` folder |
+- **[KobaltBlu](https://github.com/KobaltBlu)** for [KotOR.js](https://github.com/KobaltBlu/KotOR.js), the engine this whole thing runs on.
+- **[xoreos](https://xoreos.org/)** and **[reone](https://github.com/seedhartha/reone)**, other open Odyssey engine projects. KotOR.js leans on xoreos, and reone has been my go-to reference for how things should render.
+- **[PyKotor](https://github.com/NickHugi/PyKotor)**, used to check this build against the real game's files.
+- **The [Deadly Stream](https://deadlystream.com/) modding community**, whose tools and years of documentation make any of this possible.
+- **[StrategyWiki](https://strategywiki.org/wiki/Star_Wars:_Knights_of_the_Old_Republic_II:_The_Sith_Lords)**, for the combat rules tables I keep checking against.
+- **ShiningRedHD** (UCO Redux), **Saul0097** (Vanilla Planets HD) and **the TSLRCM team** for the mods I test with.
+- **Meta's [WebXR input profiles](https://github.com/immersive-web/webxr-input-profiles)** for the hand models, and **[IWER](https://github.com/meta-quest/immersive-web-emulation-runtime)** for testing without a headset on.
+- **Obsidian Entertainment** for making KOTOR II in the first place.
 
-## Screenshots
-
-<div align="center">
-
-| **KotOR.js Launcher** | **KotOR - Taris: Undercity** | **KotOR - Dantooine** |
-|:-------------------------:|:-------------------------:|:-------------------------:|
-| ![KotOR.js Launcher](https://raw.githubusercontent.com/KobaltBlu/KotOR.js/master/images/screenshots/KotOR-js-Launcher-001.jpg) | ![KotOR - Taris: Undercity](https://raw.githubusercontent.com/KobaltBlu/KotOR.js/master/images/screenshots/K1-Screen-001.jpg) | ![KotOR - Dantooine](https://raw.githubusercontent.com/KobaltBlu/KotOR.js/master/images/screenshots/K1-Screen-003.jpg) |
-| **KotOR II - TSL: Awaken Scene** | **KotOR II - TSL: Awaken Scene 2** |  |
-| ![KotOR II - TSL: Awaken Scene](https://raw.githubusercontent.com/KobaltBlu/KotOR.js/master/images/screenshots/K2-Screen-001.jpg) | ![KotOR II - TSL: Awaken Scene 2](https://raw.githubusercontent.com/KobaltBlu/KotOR.js/master/images/screenshots/K2-Screen-002.jpg) |
-
-</div>
-
-## Videos
-
-<div align="center">
-
-| **KotOR.js (2023) - In Browser Demo** | **KotOR JS - Combat Animations Progress Jan 2021** | **KotOR Forge - WIP: Lip Sync Editor Jan 2019** |
-|:---:|:---:|:---:|
-| [![KotOR.js (2023) - In Browser Demo](https://img.youtube.com/vi/ZT_9vKRC1t8/0.jpg)](https://www.youtube.com/watch?v=ZT_9vKRC1t8) | [![KotOR JS - Combat Animations Progress Jan 2021](https://img.youtube.com/vi/4oQ8nj_zO-w/0.jpg)](https://www.youtube.com/watch?v=4oQ8nj_zO-w) | [![KotOR Forge - WIP: Lip Sync Editor Jan 2019](https://img.youtube.com/vi/4s4uTyP5yqA/0.jpg)](https://www.youtube.com/watch?v=4s4uTyP5yqA) 
-| **KotOR JS - Lighting & Lipsync Progress Nov 2018** | **KotOR JS : TSL - Gameplay Compilation Sep 2018** | **KotOR JS: The Endar Spire Sep 2018** 
-| [![KotOR JS - Lighting & Lipsync Progress Nov 2018](https://img.youtube.com/vi/2SATn5W2sb4/0.jpg)](https://www.youtube.com/watch?v=2SATn5W2sb4) | [![KotOR JS : TSL - Gameplay Compilation Sep 2018](https://img.youtube.com/vi/IpP6BQJ5ZBQ/0.jpg)](https://www.youtube.com/watch?v=IpP6BQJ5ZBQ) | [![KotOR JS: The Endar Spire](https://img.youtube.com/vi/y2UzOH5bcAQ/0.jpg)](https://www.youtube.com/watch?v=y2UzOH5bcAQ)
-
-</div>
-
-## Influences & Credits
-
-Without these people below I couldn't have gotten this far.  
-[xoreos](https://xoreos.org/)  
-[The KotOR Modding Community](https://deadlystream.com/)   
-  
-And many many more!
+Star Wars and Knights of the Old Republic belong to Lucasfilm and Disney. This is a free fan project and isn't affiliated with or endorsed by them, Obsidian, BioWare or Aspyr.
 
 ## License
 
-[GPL 3.0 (GNU General Public License)](LICENSE.md)
+[GPL 3.0](LICENSE.md), same as KotOR.js. The source stays open.
