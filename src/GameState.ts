@@ -200,6 +200,7 @@ import {
 } from "@/utility/RendererOptions";
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 
+import { buildPartySwitchEntries } from "@/vr/runtime/VRPartySwitchRules";
 export interface GameStateInitializeOptions {
   Game: GameEngineType,
   GameDirectory: string, //path to the local game install directory
@@ -1956,12 +1957,25 @@ function distance2D(first: THREE.Vector3, second: THREE.Vector3): number {
 }
 
 function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
-  return GameState.PartyManager.party.slice(1).map((member) => ({
+  // Picking a member possesses them (SwitchPlayerCharacter), which is what
+  // retail's leader switch is; reordering the follow order left the Exile as
+  // every conversation's speaker. See VRPartySwitchRules.
+  const candidates = GameState.PartyManager.party.map((member) => ({
     id: String(member.id),
-    label: member.getName(),
-    icon: member.getPortraitResRef() || undefined,
-    resolveCurrentIndex: () => GameState.PartyManager.party.indexOf(member),
-    switchLeader: (index: number) => GameState.PartyManager.SwitchLeaderAtIndex(index),
+    name: member.getName(),
+    npcId: Number.isInteger(member.npcId) ? member.npcId : -1,
+    isPlayer: !!member.isPlayer,
+    portrait: member.getPortraitResRef() || undefined,
+  }));
+  const entries = buildPartySwitchEntries(candidates, GameState.PartyManager.ActualPlayerName, GameState.PartyManager.ActualPlayerPortrait || undefined);
+  return entries.map((entry, index) => ({
+    id: entry.id,
+    label: entry.label,
+    icon: entry.icon,
+    // The wheel treats a positive index as "switchable"; the entry's place in
+    // this list serves, since possession takes an NPC id, not an index.
+    resolveCurrentIndex: () => (entries.some((e) => e.id === entry.id) ? index + 1 : -1),
+    switchLeader: () => { GameState.PartyManager.SwitchPlayerCharacter(entry.npcId); },
   }));
 }
 

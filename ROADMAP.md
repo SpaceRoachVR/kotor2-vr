@@ -1044,13 +1044,18 @@ Engine defects found and fixed on the way, each of which stopped the run:
 15. Followers never step aside; a party member in a 2.5 m strip pinned the
     leader for good. The controlled leader now walks through their own party.
 
-**VR gaps found, not fixed:** the wheel's Party submenu only reorders the
-party; conversations always make the possessed body the speaker
-(`MakePlayerLeader`), so a companion cannot work a skill-gated console from
-VR. Retail's leader switch is possession; the driver uses
-`SwitchPlayerCharacter` directly. Also open: INSTANT effects accumulate in
-`object.effects`; `ExportPartyMemberTemplates` warns for every empty slot on
-each save.
+16. The wheel's Party submenu only reordered the party; conversations always
+    make the possessed body the speaker (`MakePlayerLeader`), so a companion
+    could not work a skill-gated console from VR. Retail's leader switch is
+    possession: the submenu now calls `SwitchPlayerCharacter` and, while a
+    companion is in control, offers the Exile by name to switch back
+    (`VRPartySwitchRules`). PartyCommand cycles through the same entries. The
+    Hangar Control step drives this route.
+
+**Still open:** INSTANT effects accumulate in `object.effects`;
+`ExportPartyMemberTemplates` warns for every empty slot on each save; while a
+companion is possessed the Exile is not in the world (the engine keeps one
+player object), unlike retail where she follows.
 
 **Tooling that made it possible:** `probe-walkmesh-map.js` (1 m ASCII
 raster plus a face dump), `walkmesh-plan.js` (height-aware face-graph
@@ -1636,9 +1641,10 @@ Every button reachable in flatscreen needs a VR route.
   opening the party wheel. The wheel is a state machine keyed on the Menu button
   being held, with no imperative open-this-submenu entry point, so forcing one
   open would mean surgery on the ownership boundaries 3.8 deliberately
-  separated. Cycling reuses the same `SwitchLeaderAtIndex` route the wheel's
-  Party submenu already calls, and the wheel stays the way to pick a *specific*
-  member.
+  separated. Cycling reuses the same possession route the wheel's Party
+  submenu calls (`SwitchPlayerCharacter`, since 2026-09-25; it used to be
+  `SwitchLeaderAtIndex`, which only reordered the follow order), and the wheel
+  stays the way to pick a *specific* member.
 
   `Pause` toggles the engine's own pause on the dominant B button.
 

@@ -89,6 +89,9 @@ export class PartyManager {
    */
   // static ActualPlayer: ModulePlayer;
   static ActualPlayerTemplate: GFFObject;
+  /** The Exile's display name and portrait as last possessed: the wheel offers her by these while a companion is in control. */
+  static ActualPlayerName: string = '';
+  static ActualPlayerPortrait: string = '';
 
   static PortraitOrder: any[] = [];
   static MaxSize = 3;
@@ -1124,6 +1127,7 @@ export class PartyManager {
     // the Exile returned from T3-M4's Peragus errand at level 1 with 12 HP,
     // no experience and no feats, as the playthrough driver found.
     if(oldPC && oldPC.isPlayer && npcId >= 0){
+      try{ PartyManager.ActualPlayerName = oldPC.getName(); PartyManager.ActualPlayerPortrait = oldPC.getPortraitResRef() || ''; }catch(e){ console.error(e); }
       PartyManager.ActualPlayerTemplate = oldPC.save();
       CurrentGame.WriteFile('pc.utc', PartyManager.ActualPlayerTemplate.getExportBuffer());
     }

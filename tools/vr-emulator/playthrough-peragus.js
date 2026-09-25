@@ -2258,25 +2258,22 @@ async function stageHangarEscape(ctx) {
     const slicer = both || members.find((m) => m.computer > 0);
     if (!repairer || !slicer) throw new Error(`no party member can work Hangar Control: ${JSON.stringify(members)}`);
 
-    // The wheel's Party submenu only reorders the party (SwitchLeaderAtIndex);
-    // the possessed character stays PartyManager.Player, and every
-    // conversation start calls MakePlayerLeader, so GetPCSpeaker is always the
-    // Exile and her skills gate the console whoever "leads". Retail's leader
-    // switch is possession, which this engine does through
-    // SwitchPlayerCharacter (the route 106PER's a_transformt3m4 used in stage
-    // B). VR has no control for that yet - a gap for the roadmap - so the
-    // driver calls it directly.
+    // The wheel's Party submenu possesses the chosen member
+    // (SwitchPlayerCharacter), which is retail's leader switch: GetPCSpeaker
+    // is then that member and their skills gate the console. While a
+    // companion is possessed the wheel offers the Exile by name to switch
+    // back. (It used to only reorder the follow order, and every
+    // conversation made the Exile the speaker again.)
     const makeLeader = async (member) => {
       const now = await roster();
-      if (now[0] && now[0].name === member.name && now[0].isPlayer === member.isPlayer) return { switched: false };
-      const npcId = member.isPlayer ? -1 : member.npcId;
-      const outcome = await harness.evaluate(`(() => { try { window.KotOR.PartyManager.SwitchPlayerCharacter(${Number(npcId)}); return { ok: true }; } catch (e) { return { ok: false, reason: String(e && e.message || e) }; } })()`);
+      if (now[0] && now[0].name === member.name) return { switched: false };
+      const wheel = await activateWheelAction(harness, { targetId: null, submenuId: 'submenu:party', actionLabel: member.name }).catch((error) => ({ ok: false, reason: String(error.message) }));
       await sleep(3000);
       await returnToGameplay(harness);
       const after = await roster();
       const player = await playerSnapshot(harness);
-      line(`  · possess ${member.name} (npc ${npcId}): ${JSON.stringify(outcome)}; party now ${JSON.stringify(after.map((m) => m.name))}; playing ${player.name} at ${JSON.stringify(player.position)}`);
-      if (!after[0] || after[0].name !== member.name) throw new Error(`could not switch to ${member.name}: ${JSON.stringify({ outcome, after })}`);
+      line(`  · wheel Party -> ${member.name}: ${JSON.stringify(wheel)}; party now ${JSON.stringify(after.map((m) => m.name))}; playing ${player.name} at ${JSON.stringify(player.position)}`);
+      if (!wheel.ok || !after[0] || after[0].name !== member.name) throw new Error(`the wheel did not hand control to ${member.name}: ${JSON.stringify({ wheel, after })}`);
       return { switched: true };
     };
     const eastDoorUnlocked = async () => {
