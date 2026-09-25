@@ -1975,7 +1975,7 @@ function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
     // The wheel treats a positive index as "switchable"; the entry's place in
     // this list serves, since possession takes an NPC id, not an index.
     resolveCurrentIndex: () => (entries.some((e) => e.id === entry.id) ? index + 1 : -1),
-    switchLeader: () => { GameState.PartyManager.SwitchPlayerCharacter(entry.npcId); },
+    switchLeader: () => { GameState.PartyManager.SwitchPlayerCharacter(entry.npcId, true); },
   }));
 }
 

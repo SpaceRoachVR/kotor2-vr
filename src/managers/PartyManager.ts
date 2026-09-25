@@ -1086,7 +1086,19 @@ export class PartyManager {
    * @param npcId - The ID of the NPC to switch the player character to
    * @returns ModuleCreature
    */
-  static SwitchPlayerCharacter(npcId = 0){
+  static SwitchPlayerCharacter(npcId = 0, keepOutgoingPlayer = false){
+    // `keepOutgoingPlayer`: retail's leader switch (a portrait click, the VR
+    // wheel's Party submenu) keeps the Exile in the world as a follower while
+    // a companion is controlled, and switching back reinstates that very
+    // instance. The scripted SwitchPlayerCharacter (a_bet3m4, a_transformt3m4:
+    // T3-M4's errand while the Exile is locked in the medical bay) does not
+    // keep her, so scripts leave this false.
+    if(npcId == -1){
+      const followerIndex = PartyManager.party.findIndex((pm, index) => index > 0 && pm && pm.isPlayer);
+      if(followerIndex > 0){
+        return PartyManager.ReinstatePlayer(followerIndex);
+      }
+    }
     // Possession must neither duplicate nor lose a party member. Taking
     // control of a companion who is already walking with the party (T3-M4
     // at 106PER's Hangar Control, the only member with both Repair and
@@ -1173,7 +1185,21 @@ export class PartyManager {
         
         GameState.group.party.add( partyMember.container );
         partyMember.getCurrentRoom();
-        oldPC.destroy();
+        if(keepOutgoingPlayer && oldPC && oldPC.isPlayer && npcId >= 0){
+          // The Exile stays, as a follower: same instance, same equipment and
+          // effects, just no longer controlled. Followers walk through the
+          // engine's party follow, and warp to their follow position when
+          // stuck (ModuleCreature.update).
+          oldPC.isPC = 0;
+          oldPC.controlled = false;
+          oldPC.clearAllActions();
+          if(PartyManager.party.indexOf(oldPC) == -1){
+            PartyManager.party.push(oldPC);
+          }
+          PartyManager.RebuildPortraitOrder();
+        }else{
+          oldPC.destroy();
+        }
         partyMember.onSpawn();
         if(outgoingNpcId >= 0 && outgoingNpcId != npcId && PartyManager.IsNPCInParty(outgoingNpcId)){
           PartyManager.RestoreCompanion(outgoingNpcId, spawn).catch((e) => console.error(e));
@@ -1184,6 +1210,43 @@ export class PartyManager {
       console.error(e);
       return undefined;
     }
+  }
+
+  /**
+   * Hands control back to the Exile who has been following as a party member
+   * since a leader switch: she becomes party[0] and PartyManager.Player again
+   * as the same instance, and the possessed member she replaces is restored
+   * as a companion where he stood.
+   */
+  static ReinstatePlayer(followerIndex: number): ModuleCreature {
+    const follower = PartyManager.party[followerIndex];
+    const oldPC = PartyManager.Player;
+    if(!follower || !follower.isPlayer){ return undefined; }
+    const outgoingNpcId = oldPC && !oldPC.isPlayer && Number.isInteger(oldPC.npcId) && oldPC.npcId >= 0 ? oldPC.npcId : -1;
+    if(outgoingNpcId >= 0){
+      try{ PartyManager.NPCS[outgoingNpcId].template = oldPC.save(); }catch(e){ console.error(e); }
+    }
+    const where = oldPC && oldPC.position ? oldPC.position.clone() : follower.position.clone();
+
+    PartyManager.party.splice(followerIndex, 1);
+    PartyManager.party[0] = follower;
+    PartyManager.Player = follower;
+    follower.isPC = 1;
+    follower.controlled = false;
+    follower.clearAllActions();
+    try{
+      PartyManager.ActualPlayerTemplate = follower.save();
+      PartyManager.PlayerTemplate = PartyManager.ActualPlayerTemplate;
+    }catch(e){ console.error(e); }
+    PartyManager.RebuildPortraitOrder();
+
+    if(oldPC && oldPC !== follower){
+      try{ oldPC.destroy(); }catch(e){ console.error(e); }
+    }
+    if(outgoingNpcId >= 0 && PartyManager.IsNPCInParty(outgoingNpcId)){
+      PartyManager.RestoreCompanion(outgoingNpcId, where).catch((e) => console.error(e));
+    }
+    return follower;
   }
 
   /**

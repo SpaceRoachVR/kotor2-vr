@@ -1050,12 +1050,15 @@ Engine defects found and fixed on the way, each of which stopped the run:
     possession: the submenu now calls `SwitchPlayerCharacter` and, while a
     companion is in control, offers the Exile by name to switch back
     (`VRPartySwitchRules`). PartyCommand cycles through the same entries. The
-    Hangar Control step drives this route.
+    Hangar Control step drives this route. A leader switch also keeps the
+    Exile in the world as a follower, as retail does, and switching back
+    reinstates that same instance (`SwitchPlayerCharacter(npcId, true)`,
+    `ReinstatePlayer`); the scripted switch (a_bet3m4, a_transformt3m4) still
+    takes her out, as those scripts expect. `probe-exile-follow.js` shows her
+    4.4 m behind T3 after a 10 m walk and back in control afterwards.
 
 **Still open:** INSTANT effects accumulate in `object.effects`;
-`ExportPartyMemberTemplates` warns for every empty slot on each save; while a
-companion is possessed the Exile is not in the world (the engine keeps one
-player object), unlike retail where she follows.
+`ExportPartyMemberTemplates` warns for every empty slot on each save.
 
 **Tooling that made it possible:** `probe-walkmesh-map.js` (1 m ASCII
 raster plus a face dump), `walkmesh-plan.js` (height-aware face-graph

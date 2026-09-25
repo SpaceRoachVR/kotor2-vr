@@ -36,7 +36,7 @@ describe('buildPartySwitchEntries', () => {
     const start = source.indexOf('function snapshotVRPartyMembers()');
     const body = source.slice(start, source.indexOf('function resolveVRCombatWeaponMode(', start));
     expect(body).toContain('buildPartySwitchEntries(');
-    expect(body).toContain('GameState.PartyManager.SwitchPlayerCharacter(entry.npcId)');
+    expect(body).toContain('GameState.PartyManager.SwitchPlayerCharacter(entry.npcId, true)');
     expect(body).not.toContain('SwitchLeaderAtIndex');
   });
 });
