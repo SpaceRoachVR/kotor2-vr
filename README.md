@@ -6,6 +6,8 @@ Not a flat screen floating in front of your face. You stand on Peragus as the Ex
 
 **This is a work in progress and it is not ready to play yet.** There's no release, no installer, and a lot is still broken. If you want to follow along or poke at it, read on.
 
+**All the VR work lives on the [`spike/stereo-perf`](https://github.com/SpaceRoachVR/kotor2-vr/tree/spike/stereo-perf) branch, so clone or check out that branch (`git clone -b spike/stereo-perf https://github.com/SpaceRoachVR/kotor2-vr.git`). `master` doesn't have the VR code yet.**
+
 ## Built on KotOR.js by KobaltBlu
 
 This whole project is a fork of [KotOR.js](https://github.com/KobaltBlu/KotOR.js) by [KobaltBlu](https://github.com/KobaltBlu). KotOR.js is a rebuild of the Odyssey engine (the engine behind KOTOR 1 and 2) written from scratch in TypeScript. It reads your own game files and runs the game in a browser or desktop app.
