@@ -17,6 +17,10 @@ export interface VRWorldUseTarget {
   readonly objectType: number;
   readonly position: THREE.Vector3;
   readonly keyRequired?: unknown;
+  /** The item tag a `keyRequired` lock names; empty on a script-only lock. */
+  readonly keyName?: unknown;
+  /** The authored conversation, if the object plays one when tried. */
+  readonly conversation?: unknown;
   readonly plot?: unknown;
   readonly scripts?: unknown;
   readonly tag?: unknown;
@@ -170,8 +174,28 @@ export function classifySafeDirectVRWorldUse(
     // story with `KeyRequired=1`, an empty `KeyName` and
     // `OnFailToOpen=a_compdlg`, so both guards refused and it offered nothing.
     // Unknown lock state is treated as locked.
-    const locked = typeof target.isLocked === 'function' ? target.isLocked() !== false : true;
-    if (locked && !isExplicitFalseFlag(target.keyRequired) && !actorHoldsRequiredKey) return null;
+    // isLocked() answers with the raw GFF byte on some doors (153HAR's
+    // kreia_sion_door: 0, not false), and `!== false` read that 0 as locked,
+    // so an unlocked plot door with KeyRequired offered nothing. Unknown still
+    // fails closed.
+    const lockedAnswer = typeof target.isLocked === 'function' ? target.isLocked() : undefined;
+    const locked = lockedAnswer === undefined || lockedAnswer === null ? true : !!lockedAnswer;
+    // `KeyRequired` with no `KeyName` is a script lock, not a key lock. The
+    // engine has no key to look for, so `ModuleDoor.use` falls straight
+    // through to OnFailToOpen — and on Peragus that script IS the way through:
+    // both airlock inner doors carry `a_airlockin`, which opens them, and the
+    // fuel depot's outer door carries `a_airlockout`, which checks for the
+    // space suit. Refusing these left the player sealed in the airlock with
+    // nothing to press, while flatscreen simply clicks the door. The engine
+    // still owns the outcome; this only lets the attempt be made.
+    //
+    // The Ebon Hawk's sealed doors have the same lock shape but carry a
+    // Conversation (a_compdlg plays it as a "this door is sealed" hint), and
+    // the decision to keep those prompt-less stands. A mechanism has a
+    // failure script and nothing to say; a hint has something to say.
+    const scriptOnlyLock = !isExplicitFalseFlag(target.keyRequired) && !hasKeyName(target.keyName) &&
+      hasStoryFailureScript(target.scripts) && !hasConversation(target.conversation);
+    if (locked && !isExplicitFalseFlag(target.keyRequired) && !scriptOnlyLock && !actorHoldsRequiredKey) return null;
 
     if (isEbonHawkGalaxyMap(target)) return 'ebon-hawk-galaxy-map';
 
@@ -191,7 +215,7 @@ export function classifySafeDirectVRWorldUse(
     // could run. The Ebon Hawk cargo locker (`locker_locked`) is key-locked,
     // not blastable, plot-flagged and carries `OnFailToOpen=a_compdlg` — with
     // the key in hand it still offered nothing.
-    if (locked && !actorHoldsRequiredKey && hasStoryFailureScript(target.scripts)) return null;
+    if (locked && !actorHoldsRequiredKey && !scriptOnlyLock && hasStoryFailureScript(target.scripts)) return null;
     return 'ordinary';
   } catch {
     return null;
@@ -337,6 +361,20 @@ function hasStoryFailureScript(scripts: unknown): boolean {
     }
     return typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
   });
+}
+
+function hasConversation(value: unknown): boolean {
+  if (!value) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'object' && 'resref' in (value as object)) {
+    const resref = (value as { readonly resref?: unknown }).resref;
+    return typeof resref === 'string' ? resref.trim().length > 0 : Boolean(resref);
+  }
+  return true;
+}
+
+function hasKeyName(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function isExplicitFalseFlag(value: unknown): boolean {

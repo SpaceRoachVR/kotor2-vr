@@ -25,6 +25,7 @@ import { type SWPortrait } from "@/engine/rules/SWPortrait";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
 
+import { registerPartyRosterMember } from "@/managers/PartyRosterRules";
 export interface CurrentMember {
   isLeader: boolean,
   memberID: number
@@ -1061,8 +1062,15 @@ export class PartyManager {
     //PartyManager.NPCS[nID].canSelect = true;
     PartyManager.NPCS[slot].template = creature.template;
     PartyManager.NPCS[slot].moduleObject = creature;
+    // The roster, not just this module's party array: the save writes
+    // PT_MEMBER_ID from npcId and a transition rebuilds the party from
+    // CurrentMembers, and T3-M4 (AddPartyMember(8) in 103PER's fuel pipe)
+    // vanished at the first of either without these. See PartyRosterRules.
+    creature.npcId = slot;
+    registerPartyRosterMember(PartyManager.CurrentMembers, slot);
     //Add the creature to the party array
     PartyManager.party.push(creature);
+    PartyManager.AddPortraitToOrder( creature.getPortraitResRef() );
     //Check to see if the creature needs to be removed from the creatures array
     let cIdx = GameState.module.area.creatures.indexOf(creature);
     if(cIdx > -1){
@@ -1076,6 +1084,24 @@ export class PartyManager {
    * @returns ModuleCreature
    */
   static SwitchPlayerCharacter(npcId = 0){
+    // Possession must neither duplicate nor lose a party member. Taking
+    // control of a companion who is already walking with the party (T3-M4
+    // at 106PER's Hangar Control, the only member with both Repair and
+    // Computer Use) used to build a second T3 at slot 0 and leave the
+    // companion instance following; handing control back destroyed the
+    // possessed instance and the roster's member was gone until the next
+    // module load. Fold the companion instance into the switch, and restore
+    // the outgoing possessed member as a companion afterwards.
+    if(npcId >= 0){
+      const companionIndex = PartyManager.party.findIndex((pm, index) => index > 0 && pm && pm.npcId == npcId);
+      if(companionIndex > 0){
+        const companion = PartyManager.party[companionIndex];
+        try{ PartyManager.NPCS[npcId].template = companion.save(); }catch(e){ console.error(e); }
+        PartyManager.party.splice(companionIndex, 1);
+        try{ companion.destroy(); }catch(e){ console.error(e); }
+      }
+    }
+
     let partyMember: ModuleCreature;
     if(npcId == -1){
       partyMember = new ModulePlayer(PartyManager.ActualPlayerTemplate);
@@ -1085,12 +1111,24 @@ export class PartyManager {
     }
      
     const oldPC = PartyManager.Player;
-    PartyManager.Player = partyMember;
+    const outgoingNpcId = oldPC && !oldPC.isPlayer && Number.isInteger(oldPC.npcId) && oldPC.npcId >= 0 ? oldPC.npcId : -1;
+    if(outgoingNpcId >= 0 && outgoingNpcId != npcId){
+      try{ PartyManager.NPCS[outgoingNpcId].template = oldPC.save(); }catch(e){ console.error(e); }
+    }
 
-    if(PartyManager.Player.isPlayer && npcId >= 0){
-      PartyManager.ActualPlayerTemplate = PartyManager.Player.save();
+    // Snapshot the OUTGOING player before the swap. This used to assign the
+    // new member first and then test `PartyManager.Player.isPlayer`, which is
+    // the incoming NPC and never true, so the real player was never saved.
+    // Switching back (-1) then rebuilt the player from whatever
+    // ActualPlayerTemplate last held - the character-creation template - and
+    // the Exile returned from T3-M4's Peragus errand at level 1 with 12 HP,
+    // no experience and no feats, as the playthrough driver found.
+    if(oldPC && oldPC.isPlayer && npcId >= 0){
+      PartyManager.ActualPlayerTemplate = oldPC.save();
       CurrentGame.WriteFile('pc.utc', PartyManager.ActualPlayerTemplate.getExportBuffer());
     }
+
+    PartyManager.Player = partyMember;
 
     try{
       const spawn = oldPC.position.clone();
@@ -1133,12 +1171,42 @@ export class PartyManager {
         partyMember.getCurrentRoom();
         oldPC.destroy();
         partyMember.onSpawn();
+        if(outgoingNpcId >= 0 && outgoingNpcId != npcId && PartyManager.IsNPCInParty(outgoingNpcId)){
+          PartyManager.RestoreCompanion(outgoingNpcId, spawn).catch((e) => console.error(e));
+        }
       });
       return partyMember;
     }catch(e){
       console.error(e);
       return undefined;
     }
+  }
+
+  /**
+   * Puts a roster member back into the party as a companion instance built
+   * from their saved template, beside `near`. Used when control is handed
+   * back from a possessed companion, whose possessed instance is destroyed.
+   */
+  static async RestoreCompanion(npcId: number, near: THREE.Vector3){
+    if(PartyManager.party.some((pm) => pm && pm.npcId == npcId)){ return; }
+    const npc = PartyManager.NPCS[npcId];
+    if(!npc || !npc.template){ return; }
+    npc.template.RootNode.addField( new GFFField(GFFDataType.DWORD, 'ObjectId') ).setValue( GameState.ModuleObjectManager.GetNextPlayerId() );
+    const companion = new ModuleCreature(npc.template);
+    companion.isPM = true;
+    companion.npcId = npcId;
+    companion.load();
+    companion.clearAllActions();
+    PartyManager.AddPortraitToOrder( companion.getPortraitResRef() );
+    PartyManager.party.push(companion);
+    companion.position.copy(near);
+    const model = await companion.loadModel();
+    model.userData.moduleObject = companion;
+    model.hasCollision = true;
+    companion.position.copy(near);
+    GameState.group.party.add( companion.container );
+    companion.getCurrentRoom();
+    companion.onSpawn();
   }
 
   /**

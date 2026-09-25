@@ -16,6 +16,25 @@ describe('shouldAutoQueueControlledBasicAttack', () => {
     })).toBe(false);
   });
 
+  test('a pending scripted attack keeps its queue filled even under embodied VR input', () => {
+    // 105PER a_bash_console: the PC is commanded to destroy the Turbolift Console.
+    expect(shouldAutoQueueControlledBasicAttack({
+      isControlledActor: true,
+      embodiedVRInputActive: true,
+      scriptedAttackPending: true,
+    })).toBe(true);
+    expect(shouldAutoQueueControlledBasicAttack({
+      isControlledActor: true,
+      embodiedVRInputActive: true,
+      scriptedAttackPending: false,
+    })).toBe(false);
+    expect(() => shouldAutoQueueControlledBasicAttack({
+      isControlledActor: true,
+      embodiedVRInputActive: true,
+      scriptedAttackPending: 'yes' as unknown as boolean,
+    })).toThrow(TypeError);
+  });
+
   test('never auto-queues a non-controlled creature', () => {
     expect(shouldAutoQueueControlledBasicAttack({
       isControlledActor: false,

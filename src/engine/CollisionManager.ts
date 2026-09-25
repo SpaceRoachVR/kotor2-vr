@@ -11,9 +11,12 @@ import {
   isWalkmeshSeam,
   seamBridgeOffsets,
   SEAM_HEIGHT_TOLERANCE,
+  DOOR_SEAM_BRIDGE_DISTANCE,
+  isPointInDoorway,
 } from "@/engine/collision/WalkmeshSeamRules";
 import { getChokeSlideVelocity } from "@/engine/collision/ChokeSlideRules";
 
+import { shouldIgnoreCreatureCollision } from "@/engine/collision/PartyCollisionRules";
 // =============================================
 // TYPE DEFINITIONS
 // =============================================
@@ -431,6 +434,14 @@ export class CollisionManager {
       }
 
       if (!creature.getAppearance()) {
+        continue;
+      }
+
+      // The controlled leader walks through their own party: followers do
+      // not step aside, and one standing in a 2.5 m strip pinned the Exile
+      // at 106PER's Decontamination Console. See PartyCollisionRules.
+      if (type === CollisionType.CREATURE &&
+          shouldIgnoreCreatureCollision(this.object as ModuleCreature, creature, GameState.PartyManager.party)) {
         continue;
       }
 
@@ -968,9 +979,34 @@ export class CollisionManager {
   private seamEdgeVerdicts: WeakMap<object, boolean> = new WeakMap();
   private seamProbePoint = new THREE.Vector3();
 
+  /**
+   * True when `point` lies in the footprint of a door that is open or
+   * destroyed. Only doors near the object are considered, so this is a
+   * handful of box tests.
+   */
+  private isInPassableDoorway(point: THREE.Vector3): boolean {
+    const doors = this.object.area?.doors;
+    if (!Array.isArray(doors) || !doors.length) return false;
+    for (const door of doors) {
+      if (!door || typeof door.isPassable !== 'function' || !door.isPassable()) continue;
+      if (!door.box || door.box.isEmpty()) continue;
+      if (door.position.distanceTo(point) > 6) continue;
+      if (isPointInDoorway(point, door.box)) return true;
+    }
+    return false;
+  }
+
+  private seamEdgeMidpoint = new THREE.Vector3();
+
   private isRoomSeamEdge(edge: any): boolean {
     if (!edge || !edge.line || !edge.normal) return false;
     const cached = this.seamEdgeVerdicts.get(edge);
+    if (cached === true) return true;
+    // A room perimeter edge lying in an open doorway is the room boundary,
+    // not a wall: the door was the wall, and it is out of the way now. This
+    // depends on door state, so it is never cached.
+    this.seamEdgeMidpoint.copy(edge.line.start).add(edge.line.end).multiplyScalar(0.5);
+    if (this.isInPassableDoorway(this.seamEdgeMidpoint)) return true;
     if (cached !== undefined) return cached;
 
     const faces = this.object.room?.collisionManager?.walkmesh?.walkableFaces;
@@ -1015,7 +1051,11 @@ export class CollisionManager {
     this.seamTravel.normalize();
     this.seamOrigin.copy(this.object.position);
 
-    for (const offset of seamBridgeOffsets()) {
+    // Under an open door the two rooms' meshes can stop over a metre apart
+    // (102PER's fourth PeragusDoor1: 1.16m); reach further there.
+    const bridgeDistance = this.isInPassableDoorway(this.seamOrigin) ? DOOR_SEAM_BRIDGE_DISTANCE : undefined;
+
+    for (const offset of seamBridgeOffsets(bridgeDistance)) {
       this.object.position.copy(this.seamOrigin).addScaledVector(this.seamTravel, offset);
       this.groundFace = undefined;
       this.findWalkableFace();

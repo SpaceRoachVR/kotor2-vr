@@ -992,6 +992,72 @@ position through leg 2.
 - The playthrough driver's failure message truncates mid-sentence
   (`"no closed door offered a "`), which makes these logs harder to read.
 
+**Extended through the end of Peragus (2026-09-23 to 2026-09-25).**
+`tools/vr-emulator/playthrough-peragus.js` continues the same driver from the
+medical bay to the Ebon Hawk's loading ramp, under the emulated headset with no
+scripted shortcuts: the administration level (vibroblade, security room,
+administration computer, Atton's cell), T3-M4's errand through the hangar and
+fuel depot, the emergency hatch and mining tunnels (containment fields, the
+turbolift), HK-50, the airlock and the asteroid exterior, the dormitories and
+the forced turbolift, the Harbinger (drift charts, crew quarters, Sion, the
+engine hatch), the fuel line (T3-M4's rescue, the mines, the Emergency Field
+Station and exit ramp), Hangar Control (possessing T3-M4 for the Repair and
+Computer Use gates, replacing the conduit), the Decontamination Console and
+the gassed tunnel, and the ramp trigger's `ebonhawk.dlg`, which loads `107PER`
+- the turret minigame, the authored end of the arc (the minigame itself is
+7.6). Every stage is a checkpoint (`--resume <name>`: `vibroblade` ...
+`t3-rescued`, `exit-ramp-open`, `hangar-bay`, `hangar-door-open`); the last
+run from `hangar-door-open` ends in `107PER` in engine mode MINIGAME.
+
+Engine defects found and fixed on the way, each of which stopped the run:
+
+1. `GetHasSkill` was a stub returning 0, so no skill-gated console reply was
+   ever offered.
+2. `SwitchPlayerCharacter` snapshotted the incoming member, so switching back
+   to the Exile rebuilt her from the character-creation template.
+3. Script locks (key-required doors with no key name) were refused by the VR
+   use gate; the failure script is the only way through.
+4. Room walkmeshes need not meet under a door (102PER: a 1.16 m gap); a
+   perimeter edge inside a passable door's box is now a seam.
+5. One dropped HTTP asset read stranded a module load; the backend retries.
+6. `EffectDamage` wrote its amount into the typed slot and slot 14, so every
+   scripted hit landed twice (102PER's steam vents killed a level-3 Exile).
+7. `ModuleTrigger` gated OnEnter and OnExit on its one-shot latch, so OnExit
+   never ran and every crossed vent kept hurting from anywhere in the module.
+8. A scripted `ActionOpenDoor` on a placeable went through the lock check.
+9. A movie mid-conversation flipped the engine out of DIALOG and the
+   conversation hung on its continue node; deferred replies now resume.
+10. `ActionAttack` refused placeable targets, placeables never ran
+    OnMeleeAttacked or died, and embodied VR stopped swinging after one hit
+    (105PER's turbolift console).
+11. `showReplies` judged continue/end on the authored links rather than the
+    replies whose conditions pass (hk50.dlg's two-way continue).
+12. The first frame after a module load was handed the whole load as its
+    delta (~5.6 s) with the pre-transition movement vector still set: one
+    10.5 m step through the fuel pipe's wall (`clampFrameDelta`,
+    `FrameDeltaRules`).
+13. `AddPartyMember` never recorded the member on the roster or its npcId, so
+    T3-M4 was lost at the first save or module load after rejoining.
+14. Possessing a companion already in the party built a duplicate and
+    switching back destroyed him; `SwitchPlayerCharacter` now folds and
+    restores companions.
+15. Followers never step aside; a party member in a 2.5 m strip pinned the
+    leader for good. The controlled leader now walks through their own party.
+
+**VR gaps found, not fixed:** the wheel's Party submenu only reorders the
+party; conversations always make the possessed body the speaker
+(`MakePlayerLeader`), so a companion cannot work a skill-gated console from
+VR. Retail's leader switch is possession; the driver uses
+`SwitchPlayerCharacter` directly. Also open: INSTANT effects accumulate in
+`object.effects`; `ExportPartyMemberTemplates` warns for every empty slot on
+each save.
+
+**Tooling that made it possible:** `probe-walkmesh-map.js` (1 m ASCII
+raster plus a face dump), `walkmesh-plan.js` (height-aware face-graph
+planner; hand-picked LYT vias were off the mesh in every module), and
+`probe-eval.js <checkpoint> "<expr>"` for one-shot state questions; the
+transition trace in `walkIntoTransition` caught defect 12 in the act.
+
 ### 1.12 — Breadth-first module sweep ✅ built and first-run verified (2026-08-29)
 
 **The discovery loop was the bottleneck, not the fixing.** Every defect in

@@ -35,6 +35,19 @@ export class CutsceneManager {
   static startingEntry: DLGNode;
   static currentEntry: DLGNode;
   static currentReplies: DLGNode[] = [];
+  /**
+   * The entry whose replies could not be shown because the engine was not in
+   * DIALOG mode at the time (a reply or entry script had started a movie).
+   * RestoreEnginePlayMode resumes it once the mode returns to DIALOG.
+   */
+  static repliesDeferredForEntry: DLGNode | undefined;
+  /**
+   * An entry that showEntry() could not set up because a movie owned the
+   * engine mode (104PER's harbcs cutscene started while a_playpermov's movie
+   * was still playing): no camera, no replies, no animations, so its
+   * checklist could never complete. RestoreEnginePlayMode shows it again.
+   */
+  static entryDeferredForMovie: DLGNode | undefined;
 
   static lastSpokenString: string = '';
 
@@ -112,7 +125,13 @@ export class CutsceneManager {
     }
 
     if (!(dialog instanceof DLGObject)) {
+      // This used to end the conversation and then fall through to read
+      // `dialog.resref` off whatever it was handed, throwing with `active`
+      // already true and no entry - a conversation that can never show and
+      // never end. Name the caller's mistake and stop.
+      console.error(`CutsceneManager.startConversation: not a DLGObject for owner='${owner?.getTag ? owner.getTag() : '?'}'`, dialog);
       this.endConversation();
+      return;
     }
 
     this.conversation_name = dialog.resref;
@@ -162,22 +181,44 @@ export class CutsceneManager {
     console.log(`CutsceneManager.startConversation: ${this.dialog.getConversationType() ? 'Computer' : 'Conversation'}`);
 
     GameState.holdWorldFadeInForDialog = (this.cutsceneMode == CutsceneMode.ANIMATED);
-    Promise.all([
+    // A conversation whose preload never settles, or whose menu open throws,
+    // used to leave `active` true with no entry and no way out: the 101PER
+    // hand-back from T3-M4 sat in DIALOG mode with a hidden menu until the
+    // playthrough driver ended it by force. Settle the preloads whatever
+    // happens to them, and if the first entry cannot be shown, say which
+    // conversation and why, and end it rather than strand the engine.
+    const startingDialog = this.dialog;
+    const startingEntry = this.startingEntry;
+    Promise.allSettled([
       this.dialog.loadStuntCamera(),
       this.dialog.loadStuntActors(),
       this.dialog.loadBackgroundMusic()
-    ]).then(() => {
-      switch (this.dialog.getConversationType()) {
-        case DLGConversationType.COMPUTER:
-          console.log('CutsceneManager.startConversation: Computer');
-          GameState.MenuManager.InGameComputer.open();
-          break;
-        default:
-          console.log('CutsceneManager.startConversation: Conversation');
-          GameState.MenuManager.InGameDialog.open();
-          break;
+    ]).then((settled) => {
+      for (const outcome of settled) {
+        if (outcome.status === 'rejected') {
+          console.error(`CutsceneManager.startConversation: preload failed for '${startingDialog.resref}'`, outcome.reason);
+        }
       }
-      this.showEntry(this.startingEntry);
+      if (this.dialog !== startingDialog || !this.active) {
+        console.warn(`CutsceneManager.startConversation: '${startingDialog.resref}' was superseded before its first entry showed`);
+        return;
+      }
+      try {
+        switch (this.dialog.getConversationType()) {
+          case DLGConversationType.COMPUTER:
+            console.log('CutsceneManager.startConversation: Computer');
+            GameState.MenuManager.InGameComputer.open();
+            break;
+          default:
+            console.log('CutsceneManager.startConversation: Conversation');
+            GameState.MenuManager.InGameDialog.open();
+            break;
+        }
+        this.showEntry(startingEntry);
+      } catch (e) {
+        console.error(`CutsceneManager.startConversation: could not show the first entry of '${startingDialog.resref}'`, e);
+        this.endConversation(true);
+      }
     });
   }
 
@@ -227,9 +268,11 @@ export class CutsceneManager {
       //Everything past this point (camera, video effect, replies, participant
       //animations) gets skipped for this entry with no other trace - previously
       //silent, which made a black-screen report impossible to confirm against a log.
-      console.warn('CutsceneManager.showEntry: engine mode is', GameState.Mode, 'not DIALOG - skipping camera/replies/animations for this entry', entry);
+      console.warn('CutsceneManager.showEntry: engine mode is', GameState.Mode, 'not DIALOG - deferring camera/replies/animations for this entry until the mode is restored', entry);
+      this.entryDeferredForMovie = entry;
       return;
     }
+    this.entryDeferredForMovie = undefined;
     GameState.VideoEffectManager.SetVideoEffect(entry.getVideoEffect());
     this.lastSpokenString = entry.getCompiledString();
     if(this.dialog.getConversationType() == DLGConversationType.COMPUTER){
@@ -337,6 +380,27 @@ export class CutsceneManager {
   }
 
   /**
+   * Show the replies that showReplies() had to defer while a movie owned the
+   * engine mode. Returns true when a deferred entry was resumed.
+   */
+  static resumeDeferredReplies(): boolean {
+    if(!this.active || GameState.Mode != EngineMode.DIALOG){ return false; }
+    const deferredEntry = this.entryDeferredForMovie;
+    if(deferredEntry){
+      this.entryDeferredForMovie = undefined;
+      console.log('CutsceneManager.resumeDeferredReplies: showing an entry deferred during a movie');
+      this.showEntry(deferredEntry);
+      return true;
+    }
+    const entry = this.repliesDeferredForEntry;
+    if(!entry){ return false; }
+    this.repliesDeferredForEntry = undefined;
+    console.log('CutsceneManager.resumeDeferredReplies: showing replies deferred during a movie');
+    this.showReplies(entry);
+    return true;
+  }
+
+  /**
    * Whether the conversation is currently accepting a PC reply selection.
    */
   static isWaitingForPCChoice(): boolean {
@@ -379,23 +443,37 @@ export class CutsceneManager {
     // scripts, so an action-only terminal reply is dropped. It was investigated
     // as the cause of the Peragus lift and cleared — the lift was the VR abort
     // guard in GameState's cutscene context, not this path.
-    if (GameState.Mode != EngineMode.DIALOG)
+    if (GameState.Mode != EngineMode.DIALOG){
+      // A movie started by a script (104PER's a_playpermov on the reply
+      // before the Harbinger's arrival) owns the engine mode here. Leaving now
+      // with the state already WAITING_FOR_PC_CHOICE and no way back hung the
+      // conversation on its continue node for good; remember the entry so
+      // RestoreEnginePlayMode can finish the job when the movie ends.
+      this.repliesDeferredForEntry = entry;
       return;
+    }
+    this.repliesDeferredForEntry = undefined;
 
-    //Get First Reply
-    const reply = this.dialog.getReplyByIndex(entry.replies[0]?.index);
+    //The replies whose conditions pass, not the first authored link. 101PER
+    //hk50.dlg E26 ends with two continue rows, R28 (101PER_Know_Sedatives > 0)
+    //and R30 (== 0): taking entry.replies[0] chose the failing one, and
+    //counting the two authored links hid that exactly one row remained, so
+    //the conversation sat on an empty reply list instead of continuing into
+    //the fight.
+    const available = this.dialog.getAvailableReplies(entry);
+    const reply = available[0];
     if(!reply){
       console.warn('CutsceneManager.showReplies: No reply found');
       this.endConversation();
       return;
     }
     
-    const isContinueDialog = entry.replies.length == 1 && reply.isContinueDialog();
-    const isEndDialog = entry.replies.length == 1 && reply.isEndDialog();
+    const isContinueDialog = available.length == 1 && reply.isContinueDialog();
+    const isEndDialog = available.length == 1 && reply.isEndDialog();
 
     //End Dialog
-    if (isEndDialog || !entry.replies.length) {
-      if(!entry.replies.length){
+    if (isEndDialog || !available.length) {
+      if(!available.length){
         console.warn('CutsceneManager.showReplies: No replies found');
       }
 

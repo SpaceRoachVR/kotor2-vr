@@ -38,6 +38,8 @@ export class CombatData {
   initiative: number;
   lastDamager: ModuleObject;
   lastAttacker: ModuleObject;
+  /** Target of a script-commanded ActionAttack, kept until it dies or actions are cleared. */
+  scriptedAttackTarget: ModuleObject | undefined;
 
   //combat
   combatActionTimer: number;

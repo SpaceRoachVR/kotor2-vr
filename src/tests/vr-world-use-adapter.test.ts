@@ -52,6 +52,62 @@ describe('describeDirectVRWorldUse', () => {
     expect(activeActor.position.toArray()).toEqual([0, 0, 0]);
   });
 
+  test('offers Use on a key-required door that names no key, so its OnFailToOpen can answer (Peragus airlocks)', () => {
+    // 103PER AirlockInnerDoor_103PER: Locked=1, KeyRequired=1, KeyName empty,
+    // OnFailToOpen=a_airlockin — the script is the only way through.
+    const airlock = {
+      id: 42,
+      objectType: ModuleObjectType.ModuleDoor,
+      position: new THREE.Vector3(1, 0, 0),
+      keyRequired: 1,
+      keyName: '',
+      plot: 1,
+      scripts: { onFailToOpen: { name: 'a_airlockin' } },
+      isLocked: () => true,
+      getName: () => 'Airlock Inner Door',
+      onClick: jest.fn(),
+    };
+    expect(describeDirectVRWorldUse(actor(), airlock, quietLogger)).toEqual(expect.objectContaining({
+      label: 'Use: Airlock Inner Door',
+    }));
+
+    // A real key lock without the key still refuses (the Ebon Hawk cargo locker).
+    const keyed = { ...airlock, keyName: 'k_ebo_key', getName: () => 'Locker', onClick: jest.fn() };
+    expect(describeDirectVRWorldUse(actor(), keyed, quietLogger)).toBeNull();
+
+    // A plain lock with a hint script still refuses (the sealed emergency hatch).
+    const hinted = { ...airlock, keyRequired: 0, getName: () => 'Emergency Hatch', onClick: jest.fn() };
+    expect(describeDirectVRWorldUse(actor(), hinted, quietLogger)).toBeNull();
+
+    // The Ebon Hawk's sealed doors share the lock shape but play a hint
+    // conversation (a_compdlg); they stay prompt-less, as decided before.
+    const sealed = { ...airlock, scripts: { onFailToOpen: { name: 'a_compdlg' } }, conversation: { resref: 'gar_door' }, getName: () => 'Sealed Door', onClick: jest.fn() };
+    expect(describeDirectVRWorldUse(actor(), sealed, quietLogger)).toBeNull();
+
+    // And a key lock with no failure script at all has nothing to try.
+    const mute = { ...airlock, scripts: {}, getName: () => 'Blast Door', onClick: jest.fn() };
+    expect(describeDirectVRWorldUse(actor(), mute, quietLogger)).toBeNull();
+  });
+
+  test('an unlocked key-required plot door whose isLocked answers 0 still offers Use (153HAR kreia_sion_door)', () => {
+    const door = {
+      id: 117,
+      objectType: ModuleObjectType.ModuleDoor,
+      position: new THREE.Vector3(1, 0, 0),
+      keyRequired: 1,
+      keyName: '',
+      plot: 1,
+      scripts: {},
+      isLocked: () => 0 as unknown as boolean,
+      getName: () => 'Door',
+      onClick: jest.fn(),
+    };
+    expect(describeDirectVRWorldUse(actor(), door, quietLogger)).toEqual(expect.objectContaining({ label: 'Use: Door' }));
+    // A door that reports itself locked with the same flags is still refused.
+    const shut = { ...door, isLocked: () => 1 as unknown as boolean, onClick: jest.fn() };
+    expect(describeDirectVRWorldUse(actor(), shut, quietLogger)).toBeNull();
+  });
+
   test('blocks a descriptor that moves out of range before activation', () => {
     const target = placeable('Console', 1);
     const logger = { info: jest.fn(), error: jest.fn() };

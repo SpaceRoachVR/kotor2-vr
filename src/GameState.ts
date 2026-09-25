@@ -45,6 +45,7 @@ import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
 import { CutsceneMode } from "@/enums/dialog/CutsceneMode";
 import { EngineFrameSource, shouldProcessEngineFrame } from "@/vr/XRFrameCadence";
+import { clampFrameDelta } from "@/engine/FrameDeltaRules";
 import { CreatureLocomotionAdapter } from "@/vr/runtime/CreatureLocomotionAdapter";
 import type { VRCombatAimCandidate } from "@/vr/runtime/VRCombatAimResolver";
 import type { VRCombatActorSnapshot } from "@/vr/runtime/VRCombatVisualEvents";
@@ -4267,7 +4268,18 @@ export class GameState implements EngineContext {
 
       await GameState.FactionManager.Load();
 
-      const module = await GameState.Module.Load(name, waypoint);
+      // Module.Load swallows its own failures and returns undefined; one
+      // dropped asset read then used to surface here as "Cannot read
+      // properties of undefined (reading 'loadScene')" with the game stranded
+      // on the load screen. Give the load a second chance before giving up.
+      let module = await GameState.Module.Load(name, waypoint);
+      if(!module){
+        console.warn(`GameState.LoadModule: '${name}' failed to load; retrying once`);
+        module = await GameState.Module.Load(name, waypoint);
+      }
+      if(!module){
+        throw new Error(`GameState.LoadModule: module '${name}' could not be loaded`);
+      }
       GameState.module = module;
       GameState.scene.visible = false;
 
@@ -4346,6 +4358,8 @@ export class GameState implements EngineContext {
         }
       });
     }catch(e){
+      // Leave the flag clear so a later transition is not a silent no-op.
+      GameState.loadingModule = false;
       console.error(e);
       throw e;
     }
@@ -4364,6 +4378,8 @@ export class GameState implements EngineContext {
     if(GameState.CutsceneManager.active){
       console.log('RestoreEnginePlayMode: DIALOG (conversation still active)');
       GameState.SetEngineMode(EngineMode.DIALOG);
+      // A movie that interrupted a conversation left its replies unshown.
+      GameState.CutsceneManager.resumeDeferredReplies();
       return;
     }
     if(GameState.module){
@@ -4504,7 +4520,10 @@ export class GameState implements EngineContext {
 
     GameState.forwardVector.set(0, 0, -1);
 
-    const delta = GameState.clock.getDelta();
+    // A module load, a movie or a background tab leaves a multi-second gap
+    // on the clock; simulating it as one frame moved the Exile 10.5 m through
+    // a wall on arrival in 103PER. See FrameDeltaRules.
+    const delta = clampFrameDelta(GameState.clock.getDelta());
     GameState.processEventListener('beforeRender', [delta]);
     GameState.delta = delta;
     GameState.deltaTime += delta;

@@ -95,3 +95,46 @@ describe('SEAM_HEIGHT_TOLERANCE', () => {
     expect(isWalkmeshSeam(PAD_EDGE_START, PAD_EDGE_END, PAD_INWARD_NORMAL, heightAware)).toBe(false);
   });
 });
+
+import { DOOR_SEAM_BRIDGE_DISTANCE, DOORWAY_MARGIN, isPointInDoorway } from '@/engine/collision/WalkmeshSeamRules';
+
+/**
+ * 102PER's fourth PeragusDoor1 at (-7.78,-16.7): rooms 102perg and 102perh
+ * stop 1.16m apart under it, and the door's footprint (its closed DWK) spans
+ * (-9.9..-5.57, -18.57..-14.92) at z 3.37..6.53.
+ */
+const TUNNEL_DOOR_BOX = { min: { x: -9.9, y: -18.57, z: 3.37 }, max: { x: -5.57, y: -14.92, z: 6.53 } };
+
+describe('DOOR_SEAM_BRIDGE_DISTANCE', () => {
+  test("covers the 1.16m gap under 102PER's fourth tunnel door, which the plain bridge does not", () => {
+    expect(SEAM_BRIDGE_DISTANCE).toBeLessThan(1.16);
+    expect(Math.max(...seamBridgeOffsets(DOOR_SEAM_BRIDGE_DISTANCE))).toBeGreaterThanOrEqual(1.16);
+  });
+
+  test('stays short of a real drop', () => {
+    expect(DOOR_SEAM_BRIDGE_DISTANCE).toBeLessThanOrEqual(2.5);
+  });
+});
+
+describe('isPointInDoorway', () => {
+  test('accepts the doorway edges of both rooms and the gap between them', () => {
+    // 102perh edge 8 midpoint and 102perg edge 3 midpoint, then the gap centre.
+    expect(isPointInDoorway({ x: -7.45, y: -17.15, z: 3.36 }, TUNNEL_DOOR_BOX)).toBe(true);
+    expect(isPointInDoorway({ x: -8.22, y: -16.2, z: 3.36 }, TUNNEL_DOOR_BOX)).toBe(true);
+    expect(isPointInDoorway({ x: -7.8, y: -16.7, z: 3.4 }, TUNNEL_DOOR_BOX)).toBe(true);
+  });
+
+  test('rejects the corridor a few metres away and a doorway on another deck', () => {
+    expect(isPointInDoorway({ x: -3, y: -22, z: 3.4 }, TUNNEL_DOOR_BOX)).toBe(false);
+    expect(isPointInDoorway({ x: -12, y: -10, z: 3.4 }, TUNNEL_DOOR_BOX)).toBe(false);
+    expect(isPointInDoorway({ x: -7.8, y: -16.7, z: 12.4 }, TUNNEL_DOOR_BOX)).toBe(false);
+  });
+
+  test('applies the margin in plan view only and validates it', () => {
+    expect(isPointInDoorway({ x: -5.57 + DOORWAY_MARGIN - 0.01, y: -16.7 }, TUNNEL_DOOR_BOX)).toBe(true);
+    expect(isPointInDoorway({ x: -5.57 + DOORWAY_MARGIN + 0.01, y: -16.7 }, TUNNEL_DOOR_BOX)).toBe(false);
+    expect(isPointInDoorway({ x: -7.8, y: -16.7 }, TUNNEL_DOOR_BOX, 0)).toBe(true);
+    expect(() => isPointInDoorway({ x: 0, y: 0 }, TUNNEL_DOOR_BOX, -1)).toThrow(RangeError);
+    expect(isPointInDoorway({ x: Number.NaN, y: 0 }, TUNNEL_DOOR_BOX)).toBe(false);
+  });
+});

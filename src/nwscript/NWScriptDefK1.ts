@@ -1,3 +1,4 @@
+import { scriptedDamageComponents } from "@/effects/scriptedDamageComponents";
 import * as THREE from "three";
 import EngineLocation from "@/engine/EngineLocation";
 import { AttackResult } from "@/enums/combat/AttackResult";
@@ -640,10 +641,22 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.VOID,
     args: [NWScriptDataType.OBJECT, NWScriptDataType.INTEGER],
     action: function(this: NWScriptInstance, args: [ModuleObject, number]){
-      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)){
-        this.caller.attackCreature(args[0]);
+      // Placeables and doors are attack targets too: 105PER's a_bash_console
+      // has the PC attack the Turbolift Console itself, whose death script
+      // (a_turbo105per) unlocks the turbolift. Refusing anything but a
+      // creature left the console standing and the door locked.
+      const target = args[0];
+      const attackable = BitWise.InstanceOfObject(target, ModuleObjectType.ModuleCreature)
+        || BitWise.InstanceOfObject(target, ModuleObjectType.ModulePlaceable)
+        || BitWise.InstanceOfObject(target, ModuleObjectType.ModuleDoor);
+      if(attackable && BitWise.InstanceOfObject(this.caller, ModuleObjectType.ModuleCreature)){
+        const caller = this.caller as ModuleCreature;
+        // Remembered so the attack is repeated until the target dies, in
+        // embodied VR as well (see VRCombatAutoQueuePolicy).
+        if(caller.combatData){ caller.combatData.scriptedAttackTarget = target; }
+        caller.attackCreature(target);
       }else{
-        console.error('ActionAttack target undefined')
+        console.error('ActionAttack: target is not attackable or the caller is not a creature', target, this.caller);
       }
     }
   },
@@ -1165,10 +1178,12 @@ NWScriptDefK1.Actions = {
       effect.setCreator(this.caller);
       effect.setSpellId(this.getSpellId());
 
-      let damageTypeIndex = Math.log2(args[1]);
-      effect.setInt( damageTypeIndex , args[0]);
+      // One slot, not two: writing the amount into both the typed slot and
+      // slot 14 doubled every scripted hit (see scriptedDamageComponents).
+      for(const [slot, amount] of scriptedDamageComponents(args[0], args[1])){
+        effect.setInt(slot, amount);
+      }
 
-      effect.setInt(14, args[0]);
       effect.setInt(16, 1000);
       effect.setInt(17, args[1]);
       effect.setInt(18, args[2]);
@@ -3722,7 +3737,21 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [NWScriptDataType.INTEGER, NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [number, ModuleObject]){
-      return 0;
+      // This was a stub that returned 0. Every skill-gated console reply that
+      // checks it first was therefore never offered: Peragus' Hangar Control
+      // (c_ic_skilrep: "[Repair] Replace the missing parts") showed T3-M4, with
+      // Repair 6 and three Parts, nothing but "Log out", and the retail route
+      // to the fuel depot stops there. Retail reads it as "the creature has a
+      // usable rank in the skill".
+      const creature = args[1];
+      if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)) return 0;
+      const skill = Number(args[0]);
+      if(!Number.isInteger(skill) || skill < 0) return 0;
+      try{
+        return (creature as ModuleCreature).getSkillLevel(skill) > 0 ? 1 : 0;
+      }catch(e){
+        return 0;
+      }
     }
   },
   287:{

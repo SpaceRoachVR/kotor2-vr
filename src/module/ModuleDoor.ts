@@ -309,9 +309,14 @@ export class ModuleDoor extends ModuleObject {
     return (this.openState == ModuleDoorOpenState.OPEN1 || this.openState == ModuleDoorOpenState.OPEN2);
   }
 
+  /** Open or destroyed: nothing of this door stands in the doorway. */
+  isPassable(): boolean {
+    return this.isOpen() || this.openState === ModuleDoorOpenState.DESTROYED;
+  }
+
   updateCollisionState(): void {
     synchronizeDoorWalkmeshCollisionState({
-      isPassable: this.isOpen() || this.openState === ModuleDoorOpenState.DESTROYED,
+      isPassable: this.isPassable(),
       walkmesh: this.collisionManager?.walkmesh,
       roomWalkmeshes: GameState.group?.room_walkmeshes,
       doorWalkmeshes: this.area?.doorWalkmeshes,

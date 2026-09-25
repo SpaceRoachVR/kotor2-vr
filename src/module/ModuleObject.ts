@@ -595,6 +595,7 @@ export class ModuleObject {
    * @param skipUnclearable 
    */
   clearAllActions(skipUnclearable = false){
+    if(this.combatData){ this.combatData.scriptedAttackTarget = undefined; }
     this.combatRound.clearActions();
     this.setComputedPath(undefined);
     //Reset the anim state

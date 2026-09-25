@@ -1,3 +1,4 @@
+import { CombatActionType } from "@/enums/combat/CombatActionType";
 import type { ModuleRoom } from "@/module/ModuleRoom";
 import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
 import { AudioEmitter } from "@/audio/AudioEmitter";
@@ -935,6 +936,63 @@ export class ModulePlaceable extends ModuleObject {
     
     this.initialized = true;
 
+  }
+
+  /** Set once the death script has run, so damage after death does nothing. */
+  deathHandled: boolean = false;
+
+  /**
+   * A hit on a placeable runs its OnMeleeAttacked (or OnSpellCastAt) script,
+   * as doors and creatures already do. 105PER's invisible turbolift console
+   * (TurboconInvis) carries k_destroytu there: the console explodes, DestroyTu
+   * starts the conversation that unlocks the turbolift. Without this hook the
+   * PC could beat the console to death and nothing happened.
+   */
+  onAttacked(attackType: CombatActionType){
+    const isSpellAttack = attackType == CombatActionType.CAST_SPELL || attackType == CombatActionType.ITEM_CAST_SPELL;
+    const script = this.scripts[!isSpellAttack ? ModuleObjectScript.PlaceableOnMeleeAttacked : ModuleObjectScript.PlaceableOnSpellCastAt];
+    if(!script){ return; }
+    try{
+      const instance = script.nwscript ? script.nwscript.newInstance() : script;
+      instance.run(this);
+    }catch(e){
+      console.error('ModulePlaceable.onAttacked: script faulted', e);
+    }
+  }
+
+  /**
+   * Placeables take damage like doors: a plot placeable is immune, Min1HP
+   * stops at one, and reaching zero runs the OnDeath script. Nothing did
+   * the last part before: 105PER's invisible turbolift console (a_bash_console)
+   * sat at 15 HP with the PC hitting it, so a_turbo105per never unlocked the
+   * turbolift.
+   */
+  subtractHP(value = 0){
+    if(this.plot){ return; }
+    const wasDead = this.isDead();
+    let amount = value;
+    if(this.min1HP){ amount = Math.min(amount, Math.max(0, this.getHP() - 1)); }
+    super.subtractHP(amount);
+    if(!wasDead && this.isDead()){
+      this.onDeath();
+    }
+  }
+
+  onDeath(){
+    if(this.deathHandled){ return; }
+    this.deathHandled = true;
+    this.useable = false;
+    try{ this.playObjectSound(ModulePlaceableObjectSound.DESTROYED); }catch(e){ /* no sound set */ }
+    try{ this.setAnimationState(ModulePlaceableAnimState.DEAD); }catch(e){ /* no death animation */ }
+    const onDeath = this.scripts[ModuleObjectScript.PlaceableOnDeath];
+    if(onDeath){
+      try{
+        const instance = onDeath.nwscript ? onDeath.nwscript.newInstance() : onDeath;
+        instance.run(this);
+      }catch(e){
+        console.error('ModulePlaceable.onDeath: OnDeath script faulted', e);
+      }
+    }
   }
 
   destroy(): void {

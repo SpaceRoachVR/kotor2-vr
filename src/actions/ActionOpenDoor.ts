@@ -77,7 +77,13 @@ export class ActionOpenDoor extends Action {
         
       }
     }else{
-      this.target.use(this.owner);
+      // A placeable, trigger, door or the module opening a door from a
+      // script is scripted door control, not a hand on the handle: it
+      // bypasses the lock the way a door opening itself does. 102PER's
+      // a_shutdownff has the Central Controller ActionOpenDoor the four
+      // Blast Containment Fields (Locked=1, KeyRequired=1, no key); through
+      // use() they answered with OnFailToOpen and stayed shut.
+      (this.target as ModuleDoor).openDoor(this.owner);
       return ActionStatus.COMPLETE;
     }
 

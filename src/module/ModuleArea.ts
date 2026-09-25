@@ -1693,7 +1693,12 @@ export class ModuleArea extends ModuleObject {
 
         //Reset the players actions between modules
         GameState.PartyManager.Player.clearAllActions();
+        // All of the momentum, not just force: speed and the unit direction VR
+        // locomotion writes into forceVector survived the transition and were
+        // scaled by the first frame's delta on arrival.
         GameState.PartyManager.Player.force = 0;
+        GameState.PartyManager.Player.speed = 0;
+        GameState.PartyManager.Player.forceVector.set(0, 0, 0);
         GameState.PartyManager.Player.collisionManager.groundFace = undefined;
         GameState.PartyManager.Player.collisionManager.lastGroundFace = undefined;
         GameState.PartyManager.Player.load();

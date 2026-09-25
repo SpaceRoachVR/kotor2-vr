@@ -10,10 +10,13 @@ function response(status: number, body: BodyInit | null = null, headers: Headers
   return new Response(body, { status, headers });
 }
 
+// The routing and queue tests are about single requests; transient retries
+// have their own describe block below.
 function createBackend(fetchImplementation: typeof fetch) {
   return new HttpGameFileSystemBackend({
     assetBaseUrl: `${origin}/assets`,
     fetch: fetchImplementation,
+    retryDelaysMs: [],
   });
 }
 
@@ -342,5 +345,60 @@ describe('HTTP game filesystem mount routing', () => {
 
     await expect(backend.readdir('', { recursive: false })).resolves.toEqual(['Override']);
     await expect(backend.readdir('', { recursive: true })).resolves.toEqual(['Override/visible.uti']);
+  });
+});
+
+describe('HTTP game filesystem transient retries', () => {
+  // A Peragus hand-back (103PER -> 101PER) stranded the game on the load
+  // screen when one of the thousands of ranged reads in a module load was
+  // dropped by the local service ("failed reading 'lips/localization.mod'
+  // ... request failed"). Dropped connections and 5xx answers are retried;
+  // real answers are not.
+  test('retries a dropped ranged read and a 503, then succeeds', async () => {
+    const fetchImplementation = jest
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockResolvedValueOnce(response(503, 'busy'))
+      .mockResolvedValueOnce(response(206, new Uint8Array([4, 5]), { 'Content-Range': 'bytes 16-17/128' }));
+    const backend = new HttpGameFileSystemBackend({ assetBaseUrl: `${origin}/assets`, fetch: fetchImplementation, retryDelaysMs: [0, 0] });
+    const handle = await backend.open('data/models.bif');
+
+    await expect(backend.read(handle, new Uint8Array(2), 0, 2, 16)).resolves.toEqual(new Uint8Array([4, 5]));
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+  });
+
+  test('gives up after the configured retries and reports the read without leaking details', async () => {
+    const fetchImplementation = jest.fn<typeof fetch>().mockRejectedValue(new Error('connection failed with token=secret'));
+    const backend = new HttpGameFileSystemBackend({ assetBaseUrl: `${origin}/assets`, fetch: fetchImplementation, retryDelaysMs: [0, 0] });
+    const handle = await backend.open('data/models.bif');
+
+    await expect(backend.read(handle, new Uint8Array(2), 0, 2, 16)).rejects.toThrow("GameFileSystem.read: failed reading 'data/models.bif' at offset 16 for 2 bytes: request failed");
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+  });
+
+  test('does not retry a 404, a short body or a bad Content-Range', async () => {
+    const fetchImplementation = jest
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response(404, 'missing'))
+      .mockResolvedValueOnce(response(206, new Uint8Array([4]), { 'Content-Range': 'bytes 16-16/128' }))
+      .mockResolvedValueOnce(response(206, new Uint8Array([4, 5]), { 'Content-Range': 'bytes 15-16/128' }));
+    const backend = new HttpGameFileSystemBackend({ assetBaseUrl: `${origin}/assets`, fetch: fetchImplementation, retryDelaysMs: [0, 0] });
+    const handle = await backend.open('data/models.bif');
+
+    await expect(backend.read(handle, new Uint8Array(2), 0, 2, 16)).rejects.toThrow(/received 404/);
+    await expect(backend.read(handle, new Uint8Array(2), 0, 2, 16)).rejects.toThrow(/expected 2 bytes|content-range/i);
+    await expect(backend.read(handle, new Uint8Array(2), 0, 2, 16)).rejects.toThrow(/content-range/i);
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+  });
+
+  test('retries whole-file reads too, and the default backend retries at all', async () => {
+    const fetchImplementation = jest
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockResolvedValueOnce(response(200, new Uint8Array([1, 2, 3])));
+    const backend = new HttpGameFileSystemBackend({ assetBaseUrl: `${origin}/assets`, fetch: fetchImplementation, retryDelaysMs: [0] });
+
+    await expect(backend.readFile('chitin.key')).resolves.toEqual(new Uint8Array([1, 2, 3]));
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 });

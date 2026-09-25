@@ -36,6 +36,44 @@ export const SEAM_HEIGHT_TOLERANCE = 0.5;
 /** How far a creature may be carried across a seam before the move is refused. */
 export const SEAM_BRIDGE_DISTANCE = 0.75;
 
+/**
+ * How far a creature may be carried across the gap under an open door.
+ *
+ * Odyssey room walkmeshes do not always meet under a doorway. In 102PER the
+ * fourth PeragusDoor1 (-7.8,-16.7) sits between rooms 102perg and 102perh
+ * whose meshes stop 1.16m apart; both doorway edges carry transition -1 and
+ * the door's own DWK has no walkable face in any state. Retail walks straight
+ * across; here the gap exceeded SEAM_BRIDGE_DISTANCE and the Exile stood at
+ * the open door for the whole run. A door footprint is at most a couple of
+ * metres deep, so this stays well short of a real drop.
+ */
+export const DOOR_SEAM_BRIDGE_DISTANCE = 2.0;
+
+/** Extra reach around a door's footprint when asking whether a point or an edge lies in its doorway, in metres. */
+export const DOORWAY_MARGIN = 0.6;
+
+export interface DoorwayBox {
+  readonly min: { readonly x: number; readonly y: number; readonly z: number };
+  readonly max: { readonly x: number; readonly y: number; readonly z: number };
+}
+
+/**
+ * True when `point` lies inside `box` in plan view (with DOORWAY_MARGIN) and
+ * within the box's height range plus a metre, so a doorway on a deck above or
+ * below does not qualify.
+ */
+export function isPointInDoorway(point: SeamPoint & { z?: number }, box: DoorwayBox, margin: number = DOORWAY_MARGIN): boolean {
+  if (!point || !box || !box.min || !box.max) return false;
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+  if (!Number.isFinite(margin) || margin < 0) throw new RangeError('margin must be a non-negative finite number');
+  if (point.x < box.min.x - margin || point.x > box.max.x + margin) return false;
+  if (point.y < box.min.y - margin || point.y > box.max.y + margin) return false;
+  if (typeof point.z === 'number' && Number.isFinite(point.z)) {
+    if (point.z < box.min.z - 1 || point.z > box.max.z + 1) return false;
+  }
+  return true;
+}
+
 /** Increment used while searching across a seam for the far island. */
 export const SEAM_BRIDGE_STEP = 0.05;
 

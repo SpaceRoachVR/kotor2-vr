@@ -27,7 +27,17 @@ export interface ClassifiedGameFileSystemPath {
 export interface HttpGameFileSystemBackendOptions {
   assetBaseUrl: string;
   fetch?: typeof fetch;
+  /**
+   * Delays before each retry of a request that failed transiently (the
+   * connection dropped, or the service answered 5xx). One module load makes
+   * thousands of ranged reads through the local service, and a single
+   * dropped request used to abort the whole load and strand the game on the
+   * load screen. Defaults to two retries; pass [] to disable.
+   */
+  retryDelaysMs?: readonly number[];
 }
+
+const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [100, 400];
 
 export interface HttpGameFileSystemDirectoryEntryMetadata {
   path: string;
@@ -106,12 +116,17 @@ class FetchQueue {
   }
 }
 
+function isTransientStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504 || status === 429;
+}
+
 /** Browser backend for the authenticated, same-origin Phase 0 asset service. */
 export class HttpGameFileSystemBackend implements GameFileSystemBackend {
   private readonly assetBaseUrl: URL;
   private readonly origin: string;
   private readonly fetchImplementation: typeof fetch;
   private readonly fetchQueue = new FetchQueue();
+  private readonly retryDelaysMs: readonly number[];
 
   constructor(options: HttpGameFileSystemBackendOptions) {
     if (!options || typeof options.assetBaseUrl !== 'string' || options.assetBaseUrl.length === 0) {
@@ -122,6 +137,7 @@ export class HttpGameFileSystemBackend implements GameFileSystemBackend {
     this.assetBaseUrl.search = '';
     this.assetBaseUrl.hash = '';
     this.origin = this.assetBaseUrl.origin;
+    this.retryDelaysMs = Array.isArray(options.retryDelaysMs) ? options.retryDelaysMs.slice() : DEFAULT_RETRY_DELAYS_MS;
     const fetchImplementation = options.fetch || globalThis.fetch;
     if (typeof fetchImplementation !== 'function') {
       throw new Error('HTTP game filesystem requires the Fetch API');
@@ -330,9 +346,36 @@ export class HttpGameFileSystemBackend implements GameFileSystemBackend {
 
   private requestWithBody<T>(url: URL, init: RequestInit, consume: (response: Response) => Promise<T>): Promise<T> {
     return this.fetchQueue.run(async () => {
-      const response = await this.fetchImplementation(url.toString(), { ...init, credentials: 'same-origin' });
+      const response = await this.fetchWithRetry(url, init);
       return await consume(response);
     });
+  }
+
+  /**
+   * Only the request itself is retried: a dropped connection, or a 429/5xx
+   * answer. Whatever the body then says (404, short body, bad Content-Range)
+   * is a real answer and goes straight to the caller.
+   */
+  private async fetchWithRetry(url: URL, init: RequestInit): Promise<Response> {
+    for (let attempt = 0; ; attempt += 1) {
+      const canRetry = attempt < this.retryDelaysMs.length;
+      let response: Response;
+      try {
+        response = await this.fetchImplementation(url.toString(), { ...init, credentials: 'same-origin' });
+      } catch (error) {
+        if (!canRetry) throw error;
+        await new Promise((resolve) => setTimeout(resolve, this.retryDelaysMs[attempt]));
+        continue;
+      }
+      if (!canRetry || !isTransientStatus(response.status)) return response;
+      await this.settleBody(response);
+      await new Promise((resolve) => setTimeout(resolve, this.retryDelaysMs[attempt]));
+    }
+  }
+
+  /** Drain a response we are not going to use so its permit/socket frees. */
+  private async settleBody(response: Response): Promise<void> {
+    try { await response.arrayBuffer(); } catch { /* ignore */ }
   }
 
   private assertUserMount(classified: ClassifiedGameFileSystemPath, operation: string): void {

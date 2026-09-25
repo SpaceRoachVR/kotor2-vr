@@ -1,3 +1,4 @@
+import { canTriggerFireEnter, canTriggerFireExit } from "@/module/TriggerFiringRules";
 import { ModuleObject } from "@/module/ModuleObject";
 import { GFFObject } from "@/resource/GFFObject";
 import * as THREE from "three";
@@ -400,7 +401,9 @@ export class ModuleTrigger extends ModuleObject {
       //If the creature is inside the bounding box, attempt to add it to the objectsInside array
       const added = this.addObjectInside(object);
       if(!added){ return; }
-      if(!this.triggered && this.isHostile(object)){
+      // Only a one-shot trap latches; a generic trigger fires OnEnter on every
+      // entry, and OnExit below on every exit (see TriggerFiringRules).
+      if(canTriggerFireEnter(this) && this.isHostile(object)){
         object.lastTriggerEntered = this;
         this.lastObjectEntered = object;
 
@@ -413,7 +416,7 @@ export class ModuleTrigger extends ModuleObject {
     //If the creature is not inside the bounding box, attempt to remove it from the objectsInside array
     const removed = this.removeObjectInside(object);
     if(!removed){ return; }
-    if(!this.triggered && this.isHostile(object)){
+    if(canTriggerFireExit(this) && this.isHostile(object)){
       object.lastTriggerExited = this;
       this.lastObjectExited = object;
       this.onExit(object);

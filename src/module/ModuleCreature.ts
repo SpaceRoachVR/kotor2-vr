@@ -1137,12 +1137,23 @@ export class ModuleCreature extends ModuleObject {
       // Embodied VR deliberately does not: each eligible physical swing or
       // trigger is what creates the authored CombatRound action. The normal
       // desktop queue returns immediately when the XR session ends.
+      // A script-commanded attack (ActionAttack) keeps going until its target
+      // is dead, in VR too: 105PER's a_bash_console has the PC destroy the
+      // Turbolift Console, and one physical swing was never going to.
+      let scripted = this.combatData.scriptedAttackTarget;
+      if(scripted && (scripted.isDead() || !scripted.area)){
+        this.combatData.scriptedAttackTarget = undefined;
+        scripted = undefined;
+      }
       if(shouldAutoQueueControlledBasicAttack({
         isControlledActor: GameState.getCurrentPlayer() == this,
         embodiedVRInputActive: GameState.isVREmbodiedCombatInputActive,
+        scriptedAttackPending: !!scripted,
       })){
         if(!this.combatRound.scheduledActionList.length && !this.combatRound.action){
-          if( this.combatData.lastAttackTarget ){
+          if( scripted ){
+            this.attackCreature(scripted, undefined);
+          }else if( this.combatData.lastAttackTarget ){
             this.attackCreature(this.combatData.lastAttackTarget, undefined);
           }else if( this.combatData.lastAttacker ){
             this.attackCreature(this.combatData.lastAttacker, undefined);

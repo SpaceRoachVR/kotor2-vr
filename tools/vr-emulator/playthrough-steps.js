@@ -20,6 +20,9 @@ const { worldState, clickButtonByText, TIMEOUTS } = require('./playthrough');
 // in its authored log-only branch. Do not reuse those stateful saves for the
 // normal new-game route.
 const CHECKPOINT_PREFIX = 'VRPT-20260824-E2E';
+// The newest checkpoint this run wrote or resumed from: where a step that
+// killed the player is retried from.
+let lastCheckpointName = null;
 
 /**
  * Checkpoints in the order they are reached. `--resume <name>` skips every step
@@ -56,7 +59,9 @@ const CHECKPOINT_ORDER = [
   'first-kill',
   'droids-cleared',
   'levelled',
-  'module-102',
+  // The rest of Peragus lives in playthrough-peragus.js; its checkpoints
+  // continue this order so `--resume` skips the right stages.
+  ...require('./playthrough-peragus').PERAGUS_CHECKPOINT_ORDER,
 ];
 
 /** Checkpoints that leave the player back aboard the Ebon Hawk, post-exterior. */
@@ -101,6 +106,8 @@ const CHECKPOINT_EXPECTATIONS = Object.freeze({
   'consoles-used': Object.freeze({ module: '101per', minimumInventoryCount: 1 }),
   'morgue-door': Object.freeze({ module: '101per', minimumInventoryCount: 1 }),
   'kreia-awakened': Object.freeze({ module: '101per', minimumInventoryCount: 1 }),
+  levelled: Object.freeze({ module: '101per', minimumInventoryCount: 1 }),
+  ...require('./playthrough-peragus').PERAGUS_CHECKPOINT_EXPECTATIONS,
 });
 
 function validateCheckpointSnapshot(name, { moduleName, inventoryCount }) {
@@ -478,7 +485,9 @@ async function waitForModule(harness, moduleName, timeoutMs = TIMEOUTS.moduleLoa
     const menus = gs.MenuManager;
     if (menus && menus.LoadScreen && menus.LoadScreen.bVisible) return false;
     // 1 = INGAME, 3 = DIALOG. A new game drops straight into a conversation.
-    return gs.Mode === 1 || gs.Mode === 3;
+    // 2 = MINIGAME: 107PER (the Ebon Hawk's escape from Peragus) is the
+    // turret minigame and never enters INGAME at all.
+    return gs.Mode === 1 || gs.Mode === 3 || gs.Mode === 2;
   })()`, timeoutMs, 1000);
 }
 
@@ -713,6 +722,29 @@ async function clearProgressBlockingDialogue(harness, label) {
   if (!blocking && state.engineMode !== ENGINE_MODE_DIALOG) return null;
 
   let played = null;
+  if (blocking && state.engineMode === 1) {
+    // A conversation menu left in the stack after its conversation ended
+    // (the T3 rescue in 103PER left InGameDialog behind) is not an
+    // interruption: CutsceneManager is idle and the engine is in INGAME.
+    // "Playing" it finishes in 0 turns and leaves it there, so the walker
+    // logged the same 0-turn interruption on every sample. Close it once.
+    const stale = await harness.evaluate(`(() => {
+      const K = window.KotOR; const cm = K.GameState.CutsceneManager;
+      const live = !!(cm && (cm.active === true || cm.dialog));
+      if (live) return { live };
+      const menu = K.MenuManager[${JSON.stringify(blocking)}];
+      const wasVisible = !!(menu && menu.bVisible);
+      const stack = Array.isArray(K.MenuManager.activeMenus) ? K.MenuManager.activeMenus.length : null;
+      try { if (menu) menu.close(); } catch (e) { return { live, closed: false, reason: String(e && e.message || e) }; }
+      return { live, closed: true, wasVisible, stackBefore: stack,
+        stackAfter: Array.isArray(K.MenuManager.activeMenus) ? K.MenuManager.activeMenus.length : null };
+    })()`);
+    if (!stale.live) {
+      line(`  · ${label}: closed a stale ${blocking} with no live conversation ${JSON.stringify(stale)}`);
+      await returnToGameplay(harness);
+      return null;
+    }
+  }
   if (blocking) {
     // Play it through the menu actually carrying it: driving InGameDialog
     // while InGameComputer holds the conversation reads "not visible" and
@@ -819,7 +851,10 @@ async function surveyArea(harness) {
         creatures: creatures.length,
         triggers: triggers.length,
       },
-      hostiles: creatures.filter((c) => c.hostile && !c.dead).sort(sortByDistance),
+      // Never a companion: in 103PER's fuel line the sweep took T3-M4 (id
+      // reused by the survey) for a hostile and spent 40 rounds failing to
+      // close on him.
+      hostiles: creatures.filter((c) => c.hostile && !c.dead && !/^(T3M4|Atton|Kreia|BaoDur|HandMaiden|Disciple|Visas|Mira|Hanharr|HK47|G0T0|Mand)$/i.test(c.tag)).sort(sortByDistance),
       nearestDoors: doors.sort(sortByDistance).slice(0, 10),
       nearestPlaceables: placeables.sort(sortByDistance).slice(0, 12),
       nearestTriggers: triggers.sort(sortByDistance).slice(0, 8),
@@ -1333,6 +1368,9 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
   let arrived = false;
   let lastNavigation = null;
   let stalledSamples = 0;
+  let stalledTotal = 0;
+  let walkSamples = 0;
+  let startModule = null;
   try {
     while (Date.now() < deadline) {
       await harness.evaluate(`(() => {
@@ -1355,7 +1393,10 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
         const referenceFacing = (${computeReferenceFacingFromQuaternion.toString()})({ x: qx, y: qy, z: qz, w: qw });
         const dx = player.position.x - ${Number(x)};
         const dy = player.position.y - ${Number(y)};
+        const gs = window.KotOR.GameState;
         return {
+          module: gs.module && gs.module.area ? String(gs.module.area.name).toLowerCase() : null,
+          loading: !!gs.loadingModule,
           ok: Number.isFinite(referenceFacing),
           reason: Number.isFinite(referenceFacing) ? null : 'headset facing is not finite',
           playerX: player.position.x,
@@ -1366,6 +1407,30 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
         };
       })()`);
       if (!navigation.ok) throw new Error(navigation.reason);
+      // A transition trigger or door fired under the walker: the target
+      // belongs to the module that just unloaded. Stop pushing at once (the
+      // finally block releases the stick) rather than driving the new
+      // arrival off its waypoint toward a point in another area.
+      if (startModule === null && navigation.module) startModule = navigation.module;
+      if (navigation.loading || (startModule && navigation.module && navigation.module !== startModule)) {
+        throw new Error(`module changed under the walker (${startModule} -> ${navigation.module}${navigation.loading ? ', loading' : ''})`);
+      }
+      // Ranged droids shoot a walker that is still pathing towards them; the
+      // Exile died in 102PER on an approach leg with healing only ever applied
+      // between fight rounds. Check every few samples and heal at 45%.
+      // Every sample: a steam vent in 102PER took the Exile from 18 to dead
+      // between two checks, and the walker then reported "stalled" for the
+      // next twenty legs. Heal at 60% on a walk; fights heal on their own.
+      walkSamples += 1;
+      const vitals = await playerVitals(harness);
+      if (vitals) {
+        if (vitals.dead) throw new Error('player died');
+        // 80%: 102PER's steam vents (2-4 each, several per second when the
+        // walker crosses a cluster) took a 14-HP Exile to dead between two
+        // samples at 60%.
+        const healAt = Math.max(8, Math.ceil((vitals.maxHp || 0) * 0.8));
+        if (vitals.hp <= healAt) await healPlayerIfInjured(harness, healAt, { quick: true });
+      }
       // Nudge a walk that has stopped dead. An authored conversation can
       // interrupt mid-leg and leave gameplay input suppressed after it ends;
       // the stick then pushes against a suspended engine for the whole
@@ -1381,6 +1446,17 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
             `${navigation.playerY.toFixed(2)}), ${navigation.remaining.toFixed(2)}m out, ` +
             `${navigation.queued} queued; re-asserting gameplay`);
           await returnToGameplay(harness);
+        }
+        // A leg that has not moved for this long is pushing at a wall, not
+        // walking. Pushing until the distance-scaled timeout (up to two
+        // minutes on a long leg) wasted most of a run on one bad route; give
+        // the caller its chance to replan instead.
+        stalledTotal += 1;
+        // Counted cumulatively as well: position jitter of a few centimetres
+        // resets the consecutive count and let a wall-push run to the timeout.
+        if (stalledSamples >= 24 || stalledTotal >= 30) {
+          throw new Error(`stalled ${navigation.remaining.toFixed(2)}m out at ` +
+            `(${navigation.playerX.toFixed(2)}, ${navigation.playerY.toFixed(2)})`);
         }
       } else {
         stalledSamples = 0;
@@ -2048,6 +2124,15 @@ async function listDoors(harness) {
       dead: typeof door.isDead === 'function' ? !!door.isDead() : null,
       locked: typeof door.isLocked === 'function' ? !!door.isLocked() : null,
       plot: !!door.plot,
+      // A key lock is not a Security or Bash candidate. This was never
+      // reported, so the navigator's "skip locked plot/key doors" filter
+      // could not see it and bashed at the hangar's welded cargo door.
+      keyRequired: !!door.keyRequired,
+      keyName: String(door.keyName || ''),
+      // A key lock that names no key, has an OnFailToOpen script and no hint
+      // conversation is a script lock (103PER's airlock doors, a_airlockin /
+      // a_airlockout): Use is the way through, and the VR use gate offers it.
+      scriptLock: !!(door.keyRequired && !String(door.keyName || '').length && door.scripts && door.scripts['OnFailToOpen'] && !(door.conversation && door.conversation.resref)),
       min1HP: !!door.min1HP,
       notBlastable: !!door.notBlastable,
       position: {
@@ -2133,8 +2218,12 @@ async function navigateTo(harness, {
   // walkmesh - an exterior mine on the Ebon Hawk hull is both - while a
   // straight stick push is the reverse. Trying only one of them made a 4.45m
   // approach report the mine as unreachable.
+  // Within a few metres the planner is the wrong tool: from 2 m beside the
+  // 102PER Central Controller it walked 14 m into the next pocket. Start
+  // such approaches with the straight push and alternate from there.
+  const startedClose = previousDistance !== null && previousDistance <= 6;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const attemptUsesPath = usePath && attempt % 2 === 1;
+    const attemptUsesPath = usePath && (startedClose ? attempt % 2 === 0 : attempt % 2 === 1);
     try {
       const arrived = await moveTo(harness, { x, y, z, range, label, usePath: attemptUsesPath });
       line(`  · reached ${label} after ${attempt} leg(s)${opened.length ? `, opening ${opened.join(', ')}` : ''}`);
@@ -2165,7 +2254,11 @@ async function navigateTo(harness, {
       // Try candidates in distance order rather than committing to the nearest.
       // The nearest closed door is often a plot door that can never open, and
       // fixating on it reported a dead end while a usable route stood behind it.
-      const closedDoors = inventory.doors.filter((door) => !door.open && !door.dead && !(door.locked && (door.plot || door.keyRequired)) && !openedIds.has(door.promptId));
+      // Only a door between here and the target can be in the way. Without
+      // the distance bound the nearest closed door was once a decorative one
+      // fifty metres off, and the recovery walked into a wall toward it.
+      const doorReach = (Number.isFinite(remaining) ? remaining : 30) + 8;
+      const closedDoors = inventory.doors.filter((door) => !door.open && !door.dead && (door.scriptLock || !(door.locked && (door.plot || door.keyRequired))) && !openedIds.has(door.promptId) && door.distance <= doorReach);
       const candidates = permittedDoorPromptIds === null
         ? closedDoors
         : closedDoors.filter((door) => permittedDoorPromptIds.includes(door.promptId));
@@ -2568,7 +2661,49 @@ async function swingAt(harness, targetId) {
  * Uses a Medpac from inventory if player HP is below threshold and player is alive.
  * Waits for the heal action to complete before continuing.
  */
-async function healPlayerIfInjured(harness, threshold = 8) {
+/** The player's hit points and whether the engine counts them dead. */
+async function playerVitals(harness) {
+  return harness.evaluate(`(() => {
+    const p = window.KotOR.PartyManager.party[0];
+    if (!p || typeof p.getHP !== 'function') return null;
+    const hp = p.getHP(); const maxHp = p.getMaxHP();
+    return { hp, maxHp, dead: (typeof p.isDead === 'function' && p.isDead()) || hp <= 0 };
+  })()`).catch(() => null);
+}
+
+/**
+ * Auto level-up through the wheel's Menu wedge (MenuCharacter, BTN_AUTO):
+ * the same route the prologue's level-up step proves, reused whenever a
+ * sweep leaves the player eligible. A level-2 Exile with 24 HP did not
+ * survive 102PER's steam corridor; retail expects level 3-4 by then.
+ */
+async function autoLevelUp(harness) {
+  // The wheel's single Menu wedge opens MenuCharacter, which is where Auto
+  // Level-Up lives - 4.8 dropped the dedicated Level-Up wedge for exactly this.
+  await activateWheelAction(harness, { targetId: null, actionLabel: 'Menu' });
+  await sleep(2000);
+  const state = await worldState(harness);
+  const controls = await describeMenuControls(harness, 'MenuCharacter');
+  const levelled = await harness.evaluate(`(() => {
+    const menus = window.KotOR.GameState.MenuManager;
+    const menu = menus.MenuCharacter;
+    if (!menu) return { ok: false, reason: 'no MenuCharacter' };
+    const button = menu.BTN_AUTO || menu.BTN_LEVELUP;
+    if (!button) {
+      return { ok: false, reason: 'no level-up control; have ' + Object.keys(menu).filter((k) => /^BTN_/.test(k)).join(',') };
+    }
+    try { button.click(); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
+    return { ok: true, used: menu.BTN_AUTO ? 'BTN_AUTO' : 'BTN_LEVELUP' };
+  })()`);
+  await sleep(3000);
+  await clearBlockingModal(harness);
+  // Leaving the character screen open holds the engine in GUI mode, which
+  // makes every later navigation report "unreachable".
+  await returnToGameplay(harness);
+  return { state, controls, levelled };
+}
+
+async function healPlayerIfInjured(harness, threshold = 8, { quick = false } = {}) {
   const result = await harness.evaluate(`(() => {
     const K = window.KotOR;
     const player = K.PartyManager && K.PartyManager.party ? K.PartyManager.party[0] : null;
@@ -2581,7 +2716,11 @@ async function healPlayerIfInjured(harness, threshold = 8) {
     const rawInv = (K.PartyManager && typeof K.PartyManager.getInventory === 'function')
       ? K.PartyManager.getInventory()
       : (player.getInventory ? player.getInventory() : []);
-    const medpac = (rawInv || []).find((i) => i && /medpac/i.test(String((i.getName && i.getName()) || i.tag || '')));
+    // A droid heals with a repair kit, not a medpac: T3-M4 carried two and
+    // died with them in his inventory.
+    const isDroid = typeof player.getRace === 'function' && player.getRace() === 5;
+    const pattern = isDroid ? /repair kit/i : /medpac/i;
+    const medpac = (rawInv || []).find((i) => i && pattern.test(String((i.getName && i.getName()) || i.tag || '')));
     if (medpac && typeof medpac.useItemOnObject === 'function') {
       medpac.useItemOnObject(player, player);
       return { attempted: true, hp, maxHp, medpac: medpac.tag || medpac.templateResRef };
@@ -2594,6 +2733,9 @@ async function healPlayerIfInjured(harness, threshold = 8) {
   })()`);
   if (result && result.attempted) {
     line(`  · player injured (hp=${result.hp}/${result.maxHp}); applied healing (${result.medpac || result.method || 'medpac'})`);
+    // A walk cannot afford the verification pause: 1.5 s blind inside
+    // 102PER's steam vents was most of the way from full to dead.
+    if (quick) return result;
     await sleep(1500);
     const hpAfter = await harness.evaluate(`(() => {
       const p = window.KotOR.PartyManager.party[0];
@@ -2624,7 +2766,10 @@ async function fightHostile(harness, target) {
   if (!position) return { killed: false, reason: 'vanished before approach' };
 
   try {
-    await navigateTo(harness, { ...position, range: 1.4, label: target.name, maxAttempts: 8 });
+    // A foe within ten metres is approached by a straight push; the engine
+    // planner routed a 13 m approach 25 m the wrong way through a door.
+    const close = Number.isFinite(Number(target.distance)) && Number(target.distance) <= 10;
+    await navigateTo(harness, { ...position, range: 1.4, label: target.name, maxAttempts: close ? 4 : 8, usePath: !close });
   } catch (error) {
     return { killed: false, reason: `unreachable: ${String(error.message).slice(0, 120)}` };
   }
@@ -2646,6 +2791,7 @@ async function fightHostile(harness, target) {
     line(`  · stance not armed for ${target.name}: ${String(error.message).slice(0, 100)}`);
   }
 
+  let farRounds = 0;
   for (let round = 0; round < 40; round += 1) {
     const status = await harness.evaluate(`(() => {
       const area = window.KotOR.GameState.module.area;
@@ -2654,9 +2800,11 @@ async function fightHostile(harness, target) {
       if (!c) return { gone: true };
       return {
         gone: false,
+        hostile: typeof c.isHostile === 'function' ? !!c.isHostile(player) : null,
         dead: typeof c.isDead === 'function' ? !!c.isDead() : null,
         hp: c.getHP ? c.getHP() : null,
         playerHp: player.getHP ? player.getHP() : null,
+        playerMaxHp: player.getMaxHP ? player.getMaxHP() : null,
         gap: +player.position.distanceTo(c.position).toFixed(2),
         pos: { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) },
       };
@@ -2665,8 +2813,21 @@ async function fightHostile(harness, target) {
     if (status.playerHp !== null && status.playerHp <= 0) {
       return { killed: false, reason: 'player died' };
     }
-    if (status.playerHp !== null && status.playerHp <= 8 && status.playerHp > 0) {
-      await healPlayerIfInjured(harness, 8);
+    // A target that is not hostile now (a companion, a droid that switched
+    // faction) is not a fight; and one the walker cannot close on in five
+    // rounds (behind a railing, on another deck) is not one either.
+    if (status.hostile === false) return { killed: false, reason: 'not hostile' };
+    if (status.gap > 2.5) {
+      farRounds += 1;
+      if (farRounds >= 5) return { killed: false, reason: `could not close (${status.gap}m after ${farRounds} rounds)` };
+    } else {
+      farRounds = 0;
+    }
+    // Heal well before the last few points: several ranged droids shooting at
+    // once took T3-M4 from 12 to 0 inside one poll interval.
+    const healAt = Math.max(8, Math.ceil((status.playerMaxHp || 0) * 0.45));
+    if (status.playerHp !== null && status.playerHp <= healAt && status.playerHp > 0) {
+      await healPlayerIfInjured(harness, healAt);
     }
     if (status.gap > 2.0 && status.pos) {
       try {
@@ -2723,6 +2884,11 @@ async function clearHostiles(harness, { limit = 12, maxDistance = Infinity } = {
     const stats = await describeInventory(harness);
     line(`  · ${next.name} (${next.distance}m): ${result.killed ? `killed in ${result.rounds} rounds` : `SKIPPED — ${result.reason}`}` +
       ` | xp=${stats.xp} hp=${stats.hp}/${stats.maxHp} canLevelUp=${stats.canLevelUp}`);
+    if (result.killed && stats.canLevelUp) {
+      const levelled = await autoLevelUp(harness).catch((error) => ({ levelled: { ok: false, reason: String(error.message) } }));
+      const after = await describeInventory(harness).catch(() => null);
+      line(`  · auto level-up: ${JSON.stringify(levelled.levelled)}; now level ${after ? after.level : '?'} hp ${after ? after.hp + '/' + after.maxHp : '?'}`);
+    }
     outcomes.push({ name: next.name, ...result });
     if (!result.killed) skipped.add(next.id);
     if (result.reason === 'player died') break;
@@ -2743,6 +2909,15 @@ async function returnToGameplay(harness) {
     const gs = window.KotOR.GameState;
     const menus = gs.MenuManager;
     const closed = [];
+    // Never push the overlay over a live conversation. On the hand-back from
+    // T3-M4 the authored 101atton conversation had just shown its first line
+    // when the driver called this; the overlay hid InGameDialog, the walker
+    // then saw DIALOG mode with no menu, and the conversation that opens the
+    // emergency hatch was force-ended unplayed.
+    const cm = gs.CutsceneManager;
+    if (gs.Mode === 3 && cm && cm.active) {
+      return { closed, mode: gs.Mode, deferred: 'conversation live' };
+    }
     for (const name of ${JSON.stringify(GAMEPLAY_RETURN_MENU_NAMES)}) {
       const menu = menus[name];
       if (menu && menu.bVisible) {
@@ -2754,6 +2929,7 @@ async function returnToGameplay(harness) {
     return { closed, mode: gs.Mode };
   })()`);
   if (outcome.closed.length) line(`  · closed ${JSON.stringify(outcome.closed)} (engineMode=${outcome.mode})`);
+  if (outcome.deferred) line(`  · returnToGameplay deferred: ${outcome.deferred}`);
   await sleep(800);
   return outcome;
 }
@@ -3254,6 +3430,7 @@ async function checkpoint(harness, name) {
     return { ...saved, diagnosis };
   }
   line(`  · checkpoint saved: ${CHECKPOINT_PREFIX} ${name}`);
+  if (!lastCheckpointName || CHECKPOINT_ORDER.indexOf(name) >= CHECKPOINT_ORDER.indexOf(lastCheckpointName)) lastCheckpointName = name;
   return { ...saved, validation };
 }
 
@@ -3263,7 +3440,10 @@ async function resumeFromCheckpoint(harness, name) {
   // loading before that lands gets the load stomped a couple of seconds later —
   // the module stays live but MainMenu is pushed on top of InGameOverlay and the
   // engine drops back to GUI mode.
-  await waitForMenu(harness, 'MainMenu', TIMEOUTS.boot);
+  // After a death the engine opens Load Game over the live module and the
+  // main menu never comes; load straight from there.
+  const moduleLive = await harness.evaluate(`!!(window.KotOR && window.KotOR.GameState && window.KotOR.GameState.module)`).catch(() => false);
+  if (!moduleLive) await waitForMenu(harness, 'MainMenu', TIMEOUTS.boot);
 
   const loaded = await harness.evaluate(`(async () => {
     const K = window.KotOR;
@@ -3349,7 +3529,20 @@ async function runPlaythrough(harness, url, args) {
     line(`\n[${report.steps.length + 1}] ${name}`);
     const entry = { name, ok: false };
     try {
-      entry.result = await fn();
+      try {
+        entry.result = await fn();
+      } catch (error) {
+        // A death is not a verdict on the route: reload the newest checkpoint
+        // and give the step one more go before calling it blocked.
+        const message = String((error && error.message) || error);
+        if (!/player died/i.test(message) || !lastCheckpointName) throw error;
+        line(`  · ${message}; reloading checkpoint "${lastCheckpointName}" and retrying the step once`);
+        await resumeFromCheckpoint(harness, lastCheckpointName);
+        await sleep(2000);
+        await returnToGameplay(harness);
+        entry.retriedAfterDeath = true;
+        entry.result = await fn();
+      }
       entry.ok = true;
     } catch (error) {
       entry.error = String((error && error.message) || error);
@@ -3358,6 +3551,16 @@ async function runPlaythrough(harness, url, args) {
       report.steps.push(entry);
       report.blocked = { step: name, error: entry.error, state: entry.state };
       line(`  ✗ BLOCKED: ${entry.error}`);
+      // The engine's own account of the failure, so a block can be read
+      // from the log without replaying it: recent errors and warnings first,
+      // then the last few lines of everything.
+      const noise = /rolling sound|PerfSampler|prompt candidacy|VR rooms|dialog rooms|VR targetUI|VR prompt/;
+      const recent = harness.consoleMessages.slice(-600).filter((m) => !noise.test(m.text));
+      const problems = recent.filter((m) => /error|warning/i.test(m.level) || /TypeError|ReferenceError|RangeError|Uncaught|Failed|failed/.test(m.text)).slice(-15);
+      line(`  · console problems (${problems.length}):`);
+      for (const m of problems) line(`      ${m.level}: ${String(m.text).slice(0, 260)}`);
+      line('  · console tail:');
+      for (const m of recent.slice(-20)) line(`      ${m.level}: ${String(m.text).slice(0, 260)}`);
       return false;
     }
     report.steps.push(entry);
@@ -3369,6 +3572,7 @@ async function runPlaythrough(harness, url, args) {
 
   if (args.resume) {
     await record(`resume checkpoint "${args.resume}"`, () => resumeFromCheckpoint(harness, args.resume));
+    lastCheckpointName = args.resume;
   } else {
     await record('new game through character creation', () => newGameThroughCharacterCreation(harness));
   }
@@ -3402,7 +3606,10 @@ async function runPlaythrough(harness, url, args) {
     return played;
   });
 
-  await record('checkpoint: prologue start', () => checkpoint(harness, 'prologue-start'));
+  // A resumed run must not rewrite this save with the resumed state: the
+  // retry-after-death then reloaded "prologue-start" (really the mining
+  // tunnels) and walked the whole crossing again.
+  if (!args.resume) await record('checkpoint: prologue start', () => checkpoint(harness, 'prologue-start'));
 
   await record('survey the area', async () => {
     const survey = await surveyArea(harness);
@@ -5593,34 +5800,10 @@ async function runPlaythrough(harness, url, args) {
         'the droid sweep did not award enough experience');
     }
 
-    // The wheel's single Menu wedge opens MenuCharacter, which is where Auto
-    // Level-Up lives — 4.8 dropped the dedicated Level-Up wedge for exactly this.
-    await activateWheelAction(harness, { targetId: null, actionLabel: 'Menu' });
-    await sleep(2000);
-    const state = await worldState(harness);
+    const { state, controls, levelled } = await autoLevelUp(harness);
     line(`  · foreground: ${state.foregroundMenu}`);
-
-    const controls = await describeMenuControls(harness, 'MenuCharacter');
     line(`  · character menu: visible=${controls.visible} clickable=${JSON.stringify(controls.clickable)}`);
-
-    const levelled = await harness.evaluate(`(() => {
-      const menus = window.KotOR.GameState.MenuManager;
-      const menu = menus.MenuCharacter;
-      if (!menu) return { ok: false, reason: 'no MenuCharacter' };
-      const button = menu.BTN_AUTO || menu.BTN_LEVELUP;
-      if (!button) {
-        return { ok: false, reason: 'no level-up control; have ' + Object.keys(menu).filter((k) => /^BTN_/.test(k)).join(',') };
-      }
-      try { button.click(); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; }
-      return { ok: true, used: menu.BTN_AUTO ? 'BTN_AUTO' : 'BTN_LEVELUP' };
-    })()`);
     line(`  · level-up control: ${JSON.stringify(levelled)}`);
-    await sleep(3000);
-    await clearBlockingModal(harness);
-
-    // Leaving the character screen open holds the engine in GUI mode, which
-    // makes every later navigation report "unreachable".
-    await returnToGameplay(harness);
 
     const after = await describeInventory(harness);
     line(`  · level ${before.level} -> ${after.level}, canLevelUp=${after.canLevelUp}`);
@@ -5631,6 +5814,10 @@ async function runPlaythrough(harness, url, args) {
     }
     return { before, after, levelled };
   });
+
+  if (!resumedPast(args, 'levelled')) {
+    await record('checkpoint: levelled', () => checkpoint(harness, 'levelled'));
+  }
 
   async function verifyMedicalBay() {
     await record('catalog the medical-bay quest fixtures', async () => {
@@ -5807,7 +5994,10 @@ async function runPlaythrough(harness, url, args) {
   }
 
   await record('confirm the authored boundary of the Peragus medical bay slice', async () => {
-    if (resumedPast(args, 'module-102')) return { skipped: 'resumed past it' };
+    // A one-time confirmation of the medical-bay slice's edge. Once the campaign
+    // has moved past it the hatch is legitimately open (T3 opens it), so the
+    // assertion below would be wrong rather than informative.
+    if (resumedPast(args, 'vibroblade')) return { skipped: 'resumed past it' };
     const state = await worldState(harness);
 
     const doors = await listDoors(harness);
@@ -5876,6 +6066,13 @@ async function runPlaythrough(harness, url, args) {
   });
 
 
+  // The rest of Peragus. Stages live in playthrough-peragus.js and share this
+  // run's record/resume machinery so a blocked step is reported the same way.
+  if (!report.blocked) {
+    const { runPeragusCampaign } = require('./playthrough-peragus');
+    await runPeragusCampaign({ harness, args, record, report, resumedPast });
+  }
+
   report.finalState = await worldState(harness).catch(() => null);
   line(`\nfinal state: ${JSON.stringify(report.finalState, null, 2)}`);
   return report;
@@ -5925,7 +6122,32 @@ module.exports = {
   resumeFromCheckpoint,
   isModuleExitDoor,
   healPlayerIfInjured,
+  playerVitals,
+  autoLevelUp,
   sleep,
   line,
   newGameThroughCharacterCreation,
+  // Used by playthrough-peragus.js.
+  boot,
+  navigateTo,
+  listDoors,
+  clearBlockingModal,
+  clearProgressBlockingDialogue,
+  activateWorldAction,
+  activateWheelAction,
+  describeActionWheel,
+  swingAt,
+  clearHostiles,
+  fightHostile,
+  returnToGameplay,
+  equipPlayerWeapon,
+  resolveOpenedContainer,
+  readGlobalNumber,
+  bashOpenPlaceable,
+  questGateSnapshot,
+  listInteractables,
+  isConversationLive,
+  chooseRequiredDialogueTextPrefix,
+  createRequiredDialoguePrefixSequence,
+  resumedPast,
 };
