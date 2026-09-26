@@ -1811,71 +1811,105 @@ First shippable artifact.
 - **7.4** Full playthrough.
 - **7.5** Optional AI-upscaled texture pack support — see below. Blocked on
   usage permission from the mod author.
-- **7.6** Swoop race (211TEL) playable in VR — see below. ✗ still broken in the
+- **7.6** Swoop race (211TEL) playable in VR — see below. ☐ rewritten 2026-09-25, awaiting a captured headset ride; was ✗ still broken in the
   headset as of 2026-09-21.
 
 M4-78 is out of scope.
 
-### 7.6 — Swoop race playable in VR ✗ still broken in the headset (2026-09-21)
+### 7.6 — Swoop race playable in VR ☐ rewritten 2026-09-25, awaiting a captured headset ride
 
-Status in one line: a day of fixes on `parity/retail-tooling` (d44a4027 through
-54259fa9) that each passed their emulator probe, and at the end of it Allen
-reported that **almost everything is still broken in the headset**. Nothing in
-this section should be treated as working until a human has ridden it.
+Status in one line: the controls were redesigned with Allen on 2026-09-25,
+the engine underneath was found to be wrong in seven places that no VR
+control could have worked around, and the whole thing now runs a clean race
+in the emulator (`tools/vr-emulator/probe-swoop-vr.js`). Nothing here has
+been ridden by a human yet; the next step is a ride with
+`tools/vr-emulator/capture-swoop-ride.js` recording.
 
-**The main lesson, before any detail: the emulator probes did not predict the
-headset.** `probe-swoop-controls.js`, `probe-swoop-obstacles.js` and
-`probe-swoop-lap.js` drive `VRMiniGameInputController.update()` directly with
-synthetic frames and step `area.update()` by hand. They prove the policy maths
-and the engine hooks, not the real path: real controller tracking and dropout,
-the real XR frame loop, the real hand model, real eye position. Round after
-round a probe passed and the ride failed. The next attempt should start by
-closing that gap - a live CDP capture of the real input frames and bike state
-*while Allen rides*, compared against what the probe assumed - rather than by
-writing more probe-verified fixes.
+**The locked control scheme** (Allen, 2026-09-25; supersedes every earlier
+one, including the hand-roll steering):
 
-**Engine faults found and fixed along the way** (real, and independent of the
-VR controls, so worth keeping even if the controls are redone):
+- Steering is the **left thumbstick** or **head lean**, both as a rate; a
+  deflected stick overrides the lean. The lean neutral is the head's
+  sideways offset across the seat, sampled through the countdown and frozen
+  at the flag. Recentre takes the current posture as straight again.
+- The hands do not steer. **Squeeze** takes hold of a handle and the hand is
+  drawn on it. The handles are the two posts under the dashboard, measured
+  from the live bike geometry at (+/-0.25, 1.25, 0.87) bike-local (y pulled back from the measured 1.40 in the headset).
+- **Right trigger** is the throttle (hold to climb the gears, as retail's
+  OnAccelerate script wants). **Left trigger** jumps, and only the left
+  trigger.
+- The bike carries sideways velocity (`SwoopLateralMotion`): LateralAccel is
+  an acceleration, the road edge is a wall that stops the bike, and every
+  moment of the ride - obstacle, mine, pad, wall, take-off, landing - pulses
+  both controllers (`SwoopRideEvents` -> `VRSpike.pulseHand`).
+- The rider's eyes sit 1.45 above the bike origin (the authored rider's 1.13 could not see over the windshield) and 0.6 forward, from the
+  authored rider's head.
 
-- `UpdateMinigame()` never ticked the module, so no minigame ever ran a frame.
-- Minigame objects were never `spawned`, so their heartbeats - the whole race
-  state machine on the swoop - never fired.
-- The pause overlay stole the engine mode and never gave it back.
-- No throttle on any input path; both SWOOPRACE cases were empty stubs.
-- Speed accelerated unconditionally once a gear engaged.
-- The track's tunnel bounds were stored but never applied to the swoop.
-- **NWScript vectors were reversed engine-wide** (first pop is z, not x).
-- The bike did not follow the course: the track model's `track` animation (96s,
-  sweeping `modelhook`) was never advanced; the bike was pushed in a straight
-  line along +Y instead.
-- The ARE `Obstacles` list was never read, so obstacles had no scripts.
-- `ModuleMGPlayer.playAnimation` leaked animation managers without bound
-  (3,419 of them, 9ms a frame) - NUL-padded names never matched.
-- Jump velocity was set and never applied, so the bike could not leave the ground.
-- **Punchthrough never worked anywhere**: TXI writes `blending 2`, the parser
-  only knew the word, and the TPC header float was misused as the cutout
-  threshold. See [[kotor2-vr-texture-alpha-rules]] in memory.
+**Engine faults found and fixed on the way** (each one would have broken the
+race whatever the controls were):
 
-**What is still unverified or known broken** (from Allen's last reports; the
-final run's specifics were not captured):
-- Steering: the model changed four times - rate, relaxing neutral, lean as lane
-  position, roll angle with smoothing. None has been confirmed in the headset.
-- Grips: placed by eye three times (all unreachable), then measured from the
-  authored rider `trider` at (+/-0.103, 1.45, 0.813). Not confirmed reachable.
-- Hand pinning to the bars on squeeze: never observed working in the headset.
-- Jump: never observed working in the headset.
-- Obstacles and boost pads: never observed triggering in the headset. The lane
-  was re-centred on the measured road (x +15) so 50 of 105 are reachable in the
-  emulator; unconfirmed live.
-- Ground: the punchthrough fix changes the grate from blotches to a grid in
-  emulated VR; not confirmed in the headset. The grate is dark by the data.
-- Seat height and facing: corrected from screenshots; not re-confirmed.
+1. `ModuleMiniGame.loadMGTracks` never placed a track model at its LYT
+   position. Every course object hangs off a track's modelhook whose offset
+   is authored against that placement, so all 47 pads and mines were piled
+   beside the start line at z 40 and the rider's own track (LYT z 41) ran
+   forty units under the road. That was the "smeared floor", the missing
+   pads and the missing obstacles in one.
+2. `NWScriptStack.push` pushed a returned vector z-first; the compiler and
+   the pop side are x-first. Scripts reading `.z` got `.x`, so 211TEL's
+   onjump read the lateral offset as height and refused jumps right of
+   centre.
+3. The TSL routine table declared `SoundObjectFadeAndStop` with one
+   argument; the script pushes two. Every stack-relative read after that
+   call in a script was one slot off, which is how the mine script came to
+   pass its gear counter to `SWMG_GetHitPoints` and end the race with 0%
+   health.
+4. `SWMG_GetHitPoints` / `SWMG_GetMaxHitPoints` excluded the player and
+   `SWMG_SetFollowerHitPoints` set nothing, so the rider could not be hurt
+   and the health percentage the heartbeat watches was garbage.
+5. Contact with pads and mines was a point-in-sphere test in three
+   dimensions. Pads sit four units under the hook and the bike covers four
+   units a frame at gear 5, so a whole lap met nothing. It is now a swept
+   test in the road plane (`SwoopCollision`), skipped while airborne so a hop
+   clears a mine.
+6. Only the player's OnHitFollower ran on contact; the mine's own
+   OnHitFollower (`mine`, the explosion and the damage) never did. Enemies
+   also had no name for `SWMG_GetObjectName`, which is how the accelpad
+   script tells a mine from a pad.
+7. The lane centre was a raycast that found the shoulder (+15); the course
+   is authored about the hook line, x 0.
 
-**Before the next attempt:** decide with Allen whether to keep iterating on
-lean/grip controls at all, or to fall back to something simpler first (stick
-steering with the bars cosmetic) to get a playable race, then layer the
-physical controls back on. Get one control working end to end in the headset
-before touching the next.
+Also fixed: the flatscreen arrow keys wrote +/-300 straight into the position
+each frame (that was the "janking"), the debug collision sphere was drawn
+around the bike, obstacles with no Invince_Period re-fired every frame, and
+the eye height resolver read the bike's meshes against a local origin.
+
+**Retail's race end**, decoded from the heartbeat: y > 6000 (one lap of the
+course), or health% <= 0, or GBL_QUIT_SWOOP; then a fade and
+`StartNewModule('207TEL', '211TEL_Swoop_Return')` with the time in the
+211TEL_SWOOP_MIN/SEC/MSEC globals. There is no result screen inside the
+module; the "result" is the dialog back in 207TEL.
+
+**Verified in the emulator, not the headset:** stick and lean steer both ways
+and settle rather than snap; the wall holds the bike at +/-20 and reports a
+bump only on impact; the left trigger jumps once per press and a press in the
+air is refused; pads boost and die when taken, mines explode, are destroyed
+and take 100 health each, the health percentage reaches the race dialog, the
+gears climb to 5 and the race no longer ends early.
+
+**First headset ride (2026-09-26):** steering, throttle, jump, pads, mines
+and the race end into 207TEL all worked as described. Three things did not
+and were fixed the same night: a pinned hand was drawn two units behind the
+bike (the pin was taken before the engine tick; held hands are now re-pinned
+after the rig sync), the rails across the road did not slow the bike (they are
+room geometry - now three short rays at hull height against the rail meshes,
+a hit running the module's obstacle script), and the eyes sat at the
+calibrated baseline (now the live head height on the swoop, with the baseline
+retaken on leaving). Eye height and grip depth were then tuned live.
+
+**Still open, for the ride:** the feel of the lateral rate (retail's own
+LateralAccel is slow at low speed and 300 at high), the lean dead zone and
+full-lock distance, whether the seat and eye placement read right from the
+saddle, and whether the k2_shield mesh (authored at alpha 0) shows.
 
 ### 7.5 — Optional AI-upscaled texture pack ☐ blocked on author permission
 

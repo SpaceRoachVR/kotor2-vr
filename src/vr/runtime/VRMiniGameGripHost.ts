@@ -23,29 +23,30 @@ import * as THREE from 'three';
 /**
  * Grip placement relative to the bike origin, in game units (Z up).
  *
- * Measured, not guessed. The bike carries an authored rider - `trider`, 994
- * vertices - posed holding the bars, so its hands say exactly where the bars
- * are. Taking the centroid of the forward-most vertices either side of centre
- * gives (+/-0.103, 1.45, 0.813), with the outermost hand vertex at +/-0.165.
- *
- * Two earlier attempts were placed by eye and both were wrong: 1.2 forward was
- * short of the bars, and 0.45 wide put them outboard of the cockpit past the
- * orange struts, where they could not be reached at all. The rider's own hands
- * were the answer the whole time.
+ * Measured from the bike's geometry in the live engine (probe-swoop-vr.js,
+ * 2026-09-25), not from the rider. The handles Allen pointed at are two short
+ * posts under the dashboard, either side of centre: the vertex cluster at
+ * x 0.19..0.30 (centroid 0.25), y 1.23..1.74 (centroid 1.38), z 0.63..0.98
+ * (centroid 0.87). The authored rider's hands close on their inner side at
+ * x +/-0.09, which is where the earlier (+/-0.103, 1.45, 0.81) came from -
+ * the grip drawn there sat inside the post rather than on it.
  */
 export const SWOOP_GRIP_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
-  [-0.103, 1.45, 0.813],
-  [0.103, 1.45, 0.813],
+  // y pulled back from the measured 1.40 to 1.25 in the headset (2026-09-26):
+  // with the eyes raised to see over the windshield the posts read as too far
+  // forward to be the handles under the rider's hands.
+  [-0.25, 1.25, 0.87],
+  [0.25, 1.25, 0.87],
 ];
 
-/** Matching the hand span the rider's own grip covers. */
+/** The posts stand up from the dashboard; this is their visible height. */
 export const SWOOP_GRIP_LENGTH = 0.12;
 export const SWOOP_GRIP_RADIUS = 0.025;
 
 export const SWOOP_GRIP_GROUP_NAME = 'vr-swoop-grips';
 
 export interface VRMiniGameGripOptions {
-  /** Grip cylinder length, along the bike's X axis. */
+  /** Grip post height, along the bike's Z axis. */
   readonly length?: number;
   readonly radius?: number;
   readonly colour?: number;
@@ -62,8 +63,8 @@ export function buildSwoopGrips(options: VRMiniGameGripOptions = {}): THREE.Obje
   group.name = SWOOP_GRIP_GROUP_NAME;
 
   const geometry = new THREE.CylinderGeometry(radius, radius, length, 12);
-  // A cylinder is Y-up in three; the grips run across the bike, which is X.
-  geometry.rotateZ(Math.PI / 2);
+  // A cylinder is Y-up in three; the posts stand up the bike, which is Z.
+  geometry.rotateX(Math.PI / 2);
   const material = new THREE.MeshBasicMaterial({ color: options.colour ?? 0x2b2f36 });
 
   for (const [x, y, z] of SWOOP_GRIP_OFFSETS) {

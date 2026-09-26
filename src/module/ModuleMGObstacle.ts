@@ -55,10 +55,19 @@ export class ModuleMGObstacle extends ModuleObject {
     }
   }
 
-  /** Whether the rider is inside this obstacle and it is not already spent. */
+  /**
+   * Whether the rider is inside this obstacle and it is not already spent.
+   *
+   * Across the road only. The LYT places an obstacle at z 0 (a few at -991)
+   * while the rider's track runs at z 41, so a sphere test in three
+   * dimensions never met one. Height is the rider's business: a hop clears an
+   * obstacle, and ModuleMGPlayer skips this test while airborne.
+   */
   isStruckBy(position: THREE.Vector3): boolean {
     if(this.invince > 0){ return false; }
-    return this.sphere.containsPoint(position);
+    const dx = position.x - this.sphere.center.x;
+    const dy = position.y - this.sphere.center.y;
+    return (dx * dx + dy * dy) <= this.sphere.radius * this.sphere.radius;
   }
 
   setTemplate(template: GFFObject){
@@ -86,8 +95,17 @@ export class ModuleMGObstacle extends ModuleObject {
     this.hit_points += nHP;
   }
 
+  /**
+   * Spent for a while after a hit. Retail ships no Invince_Period for an
+   * obstacle, and with none the same marker struck the rider every frame for
+   * the half second the slowed bike took to leave its radius - 22 hits from
+   * two markers in one probe ride, each one a jolt in the hands. One named
+   * default, long enough that a marker is met once per pass.
+   */
+  static readonly DEFAULT_REARM_SECONDS = 1.5;
+
   startInvulnerability(){
-    this.invince = this.invince_period || 0;
+    this.invince = this.invince_period || ModuleMGObstacle.DEFAULT_REARM_SECONDS;
   }
 
   onAnimEvent(){

@@ -17,6 +17,9 @@ import type { ModuleMGGunBullet } from "@/module/ModuleMGGunBullet";
 import type { ModuleMGEnemy } from "@/module/ModuleMGEnemy";
 import type { ModuleMGObstacle } from "@/module/ModuleMGObstacle";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { stepSwoopLateral, SWOOP_LATERAL_MAX_SPEED, SWOOP_WALL_BUMP_MIN_SPEED } from "@/module/minigame/SwoopLateralMotion";
+import { emitSwoopRideEvent, SwoopRideEventType } from "@/module/minigame/SwoopRideEvents";
+import { segmentMeetsCircle2D } from "@/module/minigame/SwoopCollision";
 
 /**
 * ModuleMGPlayer class.
@@ -52,6 +55,16 @@ export class ModuleMGPlayer extends ModuleObject {
   accel_secs: number;
   accel_lateral_secs: number;
   lateralForce: number;
+  /**
+   * Steering for this frame, -1 full left to +1 full right, from whichever
+   * input path moved last. Consumed by stepLateral each frame, so a key or a
+   * stick that is no longer held stops steering on its own.
+   */
+  steerInput: number = 0;
+  /** Sideways velocity carried between frames; see SwoopLateralMotion. */
+  lateralVelocity: number = 0;
+  /** Whether the bike has left the ground on a hop, so landing can be felt. */
+  airborne: boolean = false;
   invince: number;
   gear: number;
   gunTimer: number;
@@ -82,8 +95,30 @@ export class ModuleMGPlayer extends ModuleObject {
   /** How long a request stands without renewal. A couple of frames at 30fps. */
   static readonly ACCELERATION_REQUEST_TTL_MS = 120;
 
-  /** Scratch for the obstacle sweep, which runs every frame. */
-  private static obstacleProbePosition = new THREE.Vector3();
+  /** Where the bike was at the start of this frame's movement, in world space. */
+  private static sweepStart = new THREE.Vector3();
+  private static sweepEnd = new THREE.Vector3();
+  private sweepValid: boolean = false;
+  /** The rails across the road that a hop clears; see collectBarrierMeshes. */
+  private barrierMeshes: THREE.Object3D[] | null = null;
+  private static barrierRay = new THREE.Raycaster();
+  private static barrierFrom = new THREE.Vector3();
+  private static barrierDirection = new THREE.Vector3();
+  /**
+   * The room nodes that are barriers across the lane. 211TEL names them
+   * tel_gr08_lh02 (left half), rh (right half), fh (full), ch/center; the
+   * plat*, start and finish nodes with the same prefix are road tiles at
+   * z 41 and must not count. Measured live: every rail tops out at z 45.5,
+   * under a hopping bike's hull at 50, and the gantries above the full
+   * rails leave the lane open from z 46 up.
+   */
+  static readonly BARRIER_NODE_PATTERN = /_gr\d+_(lh|rh|fh|ch|center)\d*/i;
+  /** Height of the probe rays above the hook: the middle of the hull. */
+  static readonly BARRIER_RAY_HEIGHT = 0.8;
+  /** Across the hull, so a half rail clips a bike that straddles its end. */
+  static readonly BARRIER_RAY_OFFSETS: readonly number[] = [-1.5, 0, 1.5];
+  /** Reach beyond this frame's movement: the bike's own sphere. */
+  static readonly BARRIER_RAY_MARGIN = 2;
 
   /**
    * How fast a hop bleeds away, in units per second per second. 211TEL's jump
@@ -92,6 +127,8 @@ export class ModuleMGPlayer extends ModuleObject {
    */
   static readonly JUMP_GRAVITY = 45;
   static readonly DEFAULT_JUMP_SPEED = 24;
+  /** Hop height above which the bike is over an obstacle rather than in it. */
+  static readonly OBSTACLE_CLEAR_HEIGHT = 2;
 
   /** How far either side of the rider to look for the edge of the road. */
   static readonly LANE_SCAN_REACH = 200;
@@ -164,6 +201,9 @@ export class ModuleMGPlayer extends ModuleObject {
     material.transparent = true;
     material.opacity = 0.15;
     this.sphere_geom = new THREE.Mesh( geometry, material );
+    // A debug aid, not a retail sight: a translucent blue ball two units wide
+    // around the bike, which from the saddle in VR is a tint over everything.
+    this.sphere_geom.visible = false;
 
   }
 
@@ -218,6 +258,7 @@ export class ModuleMGPlayer extends ModuleObject {
 
     this.onCreateRun = false;
     this.trackAnimationPlaying = false;
+    this.barrierMeshes = null;
 
     this._heartbeatTimeout = 0;
 
@@ -287,8 +328,6 @@ export class ModuleMGPlayer extends ModuleObject {
             this.speed = this.speed_max;
           }
 
-          this.forceVector.set( this.lateralForce * delta, 0, 0 );
-
         }
 
         // Ride the authored course. The track model carries an animation named
@@ -303,24 +342,46 @@ export class ModuleMGPlayer extends ModuleObject {
         // (placed in world space along the real course) were never struck, and
         // why the world ahead turned black - the rider was flying through
         // unmodelled space beside the level, not running out of draw distance.
+        // Where the frame's movement starts, for the swept contact tests below.
+        this.container.getWorldPosition(ModuleMGPlayer.sweepStart);
+        this.sweepValid = true;
         this.advanceTrackAnimation(delta);
 
         this.track.updateMatrixWorld();
         //this.updateCollision(delta);
         // Steering is an offset from the hook, not a push on the track itself.
-        this.container.position.add(this.forceVector);
-        this.clampToTunnel();
+        this.stepLateral(delta);
         this.checkObstacleCollisions();
+        this.checkBarrierCollisions();
         //this.model.box.setFromObject(this.model);
 
         const enemies = GameState.module.area.miniGame.enemies;
+        // A hop clears a mine, and a pad on the road is not under a bike in
+        // the air: airborne, nothing on the course is touched.
+        const airborne = this.container.position.z > ModuleMGPlayer.OBSTACLE_CLEAR_HEIGHT;
         for(let i = 0; i < enemies.length; i++){
           const enemy = enemies[i];
-          if(enemy.sphere.containsPoint(this.sphere.center)){
+          // A pad the rider has already taken (the accelpad script kills it)
+          // is spent; it must not boost again on the way past.
+          if(!enemy || !enemy.alive || airborne){ continue; }
+          // Swept, across the road: pads sit four units under the hook and the
+          // bike covers four units a frame at gear 5, so a point-in-sphere
+          // test met nothing in a whole lap. Both spheres' radii count.
+          if(this.sweepMeets(enemy.sphere.center, enemy.sphere.radius + this.sphere_radius)){
             if(!enemy.collided){
               enemy.collided = true;
+              // Both sides' scripts. 211TEL's mines carry the explosion in
+              // their own OnHitFollower ('mine'); the player's ('accelpad')
+              // only knows what to do with a pad. Only the player's ran.
+              enemy.onHitFollower();
               this.onHitFollower(enemy);
+              this.emitRideEvent(
+                /mgm/i.test(String(enemy.name || enemy.trackName || '')) ? 'mine' : 'pad', 1,
+              );
             }
+          }else{
+            // Out the other side, so the same object can be met again next lap.
+            enemy.collided = false;
           }
         }
 
@@ -330,6 +391,12 @@ export class ModuleMGPlayer extends ModuleObject {
         // it lifts the rider while it lasts and gravity brings them back; the
         // tunnel's own z bound is the ceiling on a hop.
         if(this.jumpVelcolity > 0){
+          // Take-off is noticed here rather than in jump(), because the module's
+          // own jump script sets the speed directly through SWMG_SetJumpSpeed.
+          if(!this.airborne){
+            this.airborne = true;
+            this.emitRideEvent('jump', 1);
+          }
           this.container.position.z += this.jumpVelcolity * delta;
           this.jumpVelcolity -= (ModuleMGPlayer.JUMP_GRAVITY * delta);
           this.falling = false;
@@ -342,6 +409,10 @@ export class ModuleMGPlayer extends ModuleObject {
           }else{
             this.container.position.z = 0;
             this.falling = false;
+            if(this.airborne){
+              this.airborne = false;
+              this.emitRideEvent('land', 1);
+            }
           }
         }
 
@@ -434,16 +505,23 @@ export class ModuleMGPlayer extends ModuleObject {
    */
   checkObstacleCollisions(){
     if(!this.container){ return; }
+    // A hop clears an obstacle: that is what the jump is for. The same height
+    // 211TEL's own jump script uses to decide the bike is off the ground.
+    if(this.container.position.z > ModuleMGPlayer.OBSTACLE_CLEAR_HEIGHT){ return; }
+    // The hit script grants the rider a moment's invulnerability after a hit
+    // and does nothing inside it; neither should the engine, or the second
+    // marker in a row jolts the hands for nothing.
+    if(this.invince > 0){ return; }
     const obstacles = GameState.module?.area?.miniGame?.obstacles;
     if(!obstacles?.length){ return; }
-    this.container.getWorldPosition(ModuleMGPlayer.obstacleProbePosition);
-    const position = ModuleMGPlayer.obstacleProbePosition;
     for(let i = 0, len = obstacles.length; i < len; i++){
       const obstacle = obstacles[i];
-      if(!obstacle || !obstacle.isStruckBy(position)){ continue; }
+      if(!obstacle || obstacle.invince > 0){ continue; }
+      if(!this.sweepMeets(obstacle.sphere.center, obstacle.sphere.radius)){ continue; }
       obstacle.startInvulnerability();
       obstacle.onHitFollower();
       this.onHitObstacle(obstacle);
+      this.emitRideEvent('obstacle', 1);
       // One hazard per frame: a rider clipping two at once is struck by the
       // first, and the second is still there on the next pass.
       return;
@@ -495,60 +573,19 @@ export class ModuleMGPlayer extends ModuleObject {
   }
 
   /**
-   * The middle of the road, measured rather than assumed.
+   * The middle of the road: the line the hook rides.
    *
-   * The hook drops the rider at world x 0, but that is not the middle of the
-   * track: raycasting the floor across the start line finds surface from about
-   * x -20 to +50, so riding "centred" actually hugs the left edge. The
-   * obstacles bear that out - 211TEL lines them up in rows near x +20 and -30,
-   * which is symmetric about the road rather than about the rider. With the
-   * lane centred on the rider, the right-hand row sat at the very limit of a
-   * +/-20 tunnel and the left-hand row was unreachable, so a rider could ride a
-   * whole course without meeting one.
-   *
-   * Sampled once, from the floor under the start line. A track whose floor
-   * cannot be found keeps the rider's own position as the centre, which is the
-   * behaviour this replaces.
+   * This used to be measured by raycasting the floor either side of the start
+   * line, which found surface from x -20 to +50 and so put the centre at +15.
+   * The authored course says otherwise: with the tracks placed where the LYT
+   * puts them, 211TEL's 23 pads and 24 mines sit between x -15 and +15,
+   * symmetric about the hook at x 0, and the tunnel the race script sets is
+   * +/-20 about the same line. The wider floor is the shoulder beside the
+   * lane. Centred at +15 the left-hand row of pads was at the tunnel wall.
    */
   measureLaneCentre(): number {
-    if(this.laneCentreMeasured){ return this.laneCentre; }
+    this.laneCentre = 0;
     this.laneCentreMeasured = true;
-    try{
-      const rooms = GameState.module?.area?.rooms || [];
-      const meshes: THREE.Object3D[] = [];
-      for(const room of rooms){
-        if((room as any).model) (room as any).model.traverse((o: THREE.Object3D) => {
-          if((o as THREE.Mesh).isMesh) meshes.push(o);
-        });
-      }
-      if(!meshes.length){ return this.laneCentre; }
-
-      this.container.updateMatrixWorld(true);
-      const origin = new THREE.Vector3();
-      this.container.getWorldPosition(origin);
-      const raycaster = new THREE.Raycaster();
-      const down = new THREE.Vector3(0, 0, -1);
-      let min: number | null = null, max: number | null = null;
-      for(let offset = -ModuleMGPlayer.LANE_SCAN_REACH; offset <= ModuleMGPlayer.LANE_SCAN_REACH; offset += ModuleMGPlayer.LANE_SCAN_STEP){
-        raycaster.set(
-          new THREE.Vector3(origin.x + offset, origin.y, origin.z + ModuleMGPlayer.LANE_SCAN_HEIGHT),
-          down,
-        );
-        raycaster.far = ModuleMGPlayer.LANE_SCAN_HEIGHT * 2;
-        if(!raycaster.intersectObjects(meshes, false).length){
-          // Past the edge of the road. Keep only the stretch touching the rider.
-          if(min !== null && max !== null && offset > 0){ break; }
-          min = null; max = null;
-          continue;
-        }
-        if(min === null){ min = offset; }
-        max = offset;
-      }
-      if(min === null || max === null){ return this.laneCentre; }
-      this.laneCentre = (min + max) / 2;
-    }catch(e){
-      console.warn('ModuleMGPlayer.measureLaneCentre: falling back to the rider position', e);
-    }
     return this.laneCentre;
   }
 
@@ -595,6 +632,119 @@ export class ModuleMGPlayer extends ModuleObject {
    */
   jump(){
     this.jumpVelcolity = ModuleMGPlayer.DEFAULT_JUMP_SPEED;
+  }
+
+  /** Steering for this frame, from either input path; see steerInput. */
+  setSteerInput(steer: number){
+    this.steerInput = Number.isFinite(steer) ? Math.max(-1, Math.min(1, steer)) : 0;
+  }
+
+  /**
+   * Moves the bike sideways for this frame and keeps it on the road.
+   *
+   * The ARE's LateralAccel is an acceleration and UseInertia is set, so the
+   * bike carries sideways velocity (SwoopLateralMotion has the model). The
+   * flatscreen keys used to write +/-300 straight into the position each
+   * frame, which crossed the road in a seventh of a second and read as the
+   * bike jerking about at random.
+   *
+   * The road edge is a wall: the bike stops against it and the rider feels
+   * the bump, scaled by how fast they hit it.
+   */
+  stepLateral(delta: number){
+    if(!this.container){ return; }
+    const centre = this.measureLaneCentre();
+    const pos = this.tunnel?.pos, neg = this.tunnel?.neg;
+    const limit = Math.max(Math.abs(pos?.x ?? 0), Math.abs(neg?.x ?? 0));
+    const result = stepSwoopLateral(
+      { position: this.container.position.x - centre, velocity: this.lateralVelocity },
+      { steer: this.steerInput, acceleration: this.accel_lateral_secs, limit, delta },
+    );
+    this.container.position.x = centre + result.state.position;
+    this.lateralVelocity = result.state.velocity;
+    this.steerInput = 0;
+    // A bump, not a buzz: held against the edge the bike creeps into the wall
+    // by a fraction of a unit every frame, which is a scrape, not a hit.
+    if(result.wallHit >= SWOOP_WALL_BUMP_MIN_SPEED){
+      this.emitRideEvent('wall', result.wallHit / SWOOP_LATERAL_MAX_SPEED);
+    }
+    // Still the one place the hop height is bounded.
+    this.clampToTunnel();
+  }
+
+  /** The barrier meshes of the loaded rooms, found once per module. */
+  collectBarrierMeshes(): THREE.Object3D[] {
+    if(this.barrierMeshes){ return this.barrierMeshes; }
+    const meshes: THREE.Object3D[] = [];
+    const clean = (name: unknown) => String(name || '').replace(/\0[\s\S]*$/, '');
+    try{
+      for(const room of GameState.module?.area?.rooms || []){
+        const model = (room as any).model as THREE.Object3D | undefined;
+        if(!model){ continue; }
+        model.traverse((o: THREE.Object3D) => {
+          if(!(o as THREE.Mesh).isMesh){ return; }
+          const name = clean(o.name) || clean(o.parent?.name);
+          if(ModuleMGPlayer.BARRIER_NODE_PATTERN.test(name)){ meshes.push(o); }
+        });
+      }
+    }catch(e){
+      console.warn('ModuleMGPlayer.collectBarrierMeshes', e);
+    }
+    this.barrierMeshes = meshes;
+    return meshes;
+  }
+
+  /**
+   * Runs the bike into the rails across the road.
+   *
+   * These are room geometry, not obstacle markers: nothing in the ARE or LYT
+   * places them, and the walkmesh does not know them either. Retail's
+   * "DoBumping" is the engine hitting the world. Three short rays along this
+   * frame's movement, at hull height, against only the rail meshes - a ray
+   * against every room mesh cost 2.7ms. A hit is treated as an obstacle hit,
+   * which is the module's own authored answer to hitting something: speed
+   * to a crawl, gear to zero, the damage animation. A hopping bike's rays
+   * pass over the rails.
+   */
+  checkBarrierCollisions(){
+    if(!this.container || this.invince > 0 || !this.sweepValid){ return; }
+    const meshes = this.collectBarrierMeshes();
+    if(!meshes.length){ return; }
+    const from = ModuleMGPlayer.sweepStart;
+    const to = ModuleMGPlayer.sweepEnd;
+    this.container.getWorldPosition(to);
+    const direction = ModuleMGPlayer.barrierDirection.subVectors(to, from);
+    const distance = direction.length();
+    if(distance < 1e-4){ return; }
+    direction.divideScalar(distance);
+    const ray = ModuleMGPlayer.barrierRay;
+    ray.far = distance + ModuleMGPlayer.BARRIER_RAY_MARGIN;
+    for(const dx of ModuleMGPlayer.BARRIER_RAY_OFFSETS){
+      ModuleMGPlayer.barrierFrom.set(from.x + dx, from.y, from.z + ModuleMGPlayer.BARRIER_RAY_HEIGHT);
+      ray.set(ModuleMGPlayer.barrierFrom, direction);
+      if(!ray.intersectObjects(meshes, false).length){ continue; }
+      this.onHitObstacle(undefined as any);
+      this.emitRideEvent('obstacle', 1);
+      this.startInvulnerability();
+      return;
+    }
+  }
+
+  /**
+   * Whether the bike's path this frame passes within `radius` of a point,
+   * measured across the road. See SwoopCollision for why it is swept and flat.
+   */
+  sweepMeets(centre: THREE.Vector3, radius: number): boolean {
+    if(!this.container){ return false; }
+    this.container.getWorldPosition(ModuleMGPlayer.sweepEnd);
+    const b = ModuleMGPlayer.sweepEnd;
+    const a = this.sweepValid ? ModuleMGPlayer.sweepStart : b;
+    return segmentMeetsCircle2D(a.x, a.y, b.x, b.y, centre.x, centre.y, radius);
+  }
+
+  /** One of the ride's moments, for whoever wants to feel it (VR haptics). */
+  emitRideEvent(type: SwoopRideEventType, strength: number){
+    emitSwoopRideEvent(type, strength);
   }
 
   fire(){

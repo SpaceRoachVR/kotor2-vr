@@ -221,6 +221,12 @@ export interface VRSpikeHooks {
    * null when it cannot be read. See `VRSpike.resolveEyeHeightOffset`.
    */
   getEyeHeight?: () => number | null;
+  /**
+   * True while the player's real head height, not the session's calibrated
+   * baseline, should place the eyes: a seated vehicle, where the eyes belong
+   * at the rider's exactly, whatever posture the player entered VR in.
+   */
+  useLiveHeadHeight?: () => boolean;
   /** Instantly relocates the player, e.g. for a committed blink-teleport. */
   teleportPlayer?: (point: THREE.Vector3) => void;
   /** Follower camera facing, radians about the world Z axis. */
@@ -515,7 +521,12 @@ export class VRSpike {
    * engine state (its tests mock the world, and importing GameState here pulled
    * the whole engine into them).
    */
-  static miniGameInput: { update: (frame: XRInputFrame | null) => void; reset: () => void } | null = null;
+  static miniGameInput: {
+    update: (frame: XRInputFrame | null) => void;
+    reset: () => void;
+    /** Re-pins held hands against the vehicle as it is *after* this frame's engine tick. */
+    refreshPins?: () => void;
+  } | null = null;
   private static readonly inputRouter = new XRInputRouter();
   static readonly inputRecorder = new VRInputRecorder();
   static readonly tracePlayer = new VRTracePlayer();
@@ -622,6 +633,16 @@ export class VRSpike {
    */
   static setPinnedHandPose(hand: XRHandRole, pose: XRWorldPose | null): void {
     VRSpike.controllerAnchorHost?.setPinnedPose(hand, pose);
+  }
+
+  /**
+   * A haptic pulse on one hand, for gameplay that has no session of its own -
+   * the swoop's bumps and boosts. Safe outside a session: it does nothing.
+   */
+  static pulseHand(hand: XRHandRole, pattern: { durationMs: number; amplitude: number }): void {
+    const session = VRSpike.session;
+    if (!session) return;
+    void VRSpike.haptics.pulse(session, hand, pattern);
   }
   private static latestInputFrame: XRInputFrame | null = null;
   private static latestXRFrame: XRFrame | null = null;
@@ -3626,6 +3647,14 @@ export class VRSpike {
       // stand; skipping after that still keeps camera cuts from yanking them.
       if (!theaterCutscene || !VRSpike.rigSyncedThisSession) VRSpike.syncRig(worldCamera);
       VRSpike.refreshTrackedPresentationPose();
+      // A hand held on the swoop's handle is pinned in world space, and the
+      // pin was taken before this frame's engine tick moved the bike - at
+      // race speed that is two units a frame, so the hand was drawn two units
+      // behind the rider and read as having vanished. Re-pin against the bike
+      // where it is now, and re-place the anchors against the rig where it is
+      // now, which is the frame the headset is about to render.
+      VRSpike.miniGameInput?.refreshPins?.();
+      VRSpike.controllerAnchorHost?.refreshPinnedAnchors();
     }
 
     if (theaterCutscene) {
@@ -4446,8 +4475,27 @@ export class VRSpike {
    * Movement relative to the calibrated baseline still passes straight through,
    * so crouching and leaning work, and a seated player gets the same view.
    */
+  private static liveHeadHeightLastFrame = false;
+
   private static resolveEyeHeightOffset(): number {
-    const baseline = VRSpike.headHeightBaselineMetres;
+    // On the swoop the eyes go exactly where the rider's are, measured from
+    // the head as it is now rather than the calibrated baseline: a player who
+    // calibrated standing and then sat down for the race was put a head lower
+    // in the cockpit than the rider and could not see the track. And when the
+    // race ends the baseline is dropped so it is taken again in whatever
+    // posture they are in now - calibrated seated, standing up afterwards put
+    // them a head too tall in the next module.
+    const live = VRSpike.hooks?.useLiveHeadHeight?.() === true;
+    if (live !== VRSpike.liveHeadHeightLastFrame) {
+      VRSpike.liveHeadHeightLastFrame = live;
+      if (!live) {
+        VRSpike.headHeightBaselineMetres = null;
+        VRSpike.headHeightSamples = [];
+      }
+    }
+    const baseline = live
+      ? (VRSpike.latestLocalHeadPosition?.y ?? null)
+      : VRSpike.headHeightBaselineMetres;
     if (baseline === null) return 0;
     const eye = VRSpike.hooks?.getEyeHeight?.() ?? null;
     if (eye === null || !Number.isFinite(eye)) return 0;

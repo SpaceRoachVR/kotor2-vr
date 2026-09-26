@@ -96,6 +96,8 @@ export * from "@/engine/interaction/ActionApproachPolicy";
 // bundle internals.
 export * from "@/vr/runtime/XRInputRouter";
 export * from "@/vr/runtime/VRMiniGameInputController";
+export * from "@/module/minigame/SwoopRideEvents";
+export * from "@/module/minigame/SwoopLateralMotion";
 export * from "@/vr/runtime/VRMiniGameInputPolicy";
 
 // WebXR input recording & trace playback.

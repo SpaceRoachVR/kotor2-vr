@@ -340,6 +340,22 @@ export class XRControllerAnchorHost {
     this.pinnedPoses[hand] = pose;
   }
 
+  /**
+   * Re-places every pinned hand against the rig as it is now. update() ran
+   * before this frame's engine tick and rig sync; a hand pinned to something
+   * that moved since (a vehicle) is stale by a frame until this is called.
+   */
+  refreshPinnedAnchors(): void {
+    if (!this.pinnedPoses.left && !this.pinnedPoses.right) return;
+    this.rig.updateWorldMatrix(true, false);
+    const inverseRigOrientation = this.rig.getWorldQuaternion(new THREE.Quaternion()).invert();
+    for (const hand of ['left', 'right'] as const) {
+      const pose = this.pinnedPoses[hand];
+      if (!pose) continue;
+      this.applyWorldPose(this.anchors[hand], pose, inverseRigOrientation);
+    }
+  }
+
   /** Attaches a flattened presentation-only engine model to the tracked hand. */
   setHeldVisual(hand: XRHandRole, descriptor: HeldItemVisualDescriptor | null): void {
     const descriptorKey = descriptor ? XRControllerAnchorHost.getDescriptorKey(descriptor) : null;

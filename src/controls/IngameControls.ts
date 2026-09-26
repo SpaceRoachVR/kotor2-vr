@@ -656,7 +656,7 @@ export class IngameControls {
       if(GameState.State != EngineState.RUNNING) return;
       switch(GameState.module.area.miniGame.type){
         case MiniGameType.SWOOPRACE:
-          GameState.module.area.miniGame.player.lateralForce = -GameState.module.area.miniGame.player.accel_lateral_secs;
+          GameState.module.area.miniGame.player.setSteerInput(-1);
         break;
         case MiniGameType.TURRET:
           GameState.module.area.miniGame.player.rotate('z', 1 * delta);
@@ -669,7 +669,7 @@ export class IngameControls {
       if(GameState.State != EngineState.RUNNING) return;
       switch(GameState.module.area.miniGame.type){
         case MiniGameType.SWOOPRACE:
-          GameState.module.area.miniGame.player.lateralForce = GameState.module.area.miniGame.player.accel_lateral_secs;
+          GameState.module.area.miniGame.player.setSteerInput(1);
         break;
         case MiniGameType.TURRET:
           GameState.module.area.miniGame.player.rotate('z', -1 * delta);

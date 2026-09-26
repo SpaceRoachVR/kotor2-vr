@@ -87,11 +87,11 @@ describe('the tunnel keeps the bike on the track', () => {
   });
 
   test('it runs after the frame movement is applied', () => {
-    const update = player.slice(player.indexOf('  update(delta'), player.indexOf('  updatePaused('));
-    const add = update.indexOf('this.container.position.add(this.forceVector)');
-    const call = update.indexOf('this.clampToTunnel()');
-    expect(add).toBeGreaterThan(-1);
-    expect(call).toBeGreaterThan(add);
+    const step = bodyOf(player, '  stepLateral(delta: number)');
+    const move = step.indexOf('this.container.position.x = centre + result.state.position');
+    const call = step.indexOf('this.clampToTunnel()');
+    expect(move).toBeGreaterThan(-1);
+    expect(call).toBeGreaterThan(move);
   });
 });
 
@@ -127,9 +127,13 @@ describe('NWScript vectors arrive the right way round', () => {
     expect(vectorCase).toMatch(/new THREE\.Vector3\(x, y, z\)/);
   });
 
-  test('the push side still writes z first, which is what makes that the order', () => {
+  test('the push side writes x first too, so a script reading .z off a returned vector gets z', () => {
+    // Pushed z-first, the top float of a returned vector was x: 211TEL's
+    // onjump read the rider's lateral offset as height and refused every jump
+    // taken right of centre (probe-swoop-vr.js: midAirPressIgnored went from
+    // false to true with this order alone).
     expect(read('nwscript/NWScriptStack.ts')).toMatch(
-      /VECTOR[\s\S]{0,200}value: data\.z[\s\S]{0,120}value: data\.y[\s\S]{0,120}value: data\.x/,
+      /VECTOR[\s\S]{0,700}value: data\.x[\s\S]{0,120}value: data\.y[\s\S]{0,120}value: data\.z/,
     );
   });
 });

@@ -2,45 +2,40 @@ import { describe, expect, test } from '@jest/globals';
 import * as THREE from 'three';
 import {
   aimDirectionToPitchYaw, DEFAULT_MINIGAME_INPUT_CONFIGURATION, MiniGameGripState,
-  resolveSteering, resolveSwoopIntent, resolveTurretIntent,
+  resolveLeanSteer, resolveSwoopIntent, resolveSwoopSteer, resolveTurretIntent, stickX,
+  VRSwoopLeanFrame,
 } from '@/vr/runtime/VRMiniGameInputPolicy';
 import { XRHandInputFrame, XRInputFrame, XRWorldPose } from '@/vr/runtime/XRTypes';
 
 /**
- * VR input for the swoop and turret, against the decisions taken for it:
- * two-handed handlebars and grips, hold-squeeze to hold on, and either hand
- * alone still steers or aims so a seated player is never stranded. Comfort is
- * deliberately untouched — the player's existing settings apply.
+ * VR input for the swoop and turret, against the scheme locked on 2026-09-25
+ * after four hand-steering models failed in the headset: the left stick and
+ * head lean steer (a rate, stick wins), right trigger throttles, left trigger
+ * jumps, squeeze only draws the hands on the bars. The turret keeps its
+ * deliberate grip: squeeze to hold, the pair aims, the trigger fires.
  */
+
 /**
  * Buttons are keyed by gamepad index as a string, exactly as
  * XRInputFrameBuilder.readButtons writes them and XRInputRouter reads them.
- *
- * These fixtures previously used names ('squeeze', 'trigger'). No such key is
- * ever present on a real frame, so every read in the policy returned 0 — the
- * grip never closed and the throttle never opened — while this suite passed,
- * because it was asserting against the same invention. Index order is the
- * xr-standard mapping: 0 trigger, 1 squeeze, 2 touchpad, 3 thumbstick.
+ * Named keys never exist on a real frame. Index order is the xr-standard
+ * mapping: 0 trigger, 1 squeeze; the thumbstick is axes 2 and 3.
  */
 const XR_TRIGGER = '0';
 const XR_SQUEEZE = '1';
 const button = (value: number) => ({ pressed: value >= 0.5, touched: value > 0, value });
 
-// Hands default to a normal shoulder-width apart: steering is the angle of the
-// line between them, so a pair sharing one x would read every gesture as full
-// lock. Tests that care about width set x explicitly.
-const DEFAULT_HAND_X = 0.25;
-
 function hand(options: {
   hand: 'left' | 'right'; x?: number; y?: number; z?: number;
   squeeze?: number; trigger?: number; orientation?: THREE.Quaternion;
-  /** Thumbstick Y, in WebXR's sign: forward is negative. */
-  stickY?: number;
+  /** Thumbstick X on axis 2, -1 left .. +1 right. */
+  stickX?: number;
+  /** Touchpad-profile stick on axes 0/1 instead. */
+  padX?: number;
 }): XRHandInputFrame {
   const pose: XRWorldPose = {
     position: new THREE.Vector3(
-      options.x ?? (options.hand === 'left' ? -DEFAULT_HAND_X : DEFAULT_HAND_X),
-      options.y ?? 1.2, options.z ?? -0.3,
+      options.x ?? (options.hand === 'left' ? -0.25 : 0.25), options.y ?? 1.2, options.z ?? -0.3,
     ),
     orientation: options.orientation ?? new THREE.Quaternion(),
     linearVelocity: null, angularVelocity: null, trackingState: 'tracked',
@@ -48,17 +43,17 @@ function hand(options: {
   return {
     hand: options.hand, pose, targetRayPose: pose,
     buttons: { [XR_TRIGGER]: button(options.trigger ?? 0), [XR_SQUEEZE]: button(options.squeeze ?? 0) },
-    axes: [0, 0, 0, options.stickY ?? 0], interactionProfile: null,
+    axes: [options.padX ?? 0, 0, options.stickX ?? 0, 0], interactionProfile: null,
   };
 }
 
-function frame(hands: XRHandInputFrame[]): XRInputFrame {
+function frame(hands: XRHandInputFrame[], head?: Partial<{ x: number; y: number; z: number }>): XRInputFrame {
   const map: Record<string, XRHandInputFrame> = {};
   for (const h of hands) map[h.hand] = h;
   return {
     timestamp: 0,
     head: {
-      position: new THREE.Vector3(0, 1.6, 0), orientation: new THREE.Quaternion(),
+      position: new THREE.Vector3(head?.x ?? 0, head?.y ?? 1.6, head?.z ?? 0), orientation: new THREE.Quaternion(),
       linearVelocity: null, angularVelocity: null, trackingState: 'tracked',
     } as XRWorldPose,
     hands: map as never,
@@ -68,167 +63,166 @@ function frame(hands: XRHandInputFrame[]): XRInputFrame {
 
 const config = DEFAULT_MINIGAME_INPUT_CONFIGURATION;
 
-/**
- * The swoop asks nothing of the hands but that they be tracked. A rider is
- * strapped to a vehicle, not holding an object they might drop, so requiring a
- * squeeze only created a state where the controls silently did nothing. The
- * turret keeps its squeeze: that is a deliberate grip on a mounted weapon.
- */
-describe('riding the swoop', () => {
-  test('hands on the bars steer', () => {
-    const both = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.0 }), hand({ hand: 'right', squeeze: 1, y: 1.4 }),
-    ]), config);
-    expect(both.grip).toBe(MiniGameGripState.TWO_HANDED);
-    expect(both.steer).toBeGreaterThan(0);
+/** A seat at the origin with the bike's right along +X, rider sitting straight. */
+const seat = (neutral = 0): VRSwoopLeanFrame => ({
+  seatPosition: new THREE.Vector3(0, 0, 0), right: new THREE.Vector3(1, 0, 0), neutral,
+});
+
+describe('the left stick steers', () => {
+  test('pushed right steers right, pushed left steers left', () => {
+    expect(resolveSwoopSteer(frame([hand({ hand: 'left', stickX: 1 })]), null, config))
+      .toEqual({ steer: 1, source: 'stick' });
+    expect(resolveSwoopSteer(frame([hand({ hand: 'left', stickX: -1 })]), null, config))
+      .toEqual({ steer: -1, source: 'stick' });
   });
 
-  test('one hand on the bars is enough to stay in control', () => {
-    const single = resolveSteering(frame([hand({ hand: 'right', squeeze: 1, x: 0.4 })]), config);
-    expect(single.grip).toBe(MiniGameGripState.ONE_HANDED);
-    expect(single.steer).toBeGreaterThan(0);
+  test('half a push is a gentler turn, past the dead zone', () => {
+    const { steer } = resolveSwoopSteer(frame([hand({ hand: 'left', stickX: 0.6 })]), null, config);
+    expect(steer).toBeGreaterThan(0.4);
+    expect(steer).toBeLessThan(0.6);
   });
 
-  test('hands off the bars means no control', () => {
-    const loose = resolveSteering(frame([
-      hand({ hand: 'left', y: 1.0 }), hand({ hand: 'right', y: 1.4 }),
-    ]), config);
-    expect(loose.grip).toBe(MiniGameGripState.NONE);
-    expect(loose.steer).toBe(0);
+  test('a stick at rest, or wobbling inside the dead zone, does not steer', () => {
+    expect(resolveSwoopSteer(frame([hand({ hand: 'left', stickX: 0 })]), null, config).source).toBe('none');
+    expect(resolveSwoopSteer(frame([hand({ hand: 'left', stickX: 0.1 })]), null, config).steer).toBe(0);
+  });
+
+  test('the right stick does not steer', () => {
+    expect(resolveSwoopSteer(frame([hand({ hand: 'right', stickX: 1 })]), null, config).steer).toBe(0);
+  });
+
+  test('a touchpad profile reports the stick on axes 0 and 1, and that still works', () => {
+    expect(stickX(hand({ hand: 'left', padX: -0.8 }))).toBe(-0.8);
+  });
+
+  test('a missing left controller is no steer, not a crash', () => {
+    expect(resolveSwoopSteer(frame([hand({ hand: 'right' })]), null, config).steer).toBe(0);
   });
 });
 
-describe('the turret still wants a deliberate grip', () => {
-  test('an ungripped hand does not aim', () => {
-    const loose = resolveTurretIntent(frame([
-      hand({ hand: 'left' }), hand({ hand: 'right' }),
-    ]), config);
-    expect(loose.grip).toBe(MiniGameGripState.NONE);
-    expect(loose.aimDirection).toBeNull();
+describe('leaning steers', () => {
+  test('sitting straight is straight', () => {
+    expect(resolveLeanSteer(frame([]).head, seat(), config)).toBe(0);
   });
 
-  test('squeezing both grips aims', () => {
-    const held = resolveTurretIntent(frame([
-      hand({ hand: 'left', squeeze: 1 }), hand({ hand: 'right', squeeze: 1 }),
-    ]), config);
-    expect(held.grip).toBe(MiniGameGripState.TWO_HANDED);
-    expect(held.aimDirection).not.toBeNull();
+  test('leaning right steers right, and further is more', () => {
+    const little = resolveLeanSteer(frame([], { x: 0.08 }).head, seat(), config);
+    const lot = resolveLeanSteer(frame([], { x: 0.16 }).head, seat(), config);
+    expect(little).toBeGreaterThan(0);
+    expect(lot).toBeGreaterThan(little);
+  });
+
+  test('leaning the other way steers the other way, symmetrically', () => {
+    const right = resolveLeanSteer(frame([], { x: 0.1 }).head, seat(), config);
+    const left = resolveLeanSteer(frame([], { x: -0.1 }).head, seat(), config);
+    expect(left).toBeCloseTo(-right, 10);
+  });
+
+  test('full lock is reached at the configured lean and clamps beyond it', () => {
+    expect(resolveLeanSteer(frame([], { x: config.leanFullLockMetres }).head, seat(), config)).toBe(1);
+    expect(resolveLeanSteer(frame([], { x: 1 }).head, seat(), config)).toBe(1);
+  });
+
+  test('a small sway inside the dead zone is ignored', () => {
+    expect(resolveLeanSteer(frame([], { x: config.leanDeadzoneMetres * 0.9 }).head, seat(), config)).toBe(0);
+  });
+
+  test('the neutral is wherever the rider was sitting when the race started', () => {
+    // Sat 5cm right of the seat centre at the flag: that is straight.
+    expect(resolveLeanSteer(frame([], { x: 0.05 }).head, seat(0.05), config)).toBe(0);
+    expect(resolveLeanSteer(frame([], { x: 0.05 - 0.1 }).head, seat(0.05), config)).toBeLessThan(0);
+  });
+
+  test('lean is measured across the bike, whichever way the course has turned it', () => {
+    // Bike turned to face +X: its right is -Y. A head at +Y is a lean left.
+    const turned: VRSwoopLeanFrame = {
+      seatPosition: new THREE.Vector3(10, 10, 0), right: new THREE.Vector3(0, -1, 0), neutral: 0,
+    };
+    expect(resolveLeanSteer(frame([], { x: 10, y: 10.15, z: 0 }).head, turned, config)).toBeLessThan(0);
+    // And forward/back movement across the seat is not a lean at all.
+    expect(resolveLeanSteer(frame([], { x: 10.5, y: 10, z: 0 }).head, turned, config)).toBe(0);
+  });
+
+  test('with no seat known, lean cannot steer', () => {
+    expect(resolveLeanSteer(frame([], { x: 1 }).head, null, config)).toBe(0);
   });
 });
 
-describe('swoop steering', () => {
-  test('level bars do not steer', () => {
-    const level = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.2 }), hand({ hand: 'right', squeeze: 1, y: 1.2 }),
-    ]), config);
-    expect(level.steer).toBe(0);
+describe('the stick overrides the lean', () => {
+  test('a deflected stick wins even against a full lean the other way', () => {
+    const result = resolveSwoopSteer(frame([hand({ hand: 'left', stickX: 1 })], { x: -1 }), seat(), config);
+    expect(result).toEqual({ steer: 1, source: 'stick' });
   });
 
-  test('rolling the bars steers, and further is more', () => {
-    const slight = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.14 }), hand({ hand: 'right', squeeze: 1, y: 1.26 }),
-    ]), config).steer;
-    const hard = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.0 }), hand({ hand: 'right', squeeze: 1, y: 1.4 }),
-    ]), config).steer;
-    expect(slight).toBeGreaterThan(0);
-    expect(hard).toBeGreaterThan(slight);
-    expect(hard).toBeLessThanOrEqual(1);
+  test('a centred stick lets the lean steer', () => {
+    const result = resolveSwoopSteer(frame([hand({ hand: 'left', stickX: 0 })], { x: 0.1 }), seat(), config);
+    expect(result.source).toBe('lean');
+    expect(result.steer).toBeGreaterThan(0);
+  });
+});
+
+describe('triggers', () => {
+  test('the right trigger is the throttle, and holding it keeps it on', () => {
+    const intent = resolveSwoopIntent(frame([hand({ hand: 'right', trigger: 1 })]), false, config);
+    expect(intent.throttle).toBe(true);
+    expect(resolveSwoopIntent(frame([hand({ hand: 'right', trigger: 1 })]), true, config).throttle).toBe(true);
   });
 
-  test('rolling the other way steers the other way, symmetrically', () => {
-    const left = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.4 }), hand({ hand: 'right', squeeze: 1, y: 1.0 }),
-    ]), config).steer;
-    const right = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.0 }), hand({ hand: 'right', squeeze: 1, y: 1.4 }),
-    ]), config).steer;
-    expect(left).toBeCloseTo(-right, 5);
-  });
-
-  test('a small wobble inside the deadzone is ignored', () => {
-    const wobble = resolveSteering(frame([
-      hand({ hand: 'left', squeeze: 1, y: 1.2 }), hand({ hand: 'right', squeeze: 1, y: 1.201 }),
-    ]), config).steer;
-    expect(wobble).toBe(0);
+  test('the left trigger is not the throttle', () => {
+    expect(resolveSwoopIntent(frame([hand({ hand: 'left', trigger: 1 })]), false, config).throttle).toBe(false);
   });
 
   test('the left trigger jumps on the press, not while it is held', () => {
-    const held = frame([
-      hand({ hand: 'left', squeeze: 1, trigger: 1 }), hand({ hand: 'right', squeeze: 1 }),
-    ]);
-    expect(resolveSwoopIntent(held, false, config).jump).toBe(true);
-    expect(resolveSwoopIntent(held, true, config).jump).toBe(false);
-  });
-});
-
-/**
- * The throttle is a gear shift the OnAccelerate script guards by speed, so it is
- * held rather than tapped — holding it is how the bike climbs through its gears,
- * the same as holding the accelerate key on flatscreen.
- */
-describe('swoop throttle', () => {
-  const bars = (right: number, left = 0) => frame([
-    hand({ hand: 'left', squeeze: 1, trigger: left }),
-    hand({ hand: 'right', squeeze: 1, trigger: right }),
-  ]);
-
-  test('the right trigger is the throttle, and holding it keeps it on', () => {
-    expect(resolveSwoopIntent(bars(1), false, config).throttle).toBe(true);
-    expect(resolveSwoopIntent(bars(1), true, config).throttle).toBe(true);
+    const pressed = resolveSwoopIntent(frame([hand({ hand: 'left', trigger: 1 })]), false, config);
+    expect(pressed.jump).toBe(true);
+    const held = resolveSwoopIntent(frame([hand({ hand: 'left', trigger: 1 })]), true, config);
+    expect(held.jump).toBe(false);
   });
 
-  test('no right trigger, no throttle', () => {
-    expect(resolveSwoopIntent(bars(0), false, config).throttle).toBe(false);
-  });
-
-  test('the left trigger jumps without opening the throttle', () => {
-    const intent = resolveSwoopIntent(bars(0, 1), false, config);
-    expect(intent.jump).toBe(true);
-    expect(intent.throttle).toBe(false);
+  test('the right trigger, and the face buttons, do not jump', () => {
+    expect(resolveSwoopIntent(frame([hand({ hand: 'right', trigger: 1 })]), false, config).jump).toBe(false);
+    const face = hand({ hand: 'right' });
+    (face.buttons as Record<string, unknown>)['4'] = button(1);
+    expect(resolveSwoopIntent(frame([face]), false, config).jump).toBe(false);
   });
 
   test('both at once: throttle held while jumping', () => {
-    const intent = resolveSwoopIntent(bars(1, 1), false, config);
+    const intent = resolveSwoopIntent(
+      frame([hand({ hand: 'left', trigger: 1 }), hand({ hand: 'right', trigger: 1 })]), false, config,
+    );
+    expect(intent.throttle).toBe(true);
+    expect(intent.jump).toBe(true);
+  });
+});
+
+describe('the hands only hold on; they do not steer', () => {
+  test('squeezing reports the grip so the hands can be drawn on the bars', () => {
+    expect(resolveSwoopIntent(frame([hand({ hand: 'left', squeeze: 1 }), hand({ hand: 'right', squeeze: 1 })]), false, config).grip)
+      .toBe(MiniGameGripState.TWO_HANDED);
+    expect(resolveSwoopIntent(frame([hand({ hand: 'right', squeeze: 1 })]), false, config).grip)
+      .toBe(MiniGameGripState.ONE_HANDED);
+    expect(resolveSwoopIntent(frame([hand({ hand: 'right' })]), false, config).grip)
+      .toBe(MiniGameGripState.NONE);
+  });
+
+  test('the controls work with no hand on the bars: a rider is strapped in', () => {
+    const intent = resolveSwoopIntent(frame([hand({ hand: 'left', stickX: 1, trigger: 1 }), hand({ hand: 'right', trigger: 1 })]), false, config);
+    expect(intent.grip).toBe(MiniGameGripState.NONE);
+    expect(intent.steer).toBe(1);
     expect(intent.throttle).toBe(true);
     expect(intent.jump).toBe(true);
   });
 
-  test('hands off the bars means no throttle', () => {
-    const intent = resolveSwoopIntent(frame([hand({ hand: 'right', trigger: 1 })]), false, config);
-    expect(intent.grip).toBe(MiniGameGripState.NONE);
-    expect(intent.throttle).toBe(false);
-  });
-});
-
-/**
- * A rider who cannot accelerate cannot race, so the one hand that is holding on
- * keeps the throttle; the jump moves to that hand's thumbstick.
- */
-describe('one-handed swoop', () => {
-  test('the single trigger becomes the throttle, left hand or right', () => {
-    for (const role of ['left', 'right'] as const) {
-      const intent = resolveSwoopIntent(
-        frame([hand({ hand: role, squeeze: 1, trigger: 1 })]), false, config);
-      expect(intent.grip).toBe(MiniGameGripState.ONE_HANDED);
-      expect(intent.throttle).toBe(true);
-    }
+  test('hands at wildly different heights do not steer', () => {
+    const intent = resolveSwoopIntent(frame([hand({ hand: 'left', y: 0.8, squeeze: 1 }), hand({ hand: 'right', y: 1.6, squeeze: 1 })]), false, config, seat());
+    expect(intent.steer).toBe(0);
   });
 
-  test('pushing that hand’s stick forward jumps, on the push only', () => {
-    const pushed = frame([hand({ hand: 'left', squeeze: 1, stickY: -1 })]);
-    expect(resolveSwoopIntent(pushed, false, config).jump).toBe(true);
-    expect(resolveSwoopIntent(pushed, true, config).jump).toBe(false);
-  });
-
-  test('a stick at rest does not jump', () => {
-    const resting = frame([hand({ hand: 'left', squeeze: 1, stickY: 0 })]);
-    expect(resolveSwoopIntent(resting, false, config).jump).toBe(false);
-  });
-
-  test('pulling the stick back does not jump', () => {
-    const pulled = frame([hand({ hand: 'left', squeeze: 1, stickY: 1 })]);
-    expect(resolveSwoopIntent(pulled, false, config).jump).toBe(false);
+  test('a hand dropping out of the frame does not steer either', () => {
+    const before = resolveSwoopIntent(frame([hand({ hand: 'left', squeeze: 1 }), hand({ hand: 'right', squeeze: 1 })]), false, config, seat());
+    const after = resolveSwoopIntent(frame([hand({ hand: 'right', squeeze: 1 })]), false, config, seat());
+    expect(before.steer).toBe(0);
+    expect(after.steer).toBe(0);
   });
 });
 
@@ -241,37 +235,30 @@ describe('turret aim', () => {
   });
 
   test('both grips aim between the hands', () => {
-    const left = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.4);
-    const right = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -0.4);
+    const left = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.2);
+    const right = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -0.2);
     const intent = resolveTurretIntent(frame([
-      hand({ hand: 'left', squeeze: 1, orientation: left }),
-      hand({ hand: 'right', squeeze: 1, orientation: right }),
+      hand({ hand: 'left', squeeze: 1, orientation: left }), hand({ hand: 'right', squeeze: 1, orientation: right }),
     ]), config);
     expect(intent.grip).toBe(MiniGameGripState.TWO_HANDED);
-    // Equal and opposite yaw averages back to straight ahead.
     expect(intent.aimDirection!.x).toBeCloseTo(0, 5);
     expect(intent.aimDirection!.z).toBeCloseTo(-1, 5);
   });
 
   test('one grip aims along that hand', () => {
-    const turned = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
-    const intent = resolveTurretIntent(frame([
-      hand({ hand: 'right', squeeze: 1, orientation: turned }),
-    ]), config);
-    expect(intent.grip).toBe(MiniGameGripState.ONE_HANDED);
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    const intent = resolveTurretIntent(frame([hand({ hand: 'right', squeeze: 1, orientation: q })]), config);
     expect(intent.aimDirection!.x).toBeCloseTo(-1, 5);
   });
 
   test('the trigger fires while held, since the gun bank rate-limits itself', () => {
-    const intent = resolveTurretIntent(frame([
-      hand({ hand: 'right', squeeze: 1, trigger: 1 }),
-    ]), config);
-    expect(intent.fire).toBe(true);
+    expect(resolveTurretIntent(frame([hand({ hand: 'right', squeeze: 1, trigger: 1 })]), config).fire).toBe(true);
   });
 
   test('aim direction converts to the pitch and yaw the turret rotates on', () => {
-    expect(aimDirectionToPitchYaw(new THREE.Vector3(0, 0, -1)).yaw).toBeCloseTo(0, 5);
-    expect(aimDirectionToPitchYaw(new THREE.Vector3(1, 0, 0)).yaw).toBeCloseTo(Math.PI / 2, 5);
-    expect(aimDirectionToPitchYaw(new THREE.Vector3(0, 1, 0)).pitch).toBeCloseTo(Math.PI / 2, 5);
+    const { pitch, yaw } = aimDirectionToPitchYaw(new THREE.Vector3(1, 0, -1));
+    expect(yaw).toBeCloseTo(Math.PI / 4, 5);
+    expect(pitch).toBeCloseTo(0, 5);
+    expect(aimDirectionToPitchYaw(new THREE.Vector3(0, 1, -1)).pitch).toBeCloseTo(Math.PI / 4, 5);
   });
 });
