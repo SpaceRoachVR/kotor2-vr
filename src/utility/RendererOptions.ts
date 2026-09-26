@@ -61,7 +61,12 @@ export function readLaunchOption(search: string, name: string): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
-export const DEFAULT_RENDERER_DEPTH_MODE: RendererDepthMode = 'logarithmic';
+// Linear since headset round P1 (2026-09-26): in the Hangar Bay the same load
+// ran 43.2 fps with linear depth against 32.2 with logarithmic (median frame
+// 23.6 ms against 31), and the wearer saw no shimmer on the big floor or far
+// walls (H8). The log path writes gl_FragDepth in every shader, which defeats
+// early depth rejection. `?depth=logarithmic` restores the old path.
+export const DEFAULT_RENDERER_DEPTH_MODE: RendererDepthMode = 'linear';
 
 /**
  * Reads the depth mode from a launch query string.

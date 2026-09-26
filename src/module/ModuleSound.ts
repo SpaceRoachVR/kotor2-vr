@@ -209,6 +209,9 @@ export class ModuleSound extends ModuleObject {
     this.audioEmitter.intervalVariation = this.intervalVariation;
     this.audioEmitter.minDistance = this.minDistance > 0 ? this.minDistance : Math.max(1, priorityGroup?.minvolumedist || 1);
     this.audioEmitter.maxDistance = this.maxDistance > 0 ? this.maxDistance : Math.max(this.audioEmitter.minDistance, priorityGroup?.maxvolumedist || 1);
+    // Silent past MaxDistance, like retail. Under the default inverse model
+    // every sound object in a module stayed audible at ~10% from anywhere.
+    this.audioEmitter.distanceModel = 'linear';
     this.audioEmitter.playbackRate = 1;
     this.audioEmitter.playbackRateVariation = this.pitchVariation > 0 ? this.pitchVariation : priorityGroup?.playbackvariance || 0;
     this.audioEmitter.volume = Math.max(0, Math.min(127, this.volume));

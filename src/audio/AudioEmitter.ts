@@ -54,6 +54,13 @@ export class AudioEmitter {
   intervalVariation: number = 0;
   minDistance: number = 0;
   maxDistance: number = 1;
+  /**
+   * Web Audio's default 'inverse' model never reaches silence: maxDistance
+   * only stops the fade, so past it a sound holds ~1/maxDistance volume
+   * everywhere. Placed sound objects (UTS) set 'linear' so they are full
+   * volume inside MinDistance and silent at MaxDistance, as authored.
+   */
+  distanceModel: DistanceModelType = 'inverse';
   volume: number = 127;
   volumeVariation: number = 0;
   soundIndex: number = 0;
@@ -137,6 +144,12 @@ export class AudioEmitter {
       case AudioEmitterType.POSITIONAL:
         this.mainNode = this.engine.audioCtx.createPanner();
         this.setPosition( this.position.x, this.position.y, this.position.z + this.elevation );
+        (this.mainNode as PannerNode).distanceModel = this.distanceModel;
+        if(this.distanceModel === 'linear'){
+          const maxDistance = Math.max(this.maxDistance, 0.01);
+          (this.mainNode as PannerNode).refDistance = Math.min(Math.max(this.minDistance, 0), maxDistance * 0.99);
+          (this.mainNode as PannerNode).rolloffFactor = 1;
+        }
         (this.mainNode as PannerNode).maxDistance = this.maxDistance;
         this.mainNode.connect(this.gainNode);
       break;

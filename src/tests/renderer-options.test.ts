@@ -16,13 +16,14 @@ import {
  * from the launch URL instead, which is also how the A/B gets run.
  */
 describe('renderer depth mode launch option', () => {
-  test('defaults to the engine\'s inherited logarithmic depth', () => {
-    expect(DEFAULT_RENDERER_DEPTH_MODE).toBe('logarithmic');
-    expect(parseRendererDepthMode('')).toBe('logarithmic');
-    expect(parseRendererDepthMode('?key=tsl')).toBe('logarithmic');
+  test('defaults to linear depth, measured faster in the headset (round P1)', () => {
+    expect(DEFAULT_RENDERER_DEPTH_MODE).toBe('linear');
+    expect(parseRendererDepthMode('')).toBe('linear');
+    expect(parseRendererDepthMode('?key=tsl')).toBe('linear');
   });
 
-  test('selects linear depth for the other half of the A/B', () => {
+  test('selects logarithmic depth when asked, and linear explicitly', () => {
+    expect(parseRendererDepthMode('?depth=logarithmic')).toBe('logarithmic');
     expect(parseRendererDepthMode('?depth=linear')).toBe('linear');
     expect(parseRendererDepthMode('?key=tsl&depth=linear')).toBe('linear');
     expect(parseRendererDepthMode('depth=linear')).toBe('linear');
@@ -31,9 +32,9 @@ describe('renderer depth mode launch option', () => {
   });
 
   test('a typo falls back to current behaviour rather than failing to boot', () => {
-    expect(parseRendererDepthMode('?depth=lienar')).toBe('logarithmic');
-    expect(parseRendererDepthMode('?depth=')).toBe('logarithmic');
-    expect(parseRendererDepthMode(undefined as unknown as string)).toBe('logarithmic');
+    expect(parseRendererDepthMode('?depth=lienar')).toBe('linear');
+    expect(parseRendererDepthMode('?depth=')).toBe('linear');
+    expect(parseRendererDepthMode(undefined as unknown as string)).toBe('linear');
   });
 });
 

@@ -850,6 +850,19 @@ export class ModuleArea extends ModuleObject {
         this.lastRoom = undefined;
         const roomInView: boolean[] = [];
         const pos = GameState.currentCamera.position.clone().add(GameState.playerFeetOffset);
+        //In VR the wearer sees a conversation from their own head, not from the
+        //authored camera the frustum follows (that one serves the theater and
+        //camera feeds). Keep the player's room and its linked rooms, exactly
+        //what INGAME would show, so culling for the shot never opens holes in
+        //the world around them.
+        const headRooms = new Set<ModuleRoom>();
+        const dialogPlayer = GameState.getCurrentPlayer();
+        if(GameState.renderer?.xr?.isPresenting && dialogPlayer?.room){
+          headRooms.add(dialogPlayer.room);
+          for(const linked of dialogPlayer.room.linkedRoomsArray){
+            headRooms.add(linked);
+          }
+        }
 
 
         let dialogShown = 0, byNoVisObject = 0, byContainsPoint = 0, byFrustum = 0;
@@ -857,7 +870,7 @@ export class ModuleArea extends ModuleObject {
           const room = this.rooms[i];
           const inCamera = GameState.viewportFrustum.intersectsBox(room.box);
           const containsCamera = room.box.containsPoint(pos);
-          roomInView[i] = (!room.visObject || containsCamera || inCamera);
+          roomInView[i] = (!room.visObject || containsCamera || inCamera || headRooms.has(room));
           if(!room.visObject){ byNoVisObject++; }
           if(containsCamera){ byContainsPoint++; }
           if(inCamera){ byFrustum++; }
@@ -1306,11 +1319,14 @@ export class ModuleArea extends ModuleObject {
       const buffer = await ResourceLoader.loadResource(ResourceTypes.vis, this.name);
       this.visObject = new VISObject(buffer);
       this.visObject.read();
-      return;
     }catch(e){
       this.visObject = new VISObject();
       console.error(e);
     }
+    //Link every room to the VIS data on success too. An early return here
+    //left no room linked, and the DIALOG branch of updateRoomVisibility
+    //treats an unlinked room as always visible: every conversation drew the
+    //whole module (66/66 rooms in 101PER, ~3,000 draw calls in 102PER).
     this.visObject.attachArea(this);
   }
 
