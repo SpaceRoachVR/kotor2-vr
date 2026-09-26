@@ -229,15 +229,22 @@ export class ModuleRoom extends ModuleObject {
     }
 
     //Add the walkmesh back to the scene
-    if(this.collisionManager.walkmesh && !this.collisionManager.walkmesh.mesh.parent){
-      GameState.group.room_walkmeshes.add(this.collisionManager.walkmesh.mesh);
-    }else if(this.collisionManager.walkmesh && this.collisionManager.walkmesh.mesh.parent){
-      this.collisionManager.walkmesh.mesh.removeFromParent();
-      GameState.group.room_walkmeshes.add(this.collisionManager.walkmesh.mesh);
-    }
-
-    if(this.collisionManager.walkmesh){
-      this.collisionManager.walkmesh.buildEdgeNormalHelpers();
+    //
+    // Only when it is missing, and build its debug edge-normal arrows once.
+    // Conversations call show() on every visible room every frame, and this
+    // used to re-parent the walkmesh and rebuild one ArrowHelper per edge each
+    // time: ~55 MB/s of garbage in a conversation, the heap sawing up to 2 GB
+    // before each major GC (headset round P1; sampled in the emulator, 85% of
+    // all allocation was these arrows).
+    const walkmesh = this.collisionManager.walkmesh;
+    if(walkmesh){
+      if(walkmesh.mesh.parent !== GameState.group.room_walkmeshes){
+        walkmesh.mesh.removeFromParent();
+        GameState.group.room_walkmeshes.add(walkmesh.mesh);
+      }
+      if(!walkmesh.edgeNormalHelpers){
+        walkmesh.buildEdgeNormalHelpers();
+      }
     }
 
     // A room sound that has not finished loading has no audioEmitter yet.

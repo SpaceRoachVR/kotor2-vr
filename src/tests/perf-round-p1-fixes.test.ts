@@ -56,3 +56,16 @@ describe('closed doors block movement', () => {
     expect(collision).toMatch(/static DOOR_RAY_HEIGHT: number = 0\.5;/);
   });
 });
+
+describe('room show() is cheap enough to run every frame', () => {
+  test('walkmesh debug arrows are built once, and the mesh is re-parented only when missing', () => {
+    // Conversations call show() on every visible room every frame; rebuilding
+    // an ArrowHelper per walkmesh edge each time was ~55 MB/s of garbage.
+    const room = read('module/ModuleRoom.ts');
+    const at = room.indexOf('  show(showLinkedRooms = false){');
+    const body = room.slice(at, room.indexOf('  hide(hideLinkedRooms = false){', at));
+    expect(body).toContain('if(!walkmesh.edgeNormalHelpers){');
+    expect(body).toContain('if(walkmesh.mesh.parent !== GameState.group.room_walkmeshes){');
+    expect(body).not.toMatch(/\}else if\(this\.collisionManager\.walkmesh && this\.collisionManager\.walkmesh\.mesh\.parent\)/);
+  });
+});
