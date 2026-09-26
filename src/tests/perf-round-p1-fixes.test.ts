@@ -69,3 +69,20 @@ describe('room show() is cheap enough to run every frame', () => {
     expect(body).not.toMatch(/\}else if\(this\.collisionManager\.walkmesh && this\.collisionManager\.walkmesh\.mesh\.parent\)/);
   });
 });
+
+describe('the cutscene theater is a cheaper second render', () => {
+  const spike = read('vr/VRSpike.ts');
+  const at = spike.indexOf('private static renderCutscene(');
+  const body = spike.slice(at, spike.indexOf('private static renderKeyboard(', at));
+
+  test('it refreshes every other frame and on every camera cut', () => {
+    expect(body).toContain('const refreshTheater = cameraCut || VRSpike.cutsceneTheaterFrame % 2 === 0;');
+    expect(body).toMatch(/if \(refreshTheater\) \{[\s\S]*VRSpike\.movieHost\.renderGuiLayers\(renderer, layers\);/);
+  });
+
+  test('its texture is capped at 1280 x 720, and nothing walks the scene graph per frame', () => {
+    expect(spike).toMatch(/THEATER_PANEL_OPTIONS = \{[\s\S]*?maximumTextureWidth: 1280,[\s\S]*?maximumTextureHeight: 720,/);
+    expect(body).toContain('new VRPanelHost(worldScene, VRSpike.THEATER_PANEL_OPTIONS)');
+    expect(body).not.toContain('worldScene.traverse(');
+  });
+});

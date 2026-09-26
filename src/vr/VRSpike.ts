@@ -487,6 +487,18 @@ export class VRSpike {
    * when the player stands up after it (see HeadHeightCalibration).
    */
   private static readonly headHeight = new HeadHeightCalibration();
+  /** XR frames the cutscene theater has presented; even frames refresh it. */
+  private static cutsceneTheaterFrame = 0;
+  /**
+   * The theater spans ~56 degrees at 2.25 m, about 1,100 headset pixels
+   * across, so 1280 x 720 loses nothing visible against the 1536 default.
+   */
+  private static readonly THEATER_PANEL_OPTIONS = {
+    distanceMetres: 2.25,
+    widthMetres: 2.4,
+    maximumTextureWidth: 1280,
+    maximumTextureHeight: 720,
+  };
   /** Whether syncRig has placed the rig at least once in this session. */
   private static rigSyncedThisSession = false;
   /**
@@ -620,8 +632,6 @@ export class VRSpike {
   private static reportedMovieTheaterShapes = new Set<string>();
   private static lastMovieTheaterShape: string | null = null;
   private static movieTheaterShapeFrames = 0;
-  private static lastCutsceneTheaterShape: string | null = null;
-  private static cutsceneTheaterShapeFrames = 0;
   private static turnYaw = 0;
   private static readonly turnOriginOffset = new THREE.Vector3();
   private static controllerAnchorHost: XRControllerAnchorHost | null = null;
@@ -3848,10 +3858,17 @@ export class VRSpike {
     // as a jarring snap in a headset. `lastCutsceneCamera` starting null
     // means the very first frame of a cutscene never fades — only an
     // actual cut between two already-shown shots does.
-    if (VRSpike.lastCutsceneCamera !== null && VRSpike.lastCutsceneCamera !== worldCamera) {
+    const cameraCut = VRSpike.lastCutsceneCamera !== worldCamera;
+    if (VRSpike.lastCutsceneCamera !== null && cameraCut) {
       VRSpike.cutsceneFadeEnvelope.trigger(frameTimestamp);
     }
     VRSpike.lastCutsceneCamera = worldCamera;
+    // The theater is a second full render of the world, through the authored
+    // camera. Refreshing it every other XR frame (36 Hz at 72) and on every
+    // cut halves that cost; cutscenes are authored around 30 fps, and the
+    // render target keeps the last composite in between (headset round P1).
+    VRSpike.cutsceneTheaterFrame++;
+    const refreshTheater = cameraCut || VRSpike.cutsceneTheaterFrame % 2 === 0;
     if (!VRSpike.cutsceneFadeHost) {
       VRSpike.cutsceneFadeHost = new VRCutsceneFadeHost(VRSpike.camera);
     }
@@ -3861,7 +3878,7 @@ export class VRSpike {
 
     try {
       if (!VRSpike.movieHost) {
-        VRSpike.movieHost = new VRPanelHost(worldScene, { distanceMetres: 2.25, widthMetres: 2.4 });
+        VRSpike.movieHost = new VRPanelHost(worldScene, VRSpike.THEATER_PANEL_OPTIONS);
       }
       VRSpike.movieHost.present(
         VRSpike.cutsceneOwner,
@@ -3869,74 +3886,56 @@ export class VRSpike {
         Math.max(1, Math.round((VRSpike.renderer?.domElement?.width ?? 1280))),
         Math.max(1, Math.round((VRSpike.renderer?.domElement?.height ?? 720)))
       );
-      const movieVisible = VRSpike.movieHost.object.visible;
-      const panelVisible = VRSpike.panelHost?.object.visible ?? false;
-      try {
-        // Do not recursively capture a prior theater/panel surface. The
-        // authored GUI below is rendered directly into movieHost's target.
-        VRSpike.movieHost.object.visible = false;
-        if (VRSpike.panelHost) VRSpike.panelHost.object.visible = false;
-        const layers: LegacyPanelRenderLayer[] = [{
-          scene: worldScene,
-          camera: worldCamera,
-        }];
-        if (captionContext?.menu) {
-          // Reapply the ray-derived legacy cursor immediately before the GUI
-          // layer so an available reply remains visibly and semantically tied
-          // to its row in the theater.
-          captionContext.pointerSink.setPointerPosition(VRSpike.latestPanelPointerPosition);
-          layers.push({
-            scene: captionContext.guiScene,
-            camera: captionContext.guiCamera,
-            renderPass: captionContext.menu.getLegacyPanelRenderPass?.() ?? null,
-          });
-        } else {
-          captionContext?.pointerSink.setPointerPosition(null);
-        }
-        //TEMPORARY (headset R4): the reported "cutscene shows only space" cases
-        // are CUTSCENES, not movies — `[VR movie theater]` instruments
-        // renderMovie and could never see them. A cutscene composites the world
-        // through the authored camera into this same surface, so what matters
-        // here is whether that camera has any visible geometry in front of it.
-        // Reports transitions with how many composites each state held.
+      if (refreshTheater) {
+        const movieVisible = VRSpike.movieHost.object.visible;
+        const panelVisible = VRSpike.panelHost?.object.visible ?? false;
         try {
-          let visibleMeshes = 0;
-          worldScene.traverse((object) => {
-            if ((object as THREE.Mesh).isMesh && object.visible) visibleMeshes++;
-          });
-          const shape = `visibleMeshes=${visibleMeshes} captions=${!!captionContext?.menu}` +
-            ` cam=(${worldCamera.position.x.toFixed(1)},` +
-            `${worldCamera.position.y.toFixed(1)},${worldCamera.position.z.toFixed(1)})`;
-          if (shape !== VRSpike.lastCutsceneTheaterShape) {
-            if (VRSpike.lastCutsceneTheaterShape !== null) {
-              console.info(
-                `[VR cutscene theater] ${VRSpike.lastCutsceneTheaterShape}` +
-                ` held ${VRSpike.cutsceneTheaterShapeFrames} composites -> ${shape}`
-              );
-            } else {
-              console.info(`[VR cutscene theater] ${shape}`);
-            }
-            VRSpike.lastCutsceneTheaterShape = shape;
-            VRSpike.cutsceneTheaterShapeFrames = 0;
+          // Do not recursively capture a prior theater/panel surface. The
+          // authored GUI below is rendered directly into movieHost's target.
+          VRSpike.movieHost.object.visible = false;
+          if (VRSpike.panelHost) VRSpike.panelHost.object.visible = false;
+          const layers: LegacyPanelRenderLayer[] = [{
+            scene: worldScene,
+            camera: worldCamera,
+          }];
+          if (captionContext?.menu) {
+            // Reapply the ray-derived legacy cursor immediately before the GUI
+            // layer so an available reply remains visibly and semantically tied
+            // to its row in the theater.
+            captionContext.pointerSink.setPointerPosition(VRSpike.latestPanelPointerPosition);
+            layers.push({
+              scene: captionContext.guiScene,
+              camera: captionContext.guiCamera,
+              renderPass: captionContext.menu.getLegacyPanelRenderPass?.() ?? null,
+            });
+          } else {
+            captionContext?.pointerSink.setPointerPosition(null);
           }
-          VRSpike.cutsceneTheaterShapeFrames++;
-        } catch {
-          // Diagnostics must never disturb an authored shot.
-        }
-        // The body belongs in a theater shot unless the camera is inside it.
-        const cameraPosition = worldCamera.getWorldPosition(new THREE.Vector3());
-        const feet = playerBody ? playerBody.getWorldPosition(new THREE.Vector3()) : null;
-        const restoreBody = playerBody && feet && isCameraInsideBody(cameraPosition, feet)
-          ? hidePlayerBodyForFirstPerson(playerBody)
-          : () => {};
-        try {
-          VRSpike.movieHost.renderGuiLayers(renderer, layers);
+          // One line per authored shot: which camera, and whether captions ride
+          // along. This replaced a per-frame walk of the whole scene graph that
+          // counted visible meshes for the round-4 "only space" investigation.
+          if (cameraCut) {
+            console.info(
+              `[VR cutscene theater] shot captions=${!!captionContext?.menu}` +
+              ` cam=(${worldCamera.position.x.toFixed(1)},` +
+              `${worldCamera.position.y.toFixed(1)},${worldCamera.position.z.toFixed(1)})`
+            );
+          }
+          // The body belongs in a theater shot unless the camera is inside it.
+          const cameraPosition = worldCamera.getWorldPosition(new THREE.Vector3());
+          const feet = playerBody ? playerBody.getWorldPosition(new THREE.Vector3()) : null;
+          const restoreBody = playerBody && feet && isCameraInsideBody(cameraPosition, feet)
+            ? hidePlayerBodyForFirstPerson(playerBody)
+            : () => {};
+          try {
+            VRSpike.movieHost.renderGuiLayers(renderer, layers);
+          } finally {
+            restoreBody();
+          }
         } finally {
-          restoreBody();
+          VRSpike.movieHost.object.visible = movieVisible;
+          if (VRSpike.panelHost) VRSpike.panelHost.object.visible = panelVisible;
         }
-      } finally {
-        VRSpike.movieHost.object.visible = movieVisible;
-        if (VRSpike.panelHost) VRSpike.panelHost.object.visible = panelVisible;
       }
       // A previously-open generic panel must not remain as a second caption
       // plane beneath the theater. Its legacy menu state remains untouched;
