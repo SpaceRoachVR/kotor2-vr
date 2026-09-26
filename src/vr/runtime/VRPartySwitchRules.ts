@@ -59,3 +59,23 @@ export function buildPartySwitchEntries(
   }
   return entries;
 }
+
+/**
+ * The entry the Y button (PartyCommand) switches to: the next member after
+ * the one in control, in a fixed order that starts with the Exile (-1) and
+ * runs through the companions by NPC slot, then wraps.
+ *
+ * It used to take the first entry every time. Entries list the companions
+ * first and the Exile last, so with Atton and Kreia in the party the button
+ * bounced Atton -> Kreia -> Atton and could never hand control back to the
+ * Exile (headset round P1).
+ */
+export function nextPartyCycleEntry(
+  entries: readonly PartySwitchEntry[],
+  controlledNpcId: number,
+): PartySwitchEntry | null {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const order = [...entries].sort((a, b) => a.npcId - b.npcId);
+  const current = Number.isInteger(controlledNpcId) ? controlledNpcId : -1;
+  return order.find((entry) => entry.npcId > current) ?? order[0];
+}

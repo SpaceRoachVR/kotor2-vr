@@ -29,7 +29,7 @@ describe('SwitchPlayerCharacter and companions', () => {
     expect(body).toContain('if(keepOutgoingPlayer && oldPC && oldPC.isPlayer && npcId >= 0){');
     expect(body).toContain('PartyManager.party.push(oldPC);');
     expect(body).toContain('return PartyManager.ReinstatePlayer(followerIndex);');
-    const reinstate = source.slice(source.indexOf('static ReinstatePlayer(followerIndex: number)'), source.indexOf('static async RestoreCompanion('));
+    const reinstate = source.slice(source.indexOf('static ReinstatePlayer(followerIndex: number'), source.indexOf('static async RestoreCompanion('));
     expect(reinstate).toContain('PartyManager.party[0] = follower;');
     expect(reinstate).toContain('PartyManager.Player = follower;');
     expect(reinstate).toContain('PartyManager.RestoreCompanion(outgoingNpcId, where)');

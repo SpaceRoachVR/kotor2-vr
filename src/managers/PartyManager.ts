@@ -1218,7 +1218,33 @@ export class PartyManager {
    * as the same instance, and the possessed member she replaces is restored
    * as a companion where he stood.
    */
-  static ReinstatePlayer(followerIndex: number): ModuleCreature {
+  /**
+   * Hands control back to the Exile before a module transition, returning
+   * the NPC slot that was possessed (or -1 if the Exile was in control).
+   *
+   * Module loading assumes PartyManager.Player is the Exile: "Loading Player"
+   * sets its npcId to -1, and only roster companions are rebuilt. Crossing
+   * the Peragus lift while Atton was possessed made Atton the player
+   * character and left the Exile behind; a later Y press rebuilt her from
+   * her template and Atton fell out of the party (headset round P1). The
+   * companion is not respawned here, because the new module rebuilds it
+   * from the roster; LoadModule possesses it again once the area is ready.
+   */
+  static HandBackControlForTransition(): number {
+    const possessed = PartyManager.Player;
+    if(!possessed || possessed.isPlayer || !Number.isInteger(possessed.npcId) || possessed.npcId < 0){
+      return -1;
+    }
+    const followerIndex = PartyManager.party.findIndex((pm, index) => index > 0 && pm && pm.isPlayer);
+    if(followerIndex <= 0){
+      return -1;
+    }
+    const npcId = possessed.npcId;
+    PartyManager.ReinstatePlayer(followerIndex, false);
+    return npcId;
+  }
+
+  static ReinstatePlayer(followerIndex: number, restoreCompanion = true): ModuleCreature {
     const follower = PartyManager.party[followerIndex];
     const oldPC = PartyManager.Player;
     if(!follower || !follower.isPlayer){ return undefined; }
@@ -1243,7 +1269,7 @@ export class PartyManager {
     if(oldPC && oldPC !== follower){
       try{ oldPC.destroy(); }catch(e){ console.error(e); }
     }
-    if(outgoingNpcId >= 0 && PartyManager.IsNPCInParty(outgoingNpcId)){
+    if(restoreCompanion && outgoingNpcId >= 0 && PartyManager.IsNPCInParty(outgoingNpcId)){
       PartyManager.RestoreCompanion(outgoingNpcId, where).catch((e) => console.error(e));
     }
     return follower;

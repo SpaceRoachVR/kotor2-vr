@@ -211,7 +211,7 @@ import {
 } from "@/utility/RendererOptions";
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 
-import { buildPartySwitchEntries } from "@/vr/runtime/VRPartySwitchRules";
+import { buildPartySwitchEntries, nextPartyCycleEntry } from "@/vr/runtime/VRPartySwitchRules";
 export interface GameStateInitializeOptions {
   Game: GameEngineType,
   GameDirectory: string, //path to the local game install directory
@@ -2121,10 +2121,7 @@ function distance2D(first: THREE.Vector3, second: THREE.Vector3): number {
   return Math.hypot(first.x - second.x, first.y - second.y);
 }
 
-function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
-  // Picking a member possesses them (SwitchPlayerCharacter), which is what
-  // retail's leader switch is; reordering the follow order left the Exile as
-  // every conversation's speaker. See VRPartySwitchRules.
+function buildVRPartySwitchEntries() {
   const candidates = GameState.PartyManager.party.map((member) => ({
     id: String(member.id),
     name: member.getName(),
@@ -2132,7 +2129,14 @@ function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
     isPlayer: !!member.isPlayer,
     portrait: member.getPortraitResRef() || undefined,
   }));
-  const entries = buildPartySwitchEntries(candidates, GameState.PartyManager.ActualPlayerName, GameState.PartyManager.ActualPlayerPortrait || undefined);
+  return buildPartySwitchEntries(candidates, GameState.PartyManager.ActualPlayerName, GameState.PartyManager.ActualPlayerPortrait || undefined);
+}
+
+function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
+  // Picking a member possesses them (SwitchPlayerCharacter), which is what
+  // retail's leader switch is; reordering the follow order left the Exile as
+  // every conversation's speaker. See VRPartySwitchRules.
+  const entries = buildVRPartySwitchEntries();
   return entries.map((entry, index) => ({
     id: entry.id,
     label: entry.label,
@@ -2269,7 +2273,15 @@ function resolveVRCharacterEyeHeight(actor: ModuleCreature | null | undefined): 
         box.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
         top = Math.max(top, box.max.z);
       });
-      if (Number.isFinite(top)) eye = top - actor.position.z + 0.15;
+      // No head bone: estimate from the top of the mesh. A droid's eyes sit
+      // at its dome (T3-M4's 1.08 m was confirmed in the headset), but a
+      // humanoid's crown is well above its eyes, and more so in a helmet:
+      // the Exile's Peragus space suit (spacesuit01) has no head nodes at all,
+      // and "top + 0.15" put the camera at 2.06 m against Atton's 1.63.
+      if (Number.isFinite(top)) {
+        const droid = typeof actor.getRace === 'function' && actor.getRace() === VR_RACE_DROID;
+        eye = top - actor.position.z + (droid ? 0.15 : -0.22);
+      }
     }
     if (eye === null || !Number.isFinite(eye) || eye < 0.5 || eye > 2.4) return null;
     vrEyeHeightByModel.set(model, eye);
@@ -3272,18 +3284,18 @@ export class GameState implements EngineContext {
       // state machine keyed on the Menu button being held, with no imperative
       // "open this submenu" entry point, so forcing one open would mean surgery
       // on the ownership boundaries 3.8 deliberately separated. Cycling the
-      // leader gives the button a real job using the same `SwitchLeaderAtIndex`
-      // route the wheel's Party submenu already calls, and the wheel remains
-      // the way to pick a *specific* member.
+      // leader gives the button a real job: it possesses the next member by the
+      // same SwitchPlayerCharacter route the wheel's Party submenu uses, in a
+      // fixed order that always comes back round to the Exile
+      // (nextPartyCycleEntry), and the wheel remains the way to pick a
+      // *specific* member.
       cyclePartyLeader: () => {
-        const members = snapshotVRPartyMembers();
-        for (const member of members) {
-          const index = member.resolveCurrentIndex();
-          if (!Number.isInteger(index) || index <= 0) continue;
-          member.switchLeader(index);
-          return true;
-        }
-        return false;
+        const leader = GameState.PartyManager.party[0];
+        const controlledNpcId = !leader || leader.isPlayer || !Number.isInteger(leader.npcId) ? -1 : leader.npcId;
+        const next = nextPartyCycleEntry(buildVRPartySwitchEntries(), controlledNpcId);
+        if (!next) return false;
+        GameState.PartyManager.SwitchPlayerCharacter(next.npcId, true);
+        return true;
       },
       teleportPlayer: (point) => {
         const player = GameState.getCurrentPlayer();
@@ -4502,6 +4514,9 @@ export class GameState implements EngineContext {
         sMovie6: sMovie6
       });
       GameState.loadingModule = true;
+      // The transition must carry the Exile as the player character; a
+      // possessed companion is taken over again once the new area is ready.
+      const possessedNpcId = GameState.PartyManager.HandBackControlForTransition();
       await GameState.MenuManager.LoadScreen.setLoadBackground('load_'+name);
       GameState.FadeOverlayManager.FadeOut(0, 0, 0, 0);
       /**
@@ -4610,6 +4625,10 @@ export class GameState implements EngineContext {
         console.log('ModuleArea: ready to play');
         GameState.reportCullingBoundsAnomalies();
         GameState.module.readyToProcessEvents = true;
+
+        if(possessedNpcId >= 0 && GameState.PartyManager.party.some((pm) => pm && pm.npcId == possessedNpcId)){
+          try{ GameState.PartyManager.SwitchPlayerCharacter(possessedNpcId, true); }catch(e){ console.error(e); }
+        }
 
         if(GameState.Mode == EngineMode.INGAME){
           const anyCanLevel = GameState.PartyManager.party.some((p) => p.canLevelUp());
