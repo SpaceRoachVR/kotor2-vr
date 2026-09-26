@@ -180,6 +180,8 @@ export class ModuleStore extends ModuleObject {
 
     gff.RootNode.addField( new GFFField(GFFDataType.DWORD, 'ObjectId') ).setValue(this.id);
     gff.RootNode.addField( new GFFField(GFFDataType.CEXOSTRING, 'Tag') ).setValue(this.tag);
+    // Blueprint reference; dropped by every save path until now - see ModulePlaceable.save.
+    gff.RootNode.addField( new GFFField(GFFDataType.RESREF, 'TemplateResRef') ).setValue(this.templateResRef || '');
     gff.RootNode.addField( new GFFField(GFFDataType.CEXOLOCSTRING, 'LocName') ).setValue(this.locName);
     gff.RootNode.addField( new GFFField(GFFDataType.INT, 'MarkDown') ).setValue(this.markDown);
     gff.RootNode.addField( new GFFField(GFFDataType.INT, 'MarkUp') ).setValue(this.markUp);
