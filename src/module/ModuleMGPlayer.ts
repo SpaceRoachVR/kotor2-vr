@@ -99,6 +99,26 @@ export class ModuleMGPlayer extends ModuleObject {
   private static sweepStart = new THREE.Vector3();
   private static sweepEnd = new THREE.Vector3();
   private sweepValid: boolean = false;
+  /** The rails across the road that a hop clears; see collectBarrierMeshes. */
+  private barrierMeshes: THREE.Object3D[] | null = null;
+  private static barrierRay = new THREE.Raycaster();
+  private static barrierFrom = new THREE.Vector3();
+  private static barrierDirection = new THREE.Vector3();
+  /**
+   * The room nodes that are barriers across the lane. 211TEL names them
+   * tel_gr08_lh02 (left half), rh (right half), fh (full), ch/center; the
+   * plat*, start and finish nodes with the same prefix are road tiles at
+   * z 41 and must not count. Measured live: every rail tops out at z 45.5,
+   * under a hopping bike's hull at 50, and the gantries above the full
+   * rails leave the lane open from z 46 up.
+   */
+  static readonly BARRIER_NODE_PATTERN = /_gr\d+_(lh|rh|fh|ch|center)\d*/i;
+  /** Height of the probe rays above the hook: the middle of the hull. */
+  static readonly BARRIER_RAY_HEIGHT = 0.8;
+  /** Across the hull, so a half rail clips a bike that straddles its end. */
+  static readonly BARRIER_RAY_OFFSETS: readonly number[] = [-1.5, 0, 1.5];
+  /** Reach beyond this frame's movement: the bike's own sphere. */
+  static readonly BARRIER_RAY_MARGIN = 2;
 
   /**
    * How fast a hop bleeds away, in units per second per second. 211TEL's jump
@@ -238,6 +258,7 @@ export class ModuleMGPlayer extends ModuleObject {
 
     this.onCreateRun = false;
     this.trackAnimationPlaying = false;
+    this.barrierMeshes = null;
 
     this._heartbeatTimeout = 0;
 
@@ -331,6 +352,7 @@ export class ModuleMGPlayer extends ModuleObject {
         // Steering is an offset from the hook, not a push on the track itself.
         this.stepLateral(delta);
         this.checkObstacleCollisions();
+        this.checkBarrierCollisions();
         //this.model.box.setFromObject(this.model);
 
         const enemies = GameState.module.area.miniGame.enemies;
@@ -648,6 +670,64 @@ export class ModuleMGPlayer extends ModuleObject {
     }
     // Still the one place the hop height is bounded.
     this.clampToTunnel();
+  }
+
+  /** The barrier meshes of the loaded rooms, found once per module. */
+  collectBarrierMeshes(): THREE.Object3D[] {
+    if(this.barrierMeshes){ return this.barrierMeshes; }
+    const meshes: THREE.Object3D[] = [];
+    const clean = (name: unknown) => String(name || '').replace(/\0[\s\S]*$/, '');
+    try{
+      for(const room of GameState.module?.area?.rooms || []){
+        const model = (room as any).model as THREE.Object3D | undefined;
+        if(!model){ continue; }
+        model.traverse((o: THREE.Object3D) => {
+          if(!(o as THREE.Mesh).isMesh){ return; }
+          const name = clean(o.name) || clean(o.parent?.name);
+          if(ModuleMGPlayer.BARRIER_NODE_PATTERN.test(name)){ meshes.push(o); }
+        });
+      }
+    }catch(e){
+      console.warn('ModuleMGPlayer.collectBarrierMeshes', e);
+    }
+    this.barrierMeshes = meshes;
+    return meshes;
+  }
+
+  /**
+   * Runs the bike into the rails across the road.
+   *
+   * These are room geometry, not obstacle markers: nothing in the ARE or LYT
+   * places them, and the walkmesh does not know them either. Retail's
+   * "DoBumping" is the engine hitting the world. Three short rays along this
+   * frame's movement, at hull height, against only the rail meshes - a ray
+   * against every room mesh cost 2.7ms. A hit is treated as an obstacle hit,
+   * which is the module's own authored answer to hitting something: speed
+   * to a crawl, gear to zero, the damage animation. A hopping bike's rays
+   * pass over the rails.
+   */
+  checkBarrierCollisions(){
+    if(!this.container || this.invince > 0 || !this.sweepValid){ return; }
+    const meshes = this.collectBarrierMeshes();
+    if(!meshes.length){ return; }
+    const from = ModuleMGPlayer.sweepStart;
+    const to = ModuleMGPlayer.sweepEnd;
+    this.container.getWorldPosition(to);
+    const direction = ModuleMGPlayer.barrierDirection.subVectors(to, from);
+    const distance = direction.length();
+    if(distance < 1e-4){ return; }
+    direction.divideScalar(distance);
+    const ray = ModuleMGPlayer.barrierRay;
+    ray.far = distance + ModuleMGPlayer.BARRIER_RAY_MARGIN;
+    for(const dx of ModuleMGPlayer.BARRIER_RAY_OFFSETS){
+      ModuleMGPlayer.barrierFrom.set(from.x + dx, from.y, from.z + ModuleMGPlayer.BARRIER_RAY_HEIGHT);
+      ray.set(ModuleMGPlayer.barrierFrom, direction);
+      if(!ray.intersectObjects(meshes, false).length){ continue; }
+      this.onHitObstacle(undefined as any);
+      this.emitRideEvent('obstacle', 1);
+      this.startInvulnerability();
+      return;
+    }
   }
 
   /**

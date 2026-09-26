@@ -32,8 +32,11 @@ import * as THREE from 'three';
  * the grip drawn there sat inside the post rather than on it.
  */
 export const SWOOP_GRIP_OFFSETS: ReadonlyArray<readonly [number, number, number]> = [
-  [-0.25, 1.4, 0.87],
-  [0.25, 1.4, 0.87],
+  // y pulled back from the measured 1.40 to 1.25 in the headset (2026-09-26):
+  // with the eyes raised to see over the windshield the posts read as too far
+  // forward to be the handles under the rider's hands.
+  [-0.25, 1.25, 0.87],
+  [0.25, 1.25, 0.87],
 ];
 
 /** The posts stand up from the dashboard; this is their visible height. */

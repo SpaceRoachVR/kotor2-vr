@@ -93,6 +93,24 @@ describe('obstacles can be struck', () => {
     expect(bodyOf(read('module/ModuleMGPlayer.ts'), '  checkObstacleCollisions()')).toMatch(/if\(this\.invince > 0\)\{ return; \}/);
   });
 
+  test('the rails across the road are room geometry, met by short rays at hull height', () => {
+    const player = read('module/ModuleMGPlayer.ts');
+    expect(player).toContain('BARRIER_NODE_PATTERN = /_gr\\d+_(lh|rh|fh|ch|center)\\d*/i');
+    const check = bodyOf(player, '  checkBarrierCollisions()');
+    expect(check).toContain('ray.intersectObjects(meshes, false)');
+    expect(check).toContain('this.onHitObstacle(undefined as any)');
+    expect(check).toContain('if(!this.container || this.invince > 0 || !this.sweepValid){ return; }');
+    expect(bodyOf(player, '  update(delta: number = 0)')).toContain('this.checkBarrierCollisions()');
+    // Road tiles share the prefix and must not be rails.
+    const pattern = /_gr\d+_(lh|rh|fh|ch|center)\d*/i;
+    expect(pattern.test('tel_gr08_lh02')).toBe(true);
+    expect(pattern.test('swp_gr01_fh01')).toBe(true);
+    expect(pattern.test('tel_gr08_center01')).toBe(true);
+    expect(pattern.test('tel_gr08_platl03')).toBe(false);
+    expect(pattern.test('tel_gr08_start')).toBe(false);
+    expect(pattern.test('swp_gr01_finish')).toBe(false);
+  });
+
   test('a hop clears the course: nothing is struck while airborne', () => {
     const player = read('module/ModuleMGPlayer.ts');
     expect(bodyOf(player, '  checkObstacleCollisions()')).toMatch(/OBSTACLE_CLEAR_HEIGHT/);

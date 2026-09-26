@@ -3049,6 +3049,7 @@ export class GameState implements EngineContext {
       getEyeHeight: () => GameState.Mode == EngineMode.MINIGAME
         ? GameState.MINIGAME_RIDER_EYE_HEIGHT
         : resolveVRCharacterEyeHeight(GameState.getCurrentPlayer()),
+      useLiveHeadHeight: () => GameState.Mode == EngineMode.MINIGAME,
       toggleWalkRun: () => {
         const player = GameState.getCurrentPlayer();
         if (!player) return;
@@ -4145,7 +4146,12 @@ export class GameState implements EngineContext {
    * previous 0.7 was the middle of the span, which is the knees.
    */
   static readonly MINIGAME_SEAT_FORWARD_OFFSET = 0.6;
-  static readonly MINIGAME_RIDER_EYE_HEIGHT = 1.13;
+  /**
+   * Above the authored rider's eyes (1.13). Tuned live in the headset on
+   * 2026-09-26: at the rider's own eye line the windshield (z 0.92..1.22)
+   * filled the view and the track could not be seen; 1.45 clears it.
+   */
+  static readonly MINIGAME_RIDER_EYE_HEIGHT = 1.45;
 
   /**
    * The body the first-person submission must leave out.

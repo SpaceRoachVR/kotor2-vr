@@ -1782,7 +1782,7 @@ one, including the hand-roll steering):
   at the flag. Recentre takes the current posture as straight again.
 - The hands do not steer. **Squeeze** takes hold of a handle and the hand is
   drawn on it. The handles are the two posts under the dashboard, measured
-  from the live bike geometry at (+/-0.25, 1.40, 0.87) bike-local.
+  from the live bike geometry at (+/-0.25, 1.25, 0.87) bike-local (y pulled back from the measured 1.40 in the headset).
 - **Right trigger** is the throttle (hold to climb the gears, as retail's
   OnAccelerate script wants). **Left trigger** jumps, and only the left
   trigger.
@@ -1790,7 +1790,7 @@ one, including the hand-roll steering):
   an acceleration, the road edge is a wall that stops the bike, and every
   moment of the ride - obstacle, mine, pad, wall, take-off, landing - pulses
   both controllers (`SwoopRideEvents` -> `VRSpike.pulseHand`).
-- The rider's eyes sit 1.13 above the bike origin and 0.6 forward, from the
+- The rider's eyes sit 1.45 above the bike origin (the authored rider's 1.13 could not see over the windshield) and 0.6 forward, from the
   authored rider's head.
 
 **Engine faults found and fixed on the way** (each one would have broken the
@@ -1843,6 +1843,16 @@ bump only on impact; the left trigger jumps once per press and a press in the
 air is refused; pads boost and die when taken, mines explode, are destroyed
 and take 100 health each, the health percentage reaches the race dialog, the
 gears climb to 5 and the race no longer ends early.
+
+**First headset ride (2026-09-26):** steering, throttle, jump, pads, mines
+and the race end into 207TEL all worked as described. Three things did not
+and were fixed the same night: a pinned hand was drawn two units behind the
+bike (the pin was taken before the engine tick; held hands are now re-pinned
+after the rig sync), the rails across the road did not slow the bike (they are
+room geometry - now three short rays at hull height against the rail meshes,
+a hit running the module's obstacle script), and the eyes sat at the
+calibrated baseline (now the live head height on the swoop, with the baseline
+retaken on leaving). Eye height and grip depth were then tuned live.
 
 **Still open, for the ride:** the feel of the lateral rate (retail's own
 LateralAccel is slow at low speed and 300 at high), the lean dead zone and

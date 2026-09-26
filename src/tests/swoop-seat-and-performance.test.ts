@@ -114,7 +114,7 @@ describe('the grips sit on the handlebars', () => {
     const [left, right] = SWOOP_GRIP_OFFSETS;
     expect(Math.abs(left[0])).toBeCloseTo(0.25, 3);
     expect(left[0]).toBeCloseTo(-right[0], 5);
-    expect(left[1]).toBeCloseTo(1.4, 3);
+    expect(left[1]).toBeCloseTo(1.25, 3);
     expect(left[2]).toBeCloseTo(0.87, 3);
   });
 
@@ -136,7 +136,10 @@ describe('the bars can be taken hold of', () => {
 
   test('a holding hand is pinned to its grip, and a free hand released', () => {
     expect(pin).toMatch(/isGripping\(hand, config\)/);
-    expect(pin).toMatch(/holding \? \(poses\?\.\[role\] \?\? null\) : null/);
+    // Position from the post, orientation from the controller: the post's
+    // orientation is the bike's frame and put the hand inside the dashboard.
+    expect(pin).toMatch(/pinned\.position\.copy\(post\.position\)/);
+    expect(pin).toMatch(/pinned\.orientation\.copy\(hand\.pose\.orientation\)/);
   });
 
   test('the pin is only the visual: input still reads the real pose', () => {

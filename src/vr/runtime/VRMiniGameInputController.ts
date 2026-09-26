@@ -144,6 +144,25 @@ export class VRMiniGameInputController {
     }
   }
 
+  /**
+   * Moves each held hand's pin to where its post is now. Called by the host
+   * after the engine tick and the rig sync, because update() ran before the
+   * bike moved this frame; see VRSpike.render.
+   */
+  static refreshPins(): void {
+    const pinned = VRMiniGameInputController.pinnedHands;
+    if (!pinned.left && !pinned.right) return;
+    const poses = VRMiniGameInputController.provider?.()?.gripPoses ?? null;
+    if (!poses) return;
+    for (const role of ['left', 'right'] as XRHandRole[]) {
+      const pose = pinned[role];
+      const post = poses[role];
+      if (!pose || !post) continue;
+      pose.position.copy(post.position);
+      VRMiniGameInputController.pinHand?.(role, pose);
+    }
+  }
+
   /** Clears edge state when a session ends, so a stale press cannot carry over. */
   static reset(): void {
     VRMiniGameInputController.releaseHands();
@@ -214,8 +233,26 @@ export class VRMiniGameInputController {
     return frame;
   }
 
+  /** Where each held hand is drawn: the post's position, the controller's orientation. */
+  private static readonly pinnedPoseScratch: Record<XRHandRole, {
+    position: THREE.Vector3; orientation: THREE.Quaternion;
+    linearVelocity: null; angularVelocity: null; trackingState: 'tracked';
+  }> = {
+    left: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: null, angularVelocity: null, trackingState: 'tracked' },
+    right: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: null, angularVelocity: null, trackingState: 'tracked' },
+  };
+
   /**
-   * Draws each holding hand on the bar it has taken, and releases it otherwise.
+   * Draws each holding hand on the post it has taken, and releases it otherwise.
+   *
+   * Position from the post, orientation from the controller. The first ride
+   * (2026-09-25) pinned the post's whole pose, and the post's orientation is
+   * the bike's frame, not the controller convention the hand model is built
+   * around: the hand was drawn on the post, rotated into the dashboard, and
+   * read as having vanished. The controller's own orientation is what the
+   * rider's hand is actually doing, and it is re-pinned every frame so it
+   * keeps following the wrist while the fist stays on the post.
+   *
    * Only the visual is pinned; the hands have no say in the steering.
    */
   private static pinHeldHands(
@@ -224,11 +261,19 @@ export class VRMiniGameInputController {
     const poses = target.gripPoses;
     for (const role of ['left', 'right'] as XRHandRole[]) {
       const hand = inputFrame.hands[role];
-      const holding = !!hand && isGripping(hand, config);
-      const pinned = holding ? (poses?.[role] ?? null) : null;
-      if (VRMiniGameInputController.pinnedHands[role] === pinned) continue;
-      VRMiniGameInputController.pinnedHands[role] = pinned;
-      VRMiniGameInputController.pinHand?.(role, pinned);
+      const post = poses?.[role] ?? null;
+      const holding = !!hand && !!post && isGripping(hand, config);
+      if (holding) {
+        const pinned = VRMiniGameInputController.pinnedPoseScratch[role];
+        pinned.position.copy(post.position);
+        pinned.orientation.copy(hand.pose.orientation);
+        VRMiniGameInputController.pinnedHands[role] = pinned;
+        VRMiniGameInputController.pinHand?.(role, pinned);
+        continue;
+      }
+      if (!VRMiniGameInputController.pinnedHands[role]) continue;
+      VRMiniGameInputController.pinnedHands[role] = null;
+      VRMiniGameInputController.pinHand?.(role, null);
     }
   }
 

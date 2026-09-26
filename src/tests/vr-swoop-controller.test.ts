@@ -115,24 +115,35 @@ describe('the neutral is the posture at the flag', () => {
 });
 
 describe('the hands on the bars', () => {
-  test('squeezing draws the hand on its grip, releasing lets go', () => {
-    VRMiniGameInputController.update(frame([hand('left', { squeeze: 1 }), hand('right')]));
-    expect(pins).toEqual([['left', target.gripPoses!.left]]);
+  test('squeezing draws the hand on its post with the controller’s own orientation, releasing lets go', () => {
+    const left = hand('left', { squeeze: 1 });
+    VRMiniGameInputController.update(frame([left, hand('right')]));
+    expect(pins.length).toBe(1);
+    const [role, pose] = pins[0];
+    expect(role).toBe('left');
+    expect(pose!.position.equals(target.gripPoses!.left!.position)).toBe(true);
+    expect(pose!.orientation.equals(left.pose.orientation)).toBe(true);
     VRMiniGameInputController.update(frame([hand('left'), hand('right')]));
     expect(last(pins)).toEqual(['left', null]);
   });
 
-  test('a held hand is not re-pinned every frame', () => {
+  test('a held hand follows the wrist: re-pinned each frame, position fixed on the post', () => {
+    const turned = hand('right', { squeeze: 1 });
+    turned.pose.orientation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.7);
     VRMiniGameInputController.update(frame([hand('right', { squeeze: 1 })]));
-    VRMiniGameInputController.update(frame([hand('right', { squeeze: 1 })]));
-    expect(pins.length).toBe(1);
+    VRMiniGameInputController.update(frame([turned]));
+    expect(pins.length).toBe(2);
+    expect(pins.every(([, p]) => p!.position.equals(target.gripPoses!.right!.position))).toBe(true);
+    expect(last(pins)[1]!.orientation.equals(turned.pose.orientation)).toBe(true);
+    // The post's own orientation is never what the hand gets.
+    expect(last(pins)[1]!.orientation.equals(target.gripPoses!.right!.orientation)).toBe(false);
   });
 
   test('a hand that drops out of the frame is let go, and the bike does not swerve', () => {
     target.raceStarted = true;
     VRMiniGameInputController.update(frame([hand('left', { squeeze: 1 }), hand('right', { squeeze: 1 })]));
     VRMiniGameInputController.update(frame([hand('right', { squeeze: 1 })]));
-    expect(last(pins)).toEqual(['left', null]);
+    expect(pins.some(([r, p]) => r === 'left' && p === null)).toBe(true);
     expect(last(target.steers)).toBe(0);
   });
 
