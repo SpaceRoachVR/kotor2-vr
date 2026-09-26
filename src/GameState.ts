@@ -153,6 +153,7 @@ import type { BoundsSample } from "@/module/CullingBoundsAudit";
 import type {
   VRActionMenuEntry,
   VRActionWheelPartyMember,
+  VRActionWheelDirectAction,
 } from "@/vr/runtime/VRActionWheelModelBuilder";
 import {
   snapshotVRActionMenuPanelEntries,
@@ -1067,6 +1068,47 @@ function dispatchVRDirectionalForceGesture(
   return true;
 }
 
+/** TEMPORARY (3.19): names the first few cast outcomes so the headset can tune the thrust. */
+let vrForceCastOutcomesReported = 0;
+function reportVRForceCastOutcome(shape: string, detail = ''): void {
+  if (vrForceCastOutcomesReported >= 12) return;
+  vrForceCastOutcomesReported += 1;
+  console.info(`[VR force cast] TEMPORARY ${shape}${detail ? ' || ' + detail : ''}`);
+}
+
+/**
+ * ROADMAP 3.19 — the generic cast gesture releases the queued Force power at
+ * the head, when that power is one the trigger would otherwise commit. Push
+ * and Pull keep their directional flick and are deliberately not released
+ * here, so the gesture set stays at three. With nothing queued, or an attack
+ * feat at the head, the thrust is ignored and the frame falls through.
+ */
+function dispatchVRForceCastGesture(actor: ModuleCreature, targetId: string | null): boolean {
+  const intent = vrCombatIntentQueue.getHead();
+  if (!intent) return false;
+  if (intent.kind !== 'force-power' || intent.requiredInput !== 'dominant-trigger') {
+    reportVRForceCastOutcome('ignored: head is not a trigger-cast power', `head=${intent.label}`);
+    return false;
+  }
+  const target = resolveVRLockedHostile(actor, targetId);
+  if (!target) {
+    reportVRForceCastOutcome('refused: no locked hostile', `head=${intent.label} targetId=${targetId}`);
+    return false;
+  }
+  if (!getVREmbodiedTempoResult(actor, target, 'lock').eligible) {
+    reportVRForceCastOutcome('refused: round not open', `head=${intent.label}`);
+    return false;
+  }
+  if (!dispatchVRCombatIntent(actor, target, intent)) {
+    reportVRForceCastOutcome('refused: engine did not take the action', `head=${intent.label}`);
+    return false;
+  }
+  vrCombatIntentQueue.consumeHead();
+  vrCombatIssuedTargetId = target.id;
+  reportVRForceCastOutcome('released', `power=${intent.label} target=${target.getTag?.() ?? target.id}`);
+  return true;
+}
+
 /** TEMPORARY (round 6): "grenades are still entirely broken". Names each refusal once. */
 const reportedVRGrenadeOutcomes = new Set<string>();
 function reportVRGrenadeOutcomeOnce(shape: string, detail = ''): void {
@@ -1977,6 +2019,43 @@ function snapshotVRPartyMembers(): readonly VRActionWheelPartyMember[] {
     resolveCurrentIndex: () => (entries.some((e) => e.id === entry.id) ? index + 1 : -1),
     switchLeader: () => { GameState.PartyManager.SwitchPlayerCharacter(entry.npcId, true); },
   }));
+}
+
+/**
+ * ROADMAP 3.21 — "Party → Attack My Target". Every living companion other
+ * than the controlled actor drops what it is doing and opens a combat round
+ * on the pointed hostile, the same `attackCreature` route a flatscreen click
+ * on an enemy takes. The order only schedules the round; the henchman AI's
+ * own OnEndRound script resumes afterwards, so the stats and the 3-second
+ * round are untouched. Null when there is no one to order or nothing hostile
+ * to point at, so the wheel omits the entry rather than offering a no-op.
+ */
+function buildVRPartyAttackOrder(actor: ModuleCreature, target: ModuleObject): VRActionWheelDirectAction | null {
+  const companions = () => GameState.PartyManager.party.filter((member) =>
+    member !== actor && typeof member.isDead === 'function' && !member.isDead());
+  if (companions().length === 0) return null;
+  return {
+    id: 'party:attack-my-target',
+    label: 'Attack My Target',
+    icon: 'i_attack',
+    revalidate: () => isVRCombatTarget(actor, target) && companions().length > 0,
+    activate: () => {
+      if (!isVRCombatTarget(actor, target)) return;
+      let ordered = 0;
+      for (const member of companions()) {
+        try {
+          // ClearAllActions before ActionAttack, as the henchman scripts do,
+          // so the order runs ahead of a follow or a half-queued attack.
+          member.clearAllActions(true);
+          member.attackCreature(target, undefined);
+          ordered += 1;
+        } catch (error) {
+          console.warn('[VR party] attack order rejected', member.getTag?.() ?? member.id, error);
+        }
+      }
+      console.info(`[VR party] Attack My Target: ${ordered} companion(s) -> ${target.getTag?.() ?? target.id}`);
+    },
+  };
 }
 
 function resolveVRCombatWeaponMode(actor: ModuleCreature): CombatWeaponMode {
@@ -3204,6 +3283,8 @@ export class GameState implements EngineContext {
           },
           onDirectionalForceGesture: (gesture) =>
             dispatchVRDirectionalForceGesture(actor, target ? String(target.id) : null, gesture.kind),
+          onForceCastGesture: () =>
+            dispatchVRForceCastGesture(actor, target ? String(target.id) : null),
           onGrenadeTrigger: () => {
             commitVRArmedGrenade(actor, target ? String(target.id) : null);
           },
@@ -3410,6 +3491,7 @@ export class GameState implements EngineContext {
           })),
           targetIsHostileCreature: target !== null,
           partyMembers: snapshotVRPartyMembers(),
+          partyAttackOrder: target ? buildVRPartyAttackOrder(actor, target) : null,
           openComfortSettings: () => { vrComfortSettingsPanelOpen = true; },
           /**
            * ROADMAP 4.8 — one wedge for all eight in-game screens.

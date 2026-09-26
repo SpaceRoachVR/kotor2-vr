@@ -1453,7 +1453,25 @@ belong together.
   - **Done when:** Allen can pause mid-fight, queue three actions and a party
     order, unpause, and watch them play out in order.
 
-- **3.19** ☐ **One generic Force cast gesture.** Keep push and pull, and add one
+- **3.19** ✅ implemented (2026-09-25) / ☐ headset-accepted, ☐ tuned — **One
+  generic Force cast gesture.** `VRForceCastGestureController` recognises an
+  open-palm thrust of the *off* hand — neither grip nor trigger held on it, the
+  same signal that opens the rigged hand — moving at 1.2 m/s or more within
+  60 degrees of the line from the hand to the locked target's chest point
+  (head forward when there is none), with the flick's 650 ms cooldown.
+  `processCombatInput` checks it after Push/Pull and before the swing detector,
+  so a two-handed grip can never double as a cast. `dispatchVRForceCastGesture`
+  in `GameState.ts` releases the queue head only when it is a Force power the
+  trigger would otherwise commit (kind `force-power`, input `dominant-trigger`):
+  Push and Pull keep their flick, an attack feat or an empty queue ignores the
+  thrust and the frame falls through unchanged. The trigger route still works
+  alongside it. Lock, tempo, range, cost and saves are the spell's, as for the
+  flick. A TEMPORARY `[VR force cast]` line names the first 12 outcomes
+  (released / ignored / refused and why) so the thrust speed and cone can be
+  tuned from Allen's play. The emulator's 101PER has no hostile and no queued
+  power, so the release path is proven by the XR-loop and controller tests
+  only; it needs a headset fight with Stun or the shock arm queued (F23).
+  Original statement: Keep push and pull, and add one
   gesture: an off-hand open-palm thrust toward the target releases whatever
   Force power is at the head of the queue. This keeps the locked "small gesture
   set" at three, instead of one gesture per power. Force-point cost, range and
@@ -1476,7 +1494,23 @@ belong together.
   Each part lands separately and is accepted in the headset before the next
   starts.
 
-- **3.21** ☐ **Party: attack my target.** Point the off hand at an enemy and
+- **3.21** ✅ implemented (2026-09-25) / ☐ headset-accepted — **Party: attack
+  my target.** With a hostile creature aimed and at least one living companion,
+  the wheel's Party page leads with **Attack My Target**
+  (`partyAttackOrder` on the build context; `buildVRPartyAttackOrder` in
+  `GameState.ts`). Activating it gives every companion other than the
+  controlled actor `clearAllActions(true)` then `attackCreature(target)` — the
+  same order the henchman scripts issue as ClearAllActions + ActionAttack, and
+  the same route a flatscreen click on an enemy takes — so each opens its next
+  combat round on the pointed enemy ahead of whatever its OnEndRound AI would
+  have chosen. Nothing about the round changes: the AI resumes afterwards and
+  may re-target when that enemy dies. The entry is absent, not disabled, with
+  no hostile or no companion, and fails closed if either goes away while the
+  page is open. There is no separate "party order queue" in the engine; the
+  companion's own CombatRound schedule is that queue. 101PER has neither a
+  hostile nor a companion, so this is proven by the wheel-builder tests only
+  and needs a headset fight with Kreia and Atton (F24). Original statement:
+  Point the off hand at an enemy and
   choose a wheel entry (e.g. "Party → Attack my target"). It goes into the
   party order queue, which already runs ahead of members' own attacks.
   - **Done when:** both companions switch to the pointed enemy on the next round.

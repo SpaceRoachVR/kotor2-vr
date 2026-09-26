@@ -287,6 +287,8 @@ controller can only be judged on device.**
 | F20 | Swap the party leader to a droid (e.g. T3-M4) | No humanoid hands; the equipped item still floats at the controller |
 | F21 | Grip-held forward thrust with a saber and **no** Force Push queued | Registers as a swing, not a swallowed Force gesture |
 | F22 | Unarmed, punch an enemy | The punch attacks (unarmed has no automatic basic attack in VR) |
+| F23 | Wheel → **Force Powers** → queue Stun (or T3's shock arm), lock an enemy, then thrust the **open off hand** at it — no grip, no trigger (ROADMAP 3.19) | The power casts on the thrust and leaves the hilt queue. Repeat with **nothing queued**: the thrust does nothing and a saber swing still lands. Repeat with the **grip held**: no cast. Note the `[VR force cast]` console lines — they say why a thrust was refused, and whether 1.2 m/s and the 60-degree cone need tuning |
+| F24 | In a fight with Kreia and Atton, aim at one enemy and pick **Wheel → Party → Attack My Target** (ROADMAP 3.21) | Both companions turn on that enemy on their next round. The entry is missing with no hostile aimed, or when you are alone |
 
 ## G. Cutscenes and dialogue (Phase 5)
 

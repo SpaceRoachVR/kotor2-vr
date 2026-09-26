@@ -1529,6 +1529,106 @@ describe('VRSpike XR loop ownership', () => {
     expect(consumed).toBe(false);
   });
 
+  // ROADMAP 3.19 — the generic Force cast gesture.
+  function castFrame(offhandVelocity: THREE.Vector3, offhandButtons: { grip?: boolean; trigger?: boolean } = {}) {
+    const dominant = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    const offhand = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    if (offhandButtons.trigger) offhand[0] = { pressed: true, touched: true, value: 1 };
+    if (offhandButtons.grip) offhand[1] = { pressed: true, touched: true, value: 1 };
+    VRSpike.session = {
+      inputSources: [
+        { handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons: dominant } },
+        { handedness: 'left', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons: offhand } },
+      ],
+    } as unknown as XRSession;
+    const still = () => ({ position: new THREE.Vector3(), orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(), trackingState: 'tracked' });
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: { pose: still(), targetRayPose: still() },
+        left: {
+          pose: { position: new THREE.Vector3(-0.2, 0, 0), orientation: new THREE.Quaternion(), linearVelocity: offhandVelocity, trackingState: 'tracked' },
+          targetRayPose: still(),
+        },
+      },
+    };
+    (VRSpike as any).forceCastGestureController.reset();
+    (VRSpike as any).combatInputController.reset();
+  }
+
+  function castHooks(onForceCastGesture: (gesture: unknown) => boolean, onCombatSwing: (event: unknown) => void = () => undefined) {
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat: true, stanceReadout: '',
+        nominatedTargetAimPoint: new THREE.Vector3(0, 0, -3),
+        onCombatSwing,
+        onForceCastGesture,
+      }),
+    };
+  }
+
+  test('an open-palm off-hand thrust toward the target offers the generic Force cast (3.19)', () => {
+    const casts: unknown[] = [];
+    castFrame(new THREE.Vector3(0, 0, -2));
+    castHooks((gesture) => { casts.push(gesture); return true; });
+
+    (VRSpike as any).processCombatInput(1_000);
+
+    expect(casts).toEqual([expect.objectContaining({ kind: 'cast', hand: 'left', towardTarget: true })]);
+  });
+
+  test('an off-hand thrust with the grip held is a two-handed swing claim, not a cast', () => {
+    const casts: unknown[] = [];
+    castFrame(new THREE.Vector3(0, 0, -2), { grip: true });
+    castHooks((gesture) => { casts.push(gesture); return true; });
+
+    (VRSpike as any).processCombatInput(1_000);
+
+    expect(casts).toEqual([]);
+  });
+
+  test('an off-hand thrust with the trigger held is not a cast', () => {
+    const casts: unknown[] = [];
+    castFrame(new THREE.Vector3(0, 0, -2), { trigger: true });
+    castHooks((gesture) => { casts.push(gesture); return true; });
+
+    (VRSpike as any).processCombatInput(1_000);
+
+    expect(casts).toEqual([]);
+  });
+
+  test('a cast the engine declines (nothing queued) leaves the frame to the swing detector', () => {
+    const swings: unknown[] = [];
+    castFrame(new THREE.Vector3(0, 0, -2));
+    castHooks(() => false, (event) => swings.push(event));
+    // The dominant hand is still, so the detector has nothing to report: the
+    // point is that it ran, which the swing-buffer diagnostic below confirms
+    // by the controller having consumed a frame.
+    (VRSpike as any).processCombatInput(1_000);
+    (VRSpike as any).latestInputFrame.hands.right.pose.linearVelocity = new THREE.Vector3(0, 2, 0);
+    (VRSpike as any).latestInputFrame.hands.left.pose.linearVelocity = new THREE.Vector3();
+    (VRSpike as any).processCombatInput(1_100);
+
+    expect(swings).toEqual([expect.objectContaining({ input: 'dominant-swing' })]);
+  });
+
+  test('a session boundary resets the cast cooldown along with the flick', () => {
+    const casts: unknown[] = [];
+    castFrame(new THREE.Vector3(0, 0, -2));
+    castHooks((gesture) => { casts.push(gesture); return true; });
+    (VRSpike as any).processCombatInput(1_000);
+    (VRSpike as any).processCombatInput(1_100);
+    expect(casts).toHaveLength(1);
+
+    (VRSpike as any).forceCastGestureController.reset();
+    (VRSpike as any).processCombatInput(1_200);
+    expect(casts).toHaveLength(2);
+  });
+
   test('aligns neutral headset forward with KOTOR follower-camera forward', () => {
     VRSpike.rig = new THREE.Group();
     VRSpike.hooks = {

@@ -25,6 +25,7 @@ import { VR_KEYBOARD_DONE_KEY } from "./runtime/VRKeyboardLayout";
 import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatInputController";
 import { VRCombatTargetLock } from "./runtime/VRCombatTargetLock";
 import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
+import { VRForceCastGesture, VRForceCastGestureController } from "./runtime/VRForceCastGestureController";
 import { VRRadialControllerEffect, VRRadialMenuController } from "./runtime/VRRadialMenuController";
 import { VRRadialMenuHost } from "./runtime/VRRadialMenuHost";
 import type { VRRadialMenuDefinition } from "./runtime/VRRadialMenuModel";
@@ -328,6 +329,11 @@ export interface VRSpikeHooks {
     onCombatSwing(event: VRCombatSwingEvent): void;
     /** Returns true only when the gesture was spent on a queued Push/Pull. */
     onDirectionalForceGesture?(gesture: VRForceGesture): boolean;
+    /**
+     * ROADMAP 3.19 — an open-palm off-hand thrust toward the locked target.
+     * Returns true only when it released the queued Force power at the head.
+     */
+    onForceCastGesture?(gesture: VRForceCastGesture): boolean;
     onGrenadeTrigger?(): void;
     /**
      * True when the off hand holds a ranged weapon and no grenade is armed, so
@@ -624,6 +630,7 @@ export class VRSpike {
   private static readonly keyboardInputController = new VRKeyboardInputController();
   private static readonly combatInputController = new VRCombatInputController();
   private static readonly forceGestureController = new VRForceGestureController();
+  private static readonly forceCastGestureController = new VRForceCastGestureController();
   private static readonly radialMenuController = new VRRadialMenuController();
   private static readonly haptics = new VRHapticFeedback();
   private static radialMenuHost: VRRadialMenuHost | null = null;
@@ -1014,6 +1021,7 @@ export class VRSpike {
     VRSpike.offhandGrenadeTriggerHeld = false;
     VRSpike.hooks?.resetCombatInteraction?.();
     VRSpike.forceGestureController.reset();
+    VRSpike.forceCastGestureController.reset();
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
     VRSpike.clearTeleportMarker();
@@ -1098,6 +1106,7 @@ export class VRSpike {
     VRSpike.panelInputController.cancel();
     VRSpike.combatInputController.reset();
     VRSpike.forceGestureController.reset();
+    VRSpike.forceCastGestureController.reset();
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
     VRSpike.clearTeleportMarker();
@@ -1437,6 +1446,7 @@ export class VRSpike {
     VRSpike.interactionSystem.cancelTransientState();
     VRSpike.panelInputController.cancel();
     VRSpike.forceGestureController.reset();
+    VRSpike.forceCastGestureController.reset();
   }
 
   static get inputFrame(): XRInputFrame | null {
@@ -2404,6 +2414,7 @@ export class VRSpike {
       VRSpike.roundReadyLatched = false;
       VRSpike.combatInputController.reset();
       VRSpike.forceGestureController.reset();
+      VRSpike.forceCastGestureController.reset();
       VRSpike.captureWeaponActionLatch();
       return;
     }
@@ -2484,6 +2495,15 @@ export class VRSpike {
       }
 
       if (VRSpike.processForceInput(timestamp, context)) {
+        VRSpike.combatInputController.reset();
+        return;
+      }
+      // ROADMAP 3.19 — the off hand's open-palm thrust releases the queued
+      // Force power. Checked before the swing detector so a two-handed swing
+      // never doubles as a cast: with the off-hand grip held the palm is not
+      // open and the thrust is ignored here.
+      if (VRSpike.processForceCastInput(context, inputFrame, timestamp, offhandHand,
+        !offhandGrip && !offhandTriggerPressed)) {
         VRSpike.combatInputController.reset();
         return;
       }
@@ -2762,6 +2782,39 @@ export class VRSpike {
       if (!VRSpike.forceGestureErrorReported) {
         VRSpike.forceGestureErrorReported = true;
         console.error('[VRSpike] Force gesture rejected', error);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * ROADMAP 3.19 — one generic Force cast. An open-palm thrust of the off
+   * hand toward the locked target releases whatever non-Push/Pull Force power
+   * heads the queue. Returns true only when the engine spent the gesture, so
+   * an idle thrust with nothing queued still falls through to the swing
+   * detector unchanged.
+   */
+  private static processForceCastInput(
+    context: { onForceCastGesture?(gesture: VRForceCastGesture): boolean; readonly nominatedTargetAimPoint?: THREE.Vector3 | null },
+    inputFrame: XRInputFrame,
+    timestamp: number,
+    offhandHand: XRHandRole,
+    palmOpen: boolean,
+  ): boolean {
+    if (!context.onForceCastGesture) return false;
+    try {
+      const gesture = VRSpike.forceCastGestureController.process(inputFrame, {
+        hand: offhandHand,
+        palmOpen,
+        targetPoint: context.nominatedTargetAimPoint ?? null,
+        timestamp,
+      });
+      if (!gesture) return false;
+      return context.onForceCastGesture(gesture) === true;
+    } catch (error) {
+      if (!VRSpike.forceGestureErrorReported) {
+        VRSpike.forceGestureErrorReported = true;
+        console.error('[VRSpike] Force cast gesture rejected', error);
       }
       return false;
     }

@@ -76,6 +76,12 @@ export interface VRActionWheelBuildContext {
    */
   readonly targetIsHostileCreature: boolean;
   readonly partyMembers: readonly VRActionWheelPartyMember[];
+  /**
+   * ROADMAP 3.21 — "Party → Attack My Target". Present only while the aimed
+   * target is a live hostile and a companion is alive to take the order; the
+   * engine side issues the attack to every companion, not the controlled one.
+   */
+  readonly partyAttackOrder?: VRActionWheelDirectAction | null;
   readonly openComfortSettings: () => void;
   /**
    * Opens the engine's in-game menu on the Character tab.
@@ -232,14 +238,18 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
   items.push(createStaticAction('menu:screens', 'Menu', 'lbl_icn_char2', context.openMenu));
 
   const partyMembers = validPartyMembers(context.partyMembers);
-  if (partyMembers.length > 0) {
+  const partyAttackOrder = context.partyAttackOrder && isValidDirectAction(context.partyAttackOrder)
+    ? context.partyAttackOrder
+    : null;
+  if (partyMembers.length > 0 || partyAttackOrder) {
     items.push({
       kind: 'submenu',
       id: 'submenu:party',
       label: 'Party',
       icon: 'lbl_icn_prty2',
-      revalidate: () => partyMembers.some(isSwitchablePartyMember),
-      buildMenu: () => buildPartyMenu(context.id, partyMembers),
+      revalidate: () => partyMembers.some(isSwitchablePartyMember) ||
+        (partyAttackOrder !== null && safelyRevalidateDirectAction(partyAttackOrder)),
+      buildMenu: () => buildPartyMenu(context.id, partyMembers, partyAttackOrder),
     });
   }
 
@@ -500,8 +510,24 @@ function validPartyMembers(
 function buildPartyMenu(
   rootId: string,
   members: readonly VRActionWheelPartyMember[],
+  attackOrder: VRActionWheelDirectAction | null = null,
 ): VRRadialMenuDefinition {
-  const items: VRRadialActionItem[] = members.map((member) => ({
+  const items: VRRadialActionItem[] = [];
+  // The order leads the page: in a fight it is the reason to open Party at
+  // all, and the members below it are the same either way.
+  if (attackOrder) {
+    items.push({
+      kind: 'action',
+      id: 'party:attack-my-target',
+      label: 'Attack My Target',
+      icon: attackOrder.icon?.trim() || 'i_attack',
+      revalidate: () => safelyRevalidateDirectAction(attackOrder),
+      activate: () => {
+        if (safelyRevalidateDirectAction(attackOrder)) attackOrder.activate();
+      },
+    });
+  }
+  items.push(...members.map((member): VRRadialActionItem => ({
     kind: 'action',
     id: `party:${member.id.trim()}`,
     label: member.label.trim(),
@@ -511,7 +537,7 @@ function buildPartyMenu(
       const currentIndex = safelyResolvePartyIndex(member);
       if (currentIndex > 0) member.switchLeader(currentIndex);
     },
-  }));
+  })));
   return createMenu(`${rootId.trim()}:party`, 'Party', items);
 }
 

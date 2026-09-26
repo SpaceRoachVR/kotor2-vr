@@ -479,3 +479,62 @@ test('rejects a build context without an upcoming-intent clear route', () => {
 
   expect(() => buildVRActionWheel(broken)).toThrow('clearUpcomingActions must be callable');
 });
+
+// ROADMAP 3.21 — "Party -> Attack My Target".
+
+test('Attack My Target leads the Party page when the engine offers the order', () => {
+  const activate = jest.fn();
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    targetActions: [engineAction('attack', 'Attack', { panelIndex: 0 })],
+    partyMembers: [partyMember('kreia', 'Kreia')],
+    partyAttackOrder: directAction('party:attack-my-target', 'Attack My Target', { activate }),
+  }));
+  const partyMenu = findSubmenu(menu, 'submenu:party').buildMenu();
+
+  expect(contentIds(partyMenu)).toEqual(['party:attack-my-target', 'party:kreia']);
+  const order = findAction(partyMenu, 'party:attack-my-target');
+  expect(order.label).toBe('Attack My Target');
+  order.activate();
+  expect(activate).toHaveBeenCalledTimes(1);
+});
+
+test('the Party submenu still appears for the order alone, with no switchable member', () => {
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    partyMembers: [],
+    partyAttackOrder: directAction('party:attack-my-target', 'Attack My Target'),
+  }));
+  const submenu = findSubmenu(menu, 'submenu:party');
+
+  expect(submenu.revalidate()).toBe(true);
+  expect(contentIds(submenu.buildMenu())).toEqual(['party:attack-my-target']);
+});
+
+test('without the order the Party page is unchanged', () => {
+  const menu = buildVRActionWheel(context({
+    partyMembers: [partyMember('kreia', 'Kreia')],
+    partyAttackOrder: null,
+  }));
+
+  expect(contentIds(findSubmenu(menu, 'submenu:party').buildMenu())).toEqual(['party:kreia']);
+  expect(contentIds(buildVRActionWheel(context()))).not.toContain('submenu:party');
+});
+
+test('Attack My Target fails closed once the target or the companions are gone', () => {
+  const activate = jest.fn();
+  let alive = true;
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    partyMembers: [partyMember('kreia', 'Kreia')],
+    partyAttackOrder: directAction('party:attack-my-target', 'Attack My Target', {
+      revalidate: () => alive, activate,
+    }),
+  }));
+  const order = findAction(findSubmenu(menu, 'submenu:party').buildMenu(), 'party:attack-my-target');
+
+  alive = false;
+  expect(order.revalidate()).toBe(false);
+  order.activate();
+  expect(activate).not.toHaveBeenCalled();
+});
