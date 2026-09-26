@@ -43,3 +43,16 @@ describe('placed sound objects fall silent at MaxDistance', () => {
     expect(emitter).toMatch(/refDistance = Math\.min\(Math\.max\(this\.minDistance, 0\), maxDistance \* 0\.99\)/);
   });
 });
+
+describe('closed doors block movement', () => {
+  test('door collision rays are cast above the feet, not along the floor', () => {
+    // DWK slabs start at floor height; a ray at the soles grazed their bottom
+    // edge and every closed door could be walked through (round P1).
+    const collision = read('engine/CollisionManager.ts');
+    const at = collision.indexOf('private handleDoorCollisions(): void {');
+    const body = collision.slice(at, collision.indexOf('private handleRoomCollisions', at));
+    expect(body).toContain('this.playerFeetRay.z += CollisionManager.DOOR_RAY_HEIGHT;');
+    expect(body.indexOf('DOOR_RAY_HEIGHT')).toBeLessThan(body.indexOf('raycaster.ray.origin.copy(this.playerFeetRay);'));
+    expect(collision).toMatch(/static DOOR_RAY_HEIGHT: number = 0\.5;/);
+  });
+});

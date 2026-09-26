@@ -504,6 +504,8 @@ export class CollisionManager {
     }
   }
 
+  /** Height above the feet at which door collision rays are cast. */
+  static DOOR_RAY_HEIGHT: number = 0.5;
   static DIR_COUNT: number = 12;
   static DX_LIST: number[] = [1,  0.15425144988758405, -0.9524129804151563, -0.4480736161291702, 0.8141809705265618,  0.6992508064783751, -0.5984600690578581, -0.8838774731823718,  0.32578130553514806, 0.9843819506325049, -0.022096619278683942, -0.9911988217552068];
   static DY_LIST: number[] = [0, -0.9880316240928618,  -0.3048106211022167,  0.8939966636005579, 0.5806111842123143, -0.7148764296291646, -0.8011526357338304,  0.46771851834275896, 0.9454451549211168, -0.1760459464712114, -0.9997558399011495,   -0.13238162920545193];
@@ -518,8 +520,14 @@ export class CollisionManager {
     const raycaster = GameState.raycaster;
     const prevFar = raycaster.far;
 
-    // Cast from predicted position to approximate capsule collision
+    // Cast from predicted position to approximate capsule collision.
+    // Door walkmeshes (DWK) start exactly at floor height, so a horizontal
+    // ray at the soles grazed the slab's bottom edge and hit nothing: every
+    // closed door could be walked through (headset round P1, 105PER/106PER;
+    // measured: a ray at the door's base misses, 1 mm higher hits at 0.5 m).
+    // Cast at knee height instead.
     this.playerFeetRay.copy(this.object.position).add(this.object.forceVector);
+    this.playerFeetRay.z += CollisionManager.DOOR_RAY_HEIGHT;
     raycaster.ray.origin.copy(this.playerFeetRay);
     raycaster.far = this.collisionState.hitDistance;
 
