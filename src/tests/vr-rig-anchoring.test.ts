@@ -38,7 +38,7 @@ describe('VR rig follows the avatar', () => {
     (VRSpike as any).lastRigFacing = null;
     (VRSpike as any).lastRigSyncMs = Number.NEGATIVE_INFINITY;
     (VRSpike as any).rigAnchorPending = true;
-    (VRSpike as any).headHeightBaselineMetres = null;
+    (VRSpike as any).headHeight.reset();
     VRSpike.yawOffset = 0;
     VRSpike.hooks = {
       update: () => undefined,

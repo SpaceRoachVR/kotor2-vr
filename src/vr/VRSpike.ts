@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { XRCoordinateConverter } from "./runtime/XRCoordinateConverter";
+import { HeadHeightCalibration } from './runtime/HeadHeightCalibration';
 import { XRControllerAnchorHost } from "./runtime/XRControllerAnchorHost";
 import type { HeldItemVisualDescriptor } from "./runtime/XRControllerAnchorHost";
 import type { VRHandModelLoader } from "./runtime/hands/VRHandModel";
@@ -129,7 +130,6 @@ import { XRInputCapabilityValidator } from './input/XRInputCapabilityValidator';
  */
 const RECENTER_MIN_HORIZONTAL_FORWARD = 0.26;
 /** Steady head frames (~half a second) whose median is the player's standing head height. */
-const HEAD_HEIGHT_CALIBRATION_FRAMES = 36;
 /** How far an untargeted presentation shot travels. */
 const PRESENTATION_SHOT_RANGE_METRES = 20;
 /** ROADMAP 3.12 — light enough to sit under the combat feedback 3.13 will add. */
@@ -483,10 +483,10 @@ export class VRSpike {
   static rig: THREE.Group | null = null;
   /**
    * The player's own standing head height above the XR floor, calibrated from
-   * the first steady frames of a session and again on every recenter.
+   * the first steady frames of a session, again on every recenter, and raised
+   * when the player stands up after it (see HeadHeightCalibration).
    */
-  private static headHeightBaselineMetres: number | null = null;
-  private static headHeightSamples: number[] = [];
+  private static readonly headHeight = new HeadHeightCalibration();
   /** Whether syncRig has placed the rig at least once in this session. */
   private static rigSyncedThisSession = false;
   /**
@@ -1113,8 +1113,7 @@ export class VRSpike {
   private static finishSessionEnd = (): void => {
     VRSpike.perf.stop();
     VRSpike.session = null;
-    VRSpike.headHeightBaselineMetres = null;
-    VRSpike.headHeightSamples = [];
+    VRSpike.headHeight.reset();
     VRSpike.rigSyncedThisSession = false;
     VRSpike.xrFrameRenderTarget = null;
     VRSpike.previousXRInputTimestamp = null;
@@ -3484,8 +3483,7 @@ export class VRSpike {
     // what makes repeat presses idempotent.
     // Recenter is also "measure me again": a player who sat down or stood up
     // since the session began gets the character's eye height back.
-    VRSpike.headHeightBaselineMetres = null;
-    VRSpike.headHeightSamples = [];
+    VRSpike.headHeight.reset();
     const previousYawOffset = VRSpike.yawOffset;
     VRSpike.yawOffset = wrap(rigFacing - headFacing);
     const yawDelta = wrap(VRSpike.yawOffset - previousYawOffset);
@@ -4444,21 +4442,16 @@ export class VRSpike {
   }
 
   private static sampleHeadHeight(frame: XRFrame, referenceSpace: XRReferenceSpace): void {
-    if (VRSpike.headHeightBaselineMetres !== null) return;
     try {
       const y = frame.getViewerPose(referenceSpace)?.transform.position.y;
-      // A head below 30 cm is tracking that has not settled, not a person.
-      if (typeof y !== 'number' || !Number.isFinite(y) || y < 0.3 || y > 2.5) return;
-      VRSpike.headHeightSamples.push(y);
-      if (VRSpike.headHeightSamples.length < HEAD_HEIGHT_CALIBRATION_FRAMES) return;
-      const sorted = [...VRSpike.headHeightSamples].sort((a, b) => a - b);
-      VRSpike.headHeightBaselineMetres = sorted[Math.floor(sorted.length / 2)];
-      VRSpike.headHeightSamples = [];
+      if (typeof y !== 'number') return;
+      const event = VRSpike.headHeight.sample(y, performance.now());
+      if (!event) return;
       const eye = VRSpike.hooks?.getEyeHeight?.() ?? null;
-      console.info(
-        `[VRSpike] head height calibrated: player ${VRSpike.headHeightBaselineMetres.toFixed(2)} m, ` +
-        `character eye ${eye === null ? 'unknown' : eye.toFixed(2) + ' m'}`
-      );
+      const character = `character eye ${eye === null ? 'unknown' : eye.toFixed(2) + ' m'}`;
+      console.info(event.kind === 'calibrated'
+        ? `[VRSpike] head height calibrated: player ${event.baselineMetres.toFixed(2)} m, ${character}`
+        : `[VRSpike] head height raised (player stood up): ${event.previousMetres.toFixed(2)} -> ${event.baselineMetres.toFixed(2)} m, ${character}`);
     } catch {
       // Calibration is best-effort; without it the rig keeps the raw floor.
     }
@@ -4489,17 +4482,34 @@ export class VRSpike {
     if (live !== VRSpike.liveHeadHeightLastFrame) {
       VRSpike.liveHeadHeightLastFrame = live;
       if (!live) {
-        VRSpike.headHeightBaselineMetres = null;
-        VRSpike.headHeightSamples = [];
+        VRSpike.headHeight.reset();
       }
     }
-    const baseline = live
-      ? (VRSpike.latestLocalHeadPosition?.y ?? null)
-      : VRSpike.headHeightBaselineMetres;
-    if (baseline === null) return 0;
     const eye = VRSpike.hooks?.getEyeHeight?.() ?? null;
     if (eye === null || !Number.isFinite(eye)) return 0;
-    return eye - baseline;
+    const head = VRSpike.latestLocalHeadPosition?.y ?? null;
+    if (live) {
+      return head === null ? 0 : eye - head;
+    }
+    return VRSpike.clampedEyeHeightOffset(eye, VRSpike.headHeight.baselineMetres, head);
+  }
+
+  /**
+   * Outside the swoop the view is never above the character's eyes, whatever
+   * the player's real posture (Allen, 2026-09-26: "too high" is for the swoop
+   * only). Lower is allowed, so crouching still crouches. Before calibration
+   * has a baseline the head is only ever pulled down, never pushed up.
+   *
+   * Without the cap, standing up after a seated or headset-on-the-desk
+   * calibration put the camera ~0.6 m above every character until the
+   * baseline caught up (headset round P1).
+   */
+  static clampedEyeHeightOffset(eye: number, baseline: number | null, head: number | null): number {
+    if (head === null || !Number.isFinite(head)) {
+      return baseline === null ? 0 : eye - baseline;
+    }
+    if (baseline === null) return Math.min(0, eye - head);
+    return eye - Math.max(baseline, head);
   }
 
   /**
