@@ -180,6 +180,13 @@ export class ModuleMiniGame {
       await track.load();
       const model = await track.loadModel();
       track.model = model;
+      // Put the track where the layout says. Every course object hangs off a
+      // track's modelhook, and the hook's own offset is authored relative to
+      // the LYT placement: 211TEL's pad track MGT04 sits at (75, 731) with its
+      // hook at (-75, -2), which is the pad at x 0 on the road. Left at the
+      // origin, all 47 pads and mines piled up beside the start line and the
+      // rider's own track (LYT z 41) ran forty units under the road.
+      model.position.copy(track.position);
       model.userData.moduleObject = track;
       model.userData.index = i;
       //model.quaternion.setFromAxisAngle(new THREE.Vector3(0,0,1), -Math.atan2(spawnLoc.XOrientation, spawnLoc.YOrientation));
@@ -203,6 +210,14 @@ export class ModuleMiniGame {
       const track = this.tracks.find(o => o.track === enemy.trackName);
       if(track){
         enemy.setTrack(track.model);
+        // Scripts know a course object by name: 211TEL's accelpad script tells a
+        // mine from a pad with FindSubString(SWMG_GetObjectName(hit), 'MGM').
+        // The ARE gives an enemy no Name of its own; retail's is the track it
+        // rides, spelled as the LYT spells it (211TEL_MGM01), which is where
+        // the upper-case 'MGM' comes from.
+        if(!enemy.name){
+          enemy.name = String((track as any).layout?.name || enemy.trackName || '').replace(/\0[\s\S]*$/, '');
+        }
       }else{
         console.warn('ModuleMiniGame: no track named', enemy.trackName, 'for enemy', i);
       }

@@ -77,8 +77,25 @@ describe('obstacles can be struck', () => {
   });
 
   test('the sweep compares world positions, not the track node local offset', () => {
-    const check = bodyOf(read('module/ModuleMGPlayer.ts'), '  checkObstacleCollisions()');
-    expect(check).toMatch(/getWorldPosition\(ModuleMGPlayer\.obstacleProbePosition\)/);
+    const player = read('module/ModuleMGPlayer.ts');
+    const check = bodyOf(player, '  checkObstacleCollisions()');
+    expect(check).toMatch(/this\.sweepMeets\(obstacle\.sphere\.center, obstacle\.sphere\.radius\)/);
     expect(check).not.toMatch(/this\.track\.position;/);
+    const sweep = bodyOf(player, '  sweepMeets(centre: THREE.Vector3, radius: number)');
+    expect(sweep).toMatch(/getWorldPosition\(ModuleMGPlayer\.sweepEnd\)/);
+    expect(sweep).toMatch(/segmentMeetsCircle2D\(a\.x, a\.y, b\.x, b\.y, centre\.x, centre\.y, radius\)/);
+  });
+
+  test('a struck marker re-arms after a moment, and an invulnerable rider strikes nothing', () => {
+    const obstacle = read('module/ModuleMGObstacle.ts');
+    expect(obstacle).toMatch(/DEFAULT_REARM_SECONDS = 1.5/);
+    expect(bodyOf(obstacle, '  startInvulnerability()')).toMatch(/this.invince_period || ModuleMGObstacle.DEFAULT_REARM_SECONDS/);
+    expect(bodyOf(read('module/ModuleMGPlayer.ts'), '  checkObstacleCollisions()')).toMatch(/if\(this\.invince > 0\)\{ return; \}/);
+  });
+
+  test('a hop clears the course: nothing is struck while airborne', () => {
+    const player = read('module/ModuleMGPlayer.ts');
+    expect(bodyOf(player, '  checkObstacleCollisions()')).toMatch(/OBSTACLE_CLEAR_HEIGHT/);
+    expect(bodyOf(player, '  update(delta: number = 0)')).toMatch(/const airborne = this\.container\.position\.z > ModuleMGPlayer\.OBSTACLE_CLEAR_HEIGHT/);
   });
 });

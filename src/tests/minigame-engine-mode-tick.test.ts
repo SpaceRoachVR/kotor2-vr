@@ -235,8 +235,8 @@ describe('minigame input reads the frame shape the builder writes', () => {
     const policy = read('vr/runtime/VRMiniGameInputPolicy.ts');
     expect(policy).toMatch(/const XR_STANDARD_TRIGGER = '0';/);
     expect(policy).toMatch(/const XR_STANDARD_SQUEEZE = '1';/);
-    expect(policy).toMatch(/SQUEEZE_BUTTONS = \[XR_STANDARD_SQUEEZE\]/);
-    expect(policy).toMatch(/TRIGGER_BUTTONS = \[XR_STANDARD_TRIGGER\]/);
+    expect(policy).toMatch(/buttonValue\(hand, XR_STANDARD_SQUEEZE\)/);
+    expect(policy).toMatch(/buttonValue\(hand, XR_STANDARD_TRIGGER\)/);
   });
 
   test('no named button key survives anywhere in the policy', () => {

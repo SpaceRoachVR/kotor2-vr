@@ -98,6 +98,15 @@ import {
 
 /** The bike the swoop grips are currently attached to, so it is done once. */
 let vrSwoopGripsAttachedTo: THREE.Object3D | null = null;
+/** How each moment of a swoop ride feels, before scaling by how hard it hit. */
+const SWOOP_RIDE_HAPTICS: Record<SwoopRideEventType, { durationMs: number; amplitude: number }> = {
+  obstacle: { durationMs: 220, amplitude: 1.0 },
+  mine: { durationMs: 260, amplitude: 1.0 },
+  wall: { durationMs: 90, amplitude: 0.7 },
+  pad: { durationMs: 120, amplitude: 0.5 },
+  jump: { durationMs: 40, amplitude: 0.35 },
+  land: { durationMs: 70, amplitude: 0.55 },
+};
 
 /** Scratch for the grip poses, which are read every frame while riding. */
 const vrSwoopGripPoses: Record<'left' | 'right', {
@@ -133,6 +142,7 @@ function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
   return vrSwoopGripPoses;
 }
 import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
+import { addSwoopRideListener, type SwoopRideEventType } from "@/module/minigame/SwoopRideEvents";
 import { VRCombatSwingBuffer } from "@/vr/runtime/VRCombatSwingBuffer";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
@@ -2894,6 +2904,16 @@ export class GameState implements EngineContext {
     // this provider rather than importing engine state, which keeps the VR
     // layer independent of GameState (and its tests free of the engine).
     VRSpike.miniGameInput = VRMiniGameInputController;
+    // The ride's moments, in the hands. Both controllers, because the bike is
+    // what is hit, not a hand; strength scales a wall tap against a slam.
+    addSwoopRideListener((event) => {
+      if(!VRSpike.isPresenting){ return; }
+      const pattern = SWOOP_RIDE_HAPTICS[event.type];
+      if(!pattern){ return; }
+      const amplitude = Math.max(0.1, Math.min(1, pattern.amplitude * Math.max(0.3, event.strength)));
+      VRSpike.pulseHand('left', { durationMs: pattern.durationMs, amplitude });
+      VRSpike.pulseHand('right', { durationMs: pattern.durationMs, amplitude });
+    });
     VRMiniGameInputController.pinHand = (hand, pose) => VRSpike.setPinnedHandPose(hand, pose);
     VRMiniGameInputController.setProvider(() => {
       if (GameState.Mode !== EngineMode.MINIGAME) return null;
@@ -2914,20 +2934,12 @@ export class GameState implements EngineContext {
       }
       return {
         type: miniGame.type,
-        lateralAcceleration: player.accel_lateral_secs,
-        setLateralForce: (force: number) => { player.lateralForce = force; },
-        // The track's own tunnel is the width of the lane the rider may use.
-        get lateralLimit(){ return Math.abs(player.tunnel?.pos?.x ?? 0); },
-        // Both sides of this are measured from the middle of the road, which is
-        // not the line the hook drops the rider on.
-        get lateralPosition(){
-          return (player.container?.position?.x ?? 0) - (player.measureLaneCentre?.() ?? 0);
-        },
-        setLateralPosition: (position: number) => {
-          if(!player.container){ return; }
-          player.container.position.x = (player.measureLaneCentre?.() ?? 0) + position;
-          player.clampToTunnel?.();
-        },
+        // The flag has dropped once the race script grants lateral acceleration
+        // (211TEL's heartbeat: SWMG_SetLateralAccelerationPerSecond(300) on Go).
+        get raceStarted(){ return (player.accel_lateral_secs ?? 0) > 0; },
+        setSteer: (steer: number) => { player.setSteerInput?.(steer); },
+        get seatPosition(){ return GameState.getMiniGameSeat()?.position ?? null; },
+        get seatRight(){ return GameState.getMiniGameSeatRight(); },
         get gripPoses(){ return readSwoopGripPoses(player.container); },
         // TSL's swoop keeps its jump script in the OnBrake slot; onBrake()
         // falls back to the engine's own jump when a module ships none.
@@ -3031,7 +3043,12 @@ export class GameState implements EngineContext {
       // between the walkrate and runrate columns of creaturespeed.2da based on
       // `isWalking()`. VR simply had no route to the flag.
       getControlledActor: () => GameState.getCurrentPlayer(),
-      getEyeHeight: () => resolveVRCharacterEyeHeight(GameState.getCurrentPlayer()),
+      // A minigame rider is not the party leader: the swoop's own rider says
+      // where the eyes go, and the generic resolver reads the bike's meshes
+      // against a local origin and gets nonsense.
+      getEyeHeight: () => GameState.Mode == EngineMode.MINIGAME
+        ? GameState.MINIGAME_RIDER_EYE_HEIGHT
+        : resolveVRCharacterEyeHeight(GameState.getCurrentPlayer()),
       toggleWalkRun: () => {
         const player = GameState.getCurrentPlayer();
         if (!player) return;
@@ -4118,10 +4135,17 @@ export class GameState implements EngineContext {
   };
 
   /**
-   * How far forward of the bike's origin the rider sits, in game units. Taken
-   * from the middle of the authored rider's own span (y 0.12 to 1.65).
+   * Where the rider's head is on the bike, in game units from the bike origin.
+   *
+   * Measured from the authored rider (`trider` in v_supertrike01, read with
+   * PyKotor): its mesh spans y 0.12..1.65 and z 0.42..1.24, and its node sits
+   * at y 0.50. A seated figure's head is over its hips, near the node, with
+   * the legs making up the forward span - so the head is about 0.6 forward,
+   * and the eyes a hand's breadth under the top of the head at z 1.24. The
+   * previous 0.7 was the middle of the span, which is the knees.
    */
-  static readonly MINIGAME_SEAT_FORWARD_OFFSET = 0.7;
+  static readonly MINIGAME_SEAT_FORWARD_OFFSET = 0.6;
+  static readonly MINIGAME_RIDER_EYE_HEIGHT = 1.13;
 
   /**
    * The body the first-person submission must leave out.
@@ -4193,6 +4217,20 @@ export class GameState implements EngineContext {
       GameState.miniGameSeatForward.y, GameState.miniGameSeatForward.x,
     ) - Math.PI;
     return GameState.miniGameSeat;
+  }
+
+  private static miniGameSeatRight = new THREE.Vector3();
+
+  /**
+   * The bike's own right-hand axis in world space, for lean steering: the
+   * rider's head is measured across this, whichever way the course has turned
+   * the bike. Null outside a minigame.
+   */
+  public static getMiniGameSeatRight(): THREE.Vector3 | null {
+    if(!GameState.getMiniGameSeat()){ return null; }
+    // getMiniGameSeat has just decomposed the container's world matrix.
+    return GameState.miniGameSeatRight.set(1, 0, 0)
+      .applyQuaternion(GameState.miniGameSeatQuaternion).normalize();
   }
 
   public static getCurrentPlayer(): ModuleCreature {

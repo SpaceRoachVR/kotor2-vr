@@ -7209,8 +7209,17 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.VOID,
     args: [NWScriptDataType.OBJECT, NWScriptDataType.INTEGER],
     action: function(this: NWScriptInstance, args: [ModuleObject, number]){
-      if(BitWise.InstanceOfObject(this.caller, ModuleObjectType.ModuleObject)){
-        this.caller.onDamaged();
+      // Sets the follower's hit points, as the name says. It used to fire the
+      // caller's OnDamaged and set nothing, so a mine that wrote the rider's
+      // health down by 100 left it at 600, and the obstacle-hit script's
+      // "health as a percentage" on the race dialog never moved.
+      const target = args[0] as ModuleMGPlayer|ModuleMGEnemy|ModuleMGObstacle;
+      if(BitWise.InstanceOfObject(target, ModuleObjectType.ModuleMGEnemy) || BitWise.InstanceOfObject(target, ModuleObjectType.ModuleMGObstacle) || BitWise.InstanceOfObject(target, ModuleObjectType.ModuleMGPlayer)){
+        const before = target.hit_points;
+        target.hit_points = Number.isFinite(args[1]) ? args[1] : before;
+        if(target.hit_points < before && typeof (target as any).onDamaged === 'function'){
+          (target as any).onDamaged();
+        }
       }
     }
   },
@@ -7311,8 +7320,13 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [ModuleObject]){
-      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGEnemy) || BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGObstacle)){
-        return (args[0] as ModuleMGEnemy|ModuleMGObstacle).hit_points;
+      // The player too: 211TEL's hit scripts store the rider's health as a
+      // percentage, GetHitPoints / GetMaxHitPoints * 100, on the race dialog,
+      // and the heartbeat ends the race when that reaches zero. With the
+      // player excluded both read 0, the first obstacle wrote 0%, and the
+      // race finished on the spot.
+      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGEnemy) || BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGObstacle) || BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGPlayer)){
+        return (args[0] as ModuleMGEnemy|ModuleMGObstacle|ModuleMGPlayer).hit_points;
       }
       return 0;
     }
@@ -7323,8 +7337,8 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [ModuleObject]){
-      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGEnemy) || BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGObstacle)){
-        return (args[0] as ModuleMGEnemy|ModuleMGObstacle).max_hps;
+      if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGEnemy) || BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGObstacle) || BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleMGPlayer)){
+        return (args[0] as ModuleMGEnemy|ModuleMGObstacle|ModuleMGPlayer).max_hps;
       }
       return 0;
     }
@@ -7489,7 +7503,13 @@ NWScriptDefK1.Actions = {
           THREE.MathUtils.radToDeg(rot.z)
         );
       }else{
-        return GameState.module.area.miniGame.player.position;
+        // The rider's offset from the hook, which is what steering and the hop
+        // move. `player.position` is a ModuleObject field that stays at the
+        // origin for a minigame player, so 211TEL's onjump - which refuses a
+        // jump above z 2 - saw a bike forever on the ground and let the rider
+        // pogo mid-air.
+        const player = GameState.module.area.miniGame.player;
+        return (player.container?.position ?? player.position).clone();
       }
     }
   },

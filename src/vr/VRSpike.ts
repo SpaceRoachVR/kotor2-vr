@@ -612,6 +612,16 @@ export class VRSpike {
   static setPinnedHandPose(hand: XRHandRole, pose: XRWorldPose | null): void {
     VRSpike.controllerAnchorHost?.setPinnedPose(hand, pose);
   }
+
+  /**
+   * A haptic pulse on one hand, for gameplay that has no session of its own -
+   * the swoop's bumps and boosts. Safe outside a session: it does nothing.
+   */
+  static pulseHand(hand: XRHandRole, pattern: { durationMs: number; amplitude: number }): void {
+    const session = VRSpike.session;
+    if (!session) return;
+    void VRSpike.haptics.pulse(session, hand, pattern);
+  }
   private static latestInputFrame: XRInputFrame | null = null;
   private static latestXRFrame: XRFrame | null = null;
   private static latestXRFrameTimestamp = 0;

@@ -5375,7 +5375,14 @@ NWScriptDefK2.Actions = {
     comment: '745: SoundObjectFadeAndStop\nFades a sound object for \'fSeconds\' and then stops it.',
     name: 'SoundObjectFadeAndStop',
     type: NWScriptDataType.VOID,
-    args: [ NWScriptDataType.OBJECT ],
+    // (object oSound, float fSeconds), as the comment says and as K1 declares
+    // it. Listed with one argument, the VM popped one and left the float on
+    // the stack, and every SP-relative read after the call in that script was
+    // one slot off: 211TEL's mine script then passed its gear counter to
+    // SWMG_GetHitPoints (object id 3, a sound object) and wrote 0% health to
+    // the race dialog, which ended the race. The argument list is what the VM
+    // pops, whatever action is merged in from K1.
+    args: [ NWScriptDataType.OBJECT, NWScriptDataType.FLOAT ],
     action: undefined
   },
   746: {

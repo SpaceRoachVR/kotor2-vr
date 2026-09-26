@@ -77,12 +77,13 @@ describe('the bike is no longer shoved along in a straight line', () => {
     expect(update).not.toMatch(/this\.track\.position\.add/);
   });
 
-  test('the force vector carries steering only, not forward motion', () => {
-    expect(update).toMatch(/this\.forceVector\.set\( this\.lateralForce \* delta, 0, 0 \)/);
+  test('sideways motion is its own step, with inertia, and nothing else pushes the bike', () => {
+    expect(update).toMatch(/this\.stepLateral\(delta\)/);
+    expect(update).not.toMatch(/this\.lateralForce/);
   });
 
   test('steering is an offset from the hook the course animation moves', () => {
-    expect(update).toMatch(/this\.container\.position\.add\(this\.forceVector\)/);
+    expect(bodyOf(player, '  stepLateral(delta: number)')).toMatch(/this\.container\.position\.x = centre \+ result\.state\.position/);
   });
 
   test('and the tunnel clamps that offset, not the track node', () => {

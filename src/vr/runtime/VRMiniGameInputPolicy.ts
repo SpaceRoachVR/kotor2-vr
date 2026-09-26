@@ -1,80 +1,67 @@
 import * as THREE from 'three';
-import { XRHandRole, XRInputFrame, XRHandInputFrame } from '@/vr/runtime/XRTypes';
+import { XRHandRole, XRInputFrame, XRHandInputFrame, XRWorldPose } from '@/vr/runtime/XRTypes';
 
 const HAND_ROLES: readonly XRHandRole[] = ['left', 'right'];
 
 /**
  * Turns controller poses into swoop and turret input.
  *
- * Both minigames are driven two-handed, as decided for the VR layer: the swoop
- * has handlebars and the turret has grips. A hand counts as holding on while
- * its squeeze button is held (the same gesture that takes a lightsaber hilt in
- * the off hand), and either hand alone still steers or aims, so a seated player
- * who cannot hold both is never stranded mid-sequence.
+ * The swoop (decided 2026-09-25, after four hand-steering models failed in the
+ * headset): the left thumbstick and leaning the head both steer, as a rate.
+ * The stick wins whenever it is deflected. The hands do not steer at all; they
+ * take hold of the bars with squeeze and are drawn there, which is purely how
+ * the rider sees themselves on the bike. The right trigger is the throttle,
+ * the left trigger jumps.
+ *
+ * The turret is unchanged: grips are held with squeeze, the pair aims, the
+ * trigger fires.
  *
  * This file is deliberately free of engine state: it takes an input frame and
  * returns intent. VRMiniGameInputController applies it to the live minigame.
  */
 
 export enum MiniGameGripState {
-  /** Neither hand is holding on; the player is not driving. */
+  /** Neither hand is holding on. */
   NONE = 'none',
-  /** One hand: it steers or aims on its own. */
+  /** One hand. */
   ONE_HANDED = 'one-handed',
-  /** Both hands: the pair drives steering and aim. */
+  /** Both hands. */
   TWO_HANDED = 'two-handed',
 }
 
 export interface VRMiniGameInputConfiguration {
   /** Squeeze value at or above which a hand counts as holding on. */
   readonly gripThreshold: number;
-  /** Trigger value at or above which fire/jump is pressed. */
+  /** Trigger value at or above which fire/jump/throttle is pressed. */
   readonly triggerThreshold: number;
+  /** Below this stick deflection the stick is centred. */
+  readonly stickDeadzone: number;
   /**
-   * The roll angle, in radians, that reads as full lock - how far the rider
-   * turns the bars, as an angle rather than a height.
-   *
-   * Height alone was wrong: the same few centimetres means a gentle turn with
-   * hands wide apart and a violent one with hands together, so the bike jerked
-   * whenever the hands moved at all. An angle is what the rider is actually
-   * doing with the bars and does not change meaning as their hands drift.
-   * 0.6 rad is about 35 degrees, roughly a comfortable handlebar throw.
+   * Head offset from the seat, in metres, that reads as full lock. Measured
+   * sideways across the bike. A seated rider leaning as far as is comfortable
+   * moves their head about this far.
    */
-  readonly steeringFullLockAngleRadians: number;
-  /**
-   * One-handed steering instead reads sideways offset from the head, in
-   * metres, since there is no second hand to tilt against.
-   */
-  readonly oneHandedFullLockOffsetMetres: number;
-  /** Below this fraction of full lock, steering reads as centred. */
-  readonly steeringDeadzone: number;
-  /**
-   * Seconds over which the measured roll is smoothed. Hand tracking is noisy
-   * at the centimetre scale and the bike sits where the roll says, so without
-   * this the jitter is visible as the bike twitching under the rider.
-   */
-  readonly steeringSmoothingSeconds: number;
-  /**
-   * One-handed only: thumbstick push away from the player, past which that
-   * hand's stick counts as a jump. Two-handed, jump is the left trigger.
-   */
-  readonly throttleThreshold: number;
+  readonly leanFullLockMetres: number;
+  /** Head offset below which the rider is sitting straight. */
+  readonly leanDeadzoneMetres: number;
 }
 
 export const DEFAULT_MINIGAME_INPUT_CONFIGURATION: VRMiniGameInputConfiguration = {
   gripThreshold: 0.5,
   triggerThreshold: 0.5,
-  steeringFullLockAngleRadians: 0.6,
-  oneHandedFullLockOffsetMetres: 0.25,
-  steeringDeadzone: 0.06,
-  steeringSmoothingSeconds: 0.12,
-  throttleThreshold: 0.6,
+  stickDeadzone: 0.15,
+  leanFullLockMetres: 0.18,
+  leanDeadzoneMetres: 0.03,
 };
+
+export type VRSwoopSteerSource = 'stick' | 'lean' | 'none';
 
 export interface VRSwoopIntent {
   readonly grip: MiniGameGripState;
-  /** -1 hard left to +1 hard right, already deadzoned and clamped. */
+  /** -1 hard left to +1 hard right, already deadzoned and clamped. A rate. */
   readonly steer: number;
+  /** Which control the steer came from this frame. */
+  readonly steerSource: VRSwoopSteerSource;
   /** Jump this frame (edge), so holding the control cannot pogo. */
   readonly jump: boolean;
   /** Throttle held: the swoop shifts up through its gears. */
@@ -89,122 +76,73 @@ export interface VRTurretIntent {
   readonly fire: boolean;
 }
 
+/**
+ * Where the rider's head is against the seat, for lean steering.
+ *
+ * `right` is the bike's own sideways axis in world space, so the offset is
+ * measured across the bike whichever way the course has turned it. `neutral`
+ * is the head's offset along that axis captured when the race started; the
+ * rider steers by leaning away from wherever they were sitting then.
+ */
+export interface VRSwoopLeanFrame {
+  readonly seatPosition: THREE.Vector3;
+  readonly right: THREE.Vector3;
+  readonly neutral: number;
+}
+
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
 
 /**
  * Button indices, not names. XRInputFrameBuilder keys `buttons` by the
  * gamepad's own index as a string ("0", "1", ...) and XRInputRouter binds by
- * index too, so the whole VR layer speaks indices. This file used to look up
- * 'squeeze' and 'trigger', which are keys that never exist: every read returned
- * 0, so the grip never closed, the swoop never steered and the throttle never
- * opened - while the unit tests passed, because their fixtures were written to
- * the same wrong shape. The order is the xr-standard mapping every profile in
- * XRInputRouter uses.
+ * index too. The order is the xr-standard mapping every profile uses: 0
+ * trigger, 1 squeeze. Named keys never exist on a real frame.
  */
 const XR_STANDARD_TRIGGER = '0';
 const XR_STANDARD_SQUEEZE = '1';
-/**
- * The face buttons: A/X at 4 and B/Y at 5 on the Touch profiles. Both jump, on
- * either hand, because a rider who cannot jump cannot clear an obstacle and the
- * left controller drops out of the frame often enough to matter.
- */
-const XR_STANDARD_FACE_PRIMARY = '4';
-const XR_STANDARD_FACE_SECONDARY = '5';
 
-/**
- * Anything that is not the throttle (0) or the grip (1) jumps.
- *
- * A/X was bound by index and did not work in the headset, and guessing again
- * would be the third guess. Index order past the trigger and squeeze is not
- * consistent across profiles - touchpad, thumbstick press, A/X, B/Y and menu
- * all land in 2 to 6 depending on the controller - so the swoop treats every
- * one of them as a jump. There is nothing else for them to do while riding.
- */
-const JUMP_BUTTON_INDICES = ['2', '3', '4', '5', '6', '7'] as const;
-
-function buttonValue(hand: XRHandInputFrame | undefined, indices: readonly string[]): number {
+function buttonValue(hand: XRHandInputFrame | undefined, index: string): number {
   if (!hand) return 0;
-  for (const index of indices) {
-    const button = hand.buttons[index];
-    if (!button) continue;
-    if (typeof button.value === 'number' && Number.isFinite(button.value)) return button.value;
-    if (button.pressed) return 1;
-  }
-  return 0;
+  const button = hand.buttons[index];
+  if (!button) return 0;
+  if (typeof button.value === 'number' && Number.isFinite(button.value)) return button.value;
+  return button.pressed ? 1 : 0;
 }
 
 /**
- * Thumbstick push away from the player, as a positive number, from whichever
- * hand is pushing hardest.
+ * Thumbstick X, -1 left to +1 right.
  *
- * The stick sits on axes 2 and 3 on the profiles that have one and on axes 0
- * and 1 on the touchpad profiles, matching XRInputRouter's per-profile binding;
- * reading whichever pair the controller reports keeps this working on both
- * without the policy needing to know the profile. WebXR reports forward as
- * negative Y.
+ * The stick sits on axes 2 and 3 on the profiles that have one (Touch, Index,
+ * xr-standard) and on axes 0 and 1 on the touchpad profiles, matching
+ * XRInputRouter's per-profile binding. Read whichever pair the controller
+ * reports, preferring the thumbstick pair, so this works on both without the
+ * policy knowing the profile.
  */
-function stickPush(hand: XRHandInputFrame | undefined): number {
+export function stickX(hand: XRHandInputFrame | undefined): number {
   if (!hand) return 0;
   const axes = hand.axes || [];
-  const y = Number.isFinite(axes[3]) && axes[3] !== 0 ? axes[3] : axes[1];
-  if (!Number.isFinite(y)) return 0;
-  return -(y as number);
-}
-
-const SQUEEZE_BUTTONS = [XR_STANDARD_SQUEEZE] as const;
-const TRIGGER_BUTTONS = [XR_STANDARD_TRIGGER] as const;
-
-export function isFaceButtonPressed(
-  hand: XRHandInputFrame | undefined, config: VRMiniGameInputConfiguration,
-): boolean {
-  if (!hand) return false;
-  // Any of them, not the first index that happens to exist: buttonValue stops
-  // at the first present index, which would ignore every button after it.
-  return JUMP_BUTTON_INDICES.some(
-    (index) => buttonValue(hand, [index]) >= config.triggerThreshold,
-  );
+  const x = Number.isFinite(axes[2]) && axes[2] !== 0 ? axes[2] : axes[0];
+  return Number.isFinite(x) ? clamp(x as number, -1, 1) : 0;
 }
 
 export function isGripping(
   hand: XRHandInputFrame | undefined, config: VRMiniGameInputConfiguration,
 ): boolean {
   if (!hand) return false;
-  return buttonValue(hand, SQUEEZE_BUTTONS) >= config.gripThreshold;
+  return buttonValue(hand, XR_STANDARD_SQUEEZE) >= config.gripThreshold;
 }
 
 export function isTriggerPressed(
   hand: XRHandInputFrame | undefined, config: VRMiniGameInputConfiguration,
 ): boolean {
   if (!hand) return false;
-  return buttonValue(hand, TRIGGER_BUTTONS) >= config.triggerThreshold;
+  return buttonValue(hand, XR_STANDARD_TRIGGER) >= config.triggerThreshold;
 }
 
 export function resolveGripState(
   frame: XRInputFrame, config: VRMiniGameInputConfiguration,
 ): { state: MiniGameGripState; hands: XRHandInputFrame[] } {
-  const hands = HAND_ROLES
-    .map((role) => frame.hands[role])
-    .filter((hand): hand is XRHandInputFrame => isGripping(hand, config));
-  if (hands.length >= 2) return { state: MiniGameGripState.TWO_HANDED, hands };
-  if (hands.length === 1) return { state: MiniGameGripState.ONE_HANDED, hands };
-  return { state: MiniGameGripState.NONE, hands };
-}
-
-/**
- * The swoop asks nothing of the hands but that they be tracked.
- *
- * A rider is strapped to a vehicle, not holding an object they might drop:
- * there is nothing to let go of, so requiring a squeeze only creates a state
- * where the controls silently do nothing. The turret keeps its squeeze, which
- * is a deliberate grip on a mounted weapon.
- */
-export function resolveRidingState(
-  frame: XRInputFrame,
-  config: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION,
-): { state: MiniGameGripState; hands: XRHandInputFrame[] } {
-  // Holding on again, by choice: the rider takes hold of the bars with squeeze
-  // and their hands are drawn on them. Steering only counts while held.
   const hands = HAND_ROLES
     .map((role) => frame.hands[role])
     .filter((hand): hand is XRHandInputFrame => isGripping(hand, config));
@@ -219,147 +157,91 @@ function applyDeadzone(value: number, deadzone: number): number {
   if (magnitude <= deadzone) return 0;
   // Rescale so the first movement past the deadzone starts from zero rather
   // than jumping to the deadzone value.
-  const scaled = (magnitude - deadzone) / (1 - deadzone);
+  const scaled = (magnitude - deadzone) / Math.max(1e-6, 1 - deadzone);
   return clamp(scaled, 0, 1) * Math.sign(value);
 }
 
 /**
- * Handlebar steering: the roll of the line between the hands. Dropping the
- * left hand below the right steers left, which is how leaning a bike reads.
+ * The head's sideways offset from the seat, along the bike's right axis, in
+ * metres. Positive is to the rider's right.
  */
-/**
- * The rider's own straight-ahead, captured while riding rather than assumed.
- *
- * Steering used to measure against dead level, which silently assumed the
- * player holds both hands at exactly the same height and their one hand exactly
- * in line with their head. Neither is true: a hand rests where it rests, and in
- * the headset that bias read as a permanent pull to one side that had to be
- * fought to turn the other way.
- */
-export interface VRSwoopNeutral {
-  /** Two-handed: the roll angle of the bars, in radians, that means straight. */
-  readonly rollAngle: number;
-  /** One-handed: the hand's sideways offset from the head that means straight. */
-  readonly lateralOffset: number;
+export function measureLean(head: XRWorldPose, lean: VRSwoopLeanFrame): number {
+  const offset = head.position.clone().sub(lean.seatPosition);
+  return offset.dot(lean.right);
 }
 
-export const LEVEL_NEUTRAL: VRSwoopNeutral = { rollAngle: 0, lateralOffset: 0 };
-
 /**
- * The roll of the bars: the angle of the line between the hands, positive when
- * the right hand is higher. Measured against how far apart the hands are, so a
- * rider holding wide and a rider holding narrow both get the same answer for
- * the same gesture.
+ * Lean as a steer value: the head's offset from its captured neutral, past a
+ * dead zone, scaled to full lock. Positive is a lean to the right.
  */
-export function handRollAngle(
-  left: XRHandInputFrame, right: XRHandInputFrame,
+export function resolveLeanSteer(
+  head: XRWorldPose, lean: VRSwoopLeanFrame | null, config: VRMiniGameInputConfiguration,
 ): number {
-  const rise = right.pose.position.y - left.pose.position.y;
-  const run = Math.hypot(
-    right.pose.position.x - left.pose.position.x,
-    right.pose.position.z - left.pose.position.z,
-  );
-  // A floor on the run: hands brought together would otherwise make any small
-  // height difference read as full lock.
-  return Math.atan2(rise, Math.max(0.12, run));
-}
-
-/** The neutral a frame would define if the player were holding straight ahead now. */
-export function sampleSwoopNeutral(
-  frame: XRInputFrame,
-  config: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION,
-): VRSwoopNeutral | null {
-  const { state, hands } = resolveRidingState(frame, config);
-  if (state === MiniGameGripState.NONE) return null;
-  if (state === MiniGameGripState.TWO_HANDED) {
-    const left = frame.hands['left'];
-    const right = frame.hands['right'];
-    if (!left || !right) return null;
-    return { rollAngle: handRollAngle(left, right), lateralOffset: 0 };
-  }
-  return {
-    rollAngle: 0,
-    lateralOffset: hands[0].pose.position.x - frame.head.position.x,
-  };
-}
-
-export function resolveSteering(
-  frame: XRInputFrame,
-  config: VRMiniGameInputConfiguration,
-  neutral: VRSwoopNeutral = LEVEL_NEUTRAL,
-): { grip: MiniGameGripState; steer: number } {
-  const { state, hands } = resolveRidingState(frame, config);
-  if (state === MiniGameGripState.NONE) return { grip: state, steer: 0 };
-
-  if (state === MiniGameGripState.TWO_HANDED) {
-    const left = frame.hands['left'];
-    const right = frame.hands['right'];
-    if (!left || !right) return { grip: state, steer: 0 };
-    // Positive when the right hand is higher, i.e. the bars rolled right.
-    const roll = handRollAngle(left, right) - neutral.rollAngle;
-    const normalised = roll / Math.max(1e-4, config.steeringFullLockAngleRadians);
-    return { grip: state, steer: applyDeadzone(clamp(normalised, -1, 1), config.steeringDeadzone) };
-  }
-
-  // One hand: how far it sits to either side of its own resting place.
-  const hand = hands[0];
-  const offset = (hand.pose.position.x - frame.head.position.x) - neutral.lateralOffset;
-  const normalised = offset / Math.max(1e-4, config.oneHandedFullLockOffsetMetres);
-  return { grip: state, steer: applyDeadzone(clamp(normalised, -1, 1), config.steeringDeadzone) };
+  if (!lean) return 0;
+  const offset = measureLean(head, lean) - lean.neutral;
+  const full = Math.max(1e-6, config.leanFullLockMetres);
+  const deadzone = clamp(config.leanDeadzoneMetres / full, 0, 0.99);
+  return applyDeadzone(clamp(offset / full, -1, 1), deadzone);
 }
 
 /**
- * Whatever the player is currently holding to mean "jump", so the controller can
- * take the edge off it. Two-handed that is the left trigger; one-handed there is
- * no spare trigger, so it is a forward push of that hand's thumbstick.
+ * Swoop steering: the left stick if it is deflected, the lean otherwise.
+ *
+ * The left stick only. Steering off the right stick was considered and
+ * rejected: the right hand holds the throttle, and a stick under a thumb that
+ * is also squeezing a trigger drifts. The stick overrides the lean rather than
+ * adding to it, so a rider who leans by habit can always straighten up with
+ * the stick, and a stick input never fights a posture.
  */
+export function resolveSwoopSteer(
+  frame: XRInputFrame, lean: VRSwoopLeanFrame | null, config: VRMiniGameInputConfiguration,
+): { steer: number; source: VRSwoopSteerSource } {
+  const stick = applyDeadzone(stickX(frame.hands['left']), config.stickDeadzone);
+  if (stick !== 0) return { steer: stick, source: 'stick' };
+  const leanSteer = resolveLeanSteer(frame.head, lean, config);
+  if (leanSteer !== 0) return { steer: leanSteer, source: 'lean' };
+  return { steer: 0, source: 'none' };
+}
+
+/** The left trigger, and only the left trigger, is the jump. */
 export function swoopJumpControlHeld(
   frame: XRInputFrame, config: VRMiniGameInputConfiguration,
 ): boolean {
-  const { state, hands } = resolveRidingState(frame, config);
-  if (state === MiniGameGripState.NONE) return false;
-  // A face button on either hand always jumps. The left trigger is the natural
-  // pairing with a right-trigger throttle, but the left controller drops out of
-  // the input frame whenever its grip pose is briefly untracked - and a rider
-  // with no jump cannot clear an obstacle. The one-handed stick push stays as a
-  // third route for whichever hand is left.
-  if (hands.some((hand) => isFaceButtonPressed(hand, config))) return true;
-  if (state === MiniGameGripState.ONE_HANDED) {
-    return stickPush(hands[0]) >= config.throttleThreshold;
-  }
   return isTriggerPressed(frame.hands['left'], config);
 }
 
+/** The right trigger, and only the right trigger, is the throttle. */
+export function swoopThrottleHeld(
+  frame: XRInputFrame, config: VRMiniGameInputConfiguration,
+): boolean {
+  return isTriggerPressed(frame.hands['right'], config);
+}
+
 /**
- * Swoop controls: the bars steer, the right trigger is the throttle and the left
- * trigger jumps.
+ * Swoop controls, all of them, for one frame.
  *
- * The throttle is held rather than tapped because it is a gear shift the script
- * guards by speed - holding it is how the bike climbs through the gears, exactly
- * as holding the accelerate key does on flatscreen.
- *
- * One-handed, that hand's trigger becomes the throttle, since a rider with no
- * throttle is stranded; the jump moves to a forward push of its thumbstick.
+ * Nothing here asks the hands to be on the bars: a rider is strapped to a
+ * vehicle, not holding an object they might drop, so the controls work whether
+ * or not the hands are drawn on the grips. `grip` is reported so the
+ * controller can draw the held hands.
  */
 export function resolveSwoopIntent(
   frame: XRInputFrame,
   previousJumpHeld: boolean,
   config: VRMiniGameInputConfiguration = DEFAULT_MINIGAME_INPUT_CONFIGURATION,
-  neutral: VRSwoopNeutral = LEVEL_NEUTRAL,
+  lean: VRSwoopLeanFrame | null = null,
 ): VRSwoopIntent {
-  const { grip, steer } = resolveSteering(frame, config, neutral);
-  const { state, hands } = resolveRidingState(frame, config);
-
-  // No tracked hand is not riding, so nothing the triggers do counts.
-  const throttle = state === MiniGameGripState.NONE
-    ? false
-    : state === MiniGameGripState.ONE_HANDED
-      ? isTriggerPressed(hands[0], config)
-      : isTriggerPressed(frame.hands['right'], config);
-
-  // A jump is the press, not the hold: holding the control must not pogo.
+  const { state } = resolveGripState(frame, config);
+  const { steer, source } = resolveSwoopSteer(frame, lean, config);
   const jumpHeld = swoopJumpControlHeld(frame, config);
-  return { grip, steer, jump: jumpHeld && !previousJumpHeld, throttle };
+  return {
+    grip: state,
+    steer,
+    steerSource: source,
+    // A jump is the press, not the hold: holding the trigger must not pogo.
+    jump: jumpHeld && !previousJumpHeld,
+    throttle: swoopThrottleHeld(frame, config),
+  };
 }
 
 /**

@@ -58,9 +58,15 @@ export class NWScriptStack {
 
       if(type == NWScriptDataType.VECTOR){
         if(typeof data == 'object'){
-          this.stack.push( new NWScriptStackVariable({ value: data.z || 0.0, type: NWScriptDataType.FLOAT }) );
-          this.stack.push( new NWScriptStackVariable({ value: data.y || 0.0, type: NWScriptDataType.FLOAT }) );
+          // x first, z on top: the order the compiler lays a vector out, and
+          // the order the ACTION argument reader pops one (z first). Pushed
+          // z-first, a script's DESTRUCT that keeps the top float for .z got
+          // .x - 211TEL's onjump read the rider's lateral offset as height and
+          // refused every jump taken right of centre, while its heartbeat's
+          // finish line read the wrong axis.
           this.stack.push( new NWScriptStackVariable({ value: data.x || 0.0, type: NWScriptDataType.FLOAT }) );
+          this.stack.push( new NWScriptStackVariable({ value: data.y || 0.0, type: NWScriptDataType.FLOAT }) );
+          this.stack.push( new NWScriptStackVariable({ value: data.z || 0.0, type: NWScriptDataType.FLOAT }) );
           //Increase the pointer by 8 to account for Y and X
           this.pointer += 8;
         }else{

@@ -74,7 +74,7 @@ describe('the rider sits on the saddle', () => {
   );
 
   test('the seat is offset forward of the hook', () => {
-    expect(gameState).toMatch(/MINIGAME_SEAT_FORWARD_OFFSET = 0\.7;/);
+    expect(gameState).toMatch(/MINIGAME_SEAT_FORWARD_OFFSET = 0.6;/);
     expect(seat).toMatch(/addScaledVector\([\s\S]*?MINIGAME_SEAT_FORWARD_OFFSET/);
   });
 
@@ -112,61 +112,19 @@ describe('the grips sit on the handlebars', () => {
   // bars: the centroid of its forward-most vertices either side of centre.
   test('they sit where the authored rider holds', () => {
     const [left, right] = SWOOP_GRIP_OFFSETS;
-    expect(Math.abs(left[0])).toBeCloseTo(0.103, 3);
+    expect(Math.abs(left[0])).toBeCloseTo(0.25, 3);
     expect(left[0]).toBeCloseTo(-right[0], 5);
-    expect(left[1]).toBeCloseTo(1.45, 3);
-    expect(left[2]).toBeCloseTo(0.813, 3);
+    expect(left[1]).toBeCloseTo(1.4, 3);
+    expect(left[2]).toBeCloseTo(0.87, 3);
   });
 
   test('they are reachable from the saddle rather than behind it', () => {
-    const forwardOfSeat = SWOOP_GRIP_OFFSETS[0][1] - 0.7;
+    const forwardOfSeat = SWOOP_GRIP_OFFSETS[0][1] - 0.6;
     expect(forwardOfSeat).toBeGreaterThan(0.4);
     expect(forwardOfSeat).toBeLessThan(1.0);
   });
 });
 
-/**
- * "Steering didn't seem to work at all... tended to veer in whichever direction
- * was used first. Lifting one hand and dropping the other did nothing."
- *
- * Two causes, both from treating lean as a *rate*. A rate can only be undone by
- * counter-steering, so the bike kept going whichever way it was first pushed
- * and ended pinned against the tunnel wall - measured at container x = 20 of a
- * +/-20 tunnel, where nothing the rider does moves it back. And the neutral
- * relaxed towards whatever they held, so a lean held for a few seconds quietly
- * became the new straight-ahead and stopped doing anything at all.
- *
- * Lean is now a *position*: level is the centre lane, half a lean is half way
- * across, letting go returns to centre. It cannot run away and a held lean
- * keeps working. Chosen with Allen over the retail rate model.
- */
-describe('lean is where the rider is, not how fast they drift', () => {
-  const controller = read('vr/runtime/VRMiniGameInputController.ts');
-  const update = bodyOf(controller, '  static update(inputFrame: XRInputFrame | null): void');
-
-  test('the wanted lane comes from the lean and the tunnel width', () => {
-    expect(update).toMatch(/const wanted = steer \* limit;/);
-    expect(update).toMatch(/target\.setLateralPosition\(/);
-  });
-
-  test('the rate path is not also driving it', () => {
-    expect(update).toMatch(/target\.setLateralForce\(0\)/);
-  });
-
-  test('it eases rather than snapping, so tracking jitter cannot buzz the bike', () => {
-    expect(controller).toMatch(/LATERAL_EASING = 0\.12;/);
-    expect(update).toMatch(/\(wanted - current\) \* VRMiniGameInputController\.LATERAL_EASING/);
-  });
-
-  test('the drifting neutral that ate held input is gone', () => {
-    expect(controller).not.toMatch(/relaxNeutral/);
-    expect(controller).not.toMatch(/NEUTRAL_RELAX_SECONDS/);
-  });
-
-  test('a track with no tunnel falls back to the rate model rather than freezing', () => {
-    expect(update).toMatch(/if \(limit > 0\)[\s\S]*?\} else \{[\s\S]*?setLateralForce\(steer \* lateral\)/);
-  });
-});
 
 /**
  * "These need to be grip-able with the hands also." Squeeze takes hold of a
@@ -191,29 +149,51 @@ describe('the bars can be taken hold of', () => {
     expect(bodyOf(controller, '  static reset(): void')).toMatch(/releaseHands\(\)/);
   });
 
-  test('riding requires holding on', () => {
+  test('holding on is a squeeze, and holding on has no say in the steering', () => {
     const policy = read('vr/runtime/VRMiniGameInputPolicy.ts');
-    const riding = policy.slice(
-      policy.indexOf('export function resolveRidingState('),
-      policy.indexOf('export function sampleSwoopNeutral('),
-    );
-    expect(riding).toMatch(/isGripping\(hand, config\)/);
+    expect(bodyOf(policy, 'export function isGripping(')).toMatch(/XR_STANDARD_SQUEEZE/);
+    const steer = bodyOf(policy, 'export function resolveSwoopSteer(');
+    expect(steer).not.toMatch(/isGripping|resolveGripState/);
   });
 });
 
-/**
- * A/X did not jump, twice, having been bound by index each time. Index order
- * past the trigger and squeeze is not consistent across profiles, so every
- * other button jumps - there is nothing else for them to do while riding.
- */
-describe('every spare button jumps', () => {
-  const policy = read('vr/runtime/VRMiniGameInputPolicy.ts');
 
-  test('the throttle and the grip are excluded, everything else included', () => {
-    expect(policy).toMatch(/JUMP_BUTTON_INDICES = \['2', '3', '4', '5', '6', '7'\]/);
+/**
+ * The scheme locked on 2026-09-25, after four hand-steering models failed in
+ * the headset: the left stick and head lean steer as a rate, the stick wins,
+ * the hands do not steer. The policy tests cover the behaviour; this pins the
+ * wiring the engine relies on.
+ */
+describe('steering is the left stick or the lean, as a rate', () => {
+  const controller = read('vr/runtime/VRMiniGameInputController.ts');
+  const update = bodyOf(controller, '  static update(inputFrame: XRInputFrame | null): void');
+
+  test('the steer is handed to the bike as a rate input, not a lane', () => {
+    expect(update).toMatch(/target\.setSteer\(target\.raceStarted \? intent\.steer : 0\)/);
+    expect(controller).not.toMatch(/setLateralPosition|LATERAL_EASING|handRollAngle/);
   });
 
-  test('any of them counts, not just the first one present', () => {
-    expect(policy).toMatch(/JUMP_BUTTON_INDICES\.some\(/);
+  test('the bike integrates it with inertia and a wall', () => {
+    const player = read('module/ModuleMGPlayer.ts');
+    expect(bodyOf(player, '  stepLateral(delta: number)')).toMatch(/stepSwoopLateral\(/);
+    expect(bodyOf(player, '  stepLateral(delta: number)')).toMatch(/emitRideEvent\('wall'/);
+    expect(bodyOf(player, '  update(delta: number = 0)')).toMatch(/this\.stepLateral\(delta\)/);
+  });
+
+  test('both input paths write the same steer input', () => {
+    expect(read('controls/IngameControls.ts')).toMatch(/player\.setSteerInput\(-1\)/);
+    expect(read('controls/IngameControls.ts')).toMatch(/player\.setSteerInput\(1\)/);
+    expect(read('GameState.ts')).toMatch(/setSteer: \(steer: number\) => \{ player\.setSteerInput\?\.\(steer\); \}/);
+  });
+
+  test('the race start is the lateral acceleration the heartbeat grants', () => {
+    expect(read('GameState.ts')).toMatch(/get raceStarted\(\)\{ return \(player\.accel_lateral_secs \?\? 0\) > 0; \}/);
+  });
+
+  test('the left trigger alone jumps; the right trigger alone throttles', () => {
+    const policy = read('vr/runtime/VRMiniGameInputPolicy.ts');
+    expect(bodyOf(policy, 'export function swoopJumpControlHeld(')).toMatch(/frame\.hands\['left'\]/);
+    expect(bodyOf(policy, 'export function swoopThrottleHeld(')).toMatch(/frame\.hands\['right'\]/);
+    expect(policy).not.toMatch(/JUMP_BUTTON_INDICES/);
   });
 });
