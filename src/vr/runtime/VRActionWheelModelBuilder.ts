@@ -64,6 +64,12 @@ export interface VRActionWheelBuildContext {
   /** Consumable grenades arm in the off hand; they are not engine action-panel entries. */
   readonly grenadeActions?: readonly VRActionWheelDirectAction[];
   /**
+   * ROADMAP 3.20 — medpacs, stims and repair kits. They arm in the off hand
+   * like a grenade and are used by holding that hand to the neck. They share
+   * the Items page with grenades so the combat root keeps its wedge budget.
+   */
+  readonly consumableActions?: readonly VRActionWheelDirectAction[];
+  /**
    * True only when the aimed target is a hostile creature — the sole case in
    * which `ActionMenuManager` fills the target panels with combat actions.
    *
@@ -202,12 +208,18 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
     actions: forcePowerActions,
   });
 
+  // One Items page for everything that arms in the off hand: grenades first,
+  // then medpacs, stims and repair kits (3.20). A separate Consumables wedge
+  // would have been the seventh top-level item in a fight.
+  const itemActions = [...(context.grenadeActions ?? []), ...(context.consumableActions ?? [])];
   appendSubmenuOfDirectActions(items, {
-    id: 'submenu:grenades',
-    label: 'Grenades',
-    icon: 'i_grenade',
-    menuId: `${rootId}:grenades`,
-    actions: context.grenadeActions ?? [],
+    id: 'submenu:items',
+    label: 'Items',
+    // The first live entry's own icon, so the wedge never names a resref that
+    // may not exist; a grenade glyph when nothing better is known.
+    icon: itemActions.find((action) => isValidDirectAction(action) && action.icon)?.icon?.trim() || 'i_grenade',
+    menuId: `${rootId}:items`,
+    actions: itemActions,
   });
 
   // Anything the engine produced that the two combat panels did not claim:
@@ -557,7 +569,8 @@ function validateBuildContext(context: VRActionWheelBuildContext): void {
     throw new TypeError('context id must be a non-empty string');
   }
   if (!Array.isArray(context.targetActions) || !Array.isArray(context.selfActions) ||
-    (context.grenadeActions !== undefined && !Array.isArray(context.grenadeActions))) {
+    (context.grenadeActions !== undefined && !Array.isArray(context.grenadeActions)) ||
+    (context.consumableActions !== undefined && !Array.isArray(context.consumableActions))) {
     throw new TypeError('engine action collections must be arrays');
   }
   if (!Array.isArray(context.partyMembers)) throw new TypeError('partyMembers must be an array');

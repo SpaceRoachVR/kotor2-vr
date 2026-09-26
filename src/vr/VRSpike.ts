@@ -26,6 +26,7 @@ import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatI
 import { VRCombatTargetLock } from "./runtime/VRCombatTargetLock";
 import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
 import { VRForceCastGesture, VRForceCastGestureController } from "./runtime/VRForceCastGestureController";
+import { VRConsumableUseGesture, VRConsumableUseGestureController } from "./runtime/VRConsumableUseGestureController";
 import { VRRadialControllerEffect, VRRadialMenuController } from "./runtime/VRRadialMenuController";
 import { VRRadialMenuHost } from "./runtime/VRRadialMenuHost";
 import type { VRRadialMenuDefinition } from "./runtime/VRRadialMenuModel";
@@ -334,6 +335,10 @@ export interface VRSpikeHooks {
      * Returns true only when it released the queued Force power at the head.
      */
     onForceCastGesture?(gesture: VRForceCastGesture): boolean;
+    /** ROADMAP 3.20 — true while a medpac, stim or repair kit is armed in the off hand. */
+    readonly armedConsumable?: boolean;
+    /** The armed consumable was held to the neck. Returns true when the engine spent it. */
+    onConsumableUseGesture?(gesture: VRConsumableUseGesture): boolean;
     onGrenadeTrigger?(): void;
     /**
      * True when the off hand holds a ranged weapon and no grenade is armed, so
@@ -631,6 +636,7 @@ export class VRSpike {
   private static readonly combatInputController = new VRCombatInputController();
   private static readonly forceGestureController = new VRForceGestureController();
   private static readonly forceCastGestureController = new VRForceCastGestureController();
+  private static readonly consumableUseGestureController = new VRConsumableUseGestureController();
   private static readonly radialMenuController = new VRRadialMenuController();
   private static readonly haptics = new VRHapticFeedback();
   private static radialMenuHost: VRRadialMenuHost | null = null;
@@ -1022,6 +1028,7 @@ export class VRSpike {
     VRSpike.hooks?.resetCombatInteraction?.();
     VRSpike.forceGestureController.reset();
     VRSpike.forceCastGestureController.reset();
+    VRSpike.consumableUseGestureController.reset();
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
     VRSpike.clearTeleportMarker();
@@ -1107,6 +1114,7 @@ export class VRSpike {
     VRSpike.combatInputController.reset();
     VRSpike.forceGestureController.reset();
     VRSpike.forceCastGestureController.reset();
+    VRSpike.consumableUseGestureController.reset();
     VRSpike.snapTurnController.reset();
     VRSpike.teleportController.reset();
     VRSpike.clearTeleportMarker();
@@ -1447,6 +1455,7 @@ export class VRSpike {
     VRSpike.panelInputController.cancel();
     VRSpike.forceGestureController.reset();
     VRSpike.forceCastGestureController.reset();
+    VRSpike.consumableUseGestureController.reset();
   }
 
   static get inputFrame(): XRInputFrame | null {
@@ -2415,6 +2424,7 @@ export class VRSpike {
       VRSpike.combatInputController.reset();
       VRSpike.forceGestureController.reset();
       VRSpike.forceCastGestureController.reset();
+      VRSpike.consumableUseGestureController.reset();
       VRSpike.captureWeaponActionLatch();
       return;
     }
@@ -2454,6 +2464,15 @@ export class VRSpike {
       const offhandTriggerPressed = actions.some((action) =>
         action.action === SemanticXRAction.WeaponAction && action.hand === offhandHand && action.pressed
       );
+      // ROADMAP 3.20 — a medpac or stim armed in the off hand is used by
+      // holding that hand to the neck. Checked first: the frame it is used
+      // is not also a throw, a shot or a swing.
+      if (VRSpike.processConsumableUseInput(context, inputFrame, timestamp, offhandHand)) {
+        VRSpike.offhandGrenadeTriggerHeld = offhandTriggerPressed;
+        VRSpike.dominantShotTriggerHeld = context.weaponMode === 'blaster' && weaponActionPressed;
+        return;
+      }
+
       // An armed grenade always owns the off-hand trigger. Without one, an
       // off-hand blaster shoots exactly like the dominant one — round 8, T3:
       // "should also work with offhand when offhand ranged weapon is equipped".
@@ -2815,6 +2834,35 @@ export class VRSpike {
       if (!VRSpike.forceGestureErrorReported) {
         VRSpike.forceGestureErrorReported = true;
         console.error('[VRSpike] Force cast gesture rejected', error);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * ROADMAP 3.20 — the armed consumable's hold-to-the-neck. Runs the zone
+   * detector only while something is armed, so an empty off hand at the face
+   * (adjusting the headset) costs nothing and does nothing.
+   */
+  private static processConsumableUseInput(
+    context: { readonly armedConsumable?: boolean; onConsumableUseGesture?(gesture: VRConsumableUseGesture): boolean },
+    inputFrame: XRInputFrame,
+    timestamp: number,
+    offhandHand: XRHandRole,
+  ): boolean {
+    const armed = context.armedConsumable === true && typeof context.onConsumableUseGesture === 'function';
+    try {
+      const gesture = VRSpike.consumableUseGestureController.process(inputFrame, {
+        hand: offhandHand,
+        armed,
+        timestamp,
+      });
+      if (!gesture || !armed) return false;
+      return context.onConsumableUseGesture!(gesture) === true;
+    } catch (error) {
+      if (!VRSpike.combatInputErrorReported) {
+        VRSpike.combatInputErrorReported = true;
+        console.error('[VRSpike] consumable use gesture rejected', error);
       }
       return false;
     }

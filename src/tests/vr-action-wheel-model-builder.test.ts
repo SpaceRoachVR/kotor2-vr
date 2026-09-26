@@ -184,12 +184,47 @@ test('keeps grenade selection separate from the three-slot combat-action queue',
     })],
   }));
 
-  const grenades = findSubmenu(menu, 'submenu:grenades').buildMenu();
+  const grenades = findSubmenu(menu, 'submenu:items').buildMenu();
   const grenade = findAction(grenades, 'direct:grenade:17:0:52');
   grenade.activate();
 
   expect(armGrenade).toHaveBeenCalledTimes(1);
   expect(contentIds(menu)).not.toContain('direct:grenade:17:0:52');
+});
+
+// ROADMAP 3.20 — consumables share the Items page with grenades.
+
+test('medpacs and stims follow the grenades on one Items page', () => {
+  const armMedpac = jest.fn();
+  const menu = buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    targetActions: [engineAction('attack', 'Attack', { panelIndex: 0 })],
+    grenadeActions: [directAction('grenade:17:0:52', 'Plasma Grenade', { icon: 'i_grenade_plasma' })],
+    consumableActions: [
+      directAction('consumable:3:0:9', 'Medpac', { icon: 'i_medpac', activate: armMedpac }),
+      directAction('consumable:4:0:11', 'Adrenal Strength', { icon: 'i_adrenal' }),
+    ],
+  }));
+  const submenu = findSubmenu(menu, 'submenu:items');
+
+  expect(submenu.label).toBe('Items');
+  expect(submenu.icon).toBe('i_grenade_plasma');
+  expect(contentIds(submenu.buildMenu())).toEqual([
+    'direct:grenade:17:0:52', 'direct:consumable:3:0:9', 'direct:consumable:4:0:11',
+  ]);
+  findAction(submenu.buildMenu(), 'direct:consumable:3:0:9').activate();
+  expect(armMedpac).toHaveBeenCalledTimes(1);
+  // Still one page of six in a fight: Attacks, Items, Menu, Party... never seven.
+  expect(menu.pages).toHaveLength(1);
+});
+
+test('the Items page appears for consumables alone and takes their icon', () => {
+  const menu = buildVRActionWheel(context({
+    consumableActions: [directAction('consumable:3:0:9', 'Medpac', { icon: 'i_medpac' })],
+  }));
+
+  expect(findSubmenu(menu, 'submenu:items').icon).toBe('i_medpac');
+  expect(contentIds(buildVRActionWheel(context()))).not.toContain('submenu:items');
 });
 
 test('keeps world actions at the top level when the target is not a hostile creature', () => {

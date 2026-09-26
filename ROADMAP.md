@@ -1481,10 +1481,28 @@ belong together.
   - **Done when:** a queued non-push/pull power (e.g. Stun) fires on the palm
     thrust at the locked target, and does not fire with nothing queued.
 
-- **3.20** ☐ **Physical consumables and hold-to-work.** Each of these routes to the
+- **3.20** ◑ **Physical consumables and hold-to-work.** Each of these routes to the
   same engine action it uses today:
-  - A medpac or stim held to the neck or mouth uses it and spends the round's
-    action, as in retail.
+  - ✅ implemented (2026-09-25) / ☐ headset-accepted, ☐ tuned — A medpac or
+    stim held to the neck or mouth uses it and spends the round's action, as in
+    retail. The wheel's Grenades page is now **Items**: grenades first, then
+    every medpac, stim, combat shot and droid repair kit with a useable
+    CastSpell property (`describeVRConsumableInventory`), so the combat root
+    keeps its six wedges. Picking one arms it in the off hand exactly as a
+    grenade does (`vrArmedConsumableState`, a second `VRArmedGrenadeState`;
+    arming either puts the other away, and the held-item visual shows it).
+    `VRConsumableUseGestureController` fires when that hand rests for 150 ms
+    inside a 0.22 m zone centred 0.15 m below the head, with an 800 ms
+    cooldown; it runs only while something is armed, so an empty hand at the
+    face costs nothing. `commitVRArmedConsumable` then uses the item on the
+    actor by the route retail takes: in a fight a CombatRound `ITEM_CAST_SPELL`
+    on self, which spends the round's action as a grenade throw does; out of
+    one the inventory screen's own `useItemOnObject`, so a medpac between
+    fights never pulls the actor into combat state. The spell, the charge and
+    the stack are the engine's. A TEMPORARY `[VR consumable]` line names the
+    first 12 outcomes. The vr:check save carries no consumable, so this is
+    proven by the controller, XR-loop and wheel tests; it needs a headset pass
+    with a medpac in the pack (F25), which also settles the zone size.
   - Security and mine disarm or recover become hold-to-work: the wrist or hilt
     ring fills over the engine's own action time. This also removes the
     re-press restart that made Security look broken (headset round notes).

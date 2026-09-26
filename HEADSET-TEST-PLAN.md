@@ -289,6 +289,7 @@ controller can only be judged on device.**
 | F22 | Unarmed, punch an enemy | The punch attacks (unarmed has no automatic basic attack in VR) |
 | F23 | Wheel → **Force Powers** → queue Stun (or T3's shock arm), lock an enemy, then thrust the **open off hand** at it — no grip, no trigger (ROADMAP 3.19) | The power casts on the thrust and leaves the hilt queue. Repeat with **nothing queued**: the thrust does nothing and a saber swing still lands. Repeat with the **grip held**: no cast. Note the `[VR force cast]` console lines — they say why a thrust was refused, and whether 1.2 m/s and the 60-degree cone need tuning |
 | F24 | In a fight with Kreia and Atton, aim at one enemy and pick **Wheel → Party → Attack My Target** (ROADMAP 3.21) | Both companions turn on that enemy on their next round. The entry is missing with no hostile aimed, or when you are alone |
+| F25 | With a medpac in the pack: **Wheel → Items** → pick it, then bring the **off hand to your neck** and hold it there a beat (ROADMAP 3.20) | The medpac shows in the off hand after picking; at the neck it is used (heal, item count drops) and the hand empties. Do it once **out of combat** (no combat music starts) and once **in a fight** (it costs that round's action). Note whether the neck zone felt tight or fired early — the `[VR consumable]` console line says what happened |
 
 ## G. Cutscenes and dialogue (Phase 5)
 

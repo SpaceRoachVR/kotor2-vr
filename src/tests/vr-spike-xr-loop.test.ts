@@ -1629,6 +1629,79 @@ describe('VRSpike XR loop ownership', () => {
     expect(casts).toHaveLength(2);
   });
 
+  // ROADMAP 3.20 — a medpac or stim armed in the off hand, held to the neck.
+  function consumableFrame(offhandPosition: THREE.Vector3) {
+    const buttons = () => Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    VRSpike.session = {
+      inputSources: [
+        { handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons: buttons() } },
+        { handedness: 'left', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons: buttons() } },
+      ],
+    } as unknown as XRSession;
+    const still = (position = new THREE.Vector3()) => ({
+      position, orientation: new THREE.Quaternion(), linearVelocity: new THREE.Vector3(), trackingState: 'tracked',
+    });
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(0, 0, 1.6), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: { pose: still(new THREE.Vector3(0.3, 0.2, 1.0)), targetRayPose: still() },
+        left: { pose: still(offhandPosition), targetRayPose: still() },
+      },
+    };
+    (VRSpike as any).consumableUseGestureController.reset();
+    (VRSpike as any).combatInputController.reset();
+  }
+
+  function consumableHooks(armed: boolean, onConsumableUseGesture: (gesture: unknown) => boolean, onGrenadeTrigger?: () => void) {
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: null, weaponMode: 'melee-one-handed', inCombat: false, stanceReadout: '',
+        onCombatSwing: () => undefined,
+        armedConsumable: armed,
+        onConsumableUseGesture,
+        onGrenadeTrigger,
+      }),
+    };
+  }
+
+  test('an armed medpac held to the neck is used after the dwell, with no target locked (3.20)', () => {
+    const uses: unknown[] = [];
+    consumableFrame(new THREE.Vector3(0.05, 0.05, 1.45));
+    consumableHooks(true, (gesture) => { uses.push(gesture); return true; });
+
+    (VRSpike as any).processCombatInput(1_000);
+    expect(uses).toEqual([]);
+    (VRSpike as any).processCombatInput(1_200);
+
+    expect(uses).toEqual([expect.objectContaining({ hand: 'left' })]);
+  });
+
+  test('with nothing armed the off hand at the face does nothing', () => {
+    const uses: unknown[] = [];
+    consumableFrame(new THREE.Vector3(0.05, 0.05, 1.45));
+    consumableHooks(false, (gesture) => { uses.push(gesture); return true; });
+
+    (VRSpike as any).processCombatInput(1_000);
+    (VRSpike as any).processCombatInput(1_200);
+
+    expect(uses).toEqual([]);
+  });
+
+  test('an armed medpac in a hand held at the hip is not used', () => {
+    const uses: unknown[] = [];
+    consumableFrame(new THREE.Vector3(0.2, 0, 0.9));
+    consumableHooks(true, (gesture) => { uses.push(gesture); return true; });
+
+    (VRSpike as any).processCombatInput(1_000);
+    (VRSpike as any).processCombatInput(1_200);
+
+    expect(uses).toEqual([]);
+  });
+
   test('aligns neutral headset forward with KOTOR follower-camera forward', () => {
     VRSpike.rig = new THREE.Group();
     VRSpike.hooks = {

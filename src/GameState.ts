@@ -610,6 +610,12 @@ const vrCombatTempoGate = new VRCombatTempoGate();
 /** ROADMAP 3.12 — one swing held while the round is busy. */
 const vrCombatSwingBuffer = new VRCombatSwingBuffer();
 const vrArmedGrenadeState = new VRArmedGrenadeState();
+/**
+ * ROADMAP 3.20 — the one medpac, stim or repair kit armed in the off hand,
+ * used by holding that hand to the neck. Same lifecycle as a grenade: arming
+ * never touches the inventory; the commit revalidates the item first.
+ */
+const vrArmedConsumableState = new VRArmedGrenadeState();
 /** Scratch vectors for the headset audio listener, reused every frame. */
 const vrAudioListenerPosition = new THREE.Vector3();
 const vrAudioListenerForward = new THREE.Vector3();
@@ -636,6 +642,14 @@ const VR_GRENADE_BASE_ITEM_IDS = new Set<number>([
   BaseItemType.CRYOBAN_GRENADE,
   BaseItemType.FIRE_GRENADE,
   BaseItemType.ION_GRENADE,
+]);
+
+/** Held to the neck or mouth to use (3.20): stims, medpacs and droid repair kits. */
+const VR_CONSUMABLE_BASE_ITEM_IDS = new Set<number>([
+  BaseItemType.ADRENALINE,
+  BaseItemType.COMBAT_SHOTS,
+  BaseItemType.MEDICAL_EQUIPMENT,
+  BaseItemType.DROID_REPAIR_EQUIPMENT,
 ]);
 
 /**
@@ -712,6 +726,7 @@ function resetVREmbodiedCombatState(): void {
   vrCombatIntentQueue.clear();
   vrCombatSwingBuffer.clear();
   vrArmedGrenadeState.cancel();
+  vrArmedConsumableState.cancel();
   vrCombatQueueActorId = null;
   vrCombatQueueWeaponSignature = null;
   vrCombatIssuedTargetId = null;
@@ -801,6 +816,104 @@ function describeVRGrenadeInventory(actor: ModuleCreature): readonly VRGrenadeIn
 
 function findVRArmedGrenade(actor: ModuleCreature, sourceKey: string): VRGrenadeInventoryEntry | undefined {
   return describeVRGrenadeInventory(actor).find((entry) => entry.descriptor.sourceKey === sourceKey);
+}
+
+/**
+ * ROADMAP 3.20 — the consumables a hand can hold to the neck. Same shape as
+ * the grenade list: one entry per useable CastSpell property, keyed so the
+ * commit can find the very item that was armed.
+ */
+function describeVRConsumableInventory(actor: ModuleCreature): readonly VRGrenadeInventoryEntry[] {
+  const descriptions: VRGrenadeInventoryEntry[] = [];
+  for (const item of getVRCombatInventory(actor)) {
+    if (!item || !VR_CONSUMABLE_BASE_ITEM_IDS.has(item.getBaseItemId?.())) continue;
+    const properties = Array.isArray(item.properties) ? item.properties : [];
+    for (let propertyIndex = 0; propertyIndex < properties.length; propertyIndex += 1) {
+      const property = properties[propertyIndex];
+      try {
+        if (!property?.isUseable?.() || !property.is(ModuleItemProperty.CastSpell)) continue;
+        const spellId = property.getCastSpellId();
+        if (!Number.isSafeInteger(spellId) || spellId < 0) continue;
+        const itemIdentity = getVRGrenadeInventoryIdentity(item);
+        let icon = 'i_medpac';
+        try { icon = item.getIcon?.()?.trim() || icon; } catch { /* keep the fallback */ }
+        let label = 'Medpac';
+        try { label = item.getName?.()?.trim() || label; } catch { /* keep the fallback */ }
+        descriptions.push({
+          descriptor: {
+            sourceKey: `consumable:${itemIdentity}:${propertyIndex}:${spellId}`,
+            itemObjectId: itemIdentity,
+            label,
+            icon,
+          },
+          item,
+          spellId,
+        });
+      } catch {
+        // A malformed property must not take the Items page down with it.
+      }
+    }
+  }
+  return descriptions;
+}
+
+function findVRArmedConsumable(actor: ModuleCreature, sourceKey: string): VRGrenadeInventoryEntry | undefined {
+  return describeVRConsumableInventory(actor).find((entry) => entry.descriptor.sourceKey === sourceKey);
+}
+
+/** TEMPORARY (3.20): names the first few consumable outcomes for the headset. */
+let vrConsumableOutcomesReported = 0;
+function reportVRConsumableOutcome(shape: string, detail = ''): void {
+  if (vrConsumableOutcomesReported >= 12) return;
+  vrConsumableOutcomesReported += 1;
+  console.info(`[VR consumable] TEMPORARY ${shape}${detail ? ' || ' + detail : ''}`);
+}
+
+/**
+ * ROADMAP 3.20 — the armed consumable was held to the neck: use it on the
+ * actor by the route retail uses. In a fight that is a CombatRound
+ * ITEM_CAST_SPELL on self, which spends the round's action exactly as a
+ * grenade throw does; out of one it is the inventory screen's own
+ * `useItemOnObject`, an authored ActionItemCastSpell, so a medpac between
+ * fights never drags the actor into combat state. Either way the item's
+ * spell, and the charge or stack it costs, are the engine's.
+ */
+function commitVRArmedConsumable(actor: ModuleCreature): boolean {
+  const request = vrArmedConsumableState.requestCommit();
+  if (request.state !== 'armed') return false;
+  const source = findVRArmedConsumable(actor, request.grenade.sourceKey);
+  if (!source) {
+    reportVRConsumableOutcome('cancelled: armed item no longer in the inventory', request.grenade.label);
+    vrArmedConsumableState.cancel();
+    return false;
+  }
+  if (typeof actor.isDead === 'function' && actor.isDead()) return false;
+  try {
+    const inCombat = actor.combatData?.combatState === true ||
+      actor.actionQueue.actionTypeExists(ActionType.ActionCombat);
+    if (inCombat) {
+      const action = new CombatRoundAction(actor);
+      action.actionType = CombatActionType.ITEM_CAST_SPELL;
+      action.target = actor;
+      action.item = source.item;
+      action.setSpell(new GameState.TalentSpell(source.spellId));
+      action.isUserAction = true;
+      actor.combatRound.addAction(action);
+      if (!actor.actionQueue.actionTypeExists(ActionType.ActionCombat)) {
+        actor.actionQueue.add(new GameState.ActionFactory.ActionCombat(0xFFFF));
+      }
+    } else {
+      source.item.useItemOnObject(actor, actor);
+    }
+    vrArmedConsumableState.completeCommit({ sourceKey: source.descriptor.sourceKey, engineAccepted: true });
+    reportVRConsumableOutcome(inCombat ? 'used: scheduled into the combat round' : 'used: queued as an item cast',
+      `item=${source.descriptor.label} spell=${source.spellId}`);
+    return true;
+  } catch (error) {
+    reportVRConsumableOutcome('refused: use threw', String(error));
+    vrArmedConsumableState.cancel();
+    return false;
+  }
 }
 
 function getVREmbodiedTempoResult(
@@ -3049,10 +3162,15 @@ export class GameState implements EngineContext {
         if (!player) return describeVRHeldItemVisuals(undefined);
         const armed = vrArmedGrenadeState.getSnapshot().armed;
         const grenade = armed ? findVRArmedGrenade(player, armed.sourceKey)?.item ?? null : null;
+        const armedConsumable = vrArmedConsumableState.getSnapshot().armed;
+        const consumable = armedConsumable
+          ? findVRArmedConsumable(player, armedConsumable.sourceKey)?.item ?? null
+          : null;
         // Arming never mutates equipment: the controller host renders a
-        // presentation-only off-hand copy until the engine accepts the throw.
+        // presentation-only off-hand copy until the engine accepts the throw
+        // (or, for a medpac, the hold to the neck).
         const equipmentVisuals = describeVRHeldItemVisuals({
-          LEFTHAND: grenade ?? player.equipment?.LEFTHAND ?? null,
+          LEFTHAND: grenade ?? consumable ?? player.equipment?.LEFTHAND ?? null,
           RIGHTHAND: player.equipment?.RIGHTHAND ?? null,
         });
         // Equipment slots are authored as left/right. Controller dominance is
@@ -3285,6 +3403,8 @@ export class GameState implements EngineContext {
             dispatchVRDirectionalForceGesture(actor, target ? String(target.id) : null, gesture.kind),
           onForceCastGesture: () =>
             dispatchVRForceCastGesture(actor, target ? String(target.id) : null),
+          armedConsumable: vrArmedConsumableState.getSnapshot().armed !== undefined,
+          onConsumableUseGesture: () => commitVRArmedConsumable(actor),
           onGrenadeTrigger: () => {
             commitVRArmedGrenade(actor, target ? String(target.id) : null);
           },
@@ -3306,6 +3426,7 @@ export class GameState implements EngineContext {
             vrCombatIntentQueue.clear();
             vrCombatSwingBuffer.clear();
             vrArmedGrenadeState.cancel();
+            vrArmedConsumableState.cancel();
             // Cancel now stops creature combat too, not only an endless round
             // against a door. It used to return here for any creature target,
             // so pressing cancel mid-fight cleared the upcoming actions and left
@@ -3485,7 +3606,23 @@ export class GameState implements EngineContext {
               // only puts a presentation copy in the off hand for a later,
               // aimed off-hand-trigger commit.
               if (findVRArmedGrenade(actor, entry.descriptor.sourceKey)) {
+                // One off hand: arming a grenade puts the medpac away.
+                vrArmedConsumableState.cancel();
                 vrArmedGrenadeState.arm(entry.descriptor);
+              }
+            },
+          })),
+          consumableActions: describeVRConsumableInventory(actor).map((entry) => ({
+            id: entry.descriptor.sourceKey,
+            label: entry.descriptor.label,
+            icon: entry.descriptor.icon,
+            revalidate: () => findVRArmedConsumable(actor, entry.descriptor.sourceKey) !== undefined,
+            activate: () => {
+              // Presentation only, like a grenade: the item is spent when the
+              // hand holding it reaches the neck (commitVRArmedConsumable).
+              if (findVRArmedConsumable(actor, entry.descriptor.sourceKey)) {
+                vrArmedGrenadeState.cancel();
+                vrArmedConsumableState.arm(entry.descriptor);
               }
             },
           })),
