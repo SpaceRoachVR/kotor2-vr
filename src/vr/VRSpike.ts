@@ -396,8 +396,15 @@ export interface VRSpikeHooks {
    */
   serviceCombatSwingBuffer?: () => { readonly released: boolean; readonly armed: boolean } | null;
   /**
-   * ROADMAP 3.17 — a locked door or container the weapon hand is aimed at,
-   * which a melee swing through `volume` bashes by the authored route.
+   * The player picked an entry from a world prompt: which prompt (its
+   * candidate id) and the entry's label. A swing bashes only a target the
+   * player chose Bash on (Allen, 2026-09-26).
+   */
+  noteWorldPromptSelection?: (promptId: string | null, label: string) => void;
+  /**
+   * ROADMAP 3.17 — a locked door or container the weapon hand is aimed at and
+   * the player has chosen Bash on, which a melee swing through `volume`
+   * bashes by the authored route.
    */
   getWeaponBashContext?: (aimedTargetId: number | null) => {
     readonly actorId: string;
@@ -2206,7 +2213,13 @@ export class VRSpike {
         console.info(
           `[VR prompt activate] id=${action.id} label='${action.label}' hand=${hand}`
         );
+        const promptId = VRSpike.worldPromptCandidateId;
         VRSpike.clearWorldActionPrompt(false);
+        try {
+          VRSpike.hooks?.noteWorldPromptSelection?.(promptId, action.label);
+        } catch (error) {
+          console.error('[VRSpike] world prompt selection note rejected', error);
+        }
         void VRSpike.haptics.pulse(session, hand, { durationMs: 35, amplitude: 0.35 });
         try {
           action.activate();
@@ -2583,8 +2596,8 @@ export class VRSpike {
 
   /**
    * ROADMAP 3.17 — with no hostile locked, a melee swing through a locked door
-   * or container the weapon hand points at starts its authored Bash. Uses the
-   * same swing detector, so the same contact rule (3.16) applies.
+   * or container the player has chosen Bash on starts its authored Bash. Uses
+   * the same swing detector, so the same contact rule (3.16) applies.
    */
   private static processWeaponBash(
     inputFrame: XRInputFrame,

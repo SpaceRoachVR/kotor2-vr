@@ -1090,6 +1090,21 @@ function resolveVRWeaponBashTarget(actor: ModuleCreature, targetId: number | nul
   };
 }
 
+/**
+ * The object the player last chose Bash on from its world prompt. A swing
+ * bashes only this target: swing-to-bash used to fire on any locked door or
+ * container the weapon hand pointed at, which bashed things while the player
+ * was reaching for other prompt options (Allen, 2026-09-26). Picking any
+ * other prompt entry disarms it.
+ */
+let vrArmedBashTargetId: number | null = null;
+
+/** Arms Bash for the prompt's object when the entry picked was Bash. */
+export function resolveArmedBashTargetId(promptId: string | null, label: string): number | null {
+  const match = /^module-object:(\d+)$/.exec(promptId ?? '');
+  return label === 'Bash' && match ? Number(match[1]) : null;
+}
+
 const reportedVRWeaponBashRefusals = new Set<number>();
 function reportVRWeaponBashRefusalOnce(target: ModuleObject, reason: string): void {
   if (reportedVRWeaponBashRefusals.has(target.id)) return;
@@ -3485,7 +3500,12 @@ export class GameState implements EngineContext {
           },
         };
       },
+      noteWorldPromptSelection: (promptId, label) => {
+        vrArmedBashTargetId = resolveArmedBashTargetId(promptId, label);
+      },
       getWeaponBashContext: (aimedTargetId) => {
+        // Bash must be chosen from the prompt first; a swing never picks it.
+        if (aimedTargetId === null || aimedTargetId !== vrArmedBashTargetId) return null;
         const actor = GameState.getCurrentPlayer();
         if (!actor) return null;
         const resolved = resolveVRWeaponBashTarget(actor, aimedTargetId);
