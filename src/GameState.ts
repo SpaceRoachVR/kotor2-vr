@@ -212,6 +212,7 @@ import {
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 
 import { buildPartySwitchEntries, nextPartyCycleEntry } from "@/vr/runtime/VRPartySwitchRules";
+import { VRCutsceneMoveHold } from "@/vr/runtime/VRCutsceneMoveHold";
 export interface GameStateInitializeOptions {
   Game: GameEngineType,
   GameDirectory: string, //path to the local game install directory
@@ -275,10 +276,40 @@ function retainVRInPlaceSkillActionsWhileMoving(actor: ModuleCreature): boolean 
 let vrTheaterConversation: object | null = null;
 
 /**
+ * A conversation that walks the controlled character somewhere plays the walk
+ * on the theater and then teleports the view (Allen, 2026-09-26). See
+ * VRCutsceneMoveHold.
+ */
+const vrCutsceneMoveHold = new VRCutsceneMoveHold();
+
+/**
+ * Advances the hold once per XR frame. Called from getCutsceneContext, which
+ * runs every frame: syncRig does not, since it deliberately skips theater
+ * frames, and the walk being watched is on the theater.
+ */
+function observeVRCutsceneMove(): void {
+  const active = VRSpike.isPresenting && GameState.Mode !== EngineMode.MINIGAME && !!GameState.CutsceneManager?.active;
+  const state = vrCutsceneMoveHold.update(active, GameState.getCurrentPlayer()?.position ?? null, performance.now());
+  if (state.arrived) {
+    console.info('[VR cutscene move] arrived; teleporting the view and re-placing the dialogue');
+    VRSpike.requestRigReanchor();
+  }
+}
+
+/** The rig's standing point: the character, or where it stood before a cutscene moved it. */
+function resolveVRRigStandingPoint(position: THREE.Vector3 | null): THREE.Vector3 | null {
+  const held = vrCutsceneMoveHold.heldPosition;
+  return held ? new THREE.Vector3(held.x, held.y, held.z) : position;
+}
+
+/**
  * Where the current conversation shot belongs in VR. See
  * resolveVRCutscenePresentation for the rule and why.
  */
 function resolveCurrentVRCutscenePresentation(): VRCutscenePresentation {
+  // The character is being walked somewhere: show the walk on the theater
+  // rather than dragging the wearer along with it.
+  if (vrCutsceneMoveHold.isMoving) return 'theater';
   const cutscene = GameState.CutsceneManager;
   const dialog = (cutscene.dialog ?? null) as object | null;
   if (vrTheaterConversation !== dialog) vrTheaterConversation = null;
@@ -3188,7 +3219,7 @@ export class GameState implements EngineContext {
       getPlayerPosition: () => {
         const miniGameSeat = GameState.getMiniGameSeat();
         if (miniGameSeat) return miniGameSeat.position;
-        return GameState.getCurrentPlayer()?.position ?? null;
+        return resolveVRRigStandingPoint(GameState.getCurrentPlayer()?.position ?? null);
       },
       getFacing: () => {
         const miniGameSeat = GameState.getMiniGameSeat();
@@ -3851,6 +3882,7 @@ export class GameState implements EngineContext {
         }
         : null,
       getCutsceneContext: () => {
+        observeVRCutsceneMove();
         const currentEntry = GameState.CutsceneManager.currentEntry;
         // The computer panel withholds skip because it owns input while it is
         // showing numbered options — but only then. `setReplies` filters

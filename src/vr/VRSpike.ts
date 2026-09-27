@@ -3057,6 +3057,16 @@ export class VRSpike {
    * stable identity changes. This runs before any gameplay input owner so an
    * open wheel cannot retain a ray/touch selection into the incoming module.
    */
+  /**
+   * Teleport the view to wherever the controlled character now stands, and
+   * place the dialogue panel again in front of the head. Called when a
+   * cutscene has finished moving the character (VRCutsceneMoveHold).
+   */
+  static requestRigReanchor(): void {
+    VRSpike.rigAnchorPending = true;
+    VRSpike.panelHost?.clear();
+  }
+
   private static observeWorldModuleTransition(): boolean {
     const module = VRSpike.hooks?.getWorldContext().module ?? null;
     if (!VRSpike.worldPromptModuleInitialized) {
