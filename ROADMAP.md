@@ -267,18 +267,26 @@ pending as of this write-up:**
 
 - No grenade model shows in the off-hand while one is armed (the throw and
   damage themselves work).
-- No autosave, and no way back to the main menu after a party wipe — Load
-  Game still works as a route back in.
+- ~~No autosave~~ — autosave on area entry, DoSinglePlayerAutoSave and a
+  wheel Quick Save landed 2026-09-29 (0dad78c7; emulator round trip only,
+  not yet in the headset). Still no way back to the main menu after a party
+  wipe — Load Game still works as a route back in.
 - Some Peragus NPCs (the Maintenance Officer, Atton) request textures by a
   base resref the installed packs only ship as numbered variants
   (`pmbamc01` etc.), so they may show untextured patches.
-- No health readout is drawn in the headset view.
+- ~~No health readout~~ — an off-hand wrist plate (HP/FP) landed 2026-09-29
+  (d36e5f66), with sounds for hit/miss/critical so combat no longer rests on
+  haptics alone. Emulator only; placement needs a headset pass.
 - Grenades leave from the character's hand rather than the controller.
 - Security Tunnelers work even untrained — confirmed as intentional, not a
   defect.
 - The sustained-50 floor is not yet re-confirmed in the busier Ebon
   Hawk/Peragus rooms since the first headset session's 32–36 FPS reading;
-  still the largest open performance risk (H3).
+  still the largest open performance risk (H3). `perf-round.js trace`
+  (91e2e002) now records a Chrome trace of a headset window to find what
+  pushes frames onto the 31 ms plateau.
+- A script stuck in a loop now aborts after 5,000,000 instructions instead
+  of freezing the game (d1f31a17).
 
 Everything above is still **emulator or single-round device evidence, not a
 closed phase exit** — Phase 1's own exit criterion (Peragus completable in
