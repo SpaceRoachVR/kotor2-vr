@@ -5,6 +5,7 @@
  *   node tools/vr-emulator/perf-round.js load <checkpoint>
  *   node tools/vr-emulator/perf-round.js enter-vr
  *   node tools/vr-emulator/perf-round.js window <label> <seconds>
+ *   node tools/vr-emulator/perf-round.js trace <label> <seconds>
  *   node tools/vr-emulator/perf-round.js state
  *   node tools/vr-emulator/perf-round.js reload [xrscale=0.8] [depth=linear]
  *   node tools/vr-emulator/perf-round.js summary
@@ -35,6 +36,7 @@
 const fs = require('fs');
 const path = require('path');
 const { CdpSession, findPageTarget } = require('./cdp');
+const { captureTrace, analyzeTrace } = require('./perf-trace');
 
 const CHECKPOINT_PREFIX = 'VRPT-20260824-E2E';
 const argv = process.argv.slice(2);
@@ -210,6 +212,32 @@ async function measureWindow(cdp, label, seconds) {
   console.log(summaryLine(record));
 }
 
+// A timed window with a Chrome trace recorded over the same seconds, for the
+// 31 ms plateau (P1): the fps numbers say frames are late, the trace says what
+// made them late. Keep it short (20-30 s); a trace with the CPU profiler on
+// runs to hundreds of MB.
+async function traceWindow(cdp, label, seconds) {
+  const dir = path.dirname(EVIDENCE);
+  fs.mkdirSync(dir, { recursive: true });
+  const traceFile = path.join(dir, `${ROUND}-${label}.trace.json`);
+  const [events] = await Promise.all([
+    captureTrace(cdp, seconds, traceFile),
+    measureWindow(cdp, label, seconds),
+  ]);
+  const analysis = analyzeTrace(events, { seconds });
+  fs.writeFileSync(path.join(dir, `${ROUND}-${label}.trace-summary.json`), JSON.stringify(analysis, null, 1));
+  const t = analysis.mainThreadTasks;
+  const f = analysis.animationFrameCallbacks;
+  console.log(`trace ${traceFile} (${events.length} events; open in ui.perfetto.dev)`);
+  console.log(`main-thread tasks ${t.count}: p50 ${t.p50} p90 ${t.p90} p99 ${t.p99} ms, ${t.overBudget} over ${analysis.frameBudgetMs} ms`);
+  console.log(`frame callbacks ${f.count}: p50 ${f.p50} p90 ${f.p90} p99 ${f.p99} ms, ${f.overBudget} over budget`);
+  console.log(`GC ${analysis.gcMs} ms, GPU tasks ${analysis.gpuTaskMs} ms, JS sampled ${analysis.jsSampledMs} ms`);
+  for (const row of analysis.topJsSelfTime.slice(0, 15)) {
+    console.log(`  ${String(row.ms).padStart(8)} ms ${String(row.share).padStart(5)}%  ${row.fn}`);
+    if (row.callers[0]) console.log(`             via ${row.callers[0].via}`);
+  }
+}
+
 function summaryLine(r) {
   const rpt = r.report || {};
   const ft = rpt.frametimeMs || {};
@@ -292,11 +320,12 @@ async function main() {
   try {
     if (command === 'load' && rest[0]) return await load(cdp, rest[0]);
     if (command === 'window' && rest[0]) return await measureWindow(cdp, rest[0], Number(rest[1] || 60));
+    if (command === 'trace' && rest[0]) return await traceWindow(cdp, rest[0], Number(rest[1] || 20));
     if (command === 'stop' && rest[0]) return await stop(cdp, rest[0], rest[1]);
     if (command === 'enter-vr') return await enterVr(cdp);
     if (command === 'state') return console.log(JSON.stringify(await cdp.evaluate(STATE), null, 1));
     if (command === 'reload') return await reload(cdp, rest);
-    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | state | reload [k=v ...] | summary');
+    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary');
   } finally {
     cdp.close();
   }
