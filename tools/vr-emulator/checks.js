@@ -257,9 +257,12 @@ const CHECKS = [
       const startedOnce = b.started === true && b.secondStarted === false;
       const refusedCorrectly = b.started === false && b.secondStarted === false &&
         /no Bash among/.test(b.refusal || '');
+      // 5192f1e7: Bash must be picked from the prompt first, so with no pick a
+      // stray swing gets no context at all.
+      const unpicked = b.noContextWithoutPick === true;
       return {
-        ok: b.hook === true && (startedOnce || refusedCorrectly),
-        detail: `${startedOnce ? 'STARTED' : refusedCorrectly ? 'REFUSED (no authored Bash)' : 'WRONG'} ` +
+        ok: b.hook === true && (startedOnce || refusedCorrectly || unpicked),
+        detail: `${startedOnce ? 'STARTED' : refusedCorrectly ? 'REFUSED (no authored Bash)' : unpicked ? 'NO CONTEXT (Bash not picked)' : 'WRONG'} ` +
           `locked=${m.weaponBash?.lockedCount} target=${m.weaponBash?.targetTag} ` +
         `started=${m.weaponBash?.started} inCombat=${m.weaponBash?.inCombat} ` +
         `restartedBySecondSwing=${m.weaponBash?.secondStarted}` +

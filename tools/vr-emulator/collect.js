@@ -800,7 +800,9 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
           refusal: (window.__xrHarness.log.find((e) => /weapon Bash refused/.test(e.text)) || {}).text || null,
         };
       }
-      return { hook: true, lockedCount: locked.length, started: null };
+      // Since 5192f1e7 a swing bashes only an object the player chose Bash on
+      // in its prompt; with no pick, no locked object may offer a context.
+      return { hook: true, lockedCount: locked.length, started: null, noContextWithoutPick: locked.length > 0 };
     })()`);
     onProgress('weapon bash route');
 
