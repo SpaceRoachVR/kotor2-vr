@@ -5,8 +5,10 @@ constraints that follow from it.
 
 ## Target
 
-- **SteamVR** via WebXR on THREE.js (r0.149, WebXR support is built in).
-- Primary rig: **Quest 3 over Virtual Desktop, wireless, SteamVR runtime, RTX 3060.**
+- **WebXR in Chrome or Edge** on THREE.js (r0.149, WebXR support is built in). Electron has
+  no WebXR, so VR never runs in the Electron shell.
+- Primary rig: **Quest 3 over Virtual Desktop, wireless, VDXR OpenXR runtime, RTX 3060.**
+  SteamVR/OpenXR profiles are also required for v1.
   That is the perf floor, not an aspiration.
 - Open source so low-spec players can run it. GPL-3.0, inherited from upstream.
 - Quest 3 native port is a possible future, not a current constraint.
@@ -16,7 +18,7 @@ constraints that follow from it.
 **Combat.** Gestures gate the roll; stats decide hit and damage. The d20 layer stays
 authoritative — a swing never bypasses the dice. Swing governor is **option (c)**:
 every swing animates and connects visually, but only on-tempo swings roll. Off-tempo
-swings look real and do nothing mechanically, which reads better than a dead weapon.
+swings are buffered (one pending swing) and roll at the next round opening (3.12).
 Blaster deflection is automatic and stat-rolled. Blasters use a laser pointer and are
 stat-rolled, not aim-simulated.
 
@@ -45,9 +47,17 @@ route — the existing `gui/` widget layer is the thing being replaced or reproj
 and `game/tsl/` menus are frequently stubs, so check against `game/kotor/` before
 assuming a menu is missing.
 
-**Cutscenes.** Reproject onto a theater screen. Dialogue keeps the engine's camera
-cuts, with **fade-to-black between them** — the cuts themselves are nauseating in VR,
-the fade makes them tolerable.
+**Cutscenes.** Judged per shot, by place (rounds 4/7): shots of places the player
+can't see, and every Bink movie, go on the theater screen; conversations with someone
+present stay in the world with the dialogue in the lower half of the view.
+**In-world conversations ignore authored camera cuts** (decided 2026-09-29): the rig
+stays at the player, the speaker talks to you, and nothing fades between cuts. Fades
+remain only for theater shots and real location changes. This supersedes ROADMAP
+5.2's fade-on-every-cut for in-world shots.
+
+**Feedback never relies on haptics alone** (2026-09-29). Round 12 felt no pulse
+through Chrome + VDXR and the cause is unsettled; every combat cue also has an audio
+and a visual channel.
 
 **Geometry.** Hand-fix per area. Fixed canonical eye height.
 
@@ -80,4 +90,5 @@ before a monitor does; this needs to be understood before VR is called stable.
 ## Team and process
 
 Just the user and Claude. The user is comfortable with TypeScript. Public repo from day
-one. Commit locally on a topic branch; no upstream PR without being asked.
+one. Commit locally on a topic branch; no upstream PR without being asked. (Upstream
+KotOR.js PRs #110 and #111 were sent on request, 2026-09-26.)

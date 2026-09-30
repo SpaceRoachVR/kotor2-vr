@@ -37,7 +37,7 @@ Everything below is built and has been through real headset testing, but "built"
 - Blasters aim wherever the barrel points, with a laser sight. Pull the trigger to fire.
 - Force push and pull are hand flicks.
 - A timer in the lightsaber hilt shows when your next attack round is ready.
-- Haptics for your own rolls and for getting hit, including which side it came from.
+- Haptics for your own rolls and for getting hit, including which side it came from. (Written, but I haven't felt a single pulse through Chrome and Virtual Desktop yet. Still figuring out why.)
 - An optional pause you can call up to plan a fight. It never kicks in on its own.
 - Swing at a locked door or container to bash it open.
 - Party members fight on their own when they're in range, but any orders you gave them come first.
@@ -50,17 +50,19 @@ Everything below is built and has been through real headset testing, but "built"
 **Story stuff**
 - Dialogue happens in the world with the characters, with the text in the lower half of your view.
 - Cutscenes from places you can't see (security cameras, other rooms, logs) and the pre-rendered movies play on a big theater screen instead of yanking your head around.
-- Fades between camera cuts so it doesn't make you sick.
+- When the person you're talking to is standing right there, the conversation just happens in front of you. No camera cuts, no fades.
 
 **Performance**
-- The target is a steady 50 FPS or better on an RTX 3060 streaming to a Quest 3 over Virtual Desktop. It's hitting that now. 72 FPS is the stretch goal.
+- The target is a steady 50 FPS or better on an RTX 3060 streaming to a Quest 3 over Virtual Desktop. It hit that in one timed test, but in real play it's sitting around 32 FPS in a lot of places. That's the top thing I'm working on. 72 FPS is the stretch goal.
 
 ## What's still broken or missing
 
 Being straight with y'all, this list is long.
 
 - **You can't play the whole game yet.** Peragus (the mining station prologue) is where all the testing happens. I've got an automated run that goes almost all the way through it, but a clean start-to-finish run in the headset hasn't happened yet.
-- **Swoop racing is broken in VR.** A bunch of fixes looked good in testing and then didn't hold up in the headset.
+- **Swoop racing works now** (left stick plus leaning, hands on the handlebars), but I'm the only one who's ridden it. It needs someone else on it.
+- **No autosave yet, and no health readout in the headset.**
+- **No controller vibration** on my setup yet (see above).
 - **Around 40 of the game's script functions still aren't implemented.** Most are rare, but a few matter, like the dueling ring rules and some mines that get placed by scripts.
 - **No physical inventory yet.** The inventory is a floating menu for now.
 - **Memory creeps up** the more areas you load. Long sessions can get sluggish.

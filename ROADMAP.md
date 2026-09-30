@@ -12,6 +12,9 @@ corrected 60-second raw-WebXR window delivered 51.82 FPS at a 4224 × 2304 XR
 target, p90 31.0 ms, p99 46.1 ms, and a PASS verdict. Runtime cadence is still
 reported separately and 72 Hz remains a stretch target. The older 31.96-34.96
 FPS VDXR evidence remains retained rather than rewritten.
+**Caveat (2026-09-29):** perf round P1 contradicts the PASS for real play: frames
+quantize at ~15 ms / ~31 ms and play sits on the 31 ms plateau (~32 FPS). The
+50 FPS floor is not met in real play; a Chrome trace of the plateau is next.
 
 **2026-09-09 full audit inside a presenting VR session.** All 82 campaign
 modules swept with `npm run vr:sweep -- --vr` - the first sweep run through the
@@ -1766,7 +1769,10 @@ Every button reachable in flatscreen needs a VR route.
   VR-entry-during-movie freeze report got diagnostics rather than guessed fixes —
   static reading found the code more sound than initially suspected and couldn't
   confirm a root cause without device logs.
-- **5.2** ✅ Dialogue keeps engine camera cuts, with fade-to-black between them.
+- **5.2** ⟳ Superseded 2026-09-29 for in-world shots: in-world conversations ignore
+  authored camera cuts (rig stays at the player, no fades). Fade-to-black stays for
+  theater shots and real location changes. Originally: dialogue keeps engine camera
+  cuts, with fade-to-black between them.
   `VRCutsceneFadeHost`/`VRCutsceneFadeEnvelope`, triggered when the authored per-shot
   camera reference changes between frames.
 - **5.3** ☐ Comfort pass over the prologue's scripted sequences specifically. Not done.
@@ -1811,12 +1817,11 @@ First shippable artifact.
 - **7.4** Full playthrough.
 - **7.5** Optional AI-upscaled texture pack support — see below. Blocked on
   usage permission from the mod author.
-- **7.6** Swoop race (211TEL) playable in VR — see below. ☐ rewritten 2026-09-25, awaiting a captured headset ride; was ✗ still broken in the
-  headset as of 2026-09-21.
+- **7.6** Swoop race (211TEL) playable in VR — see below. ✅ ridden in the headset 2026-09-26 and works (bc8b8325, 3eaddf99); still needs a rider who isn't the developer.
 
 M4-78 is out of scope.
 
-### 7.6 — Swoop race playable in VR ☐ rewritten 2026-09-25, awaiting a captured headset ride
+### 7.6 — Swoop race playable in VR ✅ ridden 2026-09-26
 
 Status in one line: the controls were redesigned with Allen on 2026-09-25,
 the engine underneath was found to be wrong in seven places that no VR
