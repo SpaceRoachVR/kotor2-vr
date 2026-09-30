@@ -43,6 +43,7 @@ import { FollowerCamera } from "@/engine/FollowerCamera";
 import { OdysseyShaderPass } from "@/shaders/pass/OdysseyShaderPass";
 import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
+import { AutoSaveManager } from "@/engine/AutoSaveManager";
 import { CutsceneMode } from "@/enums/dialog/CutsceneMode";
 import { EngineFrameSource, shouldProcessEngineFrame } from "@/vr/XRFrameCadence";
 import { clampFrameDelta } from "@/engine/FrameDeltaRules";
@@ -3726,6 +3727,7 @@ export class GameState implements EngineContext {
            * seventh top-level item that would force the wheel to paginate.
            */
           openMenu: () => GameState.MenuManager.MenuCharacter.open(),
+          quickSave: () => { AutoSaveManager.quickSave(); },
           canSwapWeapons: typeof actor.hasAlternateWeaponSet === 'function' && actor.hasAlternateWeaponSet(),
           swapWeapons: () => actor.swapWeaponSets(),
           // BTN_CLEARALL's exact behaviour, offered only when there is
@@ -4566,6 +4568,7 @@ export class GameState implements EngineContext {
         sMovie6: sMovie6
       });
       GameState.loadingModule = true;
+      AutoSaveManager.cancel();
       // The transition must carry the Exile as the player character; a
       // possessed companion is taken over again once the new area is ready.
       const possessedNpcId = GameState.PartyManager.HandBackControlForTransition();
@@ -4677,6 +4680,10 @@ export class GameState implements EngineContext {
         console.log('ModuleArea: ready to play');
         GameState.reportCullingBoundsAnomalies();
         GameState.module.readyToProcessEvents = true;
+        // Arriving in an area (not loading a save) autosaves, as retail does.
+        if(runSpawnScripts){
+          AutoSaveManager.request('area');
+        }
 
         if(possessedNpcId >= 0 && GameState.PartyManager.party.some((pm) => pm && pm.npcId == possessedNpcId)){
           try{ GameState.PartyManager.SwitchPlayerCharacter(possessedNpcId, true); }catch(e){ console.error(e); }
@@ -4950,6 +4957,7 @@ export class GameState implements EngineContext {
         GameState.UpdateFreeLook(delta);
         break;
     }
+    AutoSaveManager.update(delta);
     VRSpike.traceStartupStage('simulation-complete');
 
     // In VR the listener is the headset, not the flatscreen follow camera.

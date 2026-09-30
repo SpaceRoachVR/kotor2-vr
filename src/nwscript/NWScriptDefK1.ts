@@ -9,6 +9,7 @@ import { GameEffectType } from "@/enums/effects/GameEffectType";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
 import { NWModuleObjectType } from "@/enums/nwscript/NWModuleObjectType";
 import { GameState } from "@/GameState";
+import { AutoSaveManager } from "@/engine/AutoSaveManager";
 import type { ModuleCreature, ModuleObject, ModuleArea, ModuleDoor, ModuleEncounter, ModuleItem, ModuleMGEnemy, ModuleMGObstacle, ModuleMGPlayer, ModulePlaceable, ModuleSound, ModuleStore, ModuleTrigger } from "@/module";
 import type { TalentObject } from "@/talents/TalentObject";
 import type { GameEffect } from "@/effects/GameEffect";
@@ -6290,7 +6291,11 @@ NWScriptDefK1.Actions = {
     comment: "512: Only if we are in a single player game, AutoSave the game.\n",
     name: "DoSinglePlayerAutoSave",
     type: NWScriptDataType.VOID,
-    args: []
+    args: [],
+    action: function(this: NWScriptInstance, args: []){
+      // Deferred until play is quiet: scripts call this mid-scene.
+      AutoSaveManager.request('script');
+    }
   },
   513:{
     comment: "513: Get the game difficulty (GAME_DIFFICULTY_*).\n",

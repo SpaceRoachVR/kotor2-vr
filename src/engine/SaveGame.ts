@@ -17,6 +17,8 @@ import { exists } from "fs";
 
 const winEpoch = new Date("01-01-1601 UTC").getTime();
 
+export type SaveGameSlot = 'game' | 'autosave' | 'quicksave';
+
 /**
  * SaveGame class.
  * 
@@ -873,20 +875,48 @@ export class SaveGame {
    * // Create an autosave
    * await SaveGame.SaveCurrentGame('', 1);
    */
-  static async SaveCurrentGame( name = '', replace_id = 0 ){
+  static async SaveCurrentGame( name = '', replace_id = 0, slot: SaveGameSlot = 'game' ){
     if(!GameState.module){ return; }
+    // An autosave firing while a manual save is still writing would interleave
+    // two exports into the same game-in-progress folder.
+    if(SaveGame.saving){
+      console.warn('SaveGame.SaveCurrentGame: a save is already in progress; skipped', slot);
+      return;
+    }
+    SaveGame.saving = true;
+    try{
+      await SaveGame.WriteCurrentGame(name, replace_id, slot);
+    }finally{
+      SaveGame.saving = false;
+    }
+  }
 
+  /** True while SaveCurrentGame is writing. */
+  static saving = false;
+
+  /**
+   * The folder a save goes to. Retail reserves 000000 for the quicksave and
+   * 000001 for the autosave, so numbered games start at 000002 - Game1.
+   */
+  static FolderNameForSlot( slot: SaveGameSlot, replace_id = 0 ): { id: number, folder: string } {
+    if(slot === 'quicksave'){ return { id: 0, folder: '000000 - QUICKSAVE' }; }
+    if(slot === 'autosave'){ return { id: 1, folder: '000001 - AUTOSAVE' }; }
+    let save_id = replace_id >= 2 ? replace_id : Math.max(2, SaveGame.NEXT_SAVE_ID);
+    if(replace_id < 2){ SaveGame.NEXT_SAVE_ID = save_id + 1; }
+    return { id: save_id, folder: Utility.PadInt(save_id, 6)+' - Game'+(save_id-1) };
+  }
+
+  private static async WriteCurrentGame( name: string, replace_id: number, slot: SaveGameSlot ){
     GameState.MenuManager.LoadScreen.open();
     GameState.MenuManager.LoadScreen.showSavingMessage();
 
-    let save_id = replace_id >= 2 ? replace_id : SaveGame.NEXT_SAVE_ID++;
+    const { folder: save_dir_name } = SaveGame.FolderNameForSlot(slot, replace_id);
 
     //Prepare SaveGame directory
     if(!(await GameFileSystem.exists(SaveGame.base_directory))){
       await GameFileSystem.mkdir(SaveGame.base_directory);
     }
 
-    let save_dir_name = Utility.PadInt(save_id, 6)+' - Game'+(save_id-1);
     let save_dir = path.join( SaveGame.base_directory, save_dir_name );
 
     if(!(await GameFileSystem.exists(save_dir))){
@@ -910,7 +940,9 @@ export class SaveGame {
     await tga.export( path.join( save_dir, 'Screen.tga'));
 
     const newEntry = new SaveGame(save_dir_name);
-    const existingIndex = SaveGame.saves.findIndex(s => s.getSaveNumber() === save_id);
+    // Match on the folder, not the number: 000001 is both the autosave and,
+    // in older builds, the first numbered game.
+    const existingIndex = SaveGame.saves.findIndex(s => (s.folderName || '').split(/[\/]/).pop() === save_dir_name);
 
     if (existingIndex >= 0) {
       SaveGame.saves[existingIndex] = newEntry;  // overwrite case

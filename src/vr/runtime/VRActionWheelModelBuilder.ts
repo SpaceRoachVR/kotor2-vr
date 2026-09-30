@@ -102,6 +102,12 @@ export interface VRActionWheelBuildContext {
    */
   readonly openMenu: () => void;
   /**
+   * Saves to retail's "000000 - QUICKSAVE" slot. Offered only out of combat
+   * (retail refuses to save in a fight), so the combat root keeps its six
+   * items.
+   */
+  readonly quickSave?: () => void;
+  /**
    * True when the player has queued actions or is in combat — the only state in
    * which clearing is meaningful. The wheel omits the route otherwise rather
    * than offering a control that would do nothing.
@@ -287,6 +293,10 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
       'i_noaction',
       context.clearQueuedActions,
     ));
+  }
+
+  if (!hostile && typeof context.quickSave === 'function') {
+    items.push(createStaticAction('menu:quicksave', 'Quick Save', undefined, context.quickSave));
   }
 
   // VR-only, so there is no authored KOTOR icon to point at; the fallback is
