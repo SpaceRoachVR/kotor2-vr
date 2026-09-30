@@ -58,11 +58,14 @@ import {
 import {
   VRCombatVisualEventObserver,
   VRCombatAttackResultObserver,
+  VR_MUZZLE_HEIGHT_METRES,
   type VRCombatActorSnapshot,
 } from "./runtime/VRCombatVisualEvents";
 import { BOLT_TRAVEL_MS, VRBlasterBoltHost } from "./runtime/VRBlasterBoltHost";
 import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
 import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
+import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue } from "./runtime/VRCombatCueAudio";
+import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateHost";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
 import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
 import { VRPauseIndicatorHost } from "./runtime/VRPauseIndicatorHost";
@@ -194,6 +197,10 @@ export interface VRSpikeHooks {
   getSoftBlockFloor?: (floorZ: number) => VRWalkmeshQuery | null;
   /** Comfort settings (ROADMAP 2.5/2.6): locomotion/turn mode and vignette. */
   getComfortSettings?: () => VRComfortSettings;
+  /** Where combat cue sounds go: the engine's audio context and GUI channel. */
+  getCombatCueAudioOutput?: () => { context: BaseAudioContext; destination: AudioNode } | null;
+  /** The controlled character's HP and FP, for the wrist plate. */
+  getPlayerVitals?: () => VRPlayerVitals | null;
   setComfortSettings?: (patch: Partial<VRComfortSettings>) => void;
   /**
    * Flips the player between the engine's walk and run rates. The rates and the
@@ -610,6 +617,9 @@ export class VRSpike {
   private static bladeSparkHost: VRBladeSparkHost | null = null;
   private static readonly damageTracker = new VRDamageFeedbackTracker();
   private static damageFlashHost: VRDamageFlashHost | null = null;
+  private static combatCueAudio: VRCombatCueAudio | null = null;
+  private static combatCueAudioErrorReported = false;
+  private static healthPlateHost: VRHealthPlateHost | null = null;
   private static pauseIndicatorHost: VRPauseIndicatorHost | null = null;
   /** The wheel was open during a player pause, for the unpause-on-close option. */
   private static radialOpenWhilePaused = false;
@@ -1190,6 +1200,8 @@ export class VRSpike {
     VRSpike.damageTracker.reset();
     VRSpike.damageFlashHost?.dispose();
     VRSpike.damageFlashHost = null;
+    VRSpike.healthPlateHost?.dispose();
+    VRSpike.healthPlateHost = null;
     VRSpike.pauseIndicatorHost?.dispose();
     VRSpike.pauseIndicatorHost = null;
     VRSpike.radialOpenWhilePaused = false;
@@ -4277,6 +4289,7 @@ export class VRSpike {
       VRSpike.bladeSparkHost?.update(nowMs);
       VRSpike.damageFlashHost?.update(nowMs);
       VRSpike.droidExplosionHost?.update(nowMs);
+      VRSpike.presentHealthPlate();
     } catch (error) {
       if (!VRSpike.combatVisualsErrorReported) {
         VRSpike.combatVisualsErrorReported = true;
@@ -4322,6 +4335,25 @@ export class VRSpike {
       // A deflection is felt when the bolt reaches the blade, not when it leaves the gun.
       const delayMs = feedback.effect === 'deflect' ? BOLT_TRAVEL_MS : 0;
       VRSpike.playHapticSequence(session, VRSpike.dominantHand, feedback.pulses, feedback.gapMs, delayMs);
+      // Heard and seen as well as felt: round 12 felt no haptics at all.
+      const cue = cueForVRCombatOutcome(feedback.outcome);
+      if (cue) VRSpike.playCombatCue(cue, delayMs);
+      if (feedback.role === 'attacker' && (feedback.outcome === 'hit' || feedback.outcome === 'critical')) {
+        const attacker = snapshots.find((snapshot) => snapshot.id === event.attackerId);
+        const struck = attacker?.attackTargetAimPoint
+          ?? (attacker?.attackTargetPosition
+            ? attacker.attackTargetPosition.clone().setZ(attacker.attackTargetPosition.z + VR_MUZZLE_HEIGHT_METRES)
+            : null);
+        if (struck) {
+          const sparks = VRSpike.ensureBladeSparkHost(worldScene);
+          if (feedback.outcome === 'critical') {
+            sparks.spark(struck, nowMs, 0, 1.8);
+            sparks.spark(struck, nowMs, 90, 2.2);
+          } else {
+            sparks.spark(struck, nowMs);
+          }
+        }
+      }
       if (feedback.effect === 'clash') {
         const bladePoint = VRSpike.resolveBladeContactPoint();
         if (bladePoint) VRSpike.ensureBladeSparkHost(worldScene).spark(bladePoint, nowMs);
@@ -4350,6 +4382,7 @@ export class VRSpike {
       : damage.critical ? DAMAGE_CRITICAL_HAPTIC : DAMAGE_HAPTIC;
     const hands: XRHandRole[] = damage.side === 'left' ? ['left'] : damage.side === 'right' ? ['right'] : ['left', 'right'];
     for (const hand of hands) void VRSpike.haptics.pulse(session, hand, pattern);
+    VRSpike.playCombatCue(damage.critical ? 'hurt-critical' : 'hurt');
 
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
     if (comfort.damageFlashEnabled === false || !VRSpike.camera) return;
@@ -4362,6 +4395,42 @@ export class VRSpike {
         console.error('[VRSpike] damage flash rejected', error);
       }
     }
+  }
+
+  /** A combat result you can hear, unless Combat Sounds is off. */
+  private static playCombatCue(cue: VRCombatCue, delayMs = 0): void {
+    const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
+    if (comfort.combatSoundsEnabled === false) return;
+    try {
+      if (!VRSpike.combatCueAudio) {
+        const output = VRSpike.hooks?.getCombatCueAudioOutput?.();
+        if (!output) return;
+        VRSpike.combatCueAudio = new VRCombatCueAudio(output.context, output.destination);
+      }
+      VRSpike.combatCueAudio.play(cue, delayMs);
+    } catch (error) {
+      if (!VRSpike.combatCueAudioErrorReported) {
+        VRSpike.combatCueAudioErrorReported = true;
+        console.error('[VRSpike] combat cue sound rejected', error);
+      }
+    }
+  }
+
+  /** HP and FP on the off-hand wrist, shown when the player glances at it. */
+  private static presentHealthPlate(): void {
+    const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
+    const offHand: XRHandRole = VRSpike.dominantHand === 'right' ? 'left' : 'right';
+    const anchor = VRSpike.controllerAnchorHost?.getAnchor(offHand) ?? null;
+    if (comfort.healthPlateEnabled === false || !anchor || !VRSpike.camera) {
+      VRSpike.healthPlateHost?.clear();
+      return;
+    }
+    if (!VRSpike.healthPlateHost || VRSpike.healthPlateHost.object.parent !== anchor) {
+      VRSpike.healthPlateHost?.dispose();
+      VRSpike.healthPlateHost = new VRHealthPlateHost(anchor);
+    }
+    const head = VRSpike.camera.getWorldPosition(new THREE.Vector3());
+    VRSpike.healthPlateHost.present(VRSpike.hooks?.getPlayerVitals?.() ?? null, head);
   }
 
   private static ensureBladeSparkHost(worldScene: THREE.Object3D): VRBladeSparkHost {

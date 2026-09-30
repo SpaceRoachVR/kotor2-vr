@@ -14,6 +14,7 @@ interface ActiveBurst {
   readonly lines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   startedAtMs: number;
   active: boolean;
+  size: number;
 }
 
 const MAX_CONCURRENT_BURSTS = 8;
@@ -35,14 +36,18 @@ export class VRBladeSparkHost {
     worldScene.add(this.object);
   }
 
-  /** Bursts at `at`, `delayMs` from now (so a spark can wait for a bolt to arrive). */
-  spark(at: THREE.Vector3, nowMs: number, delayMs = 0): void {
+  /**
+   * Bursts at `at`, `delayMs` from now (so a spark can wait for a bolt to
+   * arrive). `size` scales the burst: a critical hit bursts larger.
+   */
+  spark(at: THREE.Vector3, nowMs: number, delayMs = 0, size = 1): void {
     if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.y) || !Number.isFinite(at.z)) return;
     const burst = this.acquire();
     if (!burst) return;
     this.scatter(burst.lines.geometry);
     burst.lines.position.copy(at);
-    burst.lines.scale.setScalar(START_SCALE_METRES);
+    burst.size = Number.isFinite(size) && size > 0 ? size : 1;
+    burst.lines.scale.setScalar(START_SCALE_METRES * burst.size);
     burst.lines.material.opacity = 1;
     burst.lines.visible = false;
     burst.startedAtMs = nowMs + Math.max(0, Number.isFinite(delayMs) ? delayMs : 0);
@@ -62,7 +67,7 @@ export class VRBladeSparkHost {
       const t = elapsed / BURST_DURATION_MS;
       const eased = 1 - (1 - t) * (1 - t);
       burst.lines.visible = true;
-      burst.lines.scale.setScalar(START_SCALE_METRES + (END_SCALE_METRES - START_SCALE_METRES) * eased);
+      burst.lines.scale.setScalar((START_SCALE_METRES + (END_SCALE_METRES - START_SCALE_METRES) * eased) * burst.size);
       burst.lines.material.opacity = 1 - t;
     }
   }
@@ -121,7 +126,7 @@ export class VRBladeSparkHost {
     lines.frustumCulled = false;
     lines.visible = false;
     this.object.add(lines);
-    const burst: ActiveBurst = { lines, startedAtMs: 0, active: false };
+    const burst: ActiveBurst = { lines, startedAtMs: 0, active: false, size: 1 };
     this.pool.push(burst);
     return burst;
   }

@@ -427,6 +427,8 @@ const vrComfortSettings: MutableVRComfortSettings = {
   vignetteEnabled: false,
   damageFlashEnabled: true,
   unpauseOnWheelClose: false,
+  combatSoundsEnabled: true,
+  healthPlateEnabled: true,
 };
 let vrComfortSettingsPanelOpen = false;
 let vrComfortSettingsPausedByVR = false;
@@ -3294,6 +3296,21 @@ export class GameState implements EngineContext {
         );
       },
       getComfortSettings: () => ({ ...vrComfortSettings }),
+      getCombatCueAudioOutput: () => {
+        const engine = AudioEngine.GetAudioEngine();
+        const destination = AudioEngine.guiChannel?.getGainNode();
+        return engine?.audioCtx && destination ? { context: engine.audioCtx, destination } : null;
+      },
+      getPlayerVitals: () => {
+        const actor = GameState.getCurrentPlayer() as ModuleCreature | undefined;
+        if (!actor || typeof actor.getHP !== 'function' || typeof actor.getMaxHP !== 'function') return null;
+        return {
+          hitPoints: actor.getHP(),
+          maxHitPoints: actor.getMaxHP(),
+          forcePoints: typeof actor.getFP === 'function' ? actor.getFP() : 0,
+          maxForcePoints: typeof actor.getMaxFP === 'function' ? actor.getMaxFP() : 0,
+        };
+      },
       setComfortSettings: (patch) => Object.assign(vrComfortSettings, patch),
       // Walk/run already exists on the creature: `getMovementSpeed()` picks
       // between the walkrate and runrate columns of creaturespeed.2da based on
@@ -3790,6 +3807,14 @@ export class GameState implements EngineContext {
             label: 'Unpause on Wheel Close',
             value: vrComfortSettings.unpauseOnWheelClose === true ? 'On' : 'Off',
           },
+          {
+            label: 'Combat Sounds',
+            value: vrComfortSettings.combatSoundsEnabled !== false ? 'On' : 'Off',
+          },
+          {
+            label: 'Wrist Health',
+            value: vrComfortSettings.healthPlateEnabled !== false ? 'On' : 'Off',
+          },
         ];
         return {
           rows,
@@ -3815,6 +3840,12 @@ export class GameState implements EngineContext {
                 break;
               case 5:
                 vrComfortSettings.unpauseOnWheelClose = vrComfortSettings.unpauseOnWheelClose !== true;
+                break;
+              case 6:
+                vrComfortSettings.combatSoundsEnabled = vrComfortSettings.combatSoundsEnabled === false;
+                break;
+              case 7:
+                vrComfortSettings.healthPlateEnabled = vrComfortSettings.healthPlateEnabled === false;
                 break;
             }
           },

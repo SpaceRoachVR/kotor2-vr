@@ -42,6 +42,13 @@ export interface VRComfortSettings {
    * Off unless the player turns it on; absent reads as off.
    */
   readonly unpauseOnWheelClose?: boolean;
+  /**
+   * Hit, miss and critical knocks you can hear (2026-09-29), so combat never
+   * depends on haptics alone. On unless turned off; absent reads as on.
+   */
+  readonly combatSoundsEnabled?: boolean;
+  /** HP/FP plate on the off-hand wrist (2026-09-29). Absent reads as on. */
+  readonly healthPlateEnabled?: boolean;
 }
 export type InteractionMode = 'near-touch' | 'ray' | 'grab';
 export type CombatWeaponMode =
