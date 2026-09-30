@@ -30,6 +30,17 @@ import type { NWScriptSubroutine } from "@/nwscript/NWScriptSubroutine";
  * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
  */
 export class NWScriptInstance {
+  /**
+   * Runaway-script guard. Retail Odyssey (like NWN) aborts a script that runs
+   * too many instructions in one go ("TMI"); without a limit here a script
+   * stuck in a loop froze the whole game (103PER, rounds 6 and 12). Past the
+   * warn threshold the script is named once in the console; past the abort
+   * threshold it is stopped so the frame can finish.
+   */
+  static INSTRUCTION_WARN = 131072;
+  static INSTRUCTION_ABORT = 5000000;
+  static runawayWarned: Set<string> = new Set();
+
   uuid: string = crypto.randomUUID();
   parentUUID: string;
   name: string;
@@ -323,6 +334,23 @@ export class NWScriptInstance {
     }
   }
 
+  /**
+   * Called once the warn threshold is passed. Returns true when the script
+   * must be stopped.
+   */
+  checkRunaway(instructionCount: number): boolean {
+    const where = `${this.name} @ ${this.currentInstruction?.address} (caller ${this.caller?.getTag?.() ?? '?'})`;
+    if(instructionCount >= NWScriptInstance.INSTRUCTION_ABORT){
+      console.error(`NWScript: aborted runaway script ${where} after ${instructionCount} instructions`);
+      return true;
+    }
+    if(instructionCount === NWScriptInstance.INSTRUCTION_WARN + 1 && !NWScriptInstance.runawayWarned.has(this.name)){
+      NWScriptInstance.runawayWarned.add(this.name);
+      console.warn(`NWScript: ${where} passed ${NWScriptInstance.INSTRUCTION_WARN} instructions in one run`);
+    }
+    return false;
+  }
+
   getInstrAtOffset( offset: number ){
     //dispose() clears this map, and a script that failed to parse never had one.
     //Returning undefined lets runScript() break out of its loop the same way it
@@ -353,7 +381,13 @@ export class NWScriptInstance {
 
     this.delayCommands = [];
 
+    let instructionCount = 0;
     while(this.running && !this._disposed){
+
+      if(++instructionCount > NWScriptInstance.INSTRUCTION_WARN && this.checkRunaway(instructionCount)){
+        this.running = false;
+        break;
+      }
 
       if(this.currentInstruction)
         this.prevByteCode = this.currentInstruction.code;
