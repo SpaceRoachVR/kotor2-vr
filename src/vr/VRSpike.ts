@@ -64,6 +64,7 @@ import {
 import { BOLT_TRAVEL_MS, VRBlasterBoltHost } from "./runtime/VRBlasterBoltHost";
 import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
 import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
+import { VRPanelStickScroll } from "./runtime/VRPanelStickScroll";
 import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue } from "./runtime/VRCombatCueAudio";
 import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateHost";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
@@ -618,6 +619,8 @@ export class VRSpike {
   private static readonly damageTracker = new VRDamageFeedbackTracker();
   private static damageFlashHost: VRDamageFlashHost | null = null;
   private static combatCueAudio: VRCombatCueAudio | null = null;
+  private static readonly panelStickScroll = new VRPanelStickScroll();
+  private static panelStickScrollAt: number | null = null;
   private static combatCueAudioErrorReported = false;
   private static healthPlateHost: VRHealthPlateHost | null = null;
   private static pauseIndicatorHost: VRPauseIndicatorHost | null = null;
@@ -1589,6 +1592,18 @@ export class VRSpike {
       // menu's yet — so the ray must not keep last frame's position either.
       if (!pointerHit) VRSpike.panelPointerHost?.clear();
       VRSpike.latestPanelPointerPosition = pointerHit?.guiPosition.clone() ?? null;
+      // The pointer hand's stick scrolls the list under the pointer.
+      if (pointerHit && dominantHand) {
+        const now = performance.now();
+        const deltaSeconds = VRSpike.panelStickScrollAt === null ? 0 : (now - VRSpike.panelStickScrollAt) / 1000;
+        VRSpike.panelStickScrollAt = now;
+        const stickY = Number.isFinite(dominantHand.axes[3]) ? dominantHand.axes[3] : (dominantHand.axes[1] ?? 0);
+        const rows = VRSpike.panelStickScroll.update(stickY, deltaSeconds);
+        if (rows !== 0) context.pointerSink.scrollPointer?.(rows);
+      } else {
+        VRSpike.panelStickScroll.reset();
+        VRSpike.panelStickScrollAt = null;
+      }
       return VRSpike.panelInputController.process(
         menu,
         actions,

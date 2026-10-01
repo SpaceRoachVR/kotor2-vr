@@ -2451,6 +2451,22 @@ const vrLegacyGUIPointerAdapter = new LegacyGUIVRPointerAdapter({
     const menuName = (control as any).menu?.constructor?.name ?? 'UnknownMenu';
     EventManager.FireEvent('menu.click', { name: control.name, menu: menuName });
   },
+  // Round 14 (S2): the thumbstick scrolls the list under the pointer, as the
+  // mouse wheel does on a flat screen (IngameControls' wheel handler). The
+  // hovered element is often a row or the scrollbar, so climb to its list.
+  scrollListAtPointer: (rows: number) => {
+    let element: any = GameState.MenuManager.hoveredGUIElement;
+    for (let depth = 0; element && depth < 8; depth++) {
+      if (element.list && typeof element.list.scrollDown === 'function') { element = element.list; break; }
+      if (typeof element.scrollDown === 'function' && typeof element.maxScroll === 'number') break;
+      element = element.parent;
+    }
+    if (!element || typeof element.scrollDown !== 'function') return false;
+    for (let i = 0; i < Math.abs(rows); i++) {
+      if (rows > 0) element.scrollDown(); else element.scrollUp();
+    }
+    return true;
+  },
 });
 
 export class GameState implements EngineContext {

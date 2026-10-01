@@ -24,6 +24,8 @@ export interface LegacyGUIVRPointerAdapterDependencies {
   readonly applyPointerCoordinates: (coordinates: LegacyGUIVRPointerCoordinates) => void;
   readonly beforeControlActivation?: (control: LegacyGUIVRPointerControl) => void;
   readonly afterControlActivation?: (control: LegacyGUIVRPointerControl) => void;
+  /** Scrolls the list the pointer is over by whole rows; false when there is none. */
+  readonly scrollListAtPointer?: (rows: number) => boolean;
 }
 
 export interface LegacyGUIVRPointerCoordinates {
@@ -102,6 +104,11 @@ export class LegacyGUIVRPointerAdapter implements VRPanelPointerSink {
     control.click();
     this.dependencies.afterControlActivation?.(control);
     return true;
+  }
+
+  scrollPointer(rows: number): boolean {
+    if (!this.hasPointerHit || !Number.isInteger(rows) || rows === 0) return false;
+    return this.dependencies.scrollListAtPointer?.(rows) ?? false;
   }
 
   private static reportedMisses = new Set<string>();

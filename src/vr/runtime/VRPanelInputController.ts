@@ -14,6 +14,8 @@ export interface VRPanelMenuController {
 export interface VRPanelPointerSink {
   setPointerPosition(position: THREE.Vector2 | null): void;
   activatePointer(): boolean;
+  /** Scrolls the list under the pointer by whole rows (negative is up). */
+  scrollPointer?(rows: number): boolean;
 }
 
 type PanelButton = 'select' | 'a' | 'b' | 'x' | 'y';
