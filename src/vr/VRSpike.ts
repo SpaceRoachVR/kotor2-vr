@@ -1603,7 +1603,8 @@ export class VRSpike {
         const now = performance.now();
         const deltaSeconds = VRSpike.panelStickScrollAt === null ? 0 : (now - VRSpike.panelStickScrollAt) / 1000;
         VRSpike.panelStickScrollAt = now;
-        const stickY = Number.isFinite(dominantHand.axes[3]) ? dominantHand.axes[3] : (dominantHand.axes[1] ?? 0);
+        const axes = dominantHand.axes ?? [];
+        const stickY = Number.isFinite(axes[3]) ? axes[3] : (axes[1] ?? 0);
         const rows = VRSpike.panelStickScroll.update(stickY, deltaSeconds);
         if (rows !== 0) context.pointerSink.scrollPointer?.(rows);
       } else {

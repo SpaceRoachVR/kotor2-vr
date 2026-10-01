@@ -1803,7 +1803,7 @@ describe('VRSpike XR loop ownership', () => {
       } } },
     };
     (VRSpike as any).comfortSettingsHost = {
-      clear: jest.fn(), present: jest.fn(), rowAtRay: jest.fn(() => 2),
+      clear: jest.fn(), present: jest.fn(), rowAtRay: jest.fn(() => 2), setHighlightedRow: jest.fn(),
       object: new THREE.Mesh(new THREE.PlaneGeometry(1, 1)),
     };
     const rows = [

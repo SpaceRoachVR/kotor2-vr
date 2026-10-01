@@ -83,7 +83,11 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       const gs = window.KotOR.GameState;
       gs.MenuManager.ClearMenus();
       if (gs.module) { try { gs.module.dispose(); } catch (e) {} gs.module = undefined; }
-      Promise.resolve(window.KotOR.SaveGame.saves[0].load()).catch(() => undefined);
+      // Never the autosave or quicksave slot: they sort first and change with
+      // every session, so the check would drift between runs.
+      const saves = window.KotOR.SaveGame.saves;
+      window.__vrCheckSave = saves.find((s) => !s.getIsAutoSave() && !s.getIsQuickSave()) || saves[0];
+      Promise.resolve(window.__vrCheckSave.load()).catch(() => undefined);
       return true;
     })()`);
     await harness.waitFor(
@@ -583,7 +587,7 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       // not retained after loading, so re-read it from the save the same way
       // SaveGame.loadPartyTable does and count the source structs.
       try {
-        const save = window.KotOR.SaveGame.saves[0];
+        const save = window.__vrCheckSave || window.KotOR.SaveGame.saves[0];
         const data = await window.KotOR.GameFileSystem.readFile(
           save.directory + '/PARTYTABLE.res'
         );
