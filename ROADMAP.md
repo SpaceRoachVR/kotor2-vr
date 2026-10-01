@@ -425,7 +425,23 @@ per-frame, stereo submits the whole level twice and 0.1's numbers are meaningles
 - **Done when:** verified culling is active in stereo, with before/after draw counts.
 - **Files:** `src/module/ModuleArea.ts`.
 
-### 0.3 — Characterise the memory growth ◑ characterised and reproducible; the retaining edge is still open (2026-09-09)
+### 0.3 — Characterise the memory growth ✅ main holders found and fixed (2026-09-30)
+
+**Resolved 2026-09-30 (52bd4c3e, after round 14's 55 -> 19 FPS, 0.77 -> 2.2 GB
+session).** `probe-leak-cut.js --paths --snapshot` walks the whole property
+graph from `window.KotOR`, tags only the leaked models it cannot reach, and
+`heap-dominators.js` computes a dominator tree over that snapshot. Two holders:
+the cached source MDL's change-listener set (`onSourceModelChange.bind(this)`;
+54 of 80) and DevTools/CDP console retention of objects passed to
+`console.log` (22 of 80, chiefly `ModuleObject.destroy`). After the fix,
+`probe-memory-growth.js --cycles 3`: JS heap 777 -> 793 -> 854 -> 858 MB on
+101PER and 847 -> 849 -> 851 MB on 102PER (was +60-84 MB per cycle);
+leaked models per 101PER reload 52 -> ~7. Still open: renderer geometry and
+texture counters keep climbing (~+265 geometries a cycle), because models that
+are collected were never `dispose()`d; the remaining parentless copies are
+props (`plc_chunkybit*`, `plc_junkbin01`), `i_null`, weapons and kolto
+bubbles with no owner. The history below is kept as found.
+
 
 Measured with `tools/vr-emulator/probe-memory-growth.js`, which loads the same
 two modules in a cycle and reads every candidate retainer after a forced
