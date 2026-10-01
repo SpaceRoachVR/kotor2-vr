@@ -1948,6 +1948,7 @@ export class VRSpike {
         (pose) => VRSpike.comfortSettingsHost?.rowAtRay(pose) ?? null,
       );
       VRSpike.drawComfortSettingsPointer(scene, panel, resolution?.pose ?? VRSpike.anyTrackedRay(inputFrame));
+      VRSpike.comfortSettingsHost.setHighlightedRow(resolution?.hit ?? null);
 
       if (selectPressed && !VRSpike.comfortSettingsSelectHeld && resolution) {
         context.activateRow(resolution.hit);

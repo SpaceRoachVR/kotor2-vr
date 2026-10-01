@@ -75,10 +75,21 @@ export class VRComfortSettingsHost {
     }
   }
 
+  /** Highlights the row under the pointer, so the player sees what a click will change. */
+  setHighlightedRow(row: number | null): void {
+    const next = Number.isInteger(row) ? row as number : null;
+    if (next === this.highlightedRow) return;
+    this.highlightedRow = next;
+    if (this.lastDrawnRows) this.draw(this.lastDrawnRows);
+  }
+
+  private highlightedRow: number | null = null;
+
   clear(): void {
     this.object.visible = false;
     this.positioned = false;
     this.lastDrawnRows = null;
+    this.highlightedRow = null;
   }
 
   dispose(): void {
@@ -143,11 +154,12 @@ export class VRComfortSettingsHost {
     this.context.textBaseline = 'middle';
     rows.forEach((row, index) => {
       const y = index * rowHeight;
-      this.context.fillStyle = index % 2 === 0 ? 'rgba(8, 48, 58, 0.7)' : 'rgba(8, 48, 58, 0.5)';
+      const hovered = index === this.highlightedRow;
+      this.context.fillStyle = hovered ? 'rgba(40, 120, 140, 0.95)' : index % 2 === 0 ? 'rgba(8, 48, 58, 0.7)' : 'rgba(8, 48, 58, 0.5)';
       this.context.fillRect(0, y, width, rowHeight);
-      this.context.strokeStyle = '#62e8ff';
-      this.context.lineWidth = 2;
-      this.context.strokeRect(2, y + 2, width - 4, rowHeight - 4);
+      this.context.strokeStyle = hovered ? '#ffffff' : '#62e8ff';
+      this.context.lineWidth = hovered ? 6 : 2;
+      this.context.strokeRect(3, y + 3, width - 6, rowHeight - 6);
       this.context.textAlign = 'left';
       this.context.fillStyle = '#f4feff';
       this.context.fillText(row.label, 30, y + rowHeight / 2);

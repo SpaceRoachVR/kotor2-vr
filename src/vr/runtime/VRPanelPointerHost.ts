@@ -43,7 +43,12 @@ export class VRPanelPointerHost {
     this.rayObject.name = 'Kotor2VR.VRPanelPointerRay';
     this.rayObject.visible = false;
     this.rayObject.frustumCulled = false;
-    this.rayObject.renderOrder = 1_000_001;
+    // Above every panel (the comfort panel draws at 1_000_004, the keyboard at
+    // 1_000_003). Panels skip the depth test, so a pointer ordered below one
+    // was painted over exactly where it met it: round 14, "the ray pointer
+    // needs to collide with the menu so players can see what they are
+    // pointing at".
+    this.rayObject.renderOrder = 1_000_010;
 
     const cursorMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -64,7 +69,7 @@ export class VRPanelPointerHost {
     this.cursorObject.name = 'Kotor2VR.VRPanelPointerCursor';
     this.cursorObject.visible = false;
     this.cursorObject.frustumCulled = false;
-    this.cursorObject.renderOrder = 1_000_002;
+    this.cursorObject.renderOrder = 1_000_011;
     worldScene.add(this.rayObject, this.cursorObject);
   }
 
