@@ -44,6 +44,8 @@ import { OdysseyShaderPass } from "@/shaders/pass/OdysseyShaderPass";
 import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
 import { AutoSaveManager } from "@/engine/AutoSaveManager";
+import { classifyVRForcePower } from "@/vr/runtime/VRForcePowerClassification";
+import { resolveVRMenuRegion } from "@/vr/runtime/VRMenuRegion";
 import { CutsceneMode } from "@/enums/dialog/CutsceneMode";
 import { EngineFrameSource, shouldProcessEngineFrame } from "@/vr/XRFrameCadence";
 import { clampFrameDelta } from "@/engine/FrameDeltaRules";
@@ -397,6 +399,12 @@ function isVRWorldDialogue(menu: unknown): boolean {
     GameState.CutsceneManager.dialog?.getConversationType() !== DLGConversationType.COMPUTER &&
     resolveCurrentVRCutscenePresentation() === 'world';
 }
+
+/**
+ * Menus shown whole: the main menu's layout is placed by its own vertical
+ * offset in VRPanelHost and draws the animated scene behind it.
+ */
+const VR_UNTRIMMED_MENU_RESREFS = new Set(['mainmenu8x6_p', 'mainmenu16x12']);
 
 /** Below the eyeline: the top of the dialogue sits a little under straight ahead. */
 const VR_WORLD_DIALOGUE_VERTICAL_OFFSET_METRES = -0.35;
@@ -2615,6 +2623,17 @@ export class GameState implements EngineContext {
   static delta: number = 0;
 
   static SaveGame: SaveGame;
+
+  /**
+   * A spell was just cast (ModuleArea.attachSpellInstance). In VR, the
+   * player's own Force power gets a sound and a burst at the hand: its
+   * effects play on a body first person hides (round 14).
+   */
+  static onSpellCast: ((caster: unknown, spell: unknown) => void) | null = (caster, spell) => {
+    if (!VRSpike.isPresenting || caster !== GameState.getCurrentPlayer()) return;
+    if (classifyVRForcePower(spell) !== true) return;
+    VRSpike.presentLocalForceCast();
+  };
   
   static currentGamepad: Gamepad;
   static videoEffect: number = -1;
@@ -3939,7 +3958,18 @@ export class GameState implements EngineContext {
               region: GameState.MenuManager.InGameDialog.getVRWorldDialogueRegion(),
               verticalOffsetMetres: VR_WORLD_DIALOGUE_VERTICAL_OFFSET_METRES,
             }
-            : undefined,
+            : menu && !VR_UNTRIMMED_MENU_RESREFS.has(String((menu as any).gui_resref || '').toLowerCase())
+              ? {
+                // Round 14: keep the menu, not the full-screen fill behind it.
+                region: resolveVRMenuRegion(
+                  [(menu as any).tGuiPanel?.extent, (menu as any).childMenu?.bVisible ? (menu as any).childMenu?.tGuiPanel?.extent : null],
+                  GameState.ResolutionManager.getViewportWidth(),
+                  GameState.ResolutionManager.getViewportHeight(),
+                ),
+                // ~45 degrees wide at 1.5 m: as large as a panel should get.
+                regionWidthMetres: 1.25,
+              }
+              : undefined,
         };
       },
       getMovieContext: () => GameState.VideoManager.isMoviePlaying()
@@ -4670,6 +4700,12 @@ export class GameState implements EngineContext {
         try{ GameState.module.dispose(); }catch(e){
           console.error(e);
         }
+      }
+
+      // Party members keep their instances across the load; drop what they
+      // still point at in the outgoing area (last trigger, door, conversation).
+      for(const member of GameState.PartyManager.party){
+        try{ member?.clearAreaReferences?.(); }catch(e){ console.error(e); }
       }
 
       //Remove all cached scripts and kill all running instances

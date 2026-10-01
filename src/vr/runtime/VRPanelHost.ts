@@ -27,6 +27,12 @@ export interface VRPanelPresentOptions {
   readonly region?: VRPanelRegion | null;
   /** Added to the panel's height relative to the head when it is placed. */
   readonly verticalOffsetMetres?: number;
+  /**
+   * Show the region this wide, keeping its aspect. Without it a region keeps
+   * the size it had inside the full canvas, which for a trimmed 800x600 menu
+   * left it 0.8 m wide - smaller text than the guidelines allow.
+   */
+  readonly regionWidthMetres?: number;
 }
 
 const FULL_REGION: VRPanelRegion = { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
@@ -164,11 +170,12 @@ export class VRPanelHost {
     }
 
     const aspect = viewportWidth / viewportHeight;
-    this.object.scale.set(
-      this.options.widthMetres * (region.uMax - region.uMin),
-      (this.options.widthMetres / aspect) * (region.vMax - region.vMin),
-      1
-    );
+    const width = this.options.widthMetres * (region.uMax - region.uMin);
+    const height = (this.options.widthMetres / aspect) * (region.vMax - region.vMin);
+    const enlarge = options.region && Number.isFinite(options.regionWidthMetres) && (options.regionWidthMetres as number) > 0 && width > 0
+      ? (options.regionWidthMetres as number) / width
+      : 1;
+    this.object.scale.set(width * enlarge, height * enlarge, 1);
     this.object.visible = true;
   }
 

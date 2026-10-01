@@ -4426,6 +4426,25 @@ export class VRSpike {
     }
   }
 
+  /**
+   * Round 14: "Force powers didn't seem to work at all." They cast (the log
+   * shows Force Valor's script running), but a power's effects play on the
+   * player's own body, which is hidden in first person, so nothing told the
+   * player it went off. A rising tone and a blue burst at the casting hand.
+   */
+  static presentLocalForceCast(): void {
+    VRSpike.playCombatCue('force');
+    const scene = VRSpike.scene;
+    const hand = VRSpike.controllerAnchorHost?.getAnchor(VRSpike.dominantHand === 'right' ? 'left' : 'right')
+      ?? VRSpike.controllerAnchorHost?.getAnchor(VRSpike.dominantHand) ?? null;
+    if (!scene || !hand) return;
+    const at = hand.getWorldPosition(new THREE.Vector3());
+    const sparks = VRSpike.ensureBladeSparkHost(scene);
+    const now = performance.now();
+    sparks.spark(at, now, 0, 1.6, 0x6fc8ff);
+    sparks.spark(at, now, 120, 2.4, 0x9fe0ff);
+  }
+
   /** A combat result you can hear, unless Combat Sounds is off. */
   private static playCombatCue(cue: VRCombatCue, delayMs = 0): void {
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;

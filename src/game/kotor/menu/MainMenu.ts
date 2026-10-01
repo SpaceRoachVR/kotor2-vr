@@ -133,6 +133,14 @@ export class MainMenu extends GameMenu {
   Start(){
     return new Promise<void>( (resolve, reject) => {
       this.manager.ClearMenus(); 
+      // Nothing in-game advances a fade here; one left over from the module
+      // that was quit would cover the menu for good (black in VR, round 14).
+      GameState.FadeOverlayManager?.Clear?.();
+      // UnloadModule hides the world scene and only a module load shows it
+      // again. Quitting to this menu loads no module, and in VR the panels,
+      // pointer and cursor live in that scene: the whole headset view stayed
+      // black (round 14, "selected close game ... the screen is black").
+      if(GameState.scene) GameState.scene.visible = true;
       AudioLoader.LoadMusic(this.bgMusicResRef).then((data: Uint8Array) => {
         AudioEngine.GetAudioEngine().setAudioBuffer('BACKGROUND_MUSIC_DAY', data.buffer as ArrayBuffer, this.bgMusicResRef);
         AudioEngine.GetAudioEngine().areaMusicDayAudioEmitter.play();
