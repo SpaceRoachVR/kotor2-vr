@@ -35,13 +35,16 @@ const tone = (at: number, frequency: number, endFrequency: number, duration: num
   Object.freeze({ at, frequency, endFrequency, duration, gain, wave });
 
 const CUES: Readonly<Record<VRCombatCue, readonly VRCombatCueTone[]>> = Object.freeze({
-  miss: [tone(0, 140, 90, 0.06, 0.12, 'sine')],
-  hit: [tone(0, 260, 120, 0.09, 0.45, 'triangle')],
-  critical: [tone(0, 380, 160, 0.08, 0.6, 'triangle'), tone(0.09, 420, 170, 0.12, 0.7, 'triangle')],
-  parried: [tone(0, 1250, 1100, 0.07, 0.22, 'square')],
-  deflected: [tone(0, 1650, 1500, 0.05, 0.18, 'sine')],
-  hurt: [tone(0, 95, 55, 0.14, 0.5, 'sine')],
-  'hurt-critical': [tone(0, 95, 55, 0.14, 0.6, 'sine'), tone(0.12, 80, 45, 0.18, 0.6, 'sine')],
+  // Round 14: the first set sat at 55-420 Hz and went unnoticed through the
+  // Quest's built-in speakers, which barely reproduce that range. Everything
+  // now sits at 260-2600 Hz, where they are loudest, in the same order.
+  miss: [tone(0, 520, 380, 0.08, 0.25, 'sine')],
+  hit: [tone(0, 900, 600, 0.11, 0.6, 'triangle')],
+  critical: [tone(0, 1300, 900, 0.1, 0.75, 'triangle'), tone(0.12, 1500, 1000, 0.13, 0.8, 'triangle')],
+  parried: [tone(0, 2000, 1800, 0.08, 0.35, 'square')],
+  deflected: [tone(0, 2600, 2400, 0.06, 0.3, 'sine')],
+  hurt: [tone(0, 420, 260, 0.18, 0.55, 'square')],
+  'hurt-critical': [tone(0, 420, 260, 0.18, 0.6, 'square'), tone(0.16, 380, 240, 0.2, 0.6, 'square')],
 });
 
 export function describeVRCombatCue(cue: VRCombatCue): readonly VRCombatCueTone[] {

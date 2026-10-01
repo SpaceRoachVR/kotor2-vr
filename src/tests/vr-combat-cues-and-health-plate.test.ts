@@ -95,3 +95,13 @@ describe('settings', () => {
     expect(game).toMatch(/combatSoundsEnabled: true,\s+healthPlateEnabled: true,/);
   });
 });
+
+// Round 14: the first cues (55-420 Hz) were played but never noticed through
+// the Quest's built-in speakers. Keep every tone where those speakers work.
+test('every cue sits where headset speakers reproduce it', () => {
+  for (const cue of ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical'] as const) {
+    for (const tone of describeVRCombatCue(cue)) {
+      expect(Math.min(tone.frequency, tone.endFrequency)).toBeGreaterThanOrEqual(240);
+    }
+  }
+});
