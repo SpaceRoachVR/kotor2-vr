@@ -40,13 +40,14 @@ export class VRBladeSparkHost {
    * Bursts at `at`, `delayMs` from now (so a spark can wait for a bolt to
    * arrive). `size` scales the burst: a critical hit bursts larger.
    */
-  spark(at: THREE.Vector3, nowMs: number, delayMs = 0, size = 1): void {
+  spark(at: THREE.Vector3, nowMs: number, delayMs = 0, size = 1, colour: number = SPARK_COLOUR): void {
     if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.y) || !Number.isFinite(at.z)) return;
     const burst = this.acquire();
     if (!burst) return;
     this.scatter(burst.lines.geometry);
     burst.lines.position.copy(at);
     burst.size = Number.isFinite(size) && size > 0 ? size : 1;
+    burst.lines.material.color.setHex(colour);
     burst.lines.scale.setScalar(START_SCALE_METRES * burst.size);
     burst.lines.material.opacity = 1;
     burst.lines.visible = false;

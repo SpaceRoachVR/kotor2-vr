@@ -144,3 +144,28 @@ describe('isCameraInsideBody', () => {
     expect(isCameraInsideBody({ x: NaN, y: 0, z: 0 }, feet)).toBe(false);
   });
 });
+
+// Round 14 (N4): playing as T3, the Shock Arm and Flame Thrower beams hang off
+// T3's model, and first person hid the whole model with them.
+describe('effects riding on the hidden body', () => {
+  const { markVisibleInFirstPerson } = require('@/vr/runtime/VRFirstPersonBody');
+  test('a marked effect stays drawn while the body is hidden, and all is restored', () => {
+    const THREE_ = require('three');
+    const body = new THREE_.Group();
+    const torso = new THREE_.Object3D();
+    const hand = new THREE_.Object3D();
+    const beam = new THREE_.Object3D();
+    const glove = new THREE_.Object3D();
+    body.add(torso, hand);
+    hand.add(beam, glove);
+    markVisibleInFirstPerson(beam);
+    const restore = hidePlayerBodyForFirstPerson(body);
+    expect(body.visible).toBe(true);
+    expect(torso.visible).toBe(false);
+    expect(hand.visible).toBe(true);
+    expect(glove.visible).toBe(false);
+    expect(beam.visible).toBe(true);
+    restore();
+    expect(torso.visible && glove.visible && beam.visible).toBe(true);
+  });
+});

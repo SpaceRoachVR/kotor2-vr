@@ -1,3 +1,4 @@
+import { markVisibleInFirstPerson } from "@/vr/runtime/VRFirstPersonBody";
 import { AudioEmitter } from "@/audio/AudioEmitter";
 import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
@@ -206,6 +207,9 @@ export class EffectVisualEffect extends GameEffect {
           }).then(
             (model: OdysseyModel3D) => {
               this.impact_model = model;
+              // Drawn in first person too: a heal or Force effect on the
+              // player is the only sign it landed (round 14).
+              markVisibleInFirstPerson(model);
               if(this.object.model){
                 if(this.object.model.impact){
                   this.object.model.impact.add(this.impact_model);
@@ -241,6 +245,7 @@ export class EffectVisualEffect extends GameEffect {
           context: this.object.context,
         }).then((model: OdysseyModel3D) => {
           this.impact_root_model = model;
+          markVisibleInFirstPerson(model);
           if(this.object.model){
             this.object.model.add(this.impact_root_model);
             TextureLoader.LoadQueue();

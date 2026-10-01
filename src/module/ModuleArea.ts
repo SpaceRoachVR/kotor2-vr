@@ -816,6 +816,7 @@ export class ModuleArea extends ModuleObject {
     if(!spellInstance) return;
     GameState.group.spell_instances.add(spellInstance.container);
     this.spellInstances.push(spellInstance);
+    GameState.onSpellCast?.(spellInstance.owner, spellInstance.spell);
   }
 
   attachTextSprite3D(sprite: TextSprite3D){

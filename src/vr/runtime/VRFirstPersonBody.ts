@@ -32,6 +32,19 @@ import * as THREE from 'three';
  * world behind its screen; and the flatscreen path, party-select portraits and
  * every other camera are left exactly as they were.
  */
+/**
+ * Marks an effect model attached to a creature (a beam, a Force aura) as part
+ * of the world rather than of the body, so first person still draws it.
+ *
+ * Round 14 (N4): T3-M4's Shock Arm and Flame Thrower beams are parented to the
+ * caster's model, and playing as T3 the whole model was hidden, beam and all.
+ */
+export const VR_KEEP_IN_FIRST_PERSON = 'kotor2vrKeepInFirstPerson';
+
+export function markVisibleInFirstPerson(object: THREE.Object3D): void {
+  object.userData[VR_KEEP_IN_FIRST_PERSON] = true;
+}
+
 export function hidePlayerBodyForFirstPerson(
   body: THREE.Object3D | null | undefined,
 ): () => void {
@@ -39,8 +52,29 @@ export function hidePlayerBodyForFirstPerson(
   // something the engine had deliberately hidden — a creature mid-spawn, or a
   // player hidden by a script. Same rule as hideWorldForTheater.
   if (!body || !body.visible) return () => {};
-  body.visible = false;
-  return () => { body.visible = true; };
+  let kept = false;
+  if (typeof body.traverse === "function") body.traverse((object) => { if (object.userData?.[VR_KEEP_IN_FIRST_PERSON]) kept = true; });
+  if (!kept) {
+    body.visible = false;
+    return () => { body.visible = true; };
+  }
+  // An effect rides on the body: hide every visible branch that does not lead
+  // to one, and leave the path down to the effect (and the effect) drawn.
+  const hidden: THREE.Object3D[] = [];
+  const holdsKept = (object: THREE.Object3D): boolean => {
+    let found = false;
+    object.traverse((child) => { if (child.userData?.[VR_KEEP_IN_FIRST_PERSON]) found = true; });
+    return found;
+  };
+  const hideBranch = (object: THREE.Object3D) => {
+    for (const child of object.children) {
+      if (child.userData?.[VR_KEEP_IN_FIRST_PERSON]) continue;
+      if (holdsKept(child)) { hideBranch(child); continue; }
+      if (child.visible) { child.visible = false; hidden.push(child); }
+    }
+  };
+  hideBranch(body);
+  return () => { for (const object of hidden) object.visible = true; };
 }
 
 export interface VRPointLike { readonly x: number; readonly y: number; readonly z: number; }

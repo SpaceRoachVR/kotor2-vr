@@ -99,9 +99,19 @@ describe('settings', () => {
 // Round 14: the first cues (55-420 Hz) were played but never noticed through
 // the Quest's built-in speakers. Keep every tone where those speakers work.
 test('every cue sits where headset speakers reproduce it', () => {
-  for (const cue of ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical'] as const) {
+  for (const cue of ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical', 'force'] as const) {
     for (const tone of describeVRCombatCue(cue)) {
       expect(Math.min(tone.frequency, tone.endFrequency)).toBeGreaterThanOrEqual(240);
     }
   }
+});
+
+// Round 14: "Force powers didn't seem to work at all" - they cast, unseen.
+test('your own Force power cast is announced in VR', () => {
+  const area = fs.readFileSync(path.join(__dirname, '..', 'module', 'ModuleArea.ts'), 'utf8');
+  expect(area).toContain('GameState.onSpellCast?.(spellInstance.owner, spellInstance.spell);');
+  const game = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
+  expect(game).toMatch(/classifyVRForcePower\(spell\) !== true\) return;\s+VRSpike\.presentLocalForceCast\(\);/);
+  const force = describeVRCombatCue('force');
+  expect(force[0].endFrequency).toBeGreaterThan(force[0].frequency);
 });
