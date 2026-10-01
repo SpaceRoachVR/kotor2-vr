@@ -150,3 +150,13 @@ describe('Quick Save on the wheel', () => {
     expect(ids(buildVRActionWheel(context({ targetIsHostileCreature: true })))).not.toContain('menu:quicksave');
   });
 });
+
+describe('unspent skill points are kept', () => {
+  const read = (rel: string) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
+  test('a saved character reads SkillPoints back', () => {
+    expect(read('module/ModuleCreature.ts')).toMatch(/hasField\('SkillPoints'\)/);
+  });
+  test('accepting skills banks what is left', () => {
+    expect(read('game/kotor/menu/CharGenSkills.ts')).toContain('creature.skillPoints = Math.max(0, Number(manager.availSkillPoints) || 0);');
+  });
+});

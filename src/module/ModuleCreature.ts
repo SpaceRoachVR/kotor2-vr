@@ -4260,6 +4260,11 @@ export class ModuleCreature extends ModuleObject {
           
       if(this.template.RootNode.hasField('Gender'))
         this.gender = this.template.RootNode.getFieldByLabel('Gender').getValue();
+
+      // Unspent skill points (round 14, S2). Saved below, but never read back,
+      // so points left at character creation or a level-up were lost.
+      if(this.template.RootNode.hasField('SkillPoints'))
+        this.skillPoints = Number(this.template.RootNode.getFieldByLabel('SkillPoints').getValue()) || 0;
     
       if(this.template.RootNode.hasField('GoodEvil'))
         this.goodEvil = this.template.RootNode.getFieldByLabel('GoodEvil').getValue();

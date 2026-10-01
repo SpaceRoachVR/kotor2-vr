@@ -30,6 +30,8 @@ export interface LevelUpCreature {
   int: number;
   cha: number;
   skills: Array<{ rank: number }>;
+  /** Unspent skill points carried from character creation or earlier levels. */
+  skillPoints?: number;
   feats: Array<{ id: number }>;
   classes: LevelUpCreatureClass[];
   hitPoints: number;
@@ -47,6 +49,7 @@ export interface LevelUpCreature {
 export interface LevelUpBaseline {
   readonly abilities: Readonly<Record<LevelUpAbility, number>>;
   readonly skillRanks: ReadonlyArray<number>;
+  readonly skillPoints: number;
   readonly featIds: ReadonlyArray<number>;
   readonly spells: ReadonlyArray<{ id: number }>;
   readonly classLevel: number;
@@ -83,6 +86,7 @@ export class LevelUpSession {
         wis: creature.wis, int: creature.int, cha: creature.cha,
       },
       skillRanks: creature.skills.map((skill) => skill.rank),
+      skillPoints: Math.max(0, Number(creature.skillPoints) || 0),
       featIds: creature.feats.map((feat) => feat.id),
       spells: characterClass.spells.slice(),
       classLevel: characterClass.level,
@@ -108,9 +112,14 @@ export class LevelUpSession {
     return !this.ended;
   }
 
-  /** Skill points for this level, from the character's Intelligence right now. */
+  /**
+   * Skill points to spend: this level's, from the character's Intelligence
+   * right now, plus any left unspent before (retail banks them in the
+   * creature's SkillPoints and adds them at the next level-up).
+   */
   getSkillPoints(): number {
-    return resolveLevelUpSkillPoints(this.characterClass.skillpointbase, this.creature.int);
+    return resolveLevelUpSkillPoints(this.characterClass.skillpointbase, this.creature.int) +
+      this.baseline.skillPoints;
   }
 
   /** Whether a step has anything to spend. Skills always do: at least one point. */
@@ -207,6 +216,7 @@ export class LevelUpSession {
         for(let i = 0; i < creature.skills.length && i < baseline.skillRanks.length; i++){
           creature.skills[i].rank = baseline.skillRanks[i];
         }
+        creature.skillPoints = baseline.skillPoints;
       break;
       case 'feats': {
         const kept = new Set(baseline.featIds);

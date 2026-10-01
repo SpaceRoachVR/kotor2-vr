@@ -396,6 +396,7 @@ export class CharGenManager {
         creature.skills[i].rank = (CharGenManager as any)[fields[i]];
       }
     }
+    creature.skillPoints = Math.max(0, Number(CharGenManager.availSkillPoints) || 0);
   }
 
   static getRecommendedOrder() {

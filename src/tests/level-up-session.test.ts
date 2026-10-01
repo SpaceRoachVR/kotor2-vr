@@ -131,3 +131,23 @@ describe('a level-up session', () => {
     expect(cls.level).toBe(3);
   });
 });
+
+// Round 14 (S2): skill points left unspent at character creation never
+// reached the next level-up. Retail banks them in SkillPoints.
+describe('banked skill points', () => {
+  test('are added to the level-up allowance', () => {
+    const plain = LevelUpSession.begin(creatureWith(consularAt(3)))!.getSkillPoints();
+    const creature = creatureWith(consularAt(3));
+    creature.skillPoints = 4;
+    expect(LevelUpSession.begin(creature)!.getSkillPoints()).toBe(plain + 4);
+  });
+
+  test('Back restores the bank as it was', () => {
+    const creature = creatureWith(consularAt(3));
+    creature.skillPoints = 3;
+    const session = LevelUpSession.begin(creature)!;
+    creature.skillPoints = 0;
+    session.cancel();
+    expect(creature.skillPoints).toBe(3);
+  });
+});
