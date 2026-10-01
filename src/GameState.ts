@@ -431,6 +431,7 @@ const vrComfortSettings: MutableVRComfortSettings = {
   healthPlateEnabled: true,
 };
 let vrComfortSettingsPanelOpen = false;
+let vrControlsGuideOpen = false;
 let vrComfortSettingsPausedByVR = false;
 
 /**
@@ -3831,9 +3832,18 @@ export class GameState implements EngineContext {
             label: 'Wrist Health',
             value: vrComfortSettings.healthPlateEnabled !== false ? 'On' : 'Off',
           },
+          {
+            label: 'Dominant Hand',
+            value: VRSpike.currentDominantHand === 'left' ? 'Left' : 'Right',
+          },
+          {
+            label: 'Controls Guide',
+            value: vrControlsGuideOpen ? 'Shown' : 'Hidden',
+          },
         ];
         return {
           rows,
+          controlsGuide: vrControlsGuideOpen,
           activateRow: (index: number) => {
             switch (index) {
               case 0:
@@ -3863,9 +3873,17 @@ export class GameState implements EngineContext {
               case 7:
                 vrComfortSettings.healthPlateEnabled = vrComfortSettings.healthPlateEnabled === false;
                 break;
+              case 8:
+                // ROADMAP 3.15: the setting existed in VRSpike but no row
+                // reached it, so round 14's C3 had nothing to press.
+                VRSpike.setDominantHand(VRSpike.currentDominantHand === 'left' ? 'right' : 'left');
+                break;
+              case 9:
+                vrControlsGuideOpen = !vrControlsGuideOpen;
+                break;
             }
           },
-          close: () => { vrComfortSettingsPanelOpen = false; },
+          close: () => { vrComfortSettingsPanelOpen = false; vrControlsGuideOpen = false; },
         };
       },
       /**

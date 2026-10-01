@@ -65,6 +65,7 @@ import { BOLT_TRAVEL_MS, VRBlasterBoltHost } from "./runtime/VRBlasterBoltHost";
 import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
 import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
 import { VRPanelStickScroll } from "./runtime/VRPanelStickScroll";
+import { VRControlsGuideHost } from "./runtime/VRControlsGuide";
 import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue } from "./runtime/VRCombatCueAudio";
 import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateHost";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
@@ -441,6 +442,8 @@ export interface VRSpikeHooks {
    */
   getComfortSettingsPanelContext?: () => {
     readonly rows: readonly VRComfortSettingsRow[];
+    /** The controls guide is open beside the panel. */
+    readonly controlsGuide?: boolean;
     activateRow(index: number): void;
     close(): void;
   } | null;
@@ -558,6 +561,9 @@ export class VRSpike {
   static readonly inputRecorder = new VRInputRecorder();
   static readonly tracePlayer = new VRTracePlayer();
   private static dominantHand: XRHandRole = 'right';
+  /** The weapon hand the player chose (ROADMAP 3.15). */
+  static get currentDominantHand(): XRHandRole { return VRSpike.dominantHand; }
+  private static controlsGuideHost: VRControlsGuideHost | null = null;
   private static inputCapabilityValidator = new XRInputCapabilityValidator();
   private static desktopLoopNeedsRestart = false;
   private static readonly sessionController = new XRSessionController({
@@ -1949,6 +1955,12 @@ export class VRSpike {
       );
       VRSpike.drawComfortSettingsPointer(scene, panel, resolution?.pose ?? VRSpike.anyTrackedRay(inputFrame));
       VRSpike.comfortSettingsHost.setHighlightedRow(resolution?.hit ?? null);
+      if (context.controlsGuide) {
+        if (!VRSpike.controlsGuideHost) VRSpike.controlsGuideHost = new VRControlsGuideHost(scene);
+        VRSpike.controlsGuideHost.present(panel, VRSpike.dominantHand);
+      } else {
+        VRSpike.controlsGuideHost?.clear();
+      }
 
       if (selectPressed && !VRSpike.comfortSettingsSelectHeld && resolution) {
         context.activateRow(resolution.hit);
@@ -1999,6 +2011,7 @@ export class VRSpike {
   /** Tears down the comfort panel and its pointer together. */
   private static clearComfortSettingsPointer(): void {
     VRSpike.comfortSettingsHost?.clear();
+    VRSpike.controlsGuideHost?.clear();
     VRSpike.comfortSettingsPointerHost?.clear();
     VRSpike.comfortSettingsPointerHand.reset();
   }

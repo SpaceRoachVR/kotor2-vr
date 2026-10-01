@@ -7,11 +7,14 @@ export interface VRComfortSettingsRow {
 }
 
 const PANEL_WIDTH_METRES = 0.9;
-/** Each row keeps the size the original four-row, 0.5 m panel gave it. */
-const ROW_HEIGHT_METRES = 0.125;
+/**
+ * 9 cm a row: ten rows make a 0.9 m panel at 1.1 m, inside a comfortable
+ * vertical view, and the 34 px labels still subtend more than a degree.
+ */
+const ROW_HEIGHT_METRES = 0.09;
 const ROW_HEIGHT_PIXELS = 125;
 /** The panel grows with its settings, up to this many rows. */
-export const VR_COMFORT_SETTINGS_MAX_ROWS = 8;
+export const VR_COMFORT_SETTINGS_MAX_ROWS = 10;
 
 /**
  * Comfort settings surface (ROADMAP 2.6) — the settings VRSpike's own
