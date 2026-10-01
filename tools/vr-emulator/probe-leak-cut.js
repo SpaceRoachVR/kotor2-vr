@@ -239,6 +239,27 @@ async function reloadModule(harness) {
         }`,
       });
       for (const [key, count] of census.result.value) console.log(`NAME ${String(count).padStart(4)}  ${key}`);
+      // One leaked model of each name, in detail: who made it.
+      const detail = await harness.cdp.send('Runtime.callFunctionOn', {
+        objectId: objects.objects.objectId,
+        returnByValue: true,
+        functionDeclaration: `function () {
+          const seen = new Set(); const out = [];
+          for (const m of this) {
+            if (m.parent || seen.has(m.name)) continue;
+            seen.add(m.name);
+            const child = m.children && m.children[0];
+            out.push({ name: m.name, userData: Object.keys(m.userData || {}), childName: child && child.name, childType: child && child.type,
+              hasSource: !!m.sourceModel, sourceName: m.sourceModel && m.sourceModel.geometryHeader && m.sourceModel.geometryHeader.modelName,
+              nodes: m.nodes && m.nodes.size, meshes: (m.meshes || []).length, emitters: (m.emitters || []).length,
+              animationManager: !!m.animationManager, ctxGroup: !!(m.context && m.context.group),
+              matrixAuto: m.matrixAutoUpdate, visible: m.visible });
+            if (out.length >= 12) break;
+          }
+          return out;
+        }`,
+      });
+      for (const row of detail.result.value) console.log('DETAIL ' + JSON.stringify(row));
       const keys = await harness.evaluate(`(() => { const K = window.KotOR; const gs = K.GameState; let s = null;
         for (const c of (gs.module.area.creatures || [])) { if (c && c.model) { s = c.model; break; } }
         return Object.keys(s).slice(0, 80); })()`);
