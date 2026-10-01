@@ -181,7 +181,7 @@ export class TalentSpell extends TalentObject {
   useTalentOnObject(oTarget: ModuleObject, oCaster: ModuleObject){
     super.useTalentOnObject(oTarget, oCaster);
 
-    console.log('Talent.useTalentOnObject', this);
+    console.log('Talent.useTalentOnObject', this.label ?? this.id);
     
     oCaster.combatData.lastSpellTarget = oTarget;
     oTarget.combatData.lastSpellAttacker = oCaster;

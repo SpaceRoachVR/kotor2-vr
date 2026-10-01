@@ -156,7 +156,7 @@ export class ModuleMGPlayer extends ModuleObject {
   constructor(template: GFFObject){
     super();
     this.objectType |= ModuleObjectType.ModuleMGPlayer;
-    console.log('ModuleMGPlayer', template, this);
+    console.log('ModuleMGPlayer');
     this.template = template;
 
     this.camera = null;

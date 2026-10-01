@@ -149,7 +149,7 @@ export class ModuleMGEnemy extends ModuleObject {
 
     if(this.hit_points <= 0 && this.alive){
       this.alive = false;
-      console.log('MGEnemy death', this);
+      console.log('MGEnemy death', this.getTag?.());
       const onDeath = this.scripts[ModuleObjectScript.MGEnemyOnDeath];
       if(onDeath){
         onDeath.run(this);

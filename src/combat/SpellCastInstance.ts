@@ -96,7 +96,7 @@ export class SpellCastInstance {
           context: this.owner.context
         }).then((model: OdysseyModel3D) => {
           this.projectile = model;
-          console.log('projectile', model);
+          console.log('projectile loaded', this.spell.projmodel);
           if(this.owner.model){
             if(this.owner.model.rhand){
               this.owner.context.group.effects.add(model);
@@ -191,7 +191,7 @@ export class SpellCastInstance {
     }
 
     if(this.impactscript){
-      console.log('Casting spell', this.impactscript, this);
+      console.log('Casting spell', this.impactscript);
       const instance = GameState.NWScript.Load(this.impactscript);
       if(instance) {
         //pass the talent to the script instance and run it

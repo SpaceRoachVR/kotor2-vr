@@ -845,7 +845,7 @@ export class ModuleItem extends ModuleObject {
   }
 
   onEquip(oCreature: ModuleCreature){
-    console.log('ModuleItem.onEquip', oCreature, this);
+    console.log('ModuleItem.onEquip', oCreature?.getTag?.(), this.getTag?.());
     if(this.isDisguise()){
       oCreature.removeEffectsByType( GameEffectType.EffectDisguise ); //EFFECT_DISGUISE
       let eDisguise = new EffectDisguise();
@@ -863,7 +863,7 @@ export class ModuleItem extends ModuleObject {
   }
 
   onUnEquip(oCreature: ModuleCreature){
-    console.log('ModuleItem.onUnEquip', oCreature, this);
+    console.log('ModuleItem.onUnEquip', oCreature?.getTag?.(), this.getTag?.());
     oCreature.removeEffectsByCreator(this);
     if(GameState.PartyManager.party.indexOf(oCreature) >= 0){
       GameState.InventoryManager.addItem(this);

@@ -1428,7 +1428,7 @@ export class ModuleCreature extends ModuleObject {
   }
 
   jumpToObject(target: ModuleObject){
-    console.log('jumpToObject', target, this);
+    console.log('jumpToObject', target?.getTag?.(), this.getTag?.());
     if(target instanceof ModuleObject){
 
       let action = new GameState.ActionFactory.ActionJumpToObject();
@@ -1441,7 +1441,7 @@ export class ModuleCreature extends ModuleObject {
   }
 
   jumpToLocation(target: EngineLocation){
-    console.log('jumpToLocation', target, this);
+    console.log('jumpToLocation', this.getTag?.());
     if(target instanceof EngineLocation){
       let action = new GameState.ActionFactory.ActionJumpToPoint();
       action.setParameter(0, ActionParameterType.FLOAT, target.position.x);

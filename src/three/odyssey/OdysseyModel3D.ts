@@ -360,9 +360,59 @@ export class OdysseyModel3D extends OdysseyObject3D {
     }
     this.sourceModel = model;
     if (this.sourceModel) {
-      this.sourceModelUnsubscribe = this.sourceModel.addChangeListener(this.onSourceModelChange.bind(this));
+      // The source is the cached MDL, alive for the whole session and shared
+      // by every copy of that model. Its listener set used to hold
+      // `this.onSourceModelChange.bind(this)`, so every copy that was never
+      // disposed - and every copy nested in another (a weapon in a hand),
+      // since dispose(child) unsubscribed the parent - stayed reachable
+      // forever: ~50 models and 40-80 MB per module load, and round 14's
+      // 55 -> 19 FPS over a long session (ROADMAP 0.3). The listener now
+      // holds the copy weakly, and a finalizer drops it once the copy is gone.
+      this.sourceModelUnsubscribe = OdysseyModel3D.subscribeWeakly(this.sourceModel, this);
     }
   }
+
+  /**
+   * Subscribes `copy` to `source` without the source holding `copy`.
+   *
+   * V8 gives all closures made in one function call a single shared scope, so
+   * a listener built next to anything that mentions the copy carries the copy
+   * with it: the first weak version did exactly that, and a heap snapshot
+   * showed 54 of 80 leaked models held by its `listener` (and 4 more by the
+   * finalizer's copy of it). The listener is therefore made in its own
+   * function, which only ever sees a WeakRef, and nothing here closes over
+   * `copy` itself.
+   */
+  private static subscribeWeakly(source: OdysseyModel, copy: OdysseyModel3D): () => void {
+    const listener = OdysseyModel3D.makeSourceListener(source, new WeakRef(copy));
+    const unsubscribe = source.addChangeListener(listener);
+    const token = {};
+    OdysseyModel3D.sourceListenerFinalizer.register(copy, { source, listener }, token);
+    return () => {
+      unsubscribe();
+      OdysseyModel3D.sourceListenerFinalizer.unregister(token);
+    };
+  }
+
+  private static makeSourceListener(
+    source: OdysseyModel,
+    copy: WeakRef<OdysseyModel3D>,
+  ): (event: OdysseyModelChangeEvent) => void {
+    const listener = (event: OdysseyModelChangeEvent) => {
+      const live = copy.deref();
+      if (live) live.onSourceModelChange(event);
+      else source.removeChangeListener(listener);
+    };
+    return listener;
+  }
+
+  /** Drops a source-model listener once the copy it served has been collected. */
+  private static readonly sourceListenerFinalizer = new FinalizationRegistry<{
+    source: OdysseyModel;
+    listener: (event: OdysseyModelChangeEvent) => void;
+  }>(({ source, listener }) => {
+    try { source.removeChangeListener(listener); } catch (e) { /* source gone too */ }
+  });
 
   onSourceModelChange(event: OdysseyModelChangeEvent): void {
     this.pendingSyncEvents.push(event);

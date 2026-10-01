@@ -4053,7 +4053,7 @@ export class ModuleObject {
    */
   destroy(){
     this.destroyed = true;
-    try{ console.log('destroy', this.getTag(), this);}catch(e: any){}
+    try{ console.log('destroy', this.getTag(), this.constructor?.name);}catch(e: any){}
     try{
       this.container.removeFromParent();
 
@@ -4173,26 +4173,38 @@ export class ModuleObject {
       //Clear references to prevent circular references
       this.area = undefined;
       this.room = undefined;
-      this.lookAtObject = undefined;
-      this.lastTriggerEntered = undefined;
-      this.lastTriggerExited = undefined;
-      this.lastAreaEntered = undefined;
-      this.lastAreaExited = undefined;
-      this.lastModuleEntered = undefined;
-      this.lastModuleExited = undefined;
-      this.lastDoorEntered = undefined;
-      this.lastDoorExited = undefined;
-      this.lastPlaceableEntered = undefined;
-      this.lastPlaceableExited = undefined;
-      this.lastAoeEntered = undefined;
-      this.lastAoeExited = undefined;
-      this.conversation = undefined;
-      this.linkedToObject = undefined;
+      this.clearAreaReferences();
 
       GameState.ModuleObjectManager.RemoveObject(this); 
     }catch(e){
       console.error('ModuleObject.destroy', e);
     }
+  }
+
+  /**
+   * Forgets the objects of the area this object was last in: the trigger,
+   * door, placeable and AoE it last entered or left, what it looked at, its
+   * conversation. A party member keeps its instance across a module load, and
+   * each of these reached the whole outgoing area through it - its trigger's
+   * walkmesh leads to the rooms, the rooms to every door and model - so every
+   * load kept the last area alive (ROADMAP 0.3; round 14 ran 0.77 -> 2.2 GB).
+   */
+  clearAreaReferences(){
+    this.lookAtObject = undefined;
+    this.lastTriggerEntered = undefined;
+    this.lastTriggerExited = undefined;
+    this.lastAreaEntered = undefined;
+    this.lastAreaExited = undefined;
+    this.lastModuleEntered = undefined;
+    this.lastModuleExited = undefined;
+    this.lastDoorEntered = undefined;
+    this.lastDoorExited = undefined;
+    this.lastPlaceableEntered = undefined;
+    this.lastPlaceableExited = undefined;
+    this.lastAoeEntered = undefined;
+    this.lastAoeExited = undefined;
+    this.conversation = undefined;
+    this.linkedToObject = undefined;
   }
 
 }
