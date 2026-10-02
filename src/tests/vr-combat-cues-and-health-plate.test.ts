@@ -35,7 +35,11 @@ describe('combat cue sounds', () => {
     expect(describeVRCombatCue('miss', 'melee')[0].resref).toBe('cb_sw_blade1');
     expect(describeVRCombatCue('miss', 'ranged')[0].resref).toBe('cb_bu_metalmed');
     expect(describeVRCombatCue('hit', 'ranged')[0].resref).toBe('cb_ht_blastleth1');
-    expect(describeVRCombatCue('critical', 'melee')).toHaveLength(2);
+    // A critical is one sample, louder and pitched down: not a flam (critic run 8).
+    const crit = describeVRCombatCue('critical', 'melee');
+    expect(crit).toHaveLength(1);
+    expect(crit[0].rate).toBeLessThan(1);
+    expect(crit[0].gain).toBeGreaterThan(describeVRCombatCue('hit', 'melee')[0].gain);
     // A critical never contains the parried sound (critic run 7).
     for (const weapon of ['melee', 'ranged', 'unarmed'] as const) {
       const parried = new Set(describeVRCombatCue('parried', weapon).map((x) => x.resref));
@@ -64,14 +68,13 @@ describe('combat cue sounds', () => {
     const context: any = {
       currentTime: 10,
       decodeAudioData: jest.fn(async () => ({ duration: 0.2 })),
-      createBufferSource: () => ({ buffer: null as unknown, connect: jest.fn(), disconnect: jest.fn(), start: (t: number) => started.push(t), onended: null as any }),
+      createBufferSource: () => ({ buffer: null as unknown, playbackRate: { setValueAtTime: jest.fn() }, connect: jest.fn(), disconnect: jest.fn(), start: (t: number) => started.push(t), onended: null as any }),
       createGain: () => ({ gain: { setValueAtTime: jest.fn() }, connect: jest.fn(), disconnect: jest.fn() }),
     };
     const audio = new VRCombatCueAudio(context, {} as AudioNode, async (resref) => { loads.push(resref); return new Uint8Array([1, 2, 3]); });
     await audio.play('critical', 200, 'melee');
-    expect(started).toHaveLength(2);
+    expect(started).toHaveLength(1);
     expect(started[0]).toBeCloseTo(10.2, 6);
-    expect(started[1]).toBeGreaterThan(started[0]);
     // A critical doubles the impact into one heavier blow, decoded once.
     expect(loads).toEqual(['cb_ht_bladeleth1']);
   });

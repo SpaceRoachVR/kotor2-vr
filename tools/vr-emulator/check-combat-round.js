@@ -116,6 +116,8 @@ const check = (ok, label, detail = '') => {
       let best = null, bd = 1e9; for (const c of gs.module.area.creatures) { if (!c || (c.isDead && c.isDead())) continue; let h = false; try { h = c.isHostile(p); } catch (e) {} if (!h) continue;
         const d = c.position.distanceTo(p.position); if (d < bd) { bd = d; best = c; } }
       if (!best) return null;
+      // Enough HP to outlast every section of this check (nothing is saved).
+      try { best.addHP(400, true); } catch (e) {}
       window.__checkStart = p.position.clone();
       const v = best.position.clone().sub(p.position); v.z = 0; v.normalize();
       p.position.copy(best.position.clone().sub(v.multiplyScalar(1.6))); window.__checkTarget = best;
@@ -124,6 +126,36 @@ const check = (ok, label, detail = '') => {
     if (!setup) return;
     await sleep(3000);
     const ctx = `window.KotOR.VRSpike.hooks.getCombatContext(${setup.id})`;
+
+    // 2b. One swing while the round is busy is held and fires at the opening
+    // (ROADMAP 3.12). Nothing exercised the buffer, and a run-7 timer bug
+    // that expired every held swing on its first frame went unseen (critic
+    // run 8). In VR no swing means no attack, so a round starting after a
+    // single held swing is the swing released.
+    const swing = `(() => { const c = ${ctx}; if (c && c.onCombatSwing) c.onCombatSwing({ actorId: c.actorId, nominatedTargetId: c.nominatedTargetId, input: 'dominant-swing' }); return true; })()`;
+    const alive = await harness.evaluate(`(() => { const t = window.__checkTarget; return !!(t && !(t.isDead && t.isDead())); })()`);
+    // Let the current round finish, swing to start one, then swing again
+    // while it runs: that second swing is the held one.
+    await harness.waitFor(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound; return !!(r && !r.roundStarted && !r.roundPaused); })()`, 8000, 100).catch(() => undefined);
+    await harness.evaluate(swing);
+    await harness.waitFor(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound; return !!(r && (r.roundStarted || r.roundPaused)); })()`, 3000, 50).catch(() => undefined);
+    await sleep(300);
+    const held = await harness.evaluate(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound;
+      window.__heldMark = (window.__xrHarness && window.__xrHarness.log || []).length;
+      return { busy: !!(r && (r.roundStarted || r.roundPaused)) }; })()`);
+    await harness.evaluate(swing);
+    let roundsAfter = 0, wasStarted = true;
+    for (let i = 0; i < 60; i++) {
+      const started = await harness.evaluate(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound; return !!(r && r.roundStarted); })()`);
+      if (started && !wasStarted) roundsAfter++;
+      wasStarted = started;
+      await sleep(100);
+    }
+    const expiredLog = await harness.evaluate(`(window.__xrHarness && window.__xrHarness.log || []).slice(window.__heldMark || 0).some((e) => /expired/i.test(e.text))`);
+    check(alive, 'the target is still alive for the held-swing check');
+    check(held.busy, 'the swing was made while the round was busy');
+    check(roundsAfter >= 1, 'a swing held through a busy round fires at the opening', `rounds started after it: ${roundsAfter}`);
+    check(!expiredLog, 'the held swing does not expire on its way to the opening');
 
     // 2. Ring and round opening.
     const samples = [];

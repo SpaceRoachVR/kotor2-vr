@@ -33,9 +33,11 @@ export interface VRCombatCueSound {
   /** Start, seconds after the cue. */
   readonly at: number;
   readonly gain: number;
+  /** Playback rate; below 1 is lower and heavier (a critical). */
+  readonly rate?: number;
 }
 
-const sound = (resref: string, at = 0, gain = 1): VRCombatCueSound => Object.freeze({ resref, at, gain });
+const sound = (resref: string, at = 0, gain = 1, rate = 1): VRCombatCueSound => Object.freeze({ resref, at, gain, rate });
 
 const IMPACT: Readonly<Record<VRCombatCueWeapon, string>> = Object.freeze({
   melee: 'cb_ht_bladeleth1',
@@ -60,15 +62,15 @@ export function describeVRCombatCue(cue: VRCombatCue, weapon: VRCombatCueWeapon 
   switch (cue) {
     case 'miss': return [sound(MISS[weapon], 0, 0.8)];
     case 'hit': return [sound(IMPACT[weapon])];
-    // The impact doubled into one heavier blow (a 30 ms layer is not heard as
-    // an echo), never the parry clang (critic run 7).
-    case 'critical': return [sound(IMPACT[weapon], 0, 1), sound(IMPACT[weapon], 0.03, 0.8)];
+    // One impact, louder and pitched down: a heavier blow. Never the parry
+    // clang (run 7), and not the same sample twice, which is a flam (run 8).
+    case 'critical': return [sound(IMPACT[weapon], 0, 1.35, 0.85)];
     case 'parried': return [sound(PARRY[weapon])];
     case 'deflected': return [sound('cb_pa_blast1')];
     // A blow on you: an armour impact, unlike any sound of your own hits.
     // GameState replaces it with the attacker's weapon on your material.
     case 'hurt': return [sound('cb_ht_bladearm1')];
-    case 'hurt-critical': return [sound('cb_ht_bladearm1'), sound('cb_ht_bladearm1', 0.03, 0.8)];
+    case 'hurt-critical': return [sound('cb_ht_bladearm1', 0, 1.35, 0.85)];
     case 'force': return [sound('v_useforce')];
     // gui_actscroll decodes to 3 ms of sound; gui_actqueue is retail's
     // "action queued" click, 0.1 s.
@@ -133,6 +135,7 @@ export class VRCombatCueAudio {
       const source = this.context.createBufferSource();
       const gain = this.context.createGain();
       source.buffer = buffer;
+      if (spec.rate && spec.rate !== 1 && source.playbackRate) source.playbackRate.setValueAtTime(spec.rate, t0);
       gain.gain.setValueAtTime(spec.gain, t0);
       source.connect(gain);
       let panner: PannerNode | null = null;

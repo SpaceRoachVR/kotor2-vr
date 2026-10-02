@@ -77,7 +77,9 @@ export class MenuGameOver extends GameMenu {
     for(const save of saves){
       if(!save || !(save as any).timestampKnown) continue;
       const time = save.TIMESTAMP instanceof Date ? save.TIMESTAMP.getTime() : NaN;
-      if(!Number.isFinite(time)) continue;
+      // Saves written while the stamp was broken read as 1601 or as garbage;
+      // only a date in this century and not in the future counts (critic run 8).
+      if(!Number.isFinite(time) || time < Date.UTC(2001, 0, 1) || time > Date.now() + 86_400_000) continue;
       if(!last || time > last.TIMESTAMP.getTime()) last = save;
     }
     if(last) return last;

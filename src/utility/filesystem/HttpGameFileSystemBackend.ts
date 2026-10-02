@@ -16,6 +16,10 @@ const USER_ROOT_FILES = new Map<string, string>([
   ['swkotor.ini', 'swkotor.ini'],
   ['swkotor2.ini', 'swkotor2.ini'],
   ['settings.json', 'settings.json'],
+  // VR comfort settings and the weapon hand (GameState). Kept on disk: the
+  // headset launcher starts Chrome with a fresh profile every time, so a
+  // browser store forgot them on each launch (critic run 8).
+  ['vr-comfort.json', 'vr-comfort.json'],
 ]);
 const MAX_CONCURRENT_REQUESTS = 24;
 

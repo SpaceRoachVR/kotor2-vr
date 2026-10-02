@@ -2060,6 +2060,13 @@ export class ModuleCreature extends ModuleObject {
     return AudioPriorityGroup.NON_PLAYER_CHAT;
   }
 
+  /** A missed swing given or taken by the VR player: the VR miss cue voices it. */
+  private vrVoicesThisSwing(): boolean {
+    const action: any = this.combatData.combatAction;
+    if(!action || action.hits) return false;
+    return !!GameState.vrVoicesCombatImpact?.(this, action.target);
+  }
+
   playEvent(event: THREE.Event){
     this.audioEmitter.setPosition(this.position.x, this.position.y, this.position.z);
     this.footstepEmitter.setPosition(this.position.x, this.position.y, this.position.z);
@@ -2083,13 +2090,19 @@ export class ModuleCreature extends ModuleObject {
           footstepIsLooping = isRolling;
         }
       break;
+      // In VR the cue voices a player's miss (the whoosh) and parry; the
+      // engine played them too, so each was heard twice (critic run 8). A
+      // swing that hits keeps the engine's whoosh.
       case 'Swingshort':
+        if(this.vrVoicesThisSwing()) break;
         rhWeaponSoundResRef = rhSounds?.getSwingShortResRef() || '';
       break;
       case 'Swinglong':
+        if(this.vrVoicesThisSwing()) break;
         rhWeaponSoundResRef = rhSounds?.getSwingLongResRef() || '';
       break;
       case 'HitParry':
+        if(GameState.vrVoicesCombatImpact?.(this, this.combatData.combatAction?.target)) break;
         rhWeaponSoundResRef = rhSounds?.getHitParryResRef() || '';
       break;
       case 'Contact':
