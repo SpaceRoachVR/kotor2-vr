@@ -2709,6 +2709,12 @@ export class GameState implements EngineContext {
     if (classifyVRForcePower(spell) !== true) return;
     VRSpike.presentLocalForceCast();
   };
+
+  /** A scheduled item cast was rejected at release; the player hears the refusal in VR (critic run 4). */
+  static onItemCastRejected: ((owner: unknown) => void) | null = (owner) => {
+    if (!VRSpike.isPresenting || owner !== GameState.getCurrentPlayer()) return;
+    signalVRRefusal('refused: item cast rejected at release');
+  };
   
   static currentGamepad: Gamepad;
   static videoEffect: number = -1;

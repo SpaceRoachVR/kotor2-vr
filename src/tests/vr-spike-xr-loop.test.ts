@@ -1690,7 +1690,10 @@ describe('VRSpike XR loop ownership', () => {
 
     (VRSpike as any).processCombatInput(1_000);
     expect(uses).toEqual([]);
+    // The dwell is 300 ms since critic run 4; 200 ms is not yet a use.
     (VRSpike as any).processCombatInput(1_200);
+    expect(uses).toEqual([]);
+    (VRSpike as any).processCombatInput(1_350);
 
     expect(uses).toEqual([expect.objectContaining({ hand: 'left' })]);
   });

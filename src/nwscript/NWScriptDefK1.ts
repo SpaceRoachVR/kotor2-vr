@@ -452,7 +452,19 @@ NWScriptDefK1.Actions = {
     args: [NWScriptDataType.OBJECT, NWScriptDataType.STRING],
     action: function(this: NWScriptInstance, args: [ModuleObject, string]){
       if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleObject)){
-        return args[0].getItemByTag( args[1] );
+        const held = args[0].getItemByTag( args[1] );
+        if(held) return held;
+        // Worn items count as possessed: a quest check for an equipped item
+        // (a disguise, a worn ID) failed while it was on the body (critic
+        // runs 3 and 4).
+        const tag = String(args[1] ?? '').toLowerCase();
+        const equipment = (args[0] as any).equipment;
+        if(equipment && tag){
+          for(const item of Object.values(equipment) as any[]){
+            if(item && typeof item.getTag === 'function' && String(item.getTag()).toLowerCase() === tag) return item;
+          }
+        }
+        return undefined;
       }else{
         return undefined;
       }

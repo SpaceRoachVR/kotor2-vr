@@ -118,6 +118,10 @@ export class ActionItemCastSpell extends Action {
   }
 
   private rejectItemCast(owner: ModuleCreature): ActionStatus {
+    // A scheduled cast that dies at release (the target moved out of range,
+    // the item is gone) used to vanish silently; VR plays its refusal cue
+    // (critic run 4). See GameState.onItemCastRejected.
+    try { GameState.onItemCastRejected?.(owner); } catch { /* feedback is best effort */ }
     releaseUnstartedItemCastCombatAction(owner.combatRound);
     return ActionStatus.FAILED;
   }
@@ -125,6 +129,13 @@ export class ActionItemCastSpell extends Action {
   private isSourceItemOwnedBy(owner: ModuleCreature, candidate: unknown): boolean {
     if (!candidate) {
       return false;
+    }
+    // A worn item with an activate property (a belt, an implant) is used in
+    // place. Only the bag counted, so it could never be used (critic runs 3
+    // and 4). One with charges needs one left.
+    if (isWornBy(owner, candidate)) {
+      const item = candidate as ModuleItem;
+      return !(Number(item.maxCharges) > 0 && !(Number(item.charges) > 0));
     }
     const party = GameState.PartyManager?.party;
     if (Array.isArray(party) && party.includes(owner)) {
@@ -135,6 +146,11 @@ export class ActionItemCastSpell extends Action {
   }
 
   private consumeSourceItem(owner: ModuleCreature, item: ModuleItem): void {
+    // Worn: spend a charge if it has them, never the item itself.
+    if (isWornBy(owner, item)) {
+      if (Number(item.maxCharges) > 0) item.charges = Math.max(0, Number(item.charges) - 1);
+      return;
+    }
     const party = GameState.PartyManager?.party;
     if (Array.isArray(party) && party.includes(owner)) {
       GameState.InventoryManager.removeItem(item, 1);
@@ -143,4 +159,10 @@ export class ActionItemCastSpell extends Action {
     owner.removeItem(item, 1);
   }
 
+}
+
+function isWornBy(owner: ModuleCreature, candidate: unknown): boolean {
+  const equipment = (owner as any)?.equipment;
+  if (!equipment || !candidate) return false;
+  return Object.values(equipment).includes(candidate);
 }

@@ -2096,9 +2096,11 @@ export class ModuleObject {
       return GameState.InventoryManager.getItemByTag(sTag) as ModuleItem;
     }
 
+    // Case-insensitive, as the party pool's lookup already is.
+    const tag = String(sTag ?? '').toLowerCase();
     for(let i = 0; i < this.inventory.length; i++){
       let item = this.inventory[i];
-      if(item.getTag() == sTag)
+      if(String(item.getTag()).toLowerCase() == tag)
         return item;
     }
     return;

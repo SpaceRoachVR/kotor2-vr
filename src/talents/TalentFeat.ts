@@ -205,16 +205,22 @@ export class TalentFeat extends TalentObject {
     return 1;
   }
 
+  /**
+   * Stance penalties as the feat descriptions in dialog.tlk state them (read
+   * from the retail feat.2da/dialog.tlk, critic run 4): Flurry -2 Defense and
+   * -4 attack, Improved -1/-2, Master none; Rapid Shot -4/-4, Improved -2/-2,
+   * Master none; Critical Strike and Sniper Shot (all ranks) -5 Defense;
+   * Power Attack and Power Blast (all ranks) -3 attack. The penalty lasts the
+   * round "and for 3 seconds afterwards" (FEAT_PENALTY_DURATION).
+   */
   getArmorClassPenalty(){
     switch(this.id){
-      case 11: //FLURRY
       case 30: //RAPID SHOT
         return 4;
-      case 91: //IMPROVED FLURRY
+      case 11: //FLURRY
       case 92: //IMPROVED RAPID SHOT
         return 2;
-      case 53: //MASTER FLURRY
-      case 26: //MASTER RAPID SHOT
+      case 91: //IMPROVED FLURRY
         return 1;
       case 8: //CRITICAL STRIKE
       case 19: //IMPROVED CRITICAL STRIKE
@@ -235,25 +241,17 @@ export class TalentFeat extends TalentObject {
       case 91: //IMPROVED FLURRY
       case 92: //IMPROVED RAPID SHOT
         return 2;
-      case 53: //MASTER FLURRY
-      case 26: //MASTER RAPID SHOT
-        return 1;
       case 28: //POWER ATTACK
-        return 3;
       case 17: //IMPROVED POWER ATTACK
-        return 3;
       case 83: //MASTER POWER ATTACK
-        return 3;
       case 29: //POWER BLAST
-        return 3;
       case 18: //IMPROVED POWER BLAST
-        return 3;
       case 82: //MASTER POWER BLAST
         return 3;
     }
     return 0;
   }
-  
+
   impactCaster(object: ModuleObject){
     if(!BitWise.InstanceOfObject(object, ModuleObjectType.ModuleCreature)) return;
 

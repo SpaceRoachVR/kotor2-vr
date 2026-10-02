@@ -40,8 +40,11 @@ export interface VRConsumableUseGestureInput {
 
 const DEFAULT_CONFIGURATION: VRConsumableUseGestureConfiguration = {
   zoneDropMetres: 0.15,
-  zoneRadiusMetres: 0.22,
-  dwellMilliseconds: 150,
+  // Tightened from 0.22 m / 150 ms (critic runs 3 and 4): a queued medpac
+  // now survives movement, so pulling an armed stim close to read its label
+  // must not fire it. A deliberate press to the neck still lands well inside.
+  zoneRadiusMetres: 0.12,
+  dwellMilliseconds: 300,
   cooldownMilliseconds: 800,
 };
 

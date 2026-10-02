@@ -121,15 +121,15 @@ describe('featPrerequisiteRules', () => {
     test('correctly calculates AC penalties for combat stances including Sniper Shot', () => {
       const flurry = new TalentFeat();
       flurry.id = 11;
-      expect(flurry.getArmorClassPenalty()).toBe(4);
+      expect(flurry.getArmorClassPenalty()).toBe(2);
 
       const impFlurry = new TalentFeat();
       impFlurry.id = 91;
-      expect(impFlurry.getArmorClassPenalty()).toBe(2);
+      expect(impFlurry.getArmorClassPenalty()).toBe(1);
 
       const masterFlurry = new TalentFeat();
       masterFlurry.id = 53;
-      expect(masterFlurry.getArmorClassPenalty()).toBe(1);
+      expect(masterFlurry.getArmorClassPenalty()).toBe(0);
 
       const critStrike = new TalentFeat();
       critStrike.id = 8;
@@ -171,7 +171,7 @@ describe('featPrerequisiteRules', () => {
 
       const masterRapidShot = new TalentFeat();
       masterRapidShot.id = 26;
-      expect(masterRapidShot.getAttackPenalty()).toBe(1);
+      expect(masterRapidShot.getAttackPenalty()).toBe(0);
     });
   });
 });

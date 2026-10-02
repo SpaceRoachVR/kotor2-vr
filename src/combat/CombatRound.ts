@@ -13,6 +13,7 @@ import { AttackResult } from "@/enums/combat/AttackResult";
 import { WeaponWield } from "@/enums/combat/WeaponWield";
 import { ActionType } from "@/enums/actions/ActionType";
 import { WeaponSize } from "@/enums/combat/WeaponSize";
+import { resolveTwoWeaponPenalty } from "@/combat/TwoWeaponRules";
 import { DamageType } from "@/enums/combat/DamageType";
 import { DiceType } from "@/enums/combat/DiceType";
 import { TextSprite3D } from "@/engine/TextSprite3D";
@@ -403,6 +404,12 @@ export class CombatRound {
          */
         if(creature.equipment.LEFTHAND){
           this.calculateWeaponAttack(creature, creature.equipment.LEFTHAND, ModuleCreatureArmorSlot.LEFTHAND, combatAction);
+        }else if(this.isDoubleBladed(creature.equipment.RIGHTHAND)){
+          // A double-bladed weapon fights as two weapons: the second blade is
+          // the off-hand attack, with the two-weapon penalties (feat.2da Two-
+          // Weapon Fighting: "a double-bladed weapon or two weapons"). It used
+          // to get one attack a round (critic runs 3 and 4).
+          this.calculateWeaponAttack(creature, creature.equipment.RIGHTHAND, ModuleCreatureArmorSlot.LEFTHAND, combatAction);
         }
 
         /**
@@ -524,10 +531,22 @@ export class CombatRound {
   isDualWielding(creature: ModuleCreature): boolean {
     const rightHand = creature.equipment.RIGHTHAND;
     const leftHand = creature.equipment.LEFTHAND;
+    if(!leftHand && this.isDoubleBladed(rightHand)) return true;
     return (
       rightHand && ( rightHand.getBaseItem().weaponWield != WeaponWield.STUN_BATON ) &&
       leftHand && ( leftHand.getBaseItem().weaponWield != WeaponWield.STUN_BATON )
     );
+  }
+
+  /**
+   * Double-bladed swords, vibro double-blades and double lightsabers:
+   * baseitems.2da weaponwield 3 with "Double" in the label. The quarterstaff
+   * shares weaponwield 3 but is not double-bladed.
+   */
+  isDoubleBladed(weapon: ModuleItem | undefined): boolean {
+    const baseItem = weapon?.getBaseItem?.();
+    if(!baseItem) return false;
+    return baseItem.weaponWield == WeaponWield.TWO_HANDED_SWORD && /double/i.test(String(baseItem.label || ''));
   }
 
   /**
@@ -539,48 +558,14 @@ export class CombatRound {
   calculateTwoWeaponPenalty(creature: ModuleCreature, slot: ModuleCreatureArmorSlot.RIGHTHAND|ModuleCreatureArmorSlot.LEFTHAND){
     if(!creature) return 0;
     if(creature.isSimpleCreature()) return 0;
-
-    const rightHand = creature.equipment.RIGHTHAND;
-    const leftHand = creature.equipment.LEFTHAND;
-
-    /**
-     * Main Hand Penalty
-     */
-    if(slot == ModuleCreatureArmorSlot.RIGHTHAND){
-      let penalty = 6;
-      if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_MASTERY)){
-        penalty = 2;
-      }else if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_ADVANCED)){
-        penalty = 4;
-      }
-      if(
-        rightHand.getBaseItem().weaponWield == WeaponWield.TWO_HANDED_SWORD ||
-        rightHand.getBaseItem().weaponWield == WeaponWield.BLASTER_PISTOL
-      ){
-        penalty -= 2;
-      }
-      return Math.max(penalty, 0);
-    }
-
-    /**
-     * Off Hand Penalty
-     */
-    if(slot == ModuleCreatureArmorSlot.LEFTHAND){
-      let penalty = 10;
-      if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_MASTERY)){
-        penalty = 2;
-      }else if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_ADVANCED)){
-        penalty = 4;
-      }else if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_FIGHTING)){
-        penalty = 6;
-      }
-      if(leftHand.getBaseItem().weaponSize == WeaponSize.SMALL){
-        penalty -= 2;
-      }
-      return Math.max(penalty, 0);
-    }
-
-    return 0;
+    return resolveTwoWeaponPenalty({
+      offHand: slot == ModuleCreatureArmorSlot.LEFTHAND,
+      // "Balanced" is a light off-hand weapon (a short blade or a pistol). It
+      // eases the MAIN hand by 2; the main hand's own weapon used to decide
+      // it, and the relief went to the off hand (critic runs 3 and 4).
+      balancedOffHand: Number(creature.equipment.LEFTHAND?.getBaseItem?.()?.weaponSize) == WeaponSize.SMALL,
+      hasFeat: (feat: number) => !!creature.getHasFeat(feat),
+    });
   }
 
   /**

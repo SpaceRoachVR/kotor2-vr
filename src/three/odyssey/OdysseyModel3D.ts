@@ -275,7 +275,9 @@ export class OdysseyModel3D extends OdysseyObject3D {
     for (let i = node.children.length; i > 0; i--) {
       const object = node.children[i-1];
       node.remove(object);
-      if (object.type === 'Mesh' || object.type === 'SkinnedMesh' || object.type === 'Points') {
+      // InstancedMesh carries chunk particles (critic run 4: type 'InstancedMesh'
+      // failed this gate and was never released).
+      if (object.type === 'Mesh' || object.type === 'SkinnedMesh' || object.type === 'Points' || object.type === 'InstancedMesh') {
         // Points (particle emitters) are not Meshes: their geometry and
         // material were never released, and the renderer's geometry count
         // climbed with every module load (critic run 3, ROADMAP 0.3).
@@ -292,6 +294,10 @@ export class OdysseyModel3D extends OdysseyObject3D {
           }
           object.geometry.dispose();
         }
+      }else if(object.type === 'OdysseyEmitter'){
+        // The emitter owns its chunk mesh, geometry and cloned material; its
+        // dispose() releases them, and nothing else ever called it.
+        try{ (object as OdysseyEmitter3D).dispose(); }catch(e){ /* best effort */ }
       }else if(object.type === 'OdysseyLight'){
         if(!!this.context && !!this.context.lightManager){
           // The light itself, not the node holding it: passing the parent
