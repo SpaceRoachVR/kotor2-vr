@@ -151,12 +151,17 @@ const check = (ok, label, detail = '') => {
       wasStarted = started;
       await sleep(100);
     }
-    const expiredLog = await harness.evaluate(`(window.__xrHarness && window.__xrHarness.log || []).slice(window.__heldMark || 0).some((e) => /expired/i.test(e.text))`);
+    // Expiry logs '[VR combat swing] held swing expired', so this can fail.
+    const expiredLog = await harness.evaluate(`(window.__xrHarness && window.__xrHarness.log || []).slice(window.__heldMark || 0).some((e) => /held swing expired/i.test(e.text))`);
     check(alive, 'the target is still alive for the held-swing check');
     check(held.busy, 'the swing was made while the round was busy');
     check(roundsAfter >= 1, 'a swing held through a busy round fires at the opening', `rounds started after it: ${roundsAfter}`);
     check(!expiredLog, 'the held swing does not expire on its way to the opening');
 
+    // Blows reach the engine's Hit event as landed (the live round action;
+    // the sound gates read a field nothing assigned, critic run 9).
+    await harness.evaluate(`(() => { const gs = window.KotOR.GameState; window.__landed = 0; const orig = gs.onBlowLanded;
+      gs.onBlowLanded = function (a, t, c) { window.__landed++; return orig && orig.call(this, a, t, c); }; return true; })()`);
     // 2. Ring and round opening.
     const samples = [];
     for (let i = 0; i < 30; i++) {
@@ -179,6 +184,8 @@ const check = (ok, label, detail = '') => {
     check(samples.some((s) => s && s.r > 0 && s.r < 1), 'the ring shows progress during a wait');
     check(backwards === 0, 'the ring never runs backwards within a wait', `backward steps: ${backwards}`);
     check(samples.some((s) => s && s.open), 'the round opens at least once');
+    const landed = await harness.evaluate(`window.__landed || 0`);
+    check(landed > 0, 'landed blows reach the Hit event (impact sound gate sees them)', `landed blows: ${landed}`);
 
     // 3. Medpac queued, then strafe.
     const med = await harness.evaluate(`(() => { const vr = window.KotOR.VRSpike; const wheel = vr.hooks.createActionWheel(null); const all = [];

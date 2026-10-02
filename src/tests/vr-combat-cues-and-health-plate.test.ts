@@ -13,7 +13,7 @@ import { VRBladeSparkHost } from '@/vr/runtime/VRBladeSparkHost';
 // appropriate retail sounds". Every cue names a WAV that TSL's chitin.key
 // lists (read from the retail install), never a synthesized tone.
 const RETAIL_WAVS = new Set([
-  'cb_sw_blade1', 'cb_sw_unarmed1', 'cb_bu_metalmed',
+  'cb_sw_blade1', 'cb_sw_unarmed1', 'cb_bu_stonemed',
   'cb_ht_bladeleth1', 'cb_ht_blastleth1', 'cb_ht_unarmleth1', 'cb_ht_bladearm1',
   'cb_pa_blade1', 'cb_pa_unarm1', 'cb_pa_blast1',
   'v_useforce', 'gui_actqueue', 'gui_error', 'gui_complete', 'gui_invselect',
@@ -33,7 +33,7 @@ describe('combat cue sounds', () => {
 
   test('hit, miss and critical are told apart; the weapon picks the sound', () => {
     expect(describeVRCombatCue('miss', 'melee')[0].resref).toBe('cb_sw_blade1');
-    expect(describeVRCombatCue('miss', 'ranged')[0].resref).toBe('cb_bu_metalmed');
+    expect(describeVRCombatCue('miss', 'ranged')[0].resref).toBe('cb_bu_stonemed');
     expect(describeVRCombatCue('hit', 'ranged')[0].resref).toBe('cb_ht_blastleth1');
     // A critical is one sample, louder and pitched down: not a flam (critic run 8).
     const crit = describeVRCombatCue('critical', 'melee');

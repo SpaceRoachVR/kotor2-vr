@@ -1,3 +1,4 @@
+import { shouldPlayEngineCombatSound, type EngineCombatSoundEvent } from "@/engine/rules/EngineCombatSoundGate";
 import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
 import { GFFObject } from "@/resource/GFFObject";
 import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
@@ -2060,11 +2061,26 @@ export class ModuleCreature extends ModuleObject {
     return AudioPriorityGroup.NON_PLAYER_CHAT;
   }
 
-  /** A missed swing given or taken by the VR player: the VR miss cue voices it. */
-  private vrVoicesThisSwing(): boolean {
-    const action: any = this.combatData.combatAction;
-    if(!action || action.hits) return false;
-    return !!GameState.vrVoicesCombatImpact?.(this, action.target);
+  /**
+   * The attack this creature's round is resolving: its target and whether it
+   * landed. The round's live action, not `combatData.combatAction`, which
+   * nothing assigns (critic run 9).
+   */
+  private currentAttackForSound(): { target: any; landed: boolean; critical: boolean } {
+    const action: any = this.combatRound?.action;
+    const result = action?.attackResult;
+    const landed = result === AttackResult.HIT_SUCCESSFUL || result === AttackResult.CRITICAL_HIT || result === AttackResult.AUTOMATIC_HIT;
+    return { target: action?.target, landed, critical: result === AttackResult.CRITICAL_HIT };
+  }
+
+  private engineCombatSoundPlays(event: EngineCombatSoundEvent): boolean {
+    const attack = this.currentAttackForSound();
+    return shouldPlayEngineCombatSound({
+      event,
+      landed: attack.landed,
+      swingerIsPlayer: this === GameState.getCurrentPlayer(),
+      vrVoices: !!GameState.vrVoicesCombatImpact?.(this, attack.target),
+    });
   }
 
   playEvent(event: THREE.Event){
@@ -2094,15 +2110,15 @@ export class ModuleCreature extends ModuleObject {
       // engine played them too, so each was heard twice (critic run 8). A
       // swing that hits keeps the engine's whoosh.
       case 'Swingshort':
-        if(this.vrVoicesThisSwing()) break;
+        if(!this.engineCombatSoundPlays('swing')) break;
         rhWeaponSoundResRef = rhSounds?.getSwingShortResRef() || '';
       break;
       case 'Swinglong':
-        if(this.vrVoicesThisSwing()) break;
+        if(!this.engineCombatSoundPlays('swing')) break;
         rhWeaponSoundResRef = rhSounds?.getSwingLongResRef() || '';
       break;
       case 'HitParry':
-        if(GameState.vrVoicesCombatImpact?.(this, this.combatData.combatAction?.target)) break;
+        if(!this.engineCombatSoundPlays('parry')) break;
         rhWeaponSoundResRef = rhSounds?.getHitParryResRef() || '';
       break;
       case 'Contact':
@@ -2116,16 +2132,21 @@ export class ModuleCreature extends ModuleObject {
           this.combatData.combatAction.target.damage(this.combatData.combatAction.damage, this);
         }
 
-        // Only a blow that landed makes an impact sound (the miss already had
-        // its whoosh), and in VR a blow given or taken by the player is voiced
-        // by the VR cue at the target; playing both was an echo with one copy
-        // in the player's head (critic run 7).
-        if(!this.combatData.combatAction?.hits || GameState.vrVoicesCombatImpact?.(this, this.combatData.combatAction?.target)){
-          break;
+        {
+          const attack = this.currentAttackForSound();
+          // The blow lands now: a blow on the VR player is voiced at this
+          // moment, damage or not (critic run 9: it waited for an HP drop or
+          // a 1.2 s timer).
+          if(attack.landed) {
+            try { GameState.onBlowLanded?.(this, attack.target, attack.critical); } catch { /* feedback only */ }
+          }
+          // Only a landed blow makes an impact; in VR one given or taken by
+          // the player is voiced by the VR cue at the target (critic run 7).
+          if(!this.engineCombatSoundPlays('hit')) break;
         }
         // The struck target's material, not always leather (critic run 6).
         rhWeaponSoundResRef = impactResRef(rhSounds as any,
-          resolveVRImpactMaterialFor(this.combatData.combatAction?.target),
+          resolveVRImpactMaterialFor(this.currentAttackForSound().target),
           Math.random() < 0.5 ? 0 : 1) || rhSounds?.getLeatherResRef() || '';
       break;
     }

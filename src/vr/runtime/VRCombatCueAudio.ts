@@ -47,7 +47,10 @@ const IMPACT: Readonly<Record<VRCombatCueWeapon, string>> = Object.freeze({
 
 const MISS: Readonly<Record<VRCombatCueWeapon, string>> = Object.freeze({
   melee: 'cb_sw_blade1',
-  ranged: 'cb_bu_metalmed',
+  // A bolt striking the wall behind the target: stone, quieter (below), so a
+  // miss never sounds more like a hit than a hit on a metal droid does
+  // (critic run 9).
+  ranged: 'cb_bu_stonemed',
   unarmed: 'cb_sw_unarmed1',
 });
 
@@ -60,7 +63,7 @@ const PARRY: Readonly<Record<VRCombatCueWeapon, string>> = Object.freeze({
 /** The retail sounds a cue plays, for the player's weapon family. */
 export function describeVRCombatCue(cue: VRCombatCue, weapon: VRCombatCueWeapon = 'melee'): readonly VRCombatCueSound[] {
   switch (cue) {
-    case 'miss': return [sound(MISS[weapon], 0, 0.8)];
+    case 'miss': return [sound(MISS[weapon], 0, weapon === 'ranged' ? 0.45 : 0.8)];
     case 'hit': return [sound(IMPACT[weapon])];
     // One impact, louder and pitched down: a heavier blow. Never the parry
     // clang (run 7), and not the same sample twice, which is a flam (run 8).

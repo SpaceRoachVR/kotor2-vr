@@ -1098,10 +1098,18 @@ function resolveVRAttackWeapon(attacker: any): any {
  * whatever is struck. Choosing by grip played ion impacts for a Blaster Rifle
  * (critic run 8, read from the retail tables).
  */
-function resolveVRBoltImpact(weapon: any, _material: string): string {
+function resolveVRBoltImpact(weapon: any, material: string): string {
   const row = GameState.TwoDAManager?.datatables?.get('ammunitiontypes')?.rows?.[Number(weapon?.baseItem?.ammunitionType)];
-  const sound = String(row?.impactsound0 ?? '');
-  return sound && sound !== '****' ? sound : 'cb_ht_blastleth1';
+  const base = String(row?.impactsound0 ?? '');
+  const sound = base && base !== '****' ? base : 'cb_ht_blastleth1';
+  // The ammunition row names the family (blast / medbl / hvybl); the archives
+  // carry that family per struck material, so a bolt on a droid is metal, not
+  // leather (critic run 9). Unknown materials keep the row's own sound.
+  const family = /^(cb_ht_(?:blast|medbl|hvybl))leth1$/i.exec(sound)?.[1];
+  const suffix: Record<string, string> = {
+    cloth: 'clth1', leather: 'leth1', armor: 'arm1', forceField: 'frce1', metal: 'metal', stone: 'stne', wood: 'wood',
+  };
+  return family && suffix[material] ? `${family}${suffix[material]}` : sound;
 }
 
 /**
@@ -1144,7 +1152,9 @@ function resolveVRCombatPreloadSounds(): string[] {
       if (row?.[key]) out.add(String(row[key]));
     }
   }
-  for (const sound of ['cb_ht_blastleth1', 'cb_ht_medblleth1', 'cb_ht_hvyblleth1']) out.add(sound);
+  for (const family of ['blast', 'medbl', 'hvybl']) {
+    for (const suffix of ['leth1', 'metal', 'arm1', 'clth1']) out.add(`cb_ht_${family}${suffix}`);
+  }
   return [...out];
 }
 
@@ -1482,6 +1492,7 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
   if (vrSwingBufferMissedOpenings >= VR_SWING_BUFFER_MAX_MISSED_OPENINGS ||
     vrSwingBufferHeldSeconds >= VR_SWING_BUFFER_MAX_HELD_SECONDS) {
     vrCombatSwingBuffer.clear();
+    console.info('[VR combat swing] held swing expired');
     signalVRRefusal('refused: swing expired');
     return { released: false, armed: false };
   }
@@ -2998,6 +3009,12 @@ export class GameState implements EngineContext {
     if (vrComfortSettings.combatSoundsEnabled === false) return false;
     const player = GameState.getCurrentPlayer();
     return !!player && (attacker === player || target === player);
+  };
+
+  /** A blow landed (the attack animation's Hit): a blow on the VR player is voiced now (critic run 9). */
+  static onBlowLanded: ((attacker: unknown, target: unknown, critical: boolean) => void) | null = (attacker, target, critical) => {
+    if (!VRSpike.isPresenting || target !== GameState.getCurrentPlayer()) return;
+    try { VRSpike.playHurtCue((attacker as any)?.id, (target as any)?.id, critical); } catch { /* feedback only */ }
   };
 
   /** The player was stunned or knocked down: say so in VR (critic run 6). */
