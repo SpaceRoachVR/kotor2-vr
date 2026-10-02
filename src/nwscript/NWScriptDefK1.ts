@@ -3593,15 +3593,26 @@ NWScriptDefK1.Actions = {
       // An item in a container or an NPC's bag often has no possessor set,
       // and the pool removal below then no-op'd and left it in the source
       // too (critic run 4). Find the holder when it is not recorded.
+      const area: any = GameState.module?.area;
+      const candidates: any[] = [item.possessor, this.caller, ...GameState.PartyManager.party,
+        ...(area?.creatures || []), ...(area?.placeables || [])].filter(Boolean);
+      // Worn: take it off the body first. GetItemPossessedBy now finds worn
+      // items, and handing one on left it equipped on the giver too (critic
+      // run 5).
+      const wearer = candidates.find((o) => o?.equipment && Object.values(o.equipment).includes(item));
+      if(wearer && typeof wearer.takeOffWornItem === 'function') wearer.takeOffWornItem(item);
+      // A recorded holder counts only if it still holds the item: looting
+      // left the container named as the holder of an item now in the party
+      // bag, and the hand-in removed nothing (critic run 5).
       let possessor: any = item.possessor;
+      if(possessor && !(Array.isArray(possessor.inventory) && possessor.inventory.includes(item))) possessor = undefined;
       if(!possessor && !GameState.InventoryManager.inventory.includes(item)){
-        const holders: any[] = [this.caller];
-        const area: any = GameState.module?.area;
-        if(area) holders.push(...(area.placeables || []), ...(area.creatures || []));
-        possessor = holders.find((o) => Array.isArray(o?.inventory) && o.inventory.includes(item));
+        possessor = candidates.find((o) => Array.isArray(o?.inventory) && o.inventory.includes(item));
       }
       const whole = Math.max(1, Number(item.getStackSize()) || 1);
-      if(BitWise.InstanceOfObject(possessor, ModuleObjectType.ModuleObject)){
+      if(wearer){
+        // Already off the body; nothing to remove from an inventory.
+      }else if(BitWise.InstanceOfObject(possessor, ModuleObjectType.ModuleObject)){
         (possessor as ModuleObject).removeItem(item, whole);
       }else{
         // Not held by an object: the party pool is the only other owner. This

@@ -1,3 +1,4 @@
+import { canUseWornItemCast, resolveItemCastUseLimit, spendWornItemCast, type ItemCastUseClock, type ItemCastUseLimit, type ItemCastUseState } from "@/actions/ItemCastUseLimit";
 import { ActionStatus } from "@/enums/actions/ActionStatus";
 import { ActionType } from "@/enums/actions/ActionType";
 import { Action } from "@/actions/Action";
@@ -135,7 +136,10 @@ export class ActionItemCastSpell extends Action {
     // and 4). One with charges needs one left.
     if (isWornBy(owner, candidate)) {
       const item = candidate as ModuleItem;
-      return !(Number(item.maxCharges) > 0 && !(Number(item.charges) > 0));
+      // The property's own retail limit (iprp_chargecost): charges per use,
+      // uses per day, once per N minutes, or unlimited (critic run 5).
+      const limit = this.wornCastLimit(item);
+      return canUseWornItemCast(limit, wornCastState(item), wornCastClock());
     }
     const party = GameState.PartyManager?.party;
     if (Array.isArray(party) && party.includes(owner)) {
@@ -145,10 +149,20 @@ export class ActionItemCastSpell extends Action {
     return Array.isArray(owner.inventory) && owner.inventory.includes(candidate as ModuleItem);
   }
 
+  private wornCastLimit(item: ModuleItem): ItemCastUseLimit {
+    const spellId = this.getParameter<number>(ItemCastSpellParameter.SpellId);
+    const property = (item.properties || []).find((p: any) =>
+      p && p.propertyName === ModuleItemProperty.CastSpell && Number(p.subType) === Number(spellId));
+    return resolveItemCastUseLimit(Number((property as any)?.costValue));
+  }
+
   private consumeSourceItem(owner: ModuleCreature, item: ModuleItem): void {
     // Worn: spend a charge if it has them, never the item itself.
     if (isWornBy(owner, item)) {
-      if (Number(item.maxCharges) > 0) item.charges = Math.max(0, Number(item.charges) - 1);
+      const state = wornCastState(item);
+      const spent = spendWornItemCast(this.wornCastLimit(item), state, wornCastClock());
+      item.charges = state.charges;
+      if (spent && typeof (owner as any).takeOffWornItem === 'function') (owner as any).takeOffWornItem(item);
       return;
     }
     const party = GameState.PartyManager?.party;
@@ -165,4 +179,16 @@ function isWornBy(owner: ModuleCreature, candidate: unknown): boolean {
   const equipment = (owner as any)?.equipment;
   if (!equipment || !candidate) return false;
   return Object.values(equipment).includes(candidate);
+}
+
+function wornCastState(item: ModuleItem): ItemCastUseState {
+  const holder = item as any;
+  if (!holder.wornCastUseState) holder.wornCastUseState = { charges: Number(item.charges) || 0 };
+  holder.wornCastUseState.charges = Number(item.charges) || 0;
+  return holder.wornCastUseState;
+}
+
+function wornCastClock(): ItemCastUseClock {
+  const day = Number((GameState.module as any)?.timeManager?.pauseDay) || 0;
+  return { day, nowMs: typeof performance !== 'undefined' ? performance.now() : Date.now() };
 }

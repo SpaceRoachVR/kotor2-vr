@@ -2036,14 +2036,25 @@ export class ModuleObject {
     }
 
     const idx = this.inventory.indexOf(eItem);
+    // A party member's tag lookup answers from the shared pool, so the item
+    // may not be in this inventory at all; splice(-1) deleted the last entry
+    // (critic run 5).
+    if(idx < 0){
+      return undefined;
+    }
 
     if(nCount < eItem.getStackSize()){
       eItem.setStackSize(eItem.getStackSize() - nCount);
-    }else{
-      this.inventory.splice(idx, 1);
+      // Only a split needs a new object: the part taken away.
+      const taken = eItem.clone();
+      taken.setStackSize(nCount);
+      return taken;
     }
-
-    return eItem.clone();
+    this.inventory.splice(idx, 1);
+    if(eItem.possessor === this) eItem.setPossessor(undefined);
+    // The whole entry left: it is the item itself. Cloning here exported and
+    // re-parsed a GFF on every removal (critic run 5).
+    return eItem;
   }
 
   /**

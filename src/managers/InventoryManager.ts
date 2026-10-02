@@ -147,6 +147,10 @@ export class InventoryManager {
     const presetStack = template instanceof GameState.Module.ModuleArea.ModuleItem ? item.getStackSize() : undefined;
     item.initProperties();
     if(presetStack !== undefined && presetStack > 0) item.setStackSize(presetStack);
+    // The party pool is no object's inventory: an item arriving here (looted,
+    // given, unequipped) no longer belongs to the container or NPC it came
+    // from (critic run 5: a stale holder broke GiveItem).
+    item.setPossessor?.(undefined);
     if(item.getBaseItemId() == BaseItemType.CREDITS){
       GameState.PartyManager.AddGold(item.getStackSize());
       GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.CREDITS_RECEIVED);

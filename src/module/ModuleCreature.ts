@@ -26,7 +26,7 @@ import { TalentSkill } from "@/talents/TalentSkill";
 import { TalentSpell } from "@/talents/TalentSpell";
 import { OdysseyModel3D, OdysseyObject3D } from "@/three/odyssey";
 import { OdysseyModel, OdysseyModelAnimation } from "@/odyssey";
-import { resolveEquipmentSlotRule } from "@/module/CreatureEquipmentSlots";
+import { resolveEquipmentSlotRule, equipmentSlotMasks } from "@/module/CreatureEquipmentSlots";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
 import { CREATURE_EQUIPMENT_PERSISTENCE_SLOTS } from "@/module/creature/CreatureEquipmentPersistence";
 import { selectCorpseLoot } from "@/module/creature/CorpseLoot";
@@ -3995,8 +3995,10 @@ export class ModuleCreature extends ModuleObject {
     // Equipping from a stack takes one off it. Equipping the stack object
     // itself put "x3" in the hand and left the bag's entry pointing at the
     // equipped object, so both screens edited the same item (critic run 4).
-    if(GameState.PartyManager.party.indexOf(this as any) >= 0 && Number(item.getStackSize()) > 1
-      && GameState.InventoryManager.inventory.includes(item)){
+    const heldInStack = GameState.PartyManager.party.indexOf(this as any) >= 0
+      ? GameState.InventoryManager.inventory.includes(item)
+      : this.inventory.includes(item);
+    if(Number(item.getStackSize()) > 1 && heldInStack){
       const single = item.clone();
       item.setStackSize(item.getStackSize() - 1);
       item = single;
@@ -4132,6 +4134,26 @@ export class ModuleCreature extends ModuleObject {
     if(rule.reloadModelOnUnequip){
       this.loadModel();
     }
+  }
+
+  /**
+   * Takes a worn item off without returning it anywhere: the caller is moving
+   * it (GiveItem of an equipped quest item). Effects it granted go, its model
+   * is detached, and the body reloads for armour or headgear.
+   */
+  takeOffWornItem(item: ModuleItem): boolean {
+    const equipment = this.equipment as any;
+    for(const slot of equipmentSlotMasks()){
+      const rule = resolveEquipmentSlotRule(slot);
+      if(!rule || equipment[rule.key] !== item) continue;
+      try{ this.removeEffectsByCreator(item); }catch(e){ console.error('takeOffWornItem: effects', e); }
+      try{ (item as any).model?.parent?.remove((item as any).model); }catch(e){ /* detach is best effort */ }
+      equipment[rule.key] = undefined;
+      item.setPossessor(undefined);
+      if(rule.reloadModelOnUnequip) this.loadModel();
+      return true;
+    }
+    return false;
   }
 
   /**

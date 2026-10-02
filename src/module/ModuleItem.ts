@@ -36,6 +36,11 @@ import type { SWWeaponSound } from "@/engine/rules/SWWeaponSound";
 * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
 * @memberof KotOR
 */
+/** Fields a split-off copy must not inherit: identity and placement. */
+const VR_CLONE_SKIP_FIELDS: ReadonlySet<string> = new Set([
+  'ObjectId', 'ID', 'XPosition', 'YPosition', 'ZPosition', 'XOrientation', 'YOrientation', 'ZOrientation',
+]);
+
 export class ModuleItem extends ModuleObject {
   equippedRes: any;
   baseItemId: number;
@@ -126,7 +131,21 @@ export class ModuleItem extends ModuleObject {
       template = new GFFObject();
       for(const field of this.template.RootNode.fields) template.RootNode.addField(field);
     }
+    // The item as it is now, not as its template was: charges spent, the
+    // identified flag, upgrades and properties live on the object until a
+    // save writes them (critic run 5: the copy lost them).
+    try{
+      const runtime = this.save();
+      for(const field of runtime.fields){
+        if(!field || VR_CLONE_SKIP_FIELDS.has(field.label)) continue;
+        template.RootNode.removeFieldByLabel(field.label);
+        template.RootNode.addField(field);
+      }
+    }catch(e){
+      console.warn('ModuleItem.clone: runtime state not copied', e);
+    }
     template.RootNode.removeFieldByLabel('ObjectId');
+    template.RootNode.removeFieldByLabel('ID');
     const nItem = new ModuleItem(template);
     nItem.initProperties();
     nItem.template.getFieldByLabel('StackSize')?.setValue(1);

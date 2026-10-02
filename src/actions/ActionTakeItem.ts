@@ -51,12 +51,16 @@ export class ActionTakeItem extends Action {
       return ActionStatus.FAILED;
     }
 
+    // One is taken: the split-off part when it came from a stack, else the
+    // item itself. A missing `else` here added it to the party pool AND the
+    // taker's own inventory, and passed the whole stack (critic run 5 sweep).
     const removed = oTarget.removeItem(oItem, 1);
+    if(!removed) return ActionStatus.FAILED;
 
     if(GameState.PartyManager.party.indexOf(this.owner as any) >= 0){
-      GameState.InventoryManager.addItem( oItem );
-    }{
-      this.owner.addItem( oItem );
+      GameState.InventoryManager.addItem( removed );
+    }else{
+      this.owner.addItem( removed );
     }
 
     return ActionStatus.COMPLETE;
