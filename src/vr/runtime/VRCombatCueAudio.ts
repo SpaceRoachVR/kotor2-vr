@@ -18,7 +18,7 @@
  * The roll is untouched; this only presents a result the engine has decided.
  */
 
-export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready' | 'refused';
+export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready' | 'refused' | 'saved';
 
 export interface VRCombatCueTone {
   /** Start, seconds after the cue. */
@@ -54,6 +54,8 @@ const CUES: Readonly<Record<VRCombatCue, readonly VRCombatCueTone[]>> = Object.f
   // Something you asked for was refused (out of range, no target, can't save
   // now): two short low falling blips, unlike any hit.
   refused: [tone(0, 360, 300, 0.07, 0.35, 'square'), tone(0.1, 300, 250, 0.08, 0.35, 'square')],
+  // A quick save went through: two short rising notes, the refusal reversed.
+  saved: [tone(0, 700, 720, 0.07, 0.3, 'sine'), tone(0.09, 1050, 1080, 0.09, 0.3, 'sine')],
 });
 
 export function describeVRCombatCue(cue: VRCombatCue): readonly VRCombatCueTone[] {

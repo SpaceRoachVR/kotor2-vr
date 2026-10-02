@@ -442,7 +442,7 @@ export class ModuleTrigger extends ModuleObject {
     action.setParameter(4, ActionParameterType.INT, ignoreStartRange ? 1 : 0);
     action.setParameter(5, ActionParameterType.DWORD, ModuleObjectConstant.OBJECT_INVALID);
     action.clearable = clearable;
-    console.log('ModuleTrigger.actionDialogObject', action);
+    console.log('ModuleTrigger.actionDialogObject', this.getTag?.());
     const player = GameState.getCurrentPlayer();
     if(!player){
       console.warn('ModuleTrigger.actionDialogObject: Player not found');

@@ -9,6 +9,7 @@ import { ModuleObjectConstant } from "@/enums/module/ModuleObjectConstant";
 import { GameState } from "@/GameState";
 // import { TalentSpell } from "@/talents/TalentSpell";
 import { BitWise } from "@/utility/BitWise";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
 import type { ModuleObject } from "@/module/ModuleObject";
 
 /**
@@ -51,6 +52,13 @@ export class ActionCastSpell extends Action {
 
     if(this.spell){
       if(!this.spell.inRange(this.target, this.owner)){
+        // VR owns the player's position; the walk into cast range would drag
+        // the rig. Fail like ActionItemCastSpell does (critic run 4: a Force
+        // power kept while moving could walk the player).
+        if(ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
+          console.info('ActionCastSpell: out of range, approach suppressed', this.spell?.id);
+          return ActionStatus.FAILED;
+        }
 
         // (this.owner as any).openSpot = undefined;
         let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint(this.groupId);
@@ -68,7 +76,8 @@ export class ActionCastSpell extends Action {
         return ActionStatus.IN_PROGRESS;
 
       }else{
-        if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
+        // VR moves the player from the stick, which sets force every frame; zeroing it here rooted a player strafing while an attack or cast waited for its round (critic run 4).
+        if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature) && !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
           this.owner.force = 0;
           this.owner.speed = 0;
         }

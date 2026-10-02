@@ -97,6 +97,26 @@ describe('XRInputRouter', () => {
     expect(actions.some((action) => String(action.action) === 'wrist')).toBe(false);
   });
 
+  test('left-handed Quest: X and Y keep one job each; the wheel and party switch move to A and B', () => {
+    const press = (hand: 'left' | 'right', index: number) => {
+      const controller = questController(hand);
+      const buttons = [...controller.buttons];
+      buttons[index] = { pressed: true, touched: true, value: 1 };
+      return { ...controller, buttons };
+    };
+    const router = new XRInputRouter(BUILT_IN_XR_PROFILES, { dominantHand: 'left' });
+    const contexts = new Set(['global', 'gameplay', 'ui'] as const);
+    const pressed = (hand: 'left' | 'right', index: number) =>
+      router.route([press(hand, index)], contexts).filter((a) => a.pressed).map((a) => a.action);
+    const x = pressed('left', 4);
+    const y = pressed('left', 5);
+    expect(x).toContain(SemanticXRAction.Use);
+    expect(x).not.toContain(SemanticXRAction.Menu);
+    expect(y).not.toContain(SemanticXRAction.PartyCommand);
+    expect(pressed('right', 4)).toEqual([SemanticXRAction.Menu]);
+    expect(pressed('right', 5)).toEqual([SemanticXRAction.PartyCommand]);
+  });
+
   test.each(BUILT_IN_TRIGGER_PROFILES)(
     // Was left-only. The wheel's ray is resolved by hit, so it usually sits on
     // the right hand while confirm listened only to the left — a live pointer

@@ -144,9 +144,9 @@ function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
   }
   return vrSwoopGripPoses;
 }
-import { VRCombatTempoGate, resolveVRRoundReadiness } from "@/vr/runtime/VRCombatTempoGate";
+import { VRCombatTempoGate, type VRCombatTempoGateReason, resolveVRRoundReadiness, resolveVRRoundOpen, VRRoundReadinessLatch } from "@/vr/runtime/VRCombatTempoGate";
 import { addSwoopRideListener, type SwoopRideEventType } from "@/module/minigame/SwoopRideEvents";
-import { VRCombatSwingBuffer } from "@/vr/runtime/VRCombatSwingBuffer";
+import { VRCombatSwingBuffer, isVRCombatSwingBufferable } from "@/vr/runtime/VRCombatSwingBuffer";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
@@ -676,6 +676,7 @@ const vrCombatIntentQueue = new VRCombatIntentQueue();
 const vrCombatTempoGate = new VRCombatTempoGate();
 /** ROADMAP 3.12 — one swing held while the round is busy. */
 const vrCombatSwingBuffer = new VRCombatSwingBuffer();
+const vrRoundReadinessLatch = new VRRoundReadinessLatch();
 const vrArmedGrenadeState = new VRArmedGrenadeState();
 /**
  * ROADMAP 3.20 — the one medpac, stim or repair kit armed in the off hand,
@@ -941,8 +942,23 @@ let vrConsumableOutcomesReported = 0;
  * nothing in the headset (critic run 3): the player did not know the throw was
  * out of range or the save refused. Every refusal now also sounds.
  */
+/** Names of items the actor has scheduled into its combat round, not yet used. */
+function resolveVRScheduledItemLabels(actor: ModuleCreature): string[] {
+  try {
+    const list = actor.combatRound?.scheduledActionList;
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter((action: any) => action?.actionType === CombatActionType.ITEM_CAST_SPELL && action.item)
+      .map((action: any) => String(action.item.getName?.() ?? 'Item'));
+  } catch {
+    return [];
+  }
+}
+
 function signalVRRefusal(shape: string): void {
-  if (!shape.startsWith('refused')) return;
+  // A cancellation is a refusal the player did not ask for (the armed item
+  // left the bag), so it blips too (critic run 4).
+  if (!shape.startsWith('refused') && !shape.startsWith('cancelled')) return;
   try { VRSpike.playRefusedCue(); } catch { /* sound is best effort */ }
 }
 
@@ -1241,10 +1257,18 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
     actorId: String(actor.id),
     weaponSignature: resolveVRCombatWeaponSignature(actor),
     inCombat: actor.combatData?.combatState === true,
-    isTargetLive: (targetId: string) => resolveVRLiveCombatTarget(actor, targetId) !== null,
+    // Alive and still locked, not "inside weapon reach this frame": a target
+    // stepping a few centimetres past reach dropped the waiting swing
+    // (critic run 4). Out of reach it stays armed; the release below still
+    // needs reach, so it fires when the target is back in it.
+    isTargetLive: (targetId: string) => resolveVRLockedHostile(actor, targetId) !== null,
   };
   const dropped = vrCombatSwingBuffer.invalidate(context);
   if (dropped) {
+    // A swing the player was waiting on should not vanish silently.
+    if (dropped !== 'combat-ended') {
+      try { VRSpike.playRefusedCue(); } catch { /* sound is best effort */ }
+    }
     if (!reportedVRSwingBufferDrops.has(dropped)) {
       reportedVRSwingBufferDrops.add(dropped);
       console.info(`[VR combat swing] buffered swing dropped: ${dropped}`);
@@ -1273,7 +1297,14 @@ function dispatchVRDirectionalForceGesture(
     return false;
   }
   const target = resolveVRLockedHostile(actor, targetId);
-  if (!target || !getVREmbodiedTempoResult(actor, target, 'lock').eligible) return false;
+  if (!target) {
+    reportVRForceCastOutcome('refused: no locked hostile', `head=${intent.label} targetId=${targetId}`);
+    return false;
+  }
+  if (!isVRForceCastSchedulable(getVREmbodiedTempoResult(actor, target, 'lock'))) {
+    reportVRForceCastOutcome('refused: actor cannot act', `head=${intent.label}`);
+    return false;
+  }
   if (!dispatchVRCombatIntent(actor, target, intent)) return false;
   vrCombatIntentQueue.consumeHead();
   vrCombatIssuedTargetId = target.id;
@@ -1287,6 +1318,17 @@ function reportVRForceCastOutcome(shape: string, detail = ''): void {
   if (vrForceCastOutcomesReported >= 12) return;
   vrForceCastOutcomesReported += 1;
   console.info(`[VR force cast] TEMPORARY ${shape}${detail ? ' || ' + detail : ''}`);
+}
+
+/**
+ * A Force power goes through the action menu exactly as a flatscreen click
+ * does, and the engine schedules it at the next round opening. Requiring the
+ * round to be open at the instant of the gesture refused nearly every cast in
+ * a fight (critic run 4), the same mistake grenades had. A round that is
+ * merely busy now schedules; only an actor that cannot act refuses.
+ */
+function isVRForceCastSchedulable(tempo: { readonly eligible: boolean; readonly reason: VRCombatTempoGateReason }): boolean {
+  return tempo.eligible || isVRCombatSwingBufferable(tempo.reason);
 }
 
 /**
@@ -1308,8 +1350,8 @@ function dispatchVRForceCastGesture(actor: ModuleCreature, targetId: string | nu
     reportVRForceCastOutcome('refused: no locked hostile', `head=${intent.label} targetId=${targetId}`);
     return false;
   }
-  if (!getVREmbodiedTempoResult(actor, target, 'lock').eligible) {
-    reportVRForceCastOutcome('refused: round not open', `head=${intent.label}`);
+  if (!isVRForceCastSchedulable(getVREmbodiedTempoResult(actor, target, 'lock'))) {
+    reportVRForceCastOutcome('refused: actor cannot act', `head=${intent.label}`);
     return false;
   }
   if (!dispatchVRCombatIntent(actor, target, intent)) {
@@ -3543,6 +3585,13 @@ export class GameState implements EngineContext {
           ? candidate
           : null;
         const tempo = getVREmbodiedTempoResult(actor, target);
+        const round = actor.combatRound;
+        const roundOpen = resolveVRRoundOpen(round ? {
+          roundStarted: round.roundStarted === true,
+          roundPaused: round.roundPaused === true,
+          playerActionCommitted: round.action !== undefined,
+          scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
+        } : null);
         const queuedIntent = vrCombatIntentQueue.getHead();
         return {
           actorId: String(actor.id),
@@ -3553,15 +3602,21 @@ export class GameState implements EngineContext {
           // hidden attack mode. An empty queue deliberately returns to basic
           // attacks. Round 6 asked to know that more than one was queued; round
           // 11 (K6) asked to see them all, stacked, rather than "+2".
-          stanceReadout: formatVRCombatQueueReadout(
-            vrCombatIntentQueue.getSnapshot().entries.map((entry) => entry.label),
-          ),
-          tempoReadiness: resolveVRRoundReadiness({
+          // Items already scheduled into the round (a medpac at the neck, a
+          // thrown grenade) come after the chosen actions; a queued medpac
+          // was invisible until it went off (critic run 4).
+          stanceReadout: formatVRCombatQueueReadout([
+            ...vrCombatIntentQueue.getSnapshot().entries.map((entry) => entry.label),
+            ...resolveVRScheduledItemLabels(actor),
+          ]),
+          roundOpen: actor.combatData.combatState === true && roundOpen,
+          tempoReadiness: vrRoundReadinessLatch.apply(resolveVRRoundReadiness({
             eligible: tempo.eligible,
             hasTarget: target !== null,
             inCombat: actor.combatData.combatState === true,
+            roundOpen,
             round: actor.combatRound ?? null,
-          }),
+          }), roundOpen, actor.combatData.combatState === true),
           allowDominantTrigger: queuedIntent?.requiredInput === 'dominant-trigger',
           onCombatSwing: (event) => {
             if (event.actorId !== String(actor.id)) return;
@@ -3818,7 +3873,10 @@ export class GameState implements EngineContext {
            * seventh top-level item that would force the wheel to paginate.
            */
           openMenu: () => GameState.MenuManager.MenuCharacter.open(),
-          quickSave: () => { if (!AutoSaveManager.quickSave()) signalVRRefusal('refused: quick save'); },
+          quickSave: () => {
+            if (!AutoSaveManager.quickSave()) signalVRRefusal('refused: quick save');
+            else { try { VRSpike.playSavedCue(); } catch { /* sound is best effort */ } }
+          },
           canSwapWeapons: typeof actor.hasAlternateWeaponSet === 'function' && actor.hasAlternateWeaponSet(),
           swapWeapons: () => actor.swapWeaponSets(),
           // BTN_CLEARALL's exact behaviour, offered only when there is
@@ -3831,6 +3889,11 @@ export class GameState implements EngineContext {
             if (!player) return;
             vrCombatIntentQueue.clear();
             vrArmedGrenadeState.cancel();
+            // Everything waiting, not only the queue and a grenade: a swing
+            // held for the next round and an item at the neck used to survive
+            // "Clear Actions" and fire anyway (critic run 4).
+            vrCombatSwingBuffer.clear();
+            vrArmedConsumableState.cancel();
             player.clearAllActions();
             player.combatData.combatState = false;
             player.cancelCombat();

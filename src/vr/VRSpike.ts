@@ -2740,11 +2740,14 @@ export class VRSpike {
    */
   private static pulseRoundReady(
     session: XRSession,
-    context: { readonly inCombat: boolean; readonly tempoReadiness?: number },
+    context: { readonly inCombat: boolean; readonly tempoReadiness?: number; readonly roundOpen?: boolean },
     bufferedSwingReleased: boolean,
   ): void {
-    const open = context.inCombat === true &&
-      ((context.tempoReadiness ?? 0) >= 1 || bufferedSwingReleased);
+    // roundOpen follows the player's round alone. Readiness also reads 1 when
+    // the aim leaves every target, which ticked with no round boundary
+    // (critic run 4); it remains the fallback for hosts that do not report it.
+    const roundOpen = context.roundOpen ?? ((context.tempoReadiness ?? 0) >= 1);
+    const open = context.inCombat === true && (roundOpen || bufferedSwingReleased);
     if (open && !VRSpike.roundReadyLatched) {
       void VRSpike.haptics.pulse(session, VRSpike.dominantHand, ROUND_READY_HAPTIC);
       VRSpike.playCombatCue('ready');
@@ -4448,14 +4451,23 @@ export class VRSpike {
   }
 
   /** A refused request (grenade out of range, no target, save refused). */
+  /**
+   * Refusals and saves are interface feedback, not combat sounds: they play
+   * with Combat Sounds off, since a refusal heard by nobody is silent again
+   * (critic run 4).
+   */
   static playRefusedCue(): void {
-    VRSpike.playCombatCue('refused');
+    VRSpike.playCombatCue('refused', 0, true);
+  }
+
+  static playSavedCue(): void {
+    VRSpike.playCombatCue('saved', 0, true);
   }
 
   /** A combat result you can hear, unless Combat Sounds is off. */
-  private static playCombatCue(cue: VRCombatCue, delayMs = 0): void {
+  private static playCombatCue(cue: VRCombatCue, delayMs = 0, always = false): void {
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
-    if (comfort.combatSoundsEnabled === false) return;
+    if (!always && comfort.combatSoundsEnabled === false) return;
     try {
       if (!VRSpike.combatCueAudio) {
         const output = VRSpike.hooks?.getCombatCueAudioOutput?.();

@@ -46,9 +46,9 @@ export class EffectDisguise extends GameEffect {
         creature.pm_Appearance = creature.appearance;
         creature.pm_IsDisguised = true;
         creature.setAppearance(this.getInt(0));
-        console.log('Disguise applying', creature, this);
+        console.log('Disguise applying', creature.getTag?.(), this.getInt(0));
         creature.loadModel().then( () => {
-          console.log('Disguise applied', creature, this);
+          console.log('Disguise applied', creature.getTag?.(), this.getInt(0));
         });
       }
     }
@@ -62,9 +62,9 @@ export class EffectDisguise extends GameEffect {
         creature.pm_IsDisguised = false;
         creature.setAppearance(creature.appearance);
       }
-      console.log('Disguise removing', creature, this);
+      console.log('Disguise removing', creature.getTag?.(), this.getInt(0));
       creature.loadModel().then( () => {
-        console.log('Disguise removed', creature, this);
+        console.log('Disguise removed', creature.getTag?.(), this.getInt(0));
       });
     }
   }

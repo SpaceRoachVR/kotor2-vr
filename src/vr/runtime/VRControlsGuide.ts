@@ -25,8 +25,8 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       ['Turn your wrist', 'Check your health watch'],
     ],
   };
-  // The Quest profile pins the wheel and party switch to the physical left
-  // X and Y, whichever hand is dominant.
+  // The wheel and party switch sit on the off hand's face buttons, so a
+  // left-hander has them on A and B and keeps X and Y for Use and Back.
   if (dominant === 'right') {
     return [
       {
@@ -59,8 +59,8 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
         ['Trigger', 'Select, talk, shoot'],
         ['Stick', 'Turn (or scroll a menu list)'],
         ['Stick click, hold', 'Recenter'],
-        ['X', 'Action wheel; also Use'],
-        ['Y', 'Switch party member; also Back / pause'],
+        ['X', 'Use what you point at'],
+        ['Y', 'Back / pause'],
       ],
     },
     {
@@ -68,6 +68,8 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       lines: [
         ['Stick', 'Move'],
         ['Stick click', 'Walk / run'],
+        ['A', 'Action wheel (inventory, map, party, save, settings)'],
+        ['B', 'Switch party member'],
         ['Trigger', 'Throw an armed grenade'],
       ],
     },

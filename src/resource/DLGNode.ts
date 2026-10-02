@@ -266,8 +266,7 @@ export class DLGNode {
     }
     try{
       if(!speaker){
-        console.error(`No speaker found for ${this.text}`);
-        console.log(this);
+        console.error(`No speaker found for ${this.text}`, this.speakerTag);
         return;
       }
       console.log('saving', speaker.getName(), this.text);

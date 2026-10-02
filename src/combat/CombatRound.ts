@@ -291,7 +291,11 @@ export class CombatRound {
     this.roundPaused = true;
     this.roundPausedBy = pauseOwner;
     this.pauseTimer = pauseTimer;
+    this.pauseLength = pauseTimer;
   }
+
+  /** The length the current pause started at; the VR hilt ring reads it. */
+  pauseLength: number = 0;
 
   /**
    * Unpause the round for the given pause owner

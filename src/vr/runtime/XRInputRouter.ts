@@ -111,11 +111,16 @@ export const BUILT_IN_XR_PROFILES: readonly XRInputBindingProfile[] = [
   {
     id: 'quest-touch',
     interactionProfiles: ['oculus-touch-v3', 'oculus-touch-v2', 'oculus-touch'],
-    // Quest: Menu is left X (4), so left Y (5) is free for PartyCommand.
+    // Quest: Menu is the off-hand's lower face button (X for a right-hander),
+    // so its upper one (Y) is free for PartyCommand. Bound by role, not by
+    // the left hand: for a left-hander the dominant hand's Use and Pause
+    // already sit on X and Y, and a fixed left binding gave each of those
+    // buttons two jobs (critic runs 3 and 4). Left-handed, Menu and
+    // PartyCommand move to A and B.
     bindings: standardBindings(
       [2, 3],
-      { hand: 'left', input: { kind: 'button', index: 4 } },
-      { hand: 'left', input: { kind: 'button', index: 5 } },
+      { hand: 'offhand', input: { kind: 'button', index: 4 } },
+      { hand: 'offhand', input: { kind: 'button', index: 5 } },
     ),
   },
   {

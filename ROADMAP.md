@@ -442,6 +442,14 @@ are collected were never `dispose()`d; the remaining parentless copies are
 props (`plc_chunkybit*`, `plc_junkbin01`), `i_null`, weapons and kolto
 bubbles with no owner. The history below is kept as found.
 
+**Update 2026-10-02.** Geometry is now flat (102PER 1019 -> 1019 -> 1019 after
+`THREE.Points` disposal and `removeLight` in 07a0a53a). Textures are **counter
+drift only**: `probe-texture-leak.js` counts live `THREE.Texture` objects after a
+forced GC with `Runtime.queryObjects` and finds them flat (975 live, 185
+uploaded, across cycles) while `renderer.info.memory.textures` keeps rising.
+That counter only falls on `dispose()`; a texture collected without one stays
+counted. Not a leak. Separate stable waste: 407 copies of `cm_baremetal`.
+
 
 Measured with `tools/vr-emulator/probe-memory-growth.js`, which loads the same
 two modules in a cycle and reads every candidate retainer after a forced

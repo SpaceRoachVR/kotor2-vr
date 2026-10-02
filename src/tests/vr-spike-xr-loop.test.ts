@@ -1163,6 +1163,7 @@ describe('VRSpike XR loop ownership', () => {
     let readiness = 0;
     let inCombat = true;
     let released = false;
+    let roundOpen: boolean | undefined = undefined;
     VRSpike.hooks = {
       update: () => undefined,
       getPlayerPosition: () => null,
@@ -1170,7 +1171,7 @@ describe('VRSpike XR loop ownership', () => {
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
         actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat,
-        stanceReadout: '', tempoReadiness: readiness, onCombatSwing: () => undefined,
+        stanceReadout: '', tempoReadiness: readiness, roundOpen, onCombatSwing: () => undefined,
       }),
       serviceCombatSwingBuffer: () => ({ released, armed: false }),
     };
@@ -1200,6 +1201,20 @@ describe('VRSpike XR loop ownership', () => {
     readiness = 1;
     (VRSpike as any).processCombatInput(1_096);
     expect(ticks()).toHaveLength(2);
+
+    // In combat, readiness reading 1 because the aim left every target is not
+    // a round opening either when the host reports the round itself (critic
+    // run 4: the tick followed the aim).
+    inCombat = true;
+    roundOpen = false;
+    readiness = 0;
+    (VRSpike as any).processCombatInput(1_112);
+    readiness = 1;
+    (VRSpike as any).processCombatInput(1_128);
+    expect(ticks()).toHaveLength(2);
+    roundOpen = true;
+    (VRSpike as any).processCombatInput(1_144);
+    expect(ticks()).toHaveLength(3);
   });
 
   test('clears a stale soft lock and target-dependent transient state after engine invalidation', () => {

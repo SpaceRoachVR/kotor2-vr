@@ -1866,7 +1866,7 @@ export class ModuleObject {
           this.triggerSpellCastAtEvent( event );
         break;
         default:
-          console.error('scriptEventHandler', 'Unhandled Event', event, this);
+          console.error('scriptEventHandler', 'Unhandled Event', event?.type ?? event, this.getTag?.());
         break;
       }
     }

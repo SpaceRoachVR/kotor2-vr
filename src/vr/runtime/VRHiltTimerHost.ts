@@ -86,12 +86,20 @@ export class VRHiltTimerHost {
     this.context.arc(center, center, radius, 0, Math.PI * 2);
     this.context.stroke();
 
-    const sweep = armed ? 1 : readiness;
+    // An armed swing keeps the countdown visible, drawn in amber, with an
+    // amber centre dot for "a swing is waiting". A full amber ring hid how
+    // long the wait was (critic run 4).
     this.context.strokeStyle = armed ? '#ffb347' : readiness >= 1 ? '#5cffb1' : '#62e8ff';
     this.context.lineWidth = size * 0.12;
     this.context.beginPath();
-    this.context.arc(center, center, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * sweep);
+    this.context.arc(center, center, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * readiness);
     this.context.stroke();
+    if (armed) {
+      this.context.fillStyle = '#ffb347';
+      this.context.beginPath();
+      this.context.arc(center, center, size * 0.14, 0, Math.PI * 2);
+      this.context.fill();
+    }
 
     this.texture.needsUpdate = true;
   }
