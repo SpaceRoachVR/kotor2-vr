@@ -2980,11 +2980,27 @@ export class ModuleCreature extends ModuleObject {
     let armorAC = (this.equipment.ARMOR?.getACBonus() || 0);
 
     let dexBonus = Math.floor((this.getDEX() - 10) / 2);
+    // Armor caps how much Dexterity counts (baseitems.2da dexbonus; -1 = none).
+    const maxDex = Number(this.equipment.ARMOR?.getDexBonus?.());
+    if(this.equipment.ARMOR && Number.isFinite(maxDex) && maxDex >= 0) dexBonus = Math.min(dexBonus, maxDex);
+
+    // Defense from everything else worn (belts, implants, armbands, masks,
+    // gloves) and from effects - Force Armor/Shield/Aura, feat penalties
+    // like Flurry's - was never counted (critic run 3).
+    let otherAC = 0;
+    for(const key of ['HEAD', 'ARMS', 'BELT', 'IMPLANT', 'LEFTARMBAND', 'RIGHTARMBAND']){
+      const item = (this.equipment as any)[key];
+      if(item?.getACBonus) otherAC += Number(item.getACBonus()) || 0;
+    }
+    for(const effect of this.effects){
+      if(effect.type == GameEffectType.EffectACIncrease) otherAC += (effect.getInt(1) || 0);
+      else if(effect.type == GameEffectType.EffectACDecrease) otherAC -= (effect.getInt(1) || 0);
+    }
 
     // Natural defense (HK-47 has some) and the autobalance set's defense bonus,
     // which TSL adds to the class bonus.
     const naturalAC = Number.isFinite(this.naturalAC) ? this.naturalAC : 0;
-    return baseac + classBonus + armorAC + dexBonus + naturalAC + this.getAutoBalanceBonuses().defenseBonus;
+    return baseac + classBonus + armorAC + dexBonus + otherAC + naturalAC + this.getAutoBalanceBonuses().defenseBonus;
   }
 
   getAutoBalanceSaveBonus(): number {
@@ -3116,7 +3132,15 @@ export class ModuleCreature extends ModuleObject {
       finesseMelee: this.getHasFeat(CombatFeatType.FINESSE_MELEE_WEAPONS),
       finesseLightsaber: this.getHasFeat(CombatFeatType.FINESSE_LIGHTSABERS),
     });
-    return bab + ability + (weapon?.getAttackBonus?.() || 0) + this.getAutoBalanceBonuses().attackBonus;
+    // Attack effects: buffs, and the penalties feats apply to their user
+    // (Power Attack, Flurry, Rapid Shot) and that Horrified applies - all
+    // ignored before, so the penalties were free (critic run 3).
+    let effects = 0;
+    for(const effect of this.effects){
+      if(effect.type == GameEffectType.EffectAttackIncrease) effects += (effect.getInt(0) || 0);
+      else if(effect.type == GameEffectType.EffectAttackDecrease) effects -= (effect.getInt(0) || 0);
+    }
+    return bab + ability + (weapon?.getAttackBonus?.() || 0) + effects + this.getAutoBalanceBonuses().attackBonus;
   }
 
   /**

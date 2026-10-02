@@ -1053,12 +1053,24 @@ export class PartyManager {
    * @param creature - The creature to add to the list of Party Members
    * @returns void
    */
-  static AddCreatureToParty(slot = 1, creature: ModuleCreature){
+  static AddCreatureToParty(slot = 1, creature: ModuleCreature): boolean {
     if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)){
-      return;
+      return false;
     }
 
     creature = creature as ModuleCreature;
+    // Already in the party (this creature, or this NPC slot's member): retail
+    // reports success and adds nothing. A second add pushed a duplicate.
+    if(PartyManager.party.includes(creature) ||
+      PartyManager.party.some((member) => member && member !== PartyManager.party[0] && member.npcId === slot)){
+      return true;
+    }
+    // No room: retail AddPartyMember fails rather than growing the party past
+    // three (critic run 3; a possible part of T3 rejoining early, round 14).
+    if(PartyManager.party.length >= PartyManager.MaxSize){
+      console.warn('AddCreatureToParty: party is full; refused', slot, creature.getTag?.());
+      return false;
+    }
     creature.isPM = true;
     creature.clearAllActions();
     PartyManager.NPCS[slot].available = true;
@@ -1079,6 +1091,7 @@ export class PartyManager {
     if(cIdx > -1){
       GameState.module.area.creatures.splice(cIdx, 1);
     }
+    return true;
   }
 
   /**

@@ -222,25 +222,13 @@ export class CombatAttackData {
         this.damageList[this.attackWeapon.getDamageBonusType()].addDamage(this.attackWeapon.getDamageBonus() * damageMultiplier);
       }
 
-      if( 
-        creature.getHasFeat(CombatFeatType.POWER_ATTACK) || 
-        creature.getHasFeat(CombatFeatType.POWER_BLAST)
-      ){
-        this.damageList[DamageType.BASE].addDamage(5 * damageMultiplier);
-      }
-
-      if( 
-        creature.getHasFeat(CombatFeatType.IMPROVED_POWER_ATTACK) || 
-        creature.getHasFeat(CombatFeatType.IMPROVED_POWER_BLAST)
-      ){
-        this.damageList[DamageType.BASE].addDamage(8 * damageMultiplier);
-      }
-
-      if( 
-        creature.getHasFeat(CombatFeatType.MASTER_POWER_ATTACK) || 
-        creature.getHasFeat(CombatFeatType.MASTER_POWER_BLAST) 
-      ){
-        this.damageList[DamageType.BASE].addDamage(10 * damageMultiplier);
+      // Power Attack / Power Blast add damage only on an attack that uses
+      // them, at the tier used: melee for Attack, ranged for Blast. Merely
+      // knowing the feat used to add it to every hit, the tiers stacking to
+      // +23, so choosing the mode changed nothing (critic run 3).
+      const powerBonus = resolvePowerAttackDamage(feat?.id, !!this.attackWeapon.isRangedWeapon());
+      if(powerBonus > 0){
+        this.damageList[DamageType.BASE].addDamage(powerBonus * damageMultiplier);
       }
 
       let specBonus = this.calculateWeaponSpecBonus(creature, this.attackWeapon);
@@ -379,4 +367,17 @@ export class CombatAttackData {
     return struct;
   }
 
+}
+
+/** Bonus damage for the Power Attack / Power Blast feat an attack uses (0 for any other). */
+export function resolvePowerAttackDamage(featId: number | undefined, ranged: boolean): number {
+  switch(featId){
+    case CombatFeatType.POWER_ATTACK: return ranged ? 0 : 5;
+    case CombatFeatType.IMPROVED_POWER_ATTACK: return ranged ? 0 : 8;
+    case CombatFeatType.MASTER_POWER_ATTACK: return ranged ? 0 : 10;
+    case CombatFeatType.POWER_BLAST: return ranged ? 5 : 0;
+    case CombatFeatType.IMPROVED_POWER_BLAST: return ranged ? 8 : 0;
+    case CombatFeatType.MASTER_POWER_BLAST: return ranged ? 10 : 0;
+    default: return 0;
+  }
 }

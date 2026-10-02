@@ -6942,8 +6942,7 @@ NWScriptDefK1.Actions = {
     args: [NWScriptDataType.INTEGER, NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [number, ModuleObject]){
       if(BitWise.InstanceOfObject(args[1], ModuleObjectType.ModuleCreature)){
-        GameState.PartyManager.AddCreatureToParty(args[0], (args[1] as ModuleCreature));
-        return NW_TRUE;
+        return GameState.PartyManager.AddCreatureToParty(args[0], (args[1] as ModuleCreature)) ? NW_TRUE : NW_FALSE;
       }
       return NW_FALSE;
     }
