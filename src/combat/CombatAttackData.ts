@@ -15,6 +15,7 @@ import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot"
 import { abilityModifier, NO_AUTO_BALANCE, strengthAddsToDamage } from "@/combat/TSLCombatRules";
 import { reduceDamageList, resolveStructureDamage } from "@/engine/interaction/StructureDamageRules";
 import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
+import { resolveCriticalMultiplierBonus, resolvePowerAttackDamage } from "@/combat/CombatFeatRules";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
 
@@ -199,7 +200,10 @@ export class CombatAttackData {
       return;
     };
 
-    const damageMultiplier = isCritial ? this.attackWeapon.baseItem.criticalHitMultiplier : 1.0;
+    // Power Attack/Blast raise the critical multiplier by 1 (feat text, critic run 5).
+    const damageMultiplier = isCritial
+      ? this.attackWeapon.baseItem.criticalHitMultiplier + resolveCriticalMultiplierBonus(feat?.id, !!this.attackWeapon.isRangedWeapon())
+      : 1.0;
     // Off-hand means a second weapon: a mining droid carries its only weapon in
     // the left-hand slot, and that is not an off-hand blaster.
     const offHandBlasterPistol = this.attackSlot == ModuleCreatureArmorSlot.LEFTHAND &&
@@ -370,14 +374,5 @@ export class CombatAttackData {
 }
 
 /** Bonus damage for the Power Attack / Power Blast feat an attack uses (0 for any other). */
-export function resolvePowerAttackDamage(featId: number | undefined, ranged: boolean): number {
-  switch(featId){
-    case CombatFeatType.POWER_ATTACK: return ranged ? 0 : 5;
-    case CombatFeatType.IMPROVED_POWER_ATTACK: return ranged ? 0 : 8;
-    case CombatFeatType.MASTER_POWER_ATTACK: return ranged ? 0 : 10;
-    case CombatFeatType.POWER_BLAST: return ranged ? 5 : 0;
-    case CombatFeatType.IMPROVED_POWER_BLAST: return ranged ? 8 : 0;
-    case CombatFeatType.MASTER_POWER_BLAST: return ranged ? 10 : 0;
-    default: return 0;
-  }
-}
+// Moved to CombatFeatRules (TSL values +3/+7/+12, critic run 5); re-exported for callers.
+export { resolvePowerAttackDamage } from "@/combat/CombatFeatRules";

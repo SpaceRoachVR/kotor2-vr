@@ -11,13 +11,13 @@ import { CombatFeatType } from '@/enums/combat/CombatFeatType';
 describe('Power Attack and Power Blast damage', () => {
   test('only the feat the attack uses, at its tier', () => {
     expect(resolvePowerAttackDamage(undefined, false)).toBe(0);
-    expect(resolvePowerAttackDamage(CombatFeatType.POWER_ATTACK, false)).toBe(5);
-    expect(resolvePowerAttackDamage(CombatFeatType.IMPROVED_POWER_ATTACK, false)).toBe(8);
-    expect(resolvePowerAttackDamage(CombatFeatType.MASTER_POWER_ATTACK, false)).toBe(10);
+    expect(resolvePowerAttackDamage(CombatFeatType.POWER_ATTACK, false)).toBe(3);
+    expect(resolvePowerAttackDamage(CombatFeatType.IMPROVED_POWER_ATTACK, false)).toBe(7);
+    expect(resolvePowerAttackDamage(CombatFeatType.MASTER_POWER_ATTACK, false)).toBe(12);
   });
   test('Attack is melee, Blast is ranged', () => {
     expect(resolvePowerAttackDamage(CombatFeatType.POWER_ATTACK, true)).toBe(0);
-    expect(resolvePowerAttackDamage(CombatFeatType.POWER_BLAST, true)).toBe(5);
+    expect(resolvePowerAttackDamage(CombatFeatType.POWER_BLAST, true)).toBe(3);
     expect(resolvePowerAttackDamage(CombatFeatType.POWER_BLAST, false)).toBe(0);
   });
 });

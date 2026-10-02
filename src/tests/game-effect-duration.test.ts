@@ -291,19 +291,26 @@ describe('ModuleObject.update with expiring effects', () => {
 });
 
 describe('feat penalties applied through addEffect', () => {
-  test('a Flurry round penalty lasts one 3 second round, then leaves', () => {
+  test('a Flurry penalty lasts the round and 3 seconds after, and does not stack', () => {
     // CombatRound calls impactCaster every round a feat attack is used. The
-    // penalty used to stay forever, and its duration was ROUND_LENGTH in ms.
+    // penalty used to stay forever, then lasted only the round; the feat text
+    // says "while using this feat and for 3 seconds afterwards" (critic run 5).
     const object = host();
     object.objectType = ModuleObjectType.ModuleObject | ModuleObjectType.ModuleCreature;
+    (object as any).removeEffect = function (effect: any) {
+      const i = this.effects.indexOf(effect); if (i >= 0) this.effects.splice(i, 1);
+    };
     const flurry = Object.create(TalentFeat.prototype) as TalentFeat;
     flurry.id = 11;
 
     flurry.impactCaster(object);
     flurry.impactCaster(object);
 
-    expect(object.effects).toHaveLength(4);
-    expect(object.effects.every((e) => e.duration === CombatRound.ROUND_LENGTH / 1000)).toBe(true);
+    // A second round's penalty replaces the first: one Defense, one attack.
+    expect(object.effects).toHaveLength(2);
+    expect(object.effects.every((e) => e.duration === 2 * CombatRound.ROUND_LENGTH / 1000)).toBe(true);
+    advance(object, CombatRound.ROUND_LENGTH / 1000);
+    expect(object.effects).toHaveLength(2);
     // An effect that removes itself shifts the next one into its slot, which
     // then misses that frame — as in ModuleCreature's loop — so allow a lap.
     advance(object, CombatRound.ROUND_LENGTH / 1000 + 1);

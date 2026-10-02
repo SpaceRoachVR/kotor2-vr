@@ -10,10 +10,13 @@ import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
 import { CombatFeatType } from "@/enums/combat/CombatFeatType";
 import { AttackResult } from "@/enums/combat/AttackResult";
+import { BaseItemType } from "@/enums/combat/BaseItemType";
+import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { WeaponWield } from "@/enums/combat/WeaponWield";
 import { ActionType } from "@/enums/actions/ActionType";
 import { WeaponSize } from "@/enums/combat/WeaponSize";
 import { resolveTwoWeaponPenalty } from "@/combat/TwoWeaponRules";
+import { resolveFeatOnHitSave, resolveFeatSaveDC, resolveThreatRangeMin, resolveThreatRangeMultiplier } from "@/combat/CombatFeatRules";
 import { DamageType } from "@/enums/combat/DamageType";
 import { DiceType } from "@/enums/combat/DiceType";
 import { TextSprite3D } from "@/engine/TextSprite3D";
@@ -25,6 +28,16 @@ import { GameState } from "@/GameState";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
 import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
 import { resolveAttackRoll } from "@/combat/TSLCombatRules";
+
+/** Ranks attack results so a round reports its best attack. */
+function bestAttackResult(previous: AttackResult | undefined, next: AttackResult): AttackResult {
+  const rank = (r: AttackResult | undefined) =>
+    r === AttackResult.CRITICAL_HIT ? 4 :
+    r === AttackResult.HIT_SUCCESSFUL || r === AttackResult.AUTOMATIC_HIT ? 3 :
+    r === AttackResult.DEFLECTED || r === AttackResult.PARRIED ? 2 :
+    r === AttackResult.MISS ? 1 : 0;
+  return rank(previous) > rank(next) ? previous as AttackResult : next;
+}
 
 /**
  * CombatRound class.
@@ -544,9 +557,39 @@ export class CombatRound {
    * shares weaponwield 3 but is not double-bladed.
    */
   isDoubleBladed(weapon: ModuleItem | undefined): boolean {
-    const baseItem = weapon?.getBaseItem?.();
-    if(!baseItem) return false;
-    return baseItem.weaponWield == WeaponWield.TWO_HANDED_SWORD && /double/i.test(String(baseItem.label || ''));
+    // baseitems.2da rows 6, 7 and 9 (critic run 5: not a label match).
+    const id = weapon?.getBaseItemId?.();
+    return id === BaseItemType.DOUBLE_BLADED_SWORD || id === BaseItemType.VIBRO_DOUBLE_BLADE ||
+      id === BaseItemType.DOUBLE_BLADED_LIGHTSABER;
+  }
+
+  /**
+   * Critical Strike / Sniper Shot stun on a hit, Power Attack / Blast knock
+   * down on a critical, each unless the target makes the Fortitude save the
+   * feat text names (CombatFeatRules).
+   */
+  private applyFeatOnHit(creature: ModuleCreature, weapon: ModuleItem | undefined, combatAction: CombatRoundAction, critical: boolean){
+    if(!weapon) return;
+    const save = resolveFeatOnHitSave(combatAction.feat?.id, !!weapon.isRangedWeapon?.());
+    if(!save || (save.on === 'critical' && !critical)) return;
+    const target = combatAction.target as ModuleObject;
+    if(!target || (typeof target.isDead === 'function' && target.isDead())) return;
+    try{
+      const ability = save.ability === 'STR' ? creature.getSTR() : save.ability === 'DEX' ? creature.getDEX() : creature.getINT();
+      const dc = resolveFeatSaveDC(save, creature.getTotalClassLevel?.() ?? 0, CombatRound.GetMod(ability));
+      if(typeof target.fortitudeSave === 'function' && target.fortitudeSave(dc, 0, creature)) return;
+      const effect = save.effect === 'stun'
+        ? new GameState.GameEffectFactory.EffectSetState()
+        : new GameState.GameEffectFactory.EffectKnockdown();
+      if(save.effect === 'stun') effect.setInt(0, 4); // Stunned, as EffectStunned()
+      effect.setCreator(creature);
+      effect.setDurationType(GameEffectDurationType.TEMPORARY);
+      effect.setDuration(save.seconds);
+      effect.initialize();
+      target.addEffect(effect);
+    }catch(e){
+      console.error('CombatRound: feat on-hit effect failed', e);
+    }
   }
 
   /**
@@ -593,29 +636,40 @@ export class CombatRound {
       natural: Dice.roll(1, DiceType.d20),
       attackBonus,
       defense: combatAction.target.getAC(),
-      threatRangeMin: weapon ? weapon.getCriticalThreatRangeMin() + 1 : 20,
+      // Critical Strike / Sniper Shot widen the threat range 2x/3x/4x.
+      threatRangeMin: weapon
+        ? resolveThreatRangeMin(weapon.getCriticalThreatRangeMin() + 1,
+          resolveThreatRangeMultiplier(combatAction.feat?.id, !!weapon.isRangedWeapon?.()))
+        : 20,
       threatNatural: Dice.roll(1, DiceType.d20),
     });
     const attackRoll = roll.total;
     const isCritical = roll.critical;
     const hasAssuredHit = creature.hasEffect(GameEffectType.EffectAssuredHit);
     const attack = this.attackList[this.currentAttack];
+    if(!attack) return;
     attack.attackSlot = weaponSlot;
+    const previousResult = this.currentAttack > 0 ? combatAction.attackResult : undefined;
     if(hasAssuredHit || roll.hit){
       if(this.tryBlasterDeflection(creature, weapon, attackRoll, combatAction, attack)){
         combatAction.attackResult = AttackResult.DEFLECTED;
       }else{
-        combatAction.attackResult = (!hasAssuredHit && isCritical) ? AttackResult.CRITICAL_HIT : AttackResult.HIT_SUCCESSFUL;
+        const result = (!hasAssuredHit && isCritical) ? AttackResult.CRITICAL_HIT : AttackResult.HIT_SUCCESSFUL;
+        combatAction.attackResult = bestAttackResult(previousResult, result);
         attack.reactObject = combatAction.target;
         attack.attackWeapon = weapon;
-        attack.attackResult = combatAction.attackResult;
+        attack.attackResult = result;
         attack.calculateDamage(creature, !hasAssuredHit && isCritical, combatAction.feat);
+        this.applyFeatOnHit(creature, weapon, combatAction, result === AttackResult.CRITICAL_HIT);
       }
     }else{
-      combatAction.attackResult = AttackResult.MISS;
+      // The round's result is its best attack: a double-blade's off-hand
+      // miss after a main-blade hit used to report the round as a miss
+      // (critic run 5), and the VR feedback played the miss cue.
+      combatAction.attackResult = bestAttackResult(previousResult, AttackResult.MISS);
       attack.reactObject = combatAction.target;
       attack.attackWeapon = weapon;
-      attack.attackResult = combatAction.attackResult;
+      attack.attackResult = AttackResult.MISS;
     }
 
     // Log to combat menu - create feedback message for the attack result
