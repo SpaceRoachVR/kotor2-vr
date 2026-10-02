@@ -17,6 +17,9 @@ export type ItemCastUseLimit =
 
 export function resolveItemCastUseLimit(costValue: number): ItemCastUseLimit {
   const value = Number(costValue);
+  // 0 is "Random" (charges rolled when the item is made); a worn item with it
+  // is used in place, not destroyed (critic run 6: T3's items).
+  if (value === 0) return { kind: 'unlimited' };
   if (value >= 2 && value <= 6) return { kind: 'charges', perUse: 7 - value };
   if (value === 7 || value === 13) return { kind: 'unlimited' };
   if (value >= 8 && value <= 12) return { kind: 'per-day', uses: value - 7 };

@@ -53,6 +53,9 @@ const VR_LOADING_INTERFACE_NAMES: ReadonlySet<string> = new Set([
   'Kotor2VR.VRPanelHost',
   'Kotor2VR.VRPanelPointerRay',
   'Kotor2VR.VRPanelPointerCursor',
+  // The XR rig: the player's controllers and the loading floor ring. Hiding
+  // it left the loading screen in a void with no hands (critic run 6).
+  'VRSpike.rig',
 ]);
 
 /**

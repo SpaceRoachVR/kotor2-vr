@@ -304,13 +304,20 @@ describe('feat penalties applied through addEffect', () => {
     flurry.id = 11;
 
     flurry.impactCaster(object);
+    // Another stance next round replaces Flurry's penalty, not stacks on it.
+    const powerAttack = Object.create(TalentFeat.prototype) as TalentFeat;
+    powerAttack.id = 28;
+    powerAttack.impactCaster(object);
+    expect(object.effects.filter((e: any) => e.featPenaltyId === 11)).toHaveLength(0);
     flurry.impactCaster(object);
 
     // A second round's penalty replaces the first: one Defense, one attack.
     expect(object.effects).toHaveLength(2);
-    expect(object.effects.every((e) => e.duration === 2 * CombatRound.ROUND_LENGTH / 1000)).toBe(true);
-    advance(object, CombatRound.ROUND_LENGTH / 1000);
-    expect(object.effects).toHaveLength(2);
+    // Defense: the round and 3 s after. Attack: that round only (critic run 6).
+    const durations = object.effects.map((e) => e.duration).sort();
+    expect(durations).toEqual([CombatRound.ROUND_LENGTH / 1000, 2 * CombatRound.ROUND_LENGTH / 1000]);
+    advance(object, CombatRound.ROUND_LENGTH / 1000 + 1);
+    expect(object.effects).toHaveLength(1);
     // An effect that removes itself shifts the next one into its slot, which
     // then misses that frame — as in ModuleCreature's loop — so allow a lap.
     advance(object, CombatRound.ROUND_LENGTH / 1000 + 1);

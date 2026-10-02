@@ -16,9 +16,11 @@ import { readFeatClassColumn, readGrantedFeatLevel } from '@/talents/featClassCo
 // Effect durations count down in seconds; ROUND_LENGTH is milliseconds. The
 // penalty never expired before addEffect stamped TEMPORARY effects, so passing
 // 3000 here went unnoticed — it would now read as a 50-minute penalty.
-// The round (3 s) "and for 3 seconds afterwards" (feat text): the penalty is
-// applied as the round begins, so 3.0 expired with the round (critic run 5).
-const FEAT_PENALTY_DURATION = 6.0;
+// The feat text: the Defense penalty lasts "while using this feat and for 3
+// seconds afterwards" (the round, 3 s, plus 3 s); the attack penalty applies
+// to "all attacks that round" only (critic runs 5-6).
+const FEAT_DEFENSE_PENALTY_DURATION = 6.0;
+const FEAT_ATTACK_PENALTY_DURATION = 3.0;
 
 /**
  * TalentFeat class.
@@ -257,18 +259,17 @@ export class TalentFeat extends TalentObject {
   impactCaster(object: ModuleObject){
     if(!BitWise.InstanceOfObject(object, ModuleObjectType.ModuleCreature)) return;
 
-    // A new round's penalty replaces this feat's last one, so using the feat
-    // round after round does not stack the penalty (the window outlasts the
-    // round since critic run 5).
+    // A new stance round replaces any earlier stance's penalty, this feat's or
+    // another's: Flurry then Power Attack stacked -4 and -3 (critic run 6).
     for(const effect of [...(object.effects || [])]){
-      if((effect as any)?.featPenaltyId === this.id) object.removeEffect(effect);
+      if((effect as any)?.featPenaltyId !== undefined) object.removeEffect(effect);
     }
 
     const armorClassPenalty = this.getArmorClassPenalty();
     if(armorClassPenalty > 0){
       const acDecreaseEffect = new EffectACDecrease();
       acDecreaseEffect.setDurationType(GameEffectDurationType.TEMPORARY);
-      acDecreaseEffect.setDuration(FEAT_PENALTY_DURATION);
+      acDecreaseEffect.setDuration(FEAT_DEFENSE_PENALTY_DURATION);
       acDecreaseEffect.setInt(1, armorClassPenalty);
       (acDecreaseEffect as any).featPenaltyId = this.id;
       object.addEffect(acDecreaseEffect);
@@ -278,7 +279,7 @@ export class TalentFeat extends TalentObject {
     if(attackPenalty > 0){
       const attackDecreaseEffect = new EffectAttackDecrease();
       attackDecreaseEffect.setDurationType(GameEffectDurationType.TEMPORARY);
-      attackDecreaseEffect.setDuration(FEAT_PENALTY_DURATION);
+      attackDecreaseEffect.setDuration(FEAT_ATTACK_PENALTY_DURATION);
       attackDecreaseEffect.setInt(0, attackPenalty);
       (attackDecreaseEffect as any).featPenaltyId = this.id;
       object.addEffect(attackDecreaseEffect);

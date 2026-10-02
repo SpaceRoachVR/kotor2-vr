@@ -60,6 +60,26 @@ const check = (ok, label, detail = '') => {
       window.__forceTarget = t;
       return { id: t.id, dist: +bd.toFixed(1), castRange, selectable: gs.ModuleObjectManager.playerSelectableObjects.includes(t) }; })()`);
     console.log('  opening spot: ' + JSON.stringify(prep));
+    if (!prep.skipped && !prep.selectable) {
+      // Not in view from the opening spot: look for a place 15.5-19.5 m from
+      // the droid with line of sight both ways, while it still stands where
+      // the save put it.
+      const spot = await harness.evaluate(`(() => { const p = window.KotOR.GameState.getCurrentPlayer(); const t = window.__forceTarget; const z = p.position.z; const start = p.position.clone(); window.__saveStart = start.clone();
+        for (const d of [15.8, 16.5, 17.5, 18.5, 19.3]) for (let a = 0; a < 360; a += 5) {
+          const r = a * Math.PI / 180; p.position.set(t.position.x + Math.cos(r) * d, t.position.y + Math.sin(r) * d, z);
+          let los = false; try { los = t.hasLineOfSight(p, 20) && p.hasLineOfSight(t, 20); } catch (e) {}
+          if (los) return { d, a };
+        }
+        p.position.copy(start); return null; })()`);
+      console.log('  line-of-sight spot: ' + JSON.stringify(spot));
+      if (spot) {
+        await sleep(1500);
+        const again = await harness.evaluate(`(() => { const gs = window.KotOR.GameState; const p = gs.getCurrentPlayer(); const t = window.__forceTarget;
+          return { dist: +t.position.distanceTo(p.position).toFixed(1), selectable: gs.ModuleObjectManager.playerSelectableObjects.includes(t) }; })()`);
+        prep.dist = again.dist;
+        prep.selectable = again.selectable;
+      }
+    }
     if (prep.skipped || !prep.selectable || !(prep.dist > prep.castRange)) {
       console.log('  SKIP  Force range: ' + (prep.skipped || (!prep.selectable ? 'hostile not selectable from the opening spot' : 'hostile already within Push range')));
     } else {
@@ -82,11 +102,16 @@ const check = (ok, label, detail = '') => {
         check(String(queued.readout).length > 0, 'the refused power stays queued', `readout "${queued.readout}"`);
         const committed = await harness.evaluate(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound; return !!(r && r.action && r.action.actionType === 9 && !r.roundStarted); })()`);
         check(!committed, 'the round is not left committed to an unstarted cast');
-        // Leave nothing queued for the fight below.
-        await harness.evaluate(`(() => { const c = window.KotOR.VRSpike.hooks.getCombatContext(null); return true; })()`);
+        // Leave nothing queued for the fight below: the held Push would
+        // otherwise wait at the head of the queue for its gesture.
+        await harness.evaluate(`(() => { const c = window.KotOR.VRSpike.hooks.getCombatContext(${prep.id}); if (c && c.cancel) c.cancel(); return true; })()`);
+        await sleep(1000);
       }
     }
 
+    // Back to where the save starts, so the fight approaches from that side.
+    await harness.evaluate(`(() => { if (window.__saveStart) window.KotOR.GameState.getCurrentPlayer().position.copy(window.__saveStart); return true; })()`);
+    await sleep(1500);
     const setup = await harness.evaluate(`(() => { const K = window.KotOR; const gs = K.GameState; const p = gs.getCurrentPlayer();
       let best = null, bd = 1e9; for (const c of gs.module.area.creatures) { if (!c || (c.isDead && c.isDead())) continue; let h = false; try { h = c.isHostile(p); } catch (e) {} if (!h) continue;
         const d = c.position.distanceTo(p.position); if (d < bd) { bd = d; best = c; } }
@@ -115,6 +140,9 @@ const check = (ok, label, detail = '') => {
       if (b.r < a.r - 0.02 && !(b.r < 0.25 && a.r > 0.75)) backwards++;
     }
     console.log('  readiness ' + samples.map((s) => s ? s.r.toFixed(2) : '-').join(' '));
+    console.log('  swing log ' + JSON.stringify(await harness.evaluate(`(window.__xrHarness && window.__xrHarness.log || []).filter((e) => /VR combat swing/.test(e.text)).slice(-4).map((e) => e.text.slice(0, 220))`)));
+    console.log('  ctx ' + JSON.stringify(await harness.evaluate(`(() => { const c = ${ctx}; const p = window.KotOR.GameState.getCurrentPlayer(); const t = window.__checkTarget;
+      return c ? { nominated: c.nominatedTargetId, inCombat: c.inCombat, readout: c.stanceReadout, dist: +t.position.distanceTo(p.position).toFixed(2), dead: t.isDead(), selectable: window.KotOR.GameState.ModuleObjectManager.playerSelectableObjects.includes(t) } : null; })()`)));
     check(samples.some((s) => s && s.inCombat), 'combat started');
     check(samples.some((s) => s && s.r > 0 && s.r < 1), 'the ring shows progress during a wait');
     check(backwards === 0, 'the ring never runs backwards within a wait', `backward steps: ${backwards}`);

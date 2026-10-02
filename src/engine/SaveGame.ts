@@ -228,6 +228,7 @@ export class SaveGame {
       if(this.savenfo.RootNode.hasField('TIMESTAMP')){
         let timestamp: bigint = this.savenfo.getFieldByLabel('TIMESTAMP').getValue();
         this.TIMESTAMP = new Date(parseInt((timestamp/10000n) as any) + winEpoch);
+        this.timestampKnown = true;
       }
 
       if(this.savenfo.RootNode.hasField('PCNAME')){
@@ -875,21 +876,31 @@ export class SaveGame {
    * // Create an autosave
    * await SaveGame.SaveCurrentGame('', 1);
    */
-  static async SaveCurrentGame( name = '', replace_id = 0, slot: SaveGameSlot = 'game' ){
-    if(!GameState.module){ return; }
+  /**
+   * Resolves true when the save was written, false when it was skipped (no
+   * module, or a save already writing). Callers that report success - the
+   * VR "saved" sound - must not take a skipped save for a written one
+   * (critic run 6).
+   */
+  static async SaveCurrentGame( name = '', replace_id = 0, slot: SaveGameSlot = 'game' ): Promise<boolean> {
+    if(!GameState.module){ return false; }
     // An autosave firing while a manual save is still writing would interleave
     // two exports into the same game-in-progress folder.
     if(SaveGame.saving){
       console.warn('SaveGame.SaveCurrentGame: a save is already in progress; skipped', slot);
-      return;
+      return false;
     }
     SaveGame.saving = true;
     try{
       await SaveGame.WriteCurrentGame(name, replace_id, slot);
+      return true;
     }finally{
       SaveGame.saving = false;
     }
   }
+
+  /** Whether TIMESTAMP came from the save itself rather than "now". */
+  timestampKnown = false;
 
   /** True while SaveCurrentGame is writing. */
   static saving = false;
@@ -985,6 +996,10 @@ export class SaveGame {
     nfo.RootNode.addField(new GFFField(GFFDataType.BYTE, 'CHEATUSED')).value = 0;
     nfo.RootNode.addField(new GFFField(GFFDataType.BYTE, 'GAMEPLAYHINT')).value = 0;
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LASTMODULE')).value = GameState.module.filename.toUpperCase();
+    // Retail's FILETIME (100 ns since 1601). It was never written, so every
+    // save read back as "made just now" and the defeat screen's "Load Last
+    // Saved Game" followed listing order (critic run 6).
+    nfo.RootNode.addField(new GFFField(GFFDataType.DWORD64, 'TIMESTAMP')).value = BigInt(Date.now() - winEpoch) * 10000n;
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE1')).value = '';
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE2')).value = '';
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE3')).value = '';

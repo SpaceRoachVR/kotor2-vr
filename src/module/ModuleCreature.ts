@@ -1,3 +1,4 @@
+import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
 import { GFFObject } from "@/resource/GFFObject";
 import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
 import * as THREE from "three";
@@ -2102,7 +2103,10 @@ export class ModuleCreature extends ModuleObject {
           this.combatData.combatAction.target.damage(this.combatData.combatAction.damage, this);
         }
 
-        rhWeaponSoundResRef = rhSounds?.getLeatherResRef() || '';
+        // The struck target's material, not always leather (critic run 6).
+        rhWeaponSoundResRef = impactResRef(rhSounds as any,
+          resolveVRImpactMaterialFor(this.combatData.combatAction?.target),
+          Math.random() < 0.5 ? 0 : 1) || rhSounds?.getLeatherResRef() || '';
       break;
     }
 

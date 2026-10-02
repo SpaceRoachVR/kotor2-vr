@@ -49,6 +49,11 @@ export interface VRComfortSettings {
   readonly combatSoundsEnabled?: boolean;
   /** HP/FP plate on the off-hand wrist (2026-09-29). Absent reads as on. */
   readonly healthPlateEnabled?: boolean;
+  /**
+   * How large the in-world dialogue (subtitles and replies) is drawn: 1,
+   * 1.3 or 1.6. Absent reads as 1. Asked for in six reviews (critic run 6).
+   */
+  readonly dialogueTextScale?: number;
 }
 export type InteractionMode = 'near-touch' | 'ray' | 'grab';
 export type CombatWeaponMode =

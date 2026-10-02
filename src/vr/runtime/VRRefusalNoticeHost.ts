@@ -8,10 +8,13 @@ import * as THREE from 'three';
  * and below the horizon so it never covers what the player is aiming at.
  */
 
-const DISTANCE_METRES = 0.9;
-const WIDTH_METRES = 0.34;
-const HEIGHT_METRES = 0.055;
-const DROP_METRES = 0.22;
+// Nearer than most walls a player stands at, scaled to keep the same size in
+// view: drawn without depth test, at 0.9 m it showed "through" a wall closer
+// than that (critic run 6).
+const DISTANCE_METRES = 0.5;
+const WIDTH_METRES = 0.19;
+const HEIGHT_METRES = 0.031;
+const DROP_METRES = 0.12;
 const SHOW_MS = 1800;
 const RENDER_ORDER = 1_000_002;
 
@@ -25,7 +28,10 @@ export function describeVRRefusal(shape: string): string | null {
   if (s.includes('quick save failed')) return 'Save failed';
   if (s.includes('quick save')) return "Can't save now";
   if (s.includes('swing target lost')) return 'Target lost';
-  if (s.includes('rejected at release')) return 'Out of range';
+  if (s.includes('swing expired')) return 'Swing expired';
+  if (s.includes('target gone')) return 'Target gone';
+  if (s.includes('item unavailable')) return 'Item no longer in your pack';
+  if (s.includes('item cast rejected')) return "Couldn't use that";
   if (s.includes('cannot act')) return "Can't act now";
   if (s.includes('no longer in the inventory')) return 'Item no longer in your pack';
   if (s.startsWith('cancelled')) return 'Cancelled';

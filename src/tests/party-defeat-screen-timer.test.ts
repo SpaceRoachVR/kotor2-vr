@@ -11,13 +11,19 @@ import { PartyDefeatScreenTimer } from '@/module/creature/PartyDefeatScreenTimer
  * swings from a dead Exile.
  */
 describe('PartyDefeatScreenTimer', () => {
-  test('the first frame of a defeat opens the screen at once', () => {
-    expect(new PartyDefeatScreenTimer().defeated(0.016)).toBe('open');
+  // Critic run 6: the screen snapped open on the first frame; it now waits a
+  // beat so the last blow is seen landing.
+  const open = (timer: PartyDefeatScreenTimer) => timer.defeated(PartyDefeatScreenTimer.OPEN_DELAY_SECONDS);
+
+  test('a defeat opens the screen after a short beat, not on the first frame', () => {
+    const timer = new PartyDefeatScreenTimer();
+    expect(timer.defeated(0.016)).toBeNull();
+    expect(timer.defeated(PartyDefeatScreenTimer.OPEN_DELAY_SECONDS)).toBe('open');
   });
 
   test('closing the screen brings it back after the player has been in the game a moment', () => {
     const timer = new PartyDefeatScreenTimer();
-    timer.defeated(0.016);
+    open(timer);
     let result: string | null = null;
     let seconds = 0;
     while (result === null && seconds < 10) {
@@ -30,7 +36,7 @@ describe('PartyDefeatScreenTimer', () => {
 
   test('it keeps coming back for as long as the party stays down', () => {
     const timer = new PartyDefeatScreenTimer();
-    timer.defeated(0);
+    open(timer);
     expect(timer.defeated(PartyDefeatScreenTimer.REOPEN_SECONDS)).toBe('reopen');
     expect(timer.defeated(0.5)).toBeNull();
     expect(timer.defeated(PartyDefeatScreenTimer.REOPEN_SECONDS)).toBe('reopen');
@@ -38,16 +44,17 @@ describe('PartyDefeatScreenTimer', () => {
 
   test('a bad frame delta never counts toward reopening', () => {
     const timer = new PartyDefeatScreenTimer();
-    timer.defeated(0);
+    open(timer);
     expect(timer.defeated(Number.NaN)).toBeNull();
     expect(timer.defeated(-5)).toBeNull();
   });
 
-  test('once someone stands, the next defeat opens immediately again', () => {
+  test('once someone stands, the next defeat starts over with the same beat', () => {
     const timer = new PartyDefeatScreenTimer();
-    timer.defeated(0);
+    open(timer);
     timer.reset();
-    expect(timer.defeated(0)).toBe('open');
+    expect(timer.defeated(0)).toBeNull();
+    expect(open(timer)).toBe('open');
   });
 });
 

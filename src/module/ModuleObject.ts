@@ -2027,6 +2027,23 @@ export class ModuleObject {
    * @returns 
    */
   removeItem(item: ModuleItem, nCount = 1): ModuleItem {
+    // A party member holds nothing in its own inventory: the party pool is
+    // the bag. Removing from `inventory` found nothing, so a planted mine, a
+    // spent security tunneler and an auto-removed key were never used up, and
+    // a script's take did nothing (critic run 6).
+    if(this.isPartyMember()){
+      const pool = GameState.InventoryManager;
+      const held = pool.inventory.includes(item) ? item : (pool.getItemByTag(item.getTag()) || undefined);
+      if(!held) return undefined;
+      if(nCount < held.getStackSize()){
+        pool.removeItem(held, nCount);
+        const taken = held.clone();
+        taken.setStackSize(nCount);
+        return taken;
+      }
+      pool.removeItem(held, held.getStackSize());
+      return held;
+    }
     // The very object first: by tag alone, removing an upgraded blade took the
     // plain copy beside it instead (critic run 4).
     const eItem = this.inventory.includes(item) ? item : this.getItemByTag(item.getTag());

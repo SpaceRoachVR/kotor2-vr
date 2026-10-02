@@ -51,10 +51,10 @@ export class ActionTakeItem extends Action {
       return ActionStatus.FAILED;
     }
 
-    // One is taken: the split-off part when it came from a stack, else the
-    // item itself. A missing `else` here added it to the party pool AND the
-    // taker's own inventory, and passed the whole stack (critic run 5 sweep).
-    const removed = oTarget.removeItem(oItem, 1);
+    // ActionTakeItem takes the object, stack and all, as NWScript describes;
+    // a missing `else` here used to add it to the party pool AND the taker's
+    // own inventory (critic runs 5-6).
+    const removed = oTarget.removeItem(oItem, Math.max(1, Number(oItem.getStackSize()) || 1));
     if(!removed) return ActionStatus.FAILED;
 
     if(GameState.PartyManager.party.indexOf(this.owner as any) >= 0){

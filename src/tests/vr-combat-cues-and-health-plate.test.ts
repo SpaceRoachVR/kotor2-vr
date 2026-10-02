@@ -14,7 +14,7 @@ import { VRBladeSparkHost } from '@/vr/runtime/VRBladeSparkHost';
 // lists (read from the retail install), never a synthesized tone.
 const RETAIL_WAVS = new Set([
   'cb_sw_blade1', 'cb_sw_unarmed1', 'cb_bu_metalmed',
-  'cb_ht_bladeleth1', 'cb_ht_blastleth1', 'cb_ht_unarmleth1',
+  'cb_ht_bladeleth1', 'cb_ht_blastleth1', 'cb_ht_unarmleth1', 'cb_ht_bladearm1',
   'cb_pa_blade1', 'cb_pa_unarm1', 'cb_pa_blast1',
   'v_useforce', 'gui_actqueue', 'gui_error', 'gui_complete', 'gui_invselect',
 ]);
@@ -36,6 +36,8 @@ describe('combat cue sounds', () => {
     expect(describeVRCombatCue('miss', 'ranged')[0].resref).toBe('cb_bu_metalmed');
     expect(describeVRCombatCue('hit', 'ranged')[0].resref).toBe('cb_ht_blastleth1');
     expect(describeVRCombatCue('critical', 'melee')).toHaveLength(2);
+    // Being hit is not the sound of your own unarmed hit (critic run 6).
+    expect(describeVRCombatCue('hurt')[0].resref).not.toBe(describeVRCombatCue('hit', 'unarmed')[0].resref);
     expect(describeVRCombatCue('hit', 'melee')).toHaveLength(1);
     expect(describeVRCombatCue('refused')[0].resref).toBe('gui_error');
     expect(describeVRCombatCue('saved')[0].resref).toBe('gui_complete');
@@ -63,7 +65,8 @@ describe('combat cue sounds', () => {
     expect(started).toHaveLength(2);
     expect(started[0]).toBeCloseTo(10.2, 6);
     expect(started[1]).toBeGreaterThan(started[0]);
-    expect(loads).toEqual(['cb_ht_bladeleth1']);
+    // A critical layers the impact with the parry ring, each decoded once.
+    expect(loads.sort()).toEqual(['cb_ht_bladeleth1', 'cb_pa_blade1']);
   });
 
   test('a sound that cannot load stays silent instead of throwing', async () => {

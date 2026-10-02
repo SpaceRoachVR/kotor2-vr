@@ -33,6 +33,8 @@ export interface VRPanelPresentOptions {
    * left it 0.8 m wide - smaller text than the guidelines allow.
    */
   readonly regionWidthMetres?: number;
+  /** Scales the shown panel, keeping its place (dialogue text size). */
+  readonly scale?: number;
 }
 
 const FULL_REGION: VRPanelRegion = { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
@@ -175,7 +177,8 @@ export class VRPanelHost {
     const enlarge = options.region && Number.isFinite(options.regionWidthMetres) && (options.regionWidthMetres as number) > 0 && width > 0
       ? (options.regionWidthMetres as number) / width
       : 1;
-    this.object.scale.set(width * enlarge, height * enlarge, 1);
+    const extra = Number.isFinite(options.scale) && (options.scale as number) > 0 ? (options.scale as number) : 1;
+    this.object.scale.set(width * enlarge * extra, height * enlarge * extra, 1);
     this.object.visible = true;
   }
 

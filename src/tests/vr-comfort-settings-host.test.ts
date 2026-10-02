@@ -53,7 +53,7 @@ describe('VRComfortSettingsHost', () => {
   test('the engine offers no more rows than the panel can show', () => {
     const game = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
     const labels = ['Movement', 'Turning', 'Snap Turn Angle', 'Comfort Vignette', 'Damage Flash', 'Unpause on Wheel Close',
-      'Combat Sounds', 'Wrist Health', 'Dominant Hand', 'Controls Guide'];
+      'Combat Sounds', 'Wrist Health', 'Dominant Hand', 'Controls Guide', 'Dialogue Text'];
     for (const label of labels) expect(game).toContain(`label: '${label}'`);
     const { VR_COMFORT_SETTINGS_MAX_ROWS } = load();
     expect(labels.length).toBeLessThanOrEqual(VR_COMFORT_SETTINGS_MAX_ROWS);

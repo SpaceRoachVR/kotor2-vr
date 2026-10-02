@@ -43,10 +43,10 @@ export class ActionItemCastSpell extends Action {
     if (!BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)) return ActionStatus.FAILED;
     const owner = this.owner as ModuleCreature;
     if (!BitWise.InstanceOfObject(target, ModuleObjectType.ModuleObject) || target.isDead()) {
-      return this.rejectItemCast(owner);
+      return this.rejectItemCast(owner, 'target gone');
     }
     if (!Number.isSafeInteger(spellId) || spellId < 0) {
-      return this.rejectItemCast(owner);
+      return this.rejectItemCast(owner, 'item cast rejected');
     }
 
     if (!isItemCastSpellSourceUsable({
@@ -55,7 +55,7 @@ export class ActionItemCastSpell extends Action {
       isOwnedByCaster: (candidate) => this.isSourceItemOwnedBy(owner, candidate),
       castSpellPropertyType: ModuleItemProperty.CastSpell,
     })) {
-      return this.rejectItemCast(owner);
+      return this.rejectItemCast(owner, 'item unavailable');
     }
 
     const combatRound = owner.combatRound;
@@ -69,7 +69,7 @@ export class ActionItemCastSpell extends Action {
     this.spell = new GameState.TalentSpell(spellId);
     if (!this.spell || !this.spell.inRange(target, owner)) {
       const moveStatus = this.moveIntoCastRange(owner, target);
-      return moveStatus === ActionStatus.FAILED ? this.rejectItemCast(owner) : moveStatus;
+      return moveStatus === ActionStatus.FAILED ? this.rejectItemCast(owner, 'out of throw range') : moveStatus;
     }
 
     // VR moves the player from the stick, which sets force every frame; zeroing it here rooted a player strafing while an attack or cast waited for its round (critic run 4).
@@ -118,11 +118,11 @@ export class ActionItemCastSpell extends Action {
     return ActionStatus.IN_PROGRESS;
   }
 
-  private rejectItemCast(owner: ModuleCreature): ActionStatus {
+  private rejectItemCast(owner: ModuleCreature, reason = 'item cast rejected'): ActionStatus {
     // A scheduled cast that dies at release (the target moved out of range,
     // the item is gone) used to vanish silently; VR plays its refusal cue
     // (critic run 4). See GameState.onItemCastRejected.
-    try { GameState.onItemCastRejected?.(owner, this.getParameter<ModuleItem>(ItemCastSpellParameter.Item)); } catch { /* feedback is best effort */ }
+    try { GameState.onItemCastRejected?.(owner, this.getParameter<ModuleItem>(ItemCastSpellParameter.Item), reason); } catch { /* feedback is best effort */ }
     releaseUnstartedItemCastCombatAction(owner.combatRound);
     return ActionStatus.FAILED;
   }
@@ -139,6 +139,9 @@ export class ActionItemCastSpell extends Action {
       // The property's own retail limit (iprp_chargecost): charges per use,
       // uses per day, once per N minutes, or unlimited (critic run 5).
       const limit = this.wornCastLimit(item);
+      // No CastSpell property for this spell on the item: nothing to use.
+      // Treating the miss as "single use" destroyed the item (critic run 6).
+      if (!limit) return false;
       return canUseWornItemCast(limit, wornCastState(item), wornCastClock());
     }
     const party = GameState.PartyManager?.party;
@@ -149,18 +152,21 @@ export class ActionItemCastSpell extends Action {
     return Array.isArray(owner.inventory) && owner.inventory.includes(candidate as ModuleItem);
   }
 
-  private wornCastLimit(item: ModuleItem): ItemCastUseLimit {
+  private wornCastLimit(item: ModuleItem): ItemCastUseLimit | null {
     const spellId = this.getParameter<number>(ItemCastSpellParameter.SpellId);
     const property = (item.properties || []).find((p: any) =>
       p && p.propertyName === ModuleItemProperty.CastSpell && Number(p.subType) === Number(spellId));
-    return resolveItemCastUseLimit(Number((property as any)?.costValue));
+    if (!property) return null;
+    return resolveItemCastUseLimit(Number((property as any).costValue));
   }
 
   private consumeSourceItem(owner: ModuleCreature, item: ModuleItem): void {
     // Worn: spend a charge if it has them, never the item itself.
     if (isWornBy(owner, item)) {
       const state = wornCastState(item);
-      const spent = spendWornItemCast(this.wornCastLimit(item), state, wornCastClock());
+      const limit = this.wornCastLimit(item);
+      if (!limit) return;
+      const spent = spendWornItemCast(limit, state, wornCastClock());
       item.charges = state.charges;
       if (spent && typeof (owner as any).takeOffWornItem === 'function') (owner as any).takeOffWornItem(item);
       return;

@@ -60,11 +60,14 @@ export function describeVRCombatCue(cue: VRCombatCue, weapon: VRCombatCueWeapon 
   switch (cue) {
     case 'miss': return [sound(MISS[weapon], 0, 0.8)];
     case 'hit': return [sound(IMPACT[weapon])];
-    case 'critical': return [sound(IMPACT[weapon]), sound(IMPACT[weapon], 0.09)];
+    // Layered with the parry ring a beat later: heavier than a hit, not an echo.
+    case 'critical': return [sound(IMPACT[weapon], 0, 1), sound(PARRY[weapon], 0.04, 0.55)];
     case 'parried': return [sound(PARRY[weapon])];
     case 'deflected': return [sound('cb_pa_blast1')];
-    case 'hurt': return [sound('cb_ht_unarmleth1')];
-    case 'hurt-critical': return [sound('cb_ht_unarmleth1'), sound('cb_ht_unarmleth1', 0.12)];
+    // A blow on you: an armour impact, unlike any sound of your own hits.
+    // GameState replaces it with the attacker's weapon on your material.
+    case 'hurt': return [sound('cb_ht_bladearm1')];
+    case 'hurt-critical': return [sound('cb_ht_bladearm1'), sound('cb_pa_blade1', 0.04, 0.55)];
     case 'force': return [sound('v_useforce')];
     // gui_actscroll decodes to 3 ms of sound; gui_actqueue is retail's
     // "action queued" click, 0.1 s.
@@ -89,6 +92,13 @@ export function cueForVRCombatOutcome(outcome: string): VRCombatCue | null {
   }
 }
 
+export interface VRCombatCuePlayOptions {
+  /** Retail sounds to play instead of the cue's defaults (the weapon's own row). */
+  readonly sounds?: readonly VRCombatCueSound[];
+  /** Where in the world it happened (game coordinates, which the audio listener uses). */
+  readonly position?: { readonly x: number; readonly y: number; readonly z: number } | null;
+}
+
 /** Fetches a retail WAV as encoded bytes (AudioLoader.LoadSound). */
 export type VRCombatCueSoundLoader = (resref: string) => Promise<ArrayBuffer | ArrayBufferLike | Uint8Array | undefined>;
 
@@ -104,10 +114,16 @@ export class VRCombatCueAudio {
     if (typeof loadSound !== 'function') throw new TypeError('VR combat cue audio needs a retail sound loader');
   }
 
-  /** Plays `cue` now, or `delayMs` from now (a deflection waits for the bolt). */
-  play(cue: VRCombatCue, delayMs = 0, weapon: VRCombatCueWeapon = 'melee'): Promise<void> {
+  /**
+   * Plays `cue` now, or `delayMs` from now (a deflection waits for the bolt).
+   * `options.sounds` replaces the cue's default retail sounds with the
+   * weapon's own weaponsounds.2da row; `options.position` places it in the
+   * world through a panner instead of in the head (critic run 6).
+   */
+  play(cue: VRCombatCue, delayMs = 0, weapon: VRCombatCueWeapon = 'melee', options: VRCombatCuePlayOptions = {}): Promise<void> {
     const requested = this.context.currentTime + Math.max(0, Number.isFinite(delayMs) ? delayMs : 0) / 1000;
-    return Promise.all(describeVRCombatCue(cue, weapon).map(async (spec) => {
+    const specs = options.sounds && options.sounds.length ? options.sounds : describeVRCombatCue(cue, weapon);
+    return Promise.all(specs.map(async (spec) => {
       const buffer = await this.decode(spec.resref);
       if (!buffer) return;
       // A sound decoded late (first use) still starts as close to the event
@@ -118,13 +134,49 @@ export class VRCombatCueAudio {
       source.buffer = buffer;
       gain.gain.setValueAtTime(spec.gain, t0);
       source.connect(gain);
-      gain.connect(this.destination);
+      let panner: PannerNode | null = null;
+      const at = options.position;
+      if (at && typeof (this.context as any).createPanner === 'function') {
+        panner = this.context.createPanner();
+        panner.panningModel = 'HRTF';
+        panner.distanceModel = 'inverse';
+        panner.refDistance = 1.5;
+        panner.rolloffFactor = 0.6;
+        if (panner.positionX) {
+          panner.positionX.setValueAtTime(at.x, t0);
+          panner.positionY.setValueAtTime(at.y, t0);
+          panner.positionZ.setValueAtTime(at.z, t0);
+        } else {
+          (panner as any).setPosition(at.x, at.y, at.z);
+        }
+        gain.connect(panner);
+        panner.connect(this.destination);
+      } else {
+        gain.connect(this.destination);
+      }
       source.onended = () => {
         source.disconnect();
         gain.disconnect();
+        panner?.disconnect();
       };
       source.start(t0);
     })).then((): void => undefined);
+  }
+
+  /** Loads and decodes sounds ahead of their first use (critic run 6: the first of each cue started late). */
+  preload(resrefs: readonly string[]): Promise<void> {
+    return Promise.all(resrefs.filter(Boolean).map((r) => this.decode(r))).then((): void => undefined);
+  }
+
+  /** Every default cue sound, for preloading. */
+  static defaultSounds(): string[] {
+    const all = new Set<string>();
+    for (const cue of ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical', 'force', 'ready', 'refused', 'saved', 'neck-zone'] as const) {
+      for (const weapon of ['melee', 'ranged', 'unarmed'] as const) {
+        for (const s of describeVRCombatCue(cue, weapon)) all.add(s.resref);
+      }
+    }
+    return [...all];
   }
 
   /** Decodes each retail sound once; a sound that cannot load stays silent. */

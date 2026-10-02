@@ -574,6 +574,9 @@ export class CombatRound {
     if(!save || (save.on === 'critical' && !critical)) return;
     const target = combatAction.target as ModuleObject;
     if(!target || (typeof target.isDead === 'function' && target.isDead())) return;
+    // Droids (race 5) do not stun: TSL's Force Stun skips them and Stun Droid
+    // exists for them. The engine has no immunity system yet (critic run 6).
+    if(save.effect === 'stun' && (target as any).getRace?.() === 5) return;
     try{
       const ability = save.ability === 'STR' ? creature.getSTR() : save.ability === 'DEX' ? creature.getDEX() : creature.getINT();
       const dc = resolveFeatSaveDC(save, creature.getTotalClassLevel?.() ?? 0, CombatRound.GetMod(ability));
@@ -587,6 +590,9 @@ export class CombatRound {
       effect.setDuration(save.seconds);
       effect.initialize();
       target.addEffect(effect);
+      // A stunned or knocked-down VR player otherwise only found out by being
+      // refused (critic run 6).
+      try { GameState.onPlayerDisabled?.(target, save.effect === 'stun' ? 'Stunned' : 'Knocked down', save.seconds); } catch { /* feedback only */ }
     }catch(e){
       console.error('CombatRound: feat on-hit effect failed', e);
     }
@@ -652,7 +658,9 @@ export class CombatRound {
     const previousResult = this.currentAttack > 0 ? combatAction.attackResult : undefined;
     if(hasAssuredHit || roll.hit){
       if(this.tryBlasterDeflection(creature, weapon, attackRoll, combatAction, attack)){
-        combatAction.attackResult = AttackResult.DEFLECTED;
+        // Through the same ranking as hits and misses: a main-blade hit then a
+        // deflected off-hand shot is a round that hit (critic run 6).
+        combatAction.attackResult = bestAttackResult(previousResult, AttackResult.DEFLECTED);
       }else{
         const result = (!hasAssuredHit && isCritical) ? AttackResult.CRITICAL_HIT : AttackResult.HIT_SUCCESSFUL;
         combatAction.attackResult = bestAttackResult(previousResult, result);

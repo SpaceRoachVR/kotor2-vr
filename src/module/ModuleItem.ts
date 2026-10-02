@@ -138,6 +138,10 @@ export class ModuleItem extends ModuleObject {
       const runtime = this.save();
       for(const field of runtime.fields){
         if(!field || VR_CLONE_SKIP_FIELDS.has(field.label)) continue;
+        // save() hands back the template's own UpgradeSlot field objects; the
+        // exported copy already has its own, and taking these would alias the
+        // two items' slots (critic run 6).
+        if(/^UpgradeSlot\d$/.test(field.label)) continue;
         template.RootNode.removeFieldByLabel(field.label);
         template.RootNode.addField(field);
       }
@@ -813,6 +817,14 @@ export class ModuleItem extends ModuleObject {
       this.upgrades = this.template.getFieldByLabel('Upgrades').getValue();
     }
 
+    if(this.template.RootNode.hasField('K2VR_UsesDay')){
+      (this as any).wornCastUseState = {
+        charges: Number(this.charges) || 0,
+        usesDay: this.template.getFieldByLabel('K2VR_UsesDay').getValue(),
+        usesToday: this.template.RootNode.hasField('K2VR_UsesToday') ? this.template.getFieldByLabel('K2VR_UsesToday').getValue() : 0,
+      };
+    }
+
     if(this.template.RootNode.hasField('UpgradeLevel')){
       this.upgradeLevel = this.template.getFieldByLabel('UpgradeLevel').getValue();
     }
@@ -862,7 +874,14 @@ export class ModuleItem extends ModuleObject {
     if(this.template.RootNode.hasField('PaletteID'))
       this.palleteID = this.template.RootNode.getFieldByLabel('PaletteID').getValue();
 
-    this.weaponSound = GameState.SWRuleSet.weaponSounds[this.baseItem?.poweredItem];
+    // baseitems.2da `weaponmattype` names the weaponsounds.2da row (0 Unarmed,
+    // 1 Lightsaber, 2 Blade, 3 Large Blade). `powereditem` (0/1) was used, so
+    // every vibroblade swung and hit with the Unarmed sounds (critic run 6
+    // sweep, read from the retail tables). Blasters have none.
+    const materialType = Number(this.baseItem?.weaponMaterialType);
+    this.weaponSound = Number.isInteger(materialType) && materialType >= 0
+      ? GameState.SWRuleSet.weaponSounds[materialType]
+      : undefined;
 
     this.initialized = true
 
@@ -938,6 +957,14 @@ export class ModuleItem extends ModuleObject {
     // own fields are the item's state; they used to be dropped on save, and an
     // upgraded lightsaber came back plain (critic run 4).
     itemStruct.addField( new GFFField(GFFDataType.BYTE, 'UpgradeLevel') ).setValue(this.upgradeLevel || 0);
+    // The port's worn-activatable use count (ItemCastUseLimit), so "1 use per
+    // day" survives a save and load (critic run 6). Not a retail field;
+    // retail ignores unknown fields.
+    const wornUse = (this as any).wornCastUseState;
+    if(wornUse && wornUse.usesDay !== undefined){
+      itemStruct.addField( new GFFField(GFFDataType.INT, 'K2VR_UsesDay') ).setValue(wornUse.usesDay | 0);
+      itemStruct.addField( new GFFField(GFFDataType.INT, 'K2VR_UsesToday') ).setValue((wornUse.usesToday ?? 0) | 0);
+    }
     for(let i = 0; i < 6; i++){
       const label = 'UpgradeSlot' + i;
       if(this.template?.RootNode?.hasField(label)) itemStruct.addField(this.template.getFieldByLabel(label));

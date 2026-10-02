@@ -14,7 +14,7 @@ const PANEL_WIDTH_METRES = 0.9;
 const ROW_HEIGHT_METRES = 0.09;
 const ROW_HEIGHT_PIXELS = 125;
 /** The panel grows with its settings, up to this many rows. */
-export const VR_COMFORT_SETTINGS_MAX_ROWS = 10;
+export const VR_COMFORT_SETTINGS_MAX_ROWS = 11;
 
 /**
  * Comfort settings surface (ROADMAP 2.6) — the settings VRSpike's own

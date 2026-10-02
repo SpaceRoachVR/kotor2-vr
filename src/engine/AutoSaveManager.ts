@@ -22,7 +22,8 @@ export interface AutoSaveWorld {
   canSave(): boolean;
   /** Anyone in the party in combat. */
   inCombat(): boolean;
-  save(slot: 'autosave' | 'quicksave'): Promise<void>;
+  /** Resolves false when the save was skipped (another save writing). */
+  save(slot: 'autosave' | 'quicksave'): Promise<boolean | void>;
 }
 
 export type AutoSaveReason = 'area' | 'script';
@@ -85,8 +86,9 @@ export class AutoSaveManager {
   }
 
   private static write(slot: 'autosave' | 'quicksave', onDone?: (written: boolean) => void){
-    AutoSaveManager.world.save(slot).then(() => {
-      try { onDone?.(true); } catch (e) { /* feedback only */ }
+    AutoSaveManager.world.save(slot).then((written: unknown) => {
+      // A save skipped because another was writing resolves false.
+      try { onDone?.(written !== false); } catch (e) { /* feedback only */ }
     }, (e) => {
       console.error(`AutoSaveManager: ${slot} failed`, e);
       try { onDone?.(false); } catch (err) { /* feedback only */ }

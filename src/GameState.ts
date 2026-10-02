@@ -1,3 +1,5 @@
+import type { VRCombatCuePlayOptions } from "@/vr/runtime/VRCombatCueAudio";
+import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
 import * as THREE from "three";
 import {
   AppearanceManager, AutoPauseManager, TLKManager, CharGenManager, CheatConsoleManager, CameraShakeManager, ConfigManager, CursorManager, DialogMessageManager,
@@ -452,7 +454,11 @@ const vrComfortSettings: MutableVRComfortSettings = {
   unpauseOnWheelClose: false,
   combatSoundsEnabled: true,
   healthPlateEnabled: true,
+  dialogueTextScale: 1,
 };
+
+const VR_DIALOGUE_TEXT_SCALES = [1, 1.3, 1.6] as const;
+const VR_DIALOGUE_TEXT_LABELS = ['Normal', 'Large', 'Largest'] as const;
 let vrComfortSettingsPanelOpen = false;
 let vrControlsGuideOpen = false;
 let vrComfortSettingsPausedByVR = false;
@@ -678,10 +684,16 @@ const vrCombatTempoGate = new VRCombatTempoGate();
 /** ROADMAP 3.12 — one swing held while the round is busy. */
 const vrCombatSwingBuffer = new VRCombatSwingBuffer();
 const vrRoundReadinessLatch = new VRRoundReadinessLatch();
-/** When the held swing was offered; see VR_SWING_BUFFER_EXPIRY_MS. */
-let vrSwingBufferArmedAtMs = 0;
-/** A round and a half (ROUND_LENGTH 3 s): long enough for the next opening, not the one after. */
-const VR_SWING_BUFFER_EXPIRY_MS = 4500;
+/**
+ * Round openings a held swing has let pass. It is for the next opening: one
+ * that passes with the swing still held (the target out of reach) is missed,
+ * and a second miss drops it with a notice. Counted in openings, not wall
+ * time, so a chained round (a medpac scheduled into it) or a pause does not
+ * eat it (critic run 6).
+ */
+let vrSwingBufferMissedOpenings = 0;
+let vrSwingBufferRoundWasOpen = false;
+const VR_SWING_BUFFER_MAX_MISSED_OPENINGS = 2;
 /** The grenade last scheduled into a round, re-armed if the round rejects it. */
 let vrLastThrownGrenade: { actorId: number; sourceKey: string; itemId: unknown } | null = null;
 const vrArmedGrenadeState = new VRArmedGrenadeState();
@@ -962,6 +974,39 @@ function resolveVRScheduledItemLabels(actor: ModuleCreature): string[] {
   }
 }
 
+/**
+ * A combat cue in the attacker's own weapon sounds (weaponsounds.2da), for
+ * the struck material, placed at the target's chest (critic run 6: every cue
+ * was one flesh sample in the head). Null keeps the cue's defaults.
+ */
+function resolveVRCombatCueSounds(attackerId: string | number, targetId: string | number, cue: string): VRCombatCuePlayOptions | null {
+  try {
+    const attacker: any = GameState.ModuleObjectManager.GetObjectById?.(Number(attackerId));
+    const target: any = GameState.ModuleObjectManager.GetObjectById?.(Number(targetId));
+    if (!target?.position) return null;
+    const position = { x: target.position.x, y: target.position.y, z: target.position.z + 1.0 };
+    const weapon: any = attacker?.equipment?.RIGHTHAND;
+    // No weapon in hand fights with the Unarmed row (weaponsounds.2da row 0);
+    // a blaster has no row and keeps its bolt sounds.
+    const sounds: any = weapon ? weapon.weaponSound : GameState.SWRuleSet?.weaponSounds?.[0];
+    if (!sounds) return { position };
+    const material = resolveVRImpactMaterialFor(target);
+    let resrefs: string[] = [];
+    if (cue === 'hit' || cue === 'hurt') resrefs = [impactResRef(sounds, material, Math.random() < 0.5 ? 0 : 1)];
+    else if (cue === 'critical' || cue === 'hurt-critical') resrefs = [impactResRef(sounds, material, 0), String(sounds.parry0 || '')];
+    else if (cue === 'miss') resrefs = [String(sounds.swingShort0 || '')];
+    else if (cue === 'parried') resrefs = [String(sounds.parry0 || '')];
+    resrefs = resrefs.filter(Boolean);
+    if (!resrefs.length) return { position };
+    return {
+      position,
+      sounds: resrefs.map((resref, i) => ({ resref, at: i * 0.04, gain: i === 0 ? 1 : 0.55 })),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function signalVRRefusal(shape: string): void {
   // A cancellation is a refusal the player did not ask for (the armed item
   // left the bag), so it blips too (critic run 4).
@@ -1097,7 +1142,8 @@ function dispatchVREmbodiedCombatInput(
         input,
         weaponSignature: resolveVRCombatWeaponSignature(actor),
       }, tempo.reason)) {
-      vrSwingBufferArmedAtMs = performance.now();
+      vrSwingBufferMissedOpenings = 0;
+      vrSwingBufferRoundWasOpen = false;
       return false;
     }
     let distance = 'n/a';
@@ -1271,12 +1317,20 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
     // needs reach, so it fires when the target is back in it.
     isTargetLive: (targetId: string) => resolveVRLockedHostile(actor, targetId) !== null,
   };
-  // A held swing is for the next round, not any later one: after a round and
-  // a half it is dropped quietly. Without this, a swing at a droid that
-  // backed off fired whenever it came back into reach (critic run 5).
-  const heldFor = performance.now() - vrSwingBufferArmedAtMs;
-  if (heldFor > VR_SWING_BUFFER_EXPIRY_MS) {
+  // A held swing is for the next round, not any later one (critic run 5),
+  // counted in round openings it lets pass (see vrSwingBufferMissedOpenings).
+  const round = actor.combatRound;
+  const roundOpenNow = resolveVRRoundOpen(round ? {
+    roundStarted: round.roundStarted === true,
+    roundPaused: round.roundPaused === true,
+    playerActionCommitted: round.action !== undefined,
+    scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
+  } : null);
+  if (vrSwingBufferRoundWasOpen && !roundOpenNow) vrSwingBufferMissedOpenings++;
+  vrSwingBufferRoundWasOpen = roundOpenNow;
+  if (vrSwingBufferMissedOpenings >= VR_SWING_BUFFER_MAX_MISSED_OPENINGS) {
     vrCombatSwingBuffer.clear();
+    signalVRRefusal('refused: swing expired');
     return { released: false, armed: false };
   }
   const pendingBefore = vrCombatSwingBuffer.peek();
@@ -1286,8 +1340,10 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
     // (your first swing killed it) is a success, and a weapon swap or a
     // leader change is the player's own doing (critic run 5: a kill sounded
     // like "no").
-    const lost = resolveVRAimedObject(Number(pendingBefore?.targetId));
-    const targetDied = !lost || (typeof (lost as any).isDead === 'function' && (lost as any).isDead());
+    // Looked up by id, not among the selectable: a living droid behind a
+    // pillar is not selectable, and read as dead (critic run 6).
+    const lost: any = GameState.ModuleObjectManager.GetObjectById?.(Number(pendingBefore?.targetId));
+    const targetDied = !lost || (typeof lost.isDead === 'function' && lost.isDead());
     if (dropped === 'target-invalid' && !targetDied) {
       signalVRRefusal('refused: swing target lost');
     }
@@ -2782,18 +2838,29 @@ export class GameState implements EngineContext {
     VRSpike.presentLocalForceCast();
   };
 
+  /** The player was stunned or knocked down: say so in VR (critic run 6). */
+  static onPlayerDisabled: ((target: unknown, what: string, seconds: number) => void) | null = (target, what) => {
+    if (!VRSpike.isPresenting || target !== GameState.getCurrentPlayer()) return;
+    try { VRSpike.showNotice(what); } catch { /* feedback only */ }
+  };
+
   /** A scheduled item cast was rejected at release; the player hears the refusal in VR (critic run 4). */
-  static onItemCastRejected: ((owner: unknown, item?: unknown) => void) | null = (owner, item) => {
+  static onItemCastRejected: ((owner: unknown, item?: unknown, reason?: string) => void) | null = (owner, item, reason) => {
     if (!VRSpike.isPresenting || owner !== GameState.getCurrentPlayer()) return;
-    signalVRRefusal('refused: item cast rejected at release');
+    // The real reason, not always "out of range" (critic run 6).
+    signalVRRefusal(`refused: ${reason || 'item cast rejected'}`);
     // A grenade that could not be thrown goes back to the off hand, still
     // armed, rather than being lost with only a sound (critic run 5).
     const thrown = vrLastThrownGrenade;
     const actor = owner as ModuleCreature;
     if (thrown && item && thrown.actorId === actor.id && (item as any).id === thrown.itemId) {
       vrLastThrownGrenade = null;
+      // Only into an empty off hand: a stim armed since the throw stays
+      // (critic run 6).
+      const handBusy = vrArmedGrenadeState.getSnapshot().armed !== undefined ||
+        vrArmedConsumableState.getSnapshot().armed !== undefined;
       const entry = findVRArmedGrenade(actor, thrown.sourceKey);
-      if (entry) vrArmedGrenadeState.arm(entry.descriptor);
+      if (entry && !handBusy) vrArmedGrenadeState.arm(entry.descriptor);
     }
   };
   
@@ -3502,6 +3569,7 @@ export class GameState implements EngineContext {
           ? { context: engine.audioCtx, destination, loadSound: (resref: string) => AudioLoader.LoadSound(resref) }
           : null;
       },
+      resolveCombatCueSounds: (attackerId, targetId, cue) => resolveVRCombatCueSounds(attackerId, targetId, cue),
       getPlayerVitals: () => {
         const actor = GameState.getCurrentPlayer() as ModuleCreature | undefined;
         if (!actor || typeof actor.getHP !== 'function' || typeof actor.getMaxHP !== 'function') return null;
@@ -4055,6 +4123,10 @@ export class GameState implements EngineContext {
             label: 'Controls Guide',
             value: vrControlsGuideOpen ? 'Shown' : 'Hidden',
           },
+          {
+            label: 'Dialogue Text',
+            value: VR_DIALOGUE_TEXT_LABELS[Math.max(0, VR_DIALOGUE_TEXT_SCALES.indexOf((vrComfortSettings.dialogueTextScale ?? 1) as any))],
+          },
         ];
         return {
           rows,
@@ -4096,6 +4168,11 @@ export class GameState implements EngineContext {
               case 9:
                 vrControlsGuideOpen = !vrControlsGuideOpen;
                 break;
+              case 10: {
+                const current = Math.max(0, VR_DIALOGUE_TEXT_SCALES.indexOf((vrComfortSettings.dialogueTextScale ?? 1) as any));
+                vrComfortSettings.dialogueTextScale = VR_DIALOGUE_TEXT_SCALES[(current + 1) % VR_DIALOGUE_TEXT_SCALES.length];
+                break;
+              }
             }
           },
           close: () => { vrComfortSettingsPanelOpen = false; vrControlsGuideOpen = false; },
@@ -4153,6 +4230,7 @@ export class GameState implements EngineContext {
             ? {
               region: GameState.MenuManager.InGameDialog.getVRWorldDialogueRegion(),
               verticalOffsetMetres: VR_WORLD_DIALOGUE_VERTICAL_OFFSET_METRES,
+              scale: vrComfortSettings.dialogueTextScale ?? 1,
             }
             : menu && !VR_UNTRIMMED_MENU_RESREFS.has(String((menu as any).gui_resref || '').toLowerCase())
               ? {

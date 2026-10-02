@@ -66,7 +66,7 @@ import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
 import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
 import { VRPanelStickScroll } from "./runtime/VRPanelStickScroll";
 import { VRControlsGuideHost } from "./runtime/VRControlsGuide";
-import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue, type VRCombatCueWeapon, type VRCombatCueSoundLoader } from "./runtime/VRCombatCueAudio";
+import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue, type VRCombatCueWeapon, type VRCombatCueSoundLoader, type VRCombatCuePlayOptions } from "./runtime/VRCombatCueAudio";
 import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateHost";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
 import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
@@ -202,6 +202,8 @@ export interface VRSpikeHooks {
   getComfortSettings?: () => VRComfortSettings;
   /** Where combat cue sounds go: the engine's audio context and GUI channel. */
   getCombatCueAudioOutput?: () => { context: BaseAudioContext; destination: AudioNode; loadSound: VRCombatCueSoundLoader } | null;
+  /** The attacker's own weaponsounds.2da sounds for a cue, and where it happened. */
+  resolveCombatCueSounds?: (attackerId: string | number, targetId: string | number, cue: VRCombatCue) => VRCombatCuePlayOptions | null;
   /** The controlled character's HP and FP, for the wrist plate. */
   getPlayerVitals?: () => VRPlayerVitals | null;
   setComfortSettings?: (patch: Partial<VRComfortSettings>) => void;
@@ -3794,6 +3796,8 @@ export class VRSpike {
     const restoreBody = hidePlayerBodyForFirstPerson(playerBody);
     // While a module loads the engine hides the world scene, panel and all;
     // draw the loading screen over the dark instead.
+    const engineHidWorld = scene.visible === false;
+    VRSpike.presentLoadingFloor(engineHidWorld);
     const restoreHiddenWorld = revealVRInterfaceOverHiddenWorld(scene);
     try {
       renderer.render(scene, VRSpike.camera);
@@ -4364,6 +4368,9 @@ export class VRSpike {
     for (const event of events) {
       // ROADMAP 3.14: remember who last hit the player, so the hit-point drop
       // that follows can be shown on the right side.
+      if (localActorId !== null && event.targetId === localActorId) {
+        VRSpike.lastAttackOnPlayer = { attackerId: event.attackerId, targetId: event.targetId };
+      }
       if (localActorId !== null && event.targetId === localActorId && HIT_ATTACK_RESULTS.has(event.attackResult)) {
         const attacker = snapshots.find((snapshot) => snapshot.id === event.attackerId);
         if (attacker?.position) {
@@ -4386,7 +4393,10 @@ export class VRSpike {
       VRSpike.playHapticSequence(session, VRSpike.dominantHand, feedback.pulses, feedback.gapMs, delayMs);
       // Heard and seen as well as felt: round 12 felt no haptics at all.
       const cue = cueForVRCombatOutcome(feedback.outcome);
-      if (cue) VRSpike.playCombatCue(cue, delayMs);
+      if (cue) {
+        const placed = VRSpike.hooks?.resolveCombatCueSounds?.(event.attackerId, event.targetId, cue) ?? null;
+        VRSpike.playCombatCue(cue, delayMs, false, placed);
+      }
       if (feedback.role === 'attacker' && (feedback.outcome === 'hit' || feedback.outcome === 'critical')) {
         const attacker = snapshots.find((snapshot) => snapshot.id === event.attackerId);
         const struck = attacker?.attackTargetAimPoint
@@ -4431,7 +4441,10 @@ export class VRSpike {
       : damage.critical ? DAMAGE_CRITICAL_HAPTIC : DAMAGE_HAPTIC;
     const hands: XRHandRole[] = damage.side === 'left' ? ['left'] : damage.side === 'right' ? ['right'] : ['left', 'right'];
     for (const hand of hands) void VRSpike.haptics.pulse(session, hand, pattern);
-    VRSpike.playCombatCue(damage.critical ? 'hurt-critical' : 'hurt');
+    const hurtCue = damage.critical ? 'hurt-critical' : 'hurt';
+    const lastHit = VRSpike.lastAttackOnPlayer;
+    VRSpike.playCombatCue(hurtCue, 0, false,
+      lastHit ? VRSpike.hooks?.resolveCombatCueSounds?.(lastHit.attackerId, lastHit.targetId, hurtCue) ?? null : null);
 
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
     if (comfort.damageFlashEnabled === false || !VRSpike.camera) return;
@@ -4493,6 +4506,42 @@ export class VRSpike {
 
   private static refusalNoticeHost: VRRefusalNoticeHost | null = null;
 
+  /**
+   * A dim ring on the floor while a module loads, so the loading screen does
+   * not float in a void with no ground (critic run 6). It lives on the rig,
+   * whose origin is the XR floor, in the rig's Y-up space.
+   */
+  private static loadingFloor: THREE.Mesh | null = null;
+  private static presentLoadingFloor(show: boolean): void {
+    if (!show) {
+      if (VRSpike.loadingFloor) VRSpike.loadingFloor.visible = false;
+      return;
+    }
+    if (!VRSpike.rig || typeof (VRSpike.rig as any).add !== 'function') return;
+    if (!VRSpike.loadingFloor) {
+      const floor = new THREE.Mesh(
+        new THREE.RingGeometry(0.35, 2.4, 64, 1),
+        new THREE.MeshBasicMaterial({ color: 0x1f6b78, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }),
+      );
+      floor.name = 'Kotor2VR.LoadingFloor';
+      floor.rotation.x = -Math.PI / 2;
+      VRSpike.rig.add(floor);
+      VRSpike.loadingFloor = floor;
+    }
+    VRSpike.loadingFloor.visible = true;
+  }
+
+  /** A short line low in view, without the error sound (a status, not a refusal). */
+  static showNotice(text: string): void {
+    if (!text || !VRSpike.camera) return;
+    try {
+      if (!VRSpike.refusalNoticeHost) VRSpike.refusalNoticeHost = new VRRefusalNoticeHost(VRSpike.camera);
+      VRSpike.refusalNoticeHost.show(text, performance.now());
+    } catch (error) {
+      console.error('[VRSpike] notice rejected', error);
+    }
+  }
+
   static playSavedCue(): void {
     VRSpike.playCombatCue('saved', 0, true);
   }
@@ -4507,7 +4556,10 @@ export class VRSpike {
   }
 
   /** A combat result you can hear, unless Combat Sounds is off. */
-  private static playCombatCue(cue: VRCombatCue, delayMs = 0, always = false): void {
+  /** Who last attacked the player, so the hurt cue uses their weapon. */
+  private static lastAttackOnPlayer: { attackerId: string | number; targetId: string | number } | null = null;
+
+  private static playCombatCue(cue: VRCombatCue, delayMs = 0, always = false, options: VRCombatCuePlayOptions | null = null): void {
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
     if (!always && comfort.combatSoundsEnabled === false) return;
     try {
@@ -4515,8 +4567,9 @@ export class VRSpike {
         const output = VRSpike.hooks?.getCombatCueAudioOutput?.();
         if (!output) return;
         VRSpike.combatCueAudio = new VRCombatCueAudio(output.context, output.destination, output.loadSound);
+        void VRSpike.combatCueAudio.preload(VRCombatCueAudio.defaultSounds());
       }
-      void VRSpike.combatCueAudio.play(cue, delayMs, VRSpike.combatCueWeapon());
+      void VRSpike.combatCueAudio.play(cue, delayMs, VRSpike.combatCueWeapon(), options ?? {});
     } catch (error) {
       if (!VRSpike.combatCueAudioErrorReported) {
         VRSpike.combatCueAudioErrorReported = true;

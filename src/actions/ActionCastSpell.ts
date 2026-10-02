@@ -59,7 +59,7 @@ export class ActionCastSpell extends Action {
         if(ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
           console.info('ActionCastSpell: out of range, approach suppressed', this.spell?.id);
           releaseUnstartedCastSpellCombatAction((this.owner as any).combatRound);
-          try { GameState.onItemCastRejected?.(this.owner); } catch { /* feedback is best effort */ }
+          try { GameState.onItemCastRejected?.(this.owner, undefined, 'out of Force range'); } catch { /* feedback is best effort */ }
           return ActionStatus.FAILED;
         }
 

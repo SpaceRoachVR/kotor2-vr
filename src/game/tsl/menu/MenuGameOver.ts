@@ -67,15 +67,27 @@ export class MenuGameOver extends GameMenu {
     });
   }
 
-  /** The newest save of any kind (manual, quick or auto), like retail's "Last Save". */
+  /**
+   * The newest save of any kind (manual, quick or auto), like retail's "Last
+   * Save". Saves carry a real TIMESTAMP since critic run 6; older ones do
+   * not, and for those the highest numbered save is the newest.
+   */
   static findLastSave(saves: readonly SaveGame[]): SaveGame | undefined {
     let last: SaveGame | undefined;
     for(const save of saves){
-      const time = save?.TIMESTAMP instanceof Date ? save.TIMESTAMP.getTime() : NaN;
+      if(!save || !(save as any).timestampKnown) continue;
+      const time = save.TIMESTAMP instanceof Date ? save.TIMESTAMP.getTime() : NaN;
       if(!Number.isFinite(time)) continue;
       if(!last || time > last.TIMESTAMP.getTime()) last = save;
     }
-    return last;
+    if(last) return last;
+    let highest: SaveGame | undefined;
+    for(const save of saves){
+      const n = Number(save?.getSaveNumber?.());
+      if(!Number.isFinite(n)) continue;
+      if(!highest || n > Number(highest.getSaveNumber())) highest = save;
+    }
+    return highest;
   }
 
   private async loadLastSave(){
@@ -97,7 +109,15 @@ export class MenuGameOver extends GameMenu {
       GameState.module.dispose();
       GameState.module = undefined;
     }
-    last.load();
+    try{
+      await last.load();
+    }catch(e){
+      // A corrupt or partial save must not leave the player with no module
+      // and no menu (critic run 6): the Load Game list is the way on.
+      console.error('MenuGameOver: loading the last save failed', e);
+      this.manager.MenuSaveLoad.mode = MenuSaveLoadMode.LOADGAME;
+      this.manager.MenuSaveLoad.open();
+    }
   }
 
 }
