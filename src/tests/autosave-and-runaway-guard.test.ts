@@ -160,3 +160,14 @@ describe('unspent skill points are kept', () => {
     expect(read('game/kotor/menu/CharGenSkills.ts')).toContain('creature.skillPoints = Math.max(0, Number(manager.availSkillPoints) || 0);');
   });
 });
+
+// Found building the round-15 prepared-fight save: addItem's load() re-read the
+// template StackSize, so CreateItemOnObject(sTag, oPC, 3) gave one item.
+test('a stack set before an item is added survives the add', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'managers', 'InventoryManager.ts'), 'utf8');
+  const at = src.indexOf('const presetStack = template instanceof');
+  expect(at).toBeGreaterThan(-1);
+  expect(src.indexOf('item.initProperties();', at)).toBeGreaterThan(at);
+  expect(src.indexOf('item.load();', at)).toBeGreaterThan(at);
+  expect(src).toContain('if(presetStack !== undefined && presetStack > 0) item.setStackSize(presetStack);');
+});

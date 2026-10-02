@@ -116,6 +116,9 @@ export class InventoryManager {
       throw 'You can only add an item of type ModuleItem to an inventory';
     }
 
+    // Captured before initProperties()/load(), which both re-read the
+    // template's StackSize.
+    const presetStack = template instanceof GameState.Module.ModuleArea.ModuleItem ? item.getStackSize() : undefined;
     item.initProperties();
     if(item.getBaseItemId() == BaseItemType.CREDITS){
       GameState.PartyManager.AddGold(item.getStackSize());
@@ -125,7 +128,11 @@ export class InventoryManager {
       GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.ITEM_RECEIVED);
     }else{
       GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.ITEM_RECEIVED);
+      // load() re-reads the template's StackSize. An item handed in already
+      // built keeps the stack its caller set: CreateItemOnObject(sTag, oPC, 3)
+      // sets 3 and then adds, and used to arrive as 1.
       item.load();
+      if(presetStack !== undefined && presetStack > 0) item.setStackSize(presetStack);
       let hasItem = InventoryManager.getItemByTag(item.getTag());
       if(hasItem){
 
