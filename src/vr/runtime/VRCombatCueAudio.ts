@@ -60,14 +60,15 @@ export function describeVRCombatCue(cue: VRCombatCue, weapon: VRCombatCueWeapon 
   switch (cue) {
     case 'miss': return [sound(MISS[weapon], 0, 0.8)];
     case 'hit': return [sound(IMPACT[weapon])];
-    // Layered with the parry ring a beat later: heavier than a hit, not an echo.
-    case 'critical': return [sound(IMPACT[weapon], 0, 1), sound(PARRY[weapon], 0.04, 0.55)];
+    // The impact doubled into one heavier blow (a 30 ms layer is not heard as
+    // an echo), never the parry clang (critic run 7).
+    case 'critical': return [sound(IMPACT[weapon], 0, 1), sound(IMPACT[weapon], 0.03, 0.8)];
     case 'parried': return [sound(PARRY[weapon])];
     case 'deflected': return [sound('cb_pa_blast1')];
     // A blow on you: an armour impact, unlike any sound of your own hits.
     // GameState replaces it with the attacker's weapon on your material.
     case 'hurt': return [sound('cb_ht_bladearm1')];
-    case 'hurt-critical': return [sound('cb_ht_bladearm1'), sound('cb_pa_blade1', 0.04, 0.55)];
+    case 'hurt-critical': return [sound('cb_ht_bladearm1'), sound('cb_ht_bladearm1', 0.03, 0.8)];
     case 'force': return [sound('v_useforce')];
     // gui_actscroll decodes to 3 ms of sound; gui_actqueue is retail's
     // "action queued" click, 0.1 s.

@@ -2033,7 +2033,9 @@ export class ModuleObject {
     // a script's take did nothing (critic run 6).
     if(this.isPartyMember()){
       const pool = GameState.InventoryManager;
-      const held = pool.inventory.includes(item) ? item : (pool.getItemByTag(item.getTag()) || undefined);
+      // The object itself, else a plain stack of the same tag; never an
+      // upgraded copy standing in for a different item (critic run 7).
+      const held = pool.inventory.includes(item) ? item : findItemStackTarget(pool.inventory, item);
       if(!held) return undefined;
       if(nCount < held.getStackSize()){
         pool.removeItem(held, nCount);

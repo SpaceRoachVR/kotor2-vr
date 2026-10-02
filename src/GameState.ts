@@ -29,6 +29,7 @@ import { INIConfig } from "@/engine/INIConfig";
 // import { OdysseyObject3D } from "@/three/odyssey";
 import { AudioEngine, AudioEmitter } from "@/audio";
 import { AudioLoader } from "@/audio/AudioLoader";
+import { GameEffectType } from "@/enums/effects/GameEffectType";
 import { TGAObject } from "@/resource/TGAObject";
 
 import { IGameStateGroups } from "@/interface/engine/IGameStateGroups";
@@ -457,6 +458,40 @@ const vrComfortSettings: MutableVRComfortSettings = {
   dialogueTextScale: 1,
 };
 
+/**
+ * Comfort settings and the weapon hand survive a restart, in the game's own
+ * options store (ConfigClient, IndexedDB). They lived only in memory, so a
+ * left-handed player re-chose the hand, and a low-vision player the text
+ * size, every launch (critic run 7).
+ */
+const VR_COMFORT_CONFIG_KEY = 'vr_comfort';
+let vrComfortSettingsLoaded = false;
+function loadVRComfortSettingsOnce(): void {
+  if (vrComfortSettingsLoaded) return;
+  vrComfortSettingsLoaded = true;
+  try {
+    const stored: any = ConfigClient.get(VR_COMFORT_CONFIG_KEY);
+    if (!stored || typeof stored !== 'object') return;
+    if (stored.locomotionMode === 'smooth' || stored.locomotionMode === 'blink') vrComfortSettings.locomotionMode = stored.locomotionMode;
+    if (stored.turnMode === 'smooth' || stored.turnMode === 'snap') vrComfortSettings.turnMode = stored.turnMode;
+    if ([30, 45, 60, 90].includes(Number(stored.snapTurnDegrees))) vrComfortSettings.snapTurnDegrees = Number(stored.snapTurnDegrees);
+    for (const key of ['vignetteEnabled', 'damageFlashEnabled', 'unpauseOnWheelClose', 'combatSoundsEnabled', 'healthPlateEnabled'] as const) {
+      if (typeof stored[key] === 'boolean') (vrComfortSettings as any)[key] = stored[key];
+    }
+    if ([1, 1.3, 1.6].includes(Number(stored.dialogueTextScale))) vrComfortSettings.dialogueTextScale = Number(stored.dialogueTextScale);
+    if (stored.dominantHand === 'left' || stored.dominantHand === 'right') VRSpike.setDominantHand(stored.dominantHand);
+  } catch (error) {
+    console.warn('[VR comfort] stored settings could not be read', error);
+  }
+}
+function saveVRComfortSettings(): void {
+  try {
+    ConfigClient.set(VR_COMFORT_CONFIG_KEY, { ...vrComfortSettings, dominantHand: VRSpike.currentDominantHand });
+  } catch (error) {
+    console.warn('[VR comfort] settings could not be saved', error);
+  }
+}
+
 const VR_DIALOGUE_TEXT_SCALES = [1, 1.3, 1.6] as const;
 const VR_DIALOGUE_TEXT_LABELS = ['Normal', 'Large', 'Largest'] as const;
 let vrComfortSettingsPanelOpen = false;
@@ -694,6 +729,8 @@ const vrRoundReadinessLatch = new VRRoundReadinessLatch();
 let vrSwingBufferMissedOpenings = 0;
 let vrSwingBufferRoundWasOpen = false;
 const VR_SWING_BUFFER_MAX_MISSED_OPENINGS = 2;
+let vrSwingBufferHeldSeconds = 0;
+const VR_SWING_BUFFER_MAX_HELD_SECONDS = 6;
 /** The grenade last scheduled into a round, re-armed if the round rejects it. */
 let vrLastThrownGrenade: { actorId: number; sourceKey: string; itemId: unknown } | null = null;
 const vrArmedGrenadeState = new VRArmedGrenadeState();
@@ -984,18 +1021,31 @@ function resolveVRCombatCueSounds(attackerId: string | number, targetId: string 
     const attacker: any = GameState.ModuleObjectManager.GetObjectById?.(Number(attackerId));
     const target: any = GameState.ModuleObjectManager.GetObjectById?.(Number(targetId));
     if (!target?.position) return null;
-    const position = { x: target.position.x, y: target.position.y, z: target.position.z + 1.0 };
-    const weapon: any = attacker?.equipment?.RIGHTHAND;
-    // No weapon in hand fights with the Unarmed row (weaponsounds.2da row 0);
-    // a blaster has no row and keeps its bolt sounds.
-    const sounds: any = weapon ? weapon.weaponSound : GameState.SWRuleSet?.weaponSounds?.[0];
-    if (!sounds) return { position };
+    const chest = (o: any) => ({ x: o.position.x, y: o.position.y, z: o.position.z + 1.0 });
+    // A miss is the attacker's own whoosh, heard at the attacker; a parry is
+    // the defender's blade, at the defender (critic run 7).
+    const position = cue === 'miss' && attacker?.position ? chest(attacker) : chest(target);
+    const weapon: any = resolveVRAttackWeapon(attacker);
     const material = resolveVRImpactMaterialFor(target);
+    const impactCue = cue === 'hit' || cue === 'hurt' || cue === 'critical' || cue === 'hurt-critical';
+    const critical = cue === 'critical' || cue === 'hurt-critical';
+    // A blaster has no weaponsounds row; retail's bolt impacts are named by
+    // material (cb_ht_blast*, medbl*, hvybl*).
+    if (weapon?.baseItem?.rangedWeapon && impactCue) {
+      const bolt = resolveVRBoltImpact(weapon, material);
+      return bolt ? { position, sounds: critical ? [{ resref: bolt, at: 0, gain: 1 }, { resref: bolt, at: 0.03, gain: 0.8 }] : [{ resref: bolt, at: 0, gain: 1 }] } : { position };
+    }
+    // No weapon in hand fights with the Unarmed row (weaponsounds.2da row 0).
+    const sounds: any = weapon ? weapon.weaponSound : GameState.SWRuleSet?.weaponSounds?.[0];
+    const parrySounds: any = cue === 'parried' ? (resolveVRAttackWeapon(target)?.weaponSound ?? sounds) : sounds;
+    if (!sounds) return { position };
     let resrefs: string[] = [];
     if (cue === 'hit' || cue === 'hurt') resrefs = [impactResRef(sounds, material, Math.random() < 0.5 ? 0 : 1)];
-    else if (cue === 'critical' || cue === 'hurt-critical') resrefs = [impactResRef(sounds, material, 0), String(sounds.parry0 || '')];
+    // Both impact variants together: heavier than a hit, and nothing to do
+    // with the parry clang (critic run 7: a crit sounded like a parry).
+    else if (critical) resrefs = [impactResRef(sounds, material, 0), impactResRef(sounds, material, 1)];
     else if (cue === 'miss') resrefs = [String(sounds.swingShort0 || '')];
-    else if (cue === 'parried') resrefs = [String(sounds.parry0 || '')];
+    else if (cue === 'parried') resrefs = [String(parrySounds?.parry0 || '')];
     resrefs = resrefs.filter(Boolean);
     if (!resrefs.length) return { position };
     return {
@@ -1005,6 +1055,65 @@ function resolveVRCombatCueSounds(attackerId: string | number, targetId: string 
   } catch {
     return null;
   }
+}
+
+/** The weapon an attack is made with: right hand, then left, then a creature weapon. */
+function resolveVRAttackWeapon(attacker: any): any {
+  const e = attacker?.equipment;
+  return e?.RIGHTHAND ?? e?.LEFTHAND ?? e?.CLAW1 ?? e?.CLAW2 ?? e?.CLAW3 ?? undefined;
+}
+
+/** Retail bolt impact by blaster family and struck material (chitin.key cb_ht_*). */
+function resolveVRBoltImpact(weapon: any, material: string): string {
+  const wield = Number(weapon?.baseItem?.weaponWield);
+  const family = wield === 6 ? 'hvybl' : wield === 5 ? 'medbl' : 'blast';
+  const suffix: Record<string, string> = {
+    cloth: 'clth1', leather: 'leth1', armor: 'arm1', forceField: 'frce1', metal: 'metal', stone: 'stne', wood: 'wood',
+  };
+  return `cb_ht_${family}${suffix[material] ?? 'leth1'}`;
+}
+
+/**
+ * Why the player cannot act, if an effect holds them: stunned, knocked down,
+ * paralysed, choked, held, frightened, asleep. Any source - Force Stun, a
+ * stun grenade, Horror, a feat - not only the feat stun (critic run 7).
+ */
+function resolveVRPlayerDisabledState(): string | null {
+  const player: any = GameState.getCurrentPlayer();
+  if (!player || !Array.isArray(player.effects)) return null;
+  for (const effect of player.effects) {
+    if (!effect) continue;
+    if (effect.type === GameEffectType.EffectKnockdown) return 'Knocked down';
+    if (effect.type === GameEffectType.EffectSetState) {
+      switch (Number(effect.getInt?.(0))) {
+        case 1: return 'Confused';
+        case 2: return 'Frightened';
+        case 3: case 4: return 'Stunned';
+        case 5: return 'Paralysed';
+        case 6: return 'Asleep';
+        case 7: return 'Choked';
+        case 8: return 'Horrified';
+        case 9: return 'Knocked back';
+        case 10: return 'Held';
+      }
+    }
+  }
+  return null;
+}
+
+/** Every sound the player's own fights can use now, for preloading. */
+function resolveVRCombatPreloadSounds(): string[] {
+  const out = new Set<string>();
+  const rows: any[] = Object.values(GameState.SWRuleSet?.weaponSounds ?? {});
+  for (const row of rows) {
+    for (const key of ['leather0', 'leather1', 'metal0', 'metal1', 'armor0', 'armor1', 'cloth0', 'cloth1', 'parry0', 'swingShort0']) {
+      if (row?.[key]) out.add(String(row[key]));
+    }
+  }
+  for (const family of ['blast', 'medbl', 'hvybl']) {
+    for (const suffix of ['leth1', 'metal', 'arm1', 'clth1']) out.add(`cb_ht_${family}${suffix}`);
+  }
+  return [...out];
 }
 
 function signalVRRefusal(shape: string): void {
@@ -1144,6 +1253,7 @@ function dispatchVREmbodiedCombatInput(
       }, tempo.reason)) {
       vrSwingBufferMissedOpenings = 0;
       vrSwingBufferRoundWasOpen = false;
+      vrSwingBufferHeldSeconds = 0;
       return false;
     }
     let distance = 'n/a';
@@ -1304,7 +1414,11 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
   if (!vrCombatSwingBuffer.hasPending) return { released: false, armed: false };
   // A swing held through a pause would fire on resume with nobody asking.
   if (GameState.State === EngineState.PAUSED) {
+    // A swing held through a pause would fire on resume with nobody asking,
+    // so the pause clears it - and now says so (critic run 7: it was silent,
+    // and a comment claimed otherwise).
     vrCombatSwingBuffer.clear();
+    try { VRSpike.showNotice('Held swing cleared'); } catch { /* feedback only */ }
     return { released: false, armed: false };
   }
   const context = {
@@ -1328,7 +1442,13 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
   } : null);
   if (vrSwingBufferRoundWasOpen && !roundOpenNow) vrSwingBufferMissedOpenings++;
   vrSwingBufferRoundWasOpen = roundOpenNow;
-  if (vrSwingBufferMissedOpenings >= VR_SWING_BUFFER_MAX_MISSED_OPENINGS) {
+  // An open round with the target out of reach never closes, so the count
+  // alone never ran out and the swing fired whenever the droid came back
+  // (critic run 7). Game time held also counts: two rounds' worth, measured
+  // only while the game runs (a pause clears the swing above).
+  vrSwingBufferHeldSeconds += Math.max(0, Number(GameState.deltaTime) || 0);
+  if (vrSwingBufferMissedOpenings >= VR_SWING_BUFFER_MAX_MISSED_OPENINGS ||
+    vrSwingBufferHeldSeconds >= VR_SWING_BUFFER_MAX_HELD_SECONDS) {
     vrCombatSwingBuffer.clear();
     signalVRRefusal('refused: swing expired');
     return { released: false, armed: false };
@@ -2838,6 +2958,13 @@ export class GameState implements EngineContext {
     VRSpike.presentLocalForceCast();
   };
 
+  /** In VR, the player's own blows and blows on the player are voiced by the VR cue (critic run 7). */
+  static vrVoicesCombatImpact: ((attacker: unknown, target: unknown) => boolean) | null = (attacker, target) => {
+    if (!VRSpike.isPresenting) return false;
+    const player = GameState.getCurrentPlayer();
+    return !!player && (attacker === player || target === player);
+  };
+
   /** The player was stunned or knocked down: say so in VR (critic run 6). */
   static onPlayerDisabled: ((target: unknown, what: string, seconds: number) => void) | null = (target, what) => {
     if (!VRSpike.isPresenting || target !== GameState.getCurrentPlayer()) return;
@@ -3560,7 +3687,7 @@ export class GameState implements EngineContext {
           floorZ,
         );
       },
-      getComfortSettings: () => ({ ...vrComfortSettings }),
+      getComfortSettings: () => { loadVRComfortSettingsOnce(); return { ...vrComfortSettings }; },
       getCombatCueAudioOutput: () => {
         const engine = AudioEngine.GetAudioEngine();
         const destination = AudioEngine.guiChannel?.getGainNode();
@@ -3570,6 +3697,8 @@ export class GameState implements EngineContext {
           : null;
       },
       resolveCombatCueSounds: (attackerId, targetId, cue) => resolveVRCombatCueSounds(attackerId, targetId, cue),
+      getCombatCuePreloadSounds: () => resolveVRCombatPreloadSounds(),
+      getPlayerDisabledState: () => resolveVRPlayerDisabledState(),
       getPlayerVitals: () => {
         const actor = GameState.getCurrentPlayer() as ModuleCreature | undefined;
         if (!actor || typeof actor.getHP !== 'function' || typeof actor.getMaxHP !== 'function') return null;
@@ -3580,7 +3709,7 @@ export class GameState implements EngineContext {
           maxForcePoints: typeof actor.getMaxFP === 'function' ? actor.getMaxFP() : 0,
         };
       },
-      setComfortSettings: (patch) => Object.assign(vrComfortSettings, patch),
+      setComfortSettings: (patch) => { Object.assign(vrComfortSettings, patch); saveVRComfortSettings(); },
       // Walk/run already exists on the creature: `getMovementSpeed()` picks
       // between the walkrate and runrate columns of creaturespeed.2da based on
       // `isWalking()`. VR simply had no route to the flag.
@@ -4174,6 +4303,7 @@ export class GameState implements EngineContext {
                 break;
               }
             }
+            saveVRComfortSettings();
           },
           close: () => { vrComfortSettingsPanelOpen = false; vrControlsGuideOpen = false; },
         };
@@ -4231,6 +4361,7 @@ export class GameState implements EngineContext {
               region: GameState.MenuManager.InGameDialog.getVRWorldDialogueRegion(),
               verticalOffsetMetres: VR_WORLD_DIALOGUE_VERTICAL_OFFSET_METRES,
               scale: vrComfortSettings.dialogueTextScale ?? 1,
+              scaleAnchor: 'top',
             }
             : menu && !VR_UNTRIMMED_MENU_RESREFS.has(String((menu as any).gui_resref || '').toLowerCase())
               ? {

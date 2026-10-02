@@ -2103,6 +2103,13 @@ export class ModuleCreature extends ModuleObject {
           this.combatData.combatAction.target.damage(this.combatData.combatAction.damage, this);
         }
 
+        // Only a blow that landed makes an impact sound (the miss already had
+        // its whoosh), and in VR a blow given or taken by the player is voiced
+        // by the VR cue at the target; playing both was an echo with one copy
+        // in the player's head (critic run 7).
+        if(!this.combatData.combatAction?.hits || GameState.vrVoicesCombatImpact?.(this, this.combatData.combatAction?.target)){
+          break;
+        }
         // The struck target's material, not always leather (critic run 6).
         rhWeaponSoundResRef = impactResRef(rhSounds as any,
           resolveVRImpactMaterialFor(this.combatData.combatAction?.target),

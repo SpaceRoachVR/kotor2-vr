@@ -19,8 +19,13 @@ import { readFeatClassColumn, readGrantedFeatLevel } from '@/talents/featClassCo
 // The feat text: the Defense penalty lasts "while using this feat and for 3
 // seconds afterwards" (the round, 3 s, plus 3 s); the attack penalty applies
 // to "all attacks that round" only (critic runs 5-6).
-const FEAT_DEFENSE_PENALTY_DURATION = 6.0;
-const FEAT_ATTACK_PENALTY_DURATION = 3.0;
+// Both expire a little inside the round: an effect ending exactly at 3.0 s
+// was still present when the next round rolled its attacks that frame
+// (critic run 7). Critical Strike / Sniper Shot lower Defense only "when
+// used" - that round - so only Flurry and Rapid Shot carry it 3 s past.
+const FEAT_DEFENSE_PENALTY_DURATION = 5.5;
+const FEAT_ATTACK_PENALTY_DURATION = 2.5;
+const FEAT_ROUND_ONLY_DEFENSE_DURATION = 2.5;
 
 /**
  * TalentFeat class.
@@ -237,6 +242,11 @@ export class TalentFeat extends TalentObject {
     return 0;
   }
 
+  /** Flurry and Rapid Shot ranks: "for 3 seconds afterwards". The others: "when used". */
+  defensePenaltyOutlastsRound(): boolean {
+    return [11, 91, 30, 92].includes(this.id);
+  }
+
   getAttackPenalty(){
     switch(this.id){
       case 11: //FLURRY
@@ -269,7 +279,7 @@ export class TalentFeat extends TalentObject {
     if(armorClassPenalty > 0){
       const acDecreaseEffect = new EffectACDecrease();
       acDecreaseEffect.setDurationType(GameEffectDurationType.TEMPORARY);
-      acDecreaseEffect.setDuration(FEAT_DEFENSE_PENALTY_DURATION);
+      acDecreaseEffect.setDuration(this.defensePenaltyOutlastsRound() ? FEAT_DEFENSE_PENALTY_DURATION : FEAT_ROUND_ONLY_DEFENSE_DURATION);
       acDecreaseEffect.setInt(1, armorClassPenalty);
       (acDecreaseEffect as any).featPenaltyId = this.id;
       object.addEffect(acDecreaseEffect);

@@ -67,12 +67,13 @@ export class VRRefusalNoticeHost {
     camera.add(this.object);
   }
 
-  show(text: string, nowMs: number): void {
+  show(text: string, nowMs: number, holdMs: number = SHOW_MS): void {
     if (text !== this.shownText) {
       this.draw(text);
       this.shownText = text;
     }
-    this.hideAt = nowMs + SHOW_MS;
+    this.hideAt = Math.max(this.hideAt, nowMs + holdMs);
+    if (holdMs === SHOW_MS) this.hideAt = nowMs + SHOW_MS;
     this.object.visible = true;
   }
 

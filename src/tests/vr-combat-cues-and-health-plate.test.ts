@@ -36,6 +36,13 @@ describe('combat cue sounds', () => {
     expect(describeVRCombatCue('miss', 'ranged')[0].resref).toBe('cb_bu_metalmed');
     expect(describeVRCombatCue('hit', 'ranged')[0].resref).toBe('cb_ht_blastleth1');
     expect(describeVRCombatCue('critical', 'melee')).toHaveLength(2);
+    // A critical never contains the parried sound (critic run 7).
+    for (const weapon of ['melee', 'ranged', 'unarmed'] as const) {
+      const parried = new Set(describeVRCombatCue('parried', weapon).map((x) => x.resref));
+      for (const cue of ['critical', 'hurt-critical'] as const) {
+        for (const x of describeVRCombatCue(cue, weapon)) expect(parried.has(x.resref)).toBe(false);
+      }
+    }
     // Being hit is not the sound of your own unarmed hit (critic run 6).
     expect(describeVRCombatCue('hurt')[0].resref).not.toBe(describeVRCombatCue('hit', 'unarmed')[0].resref);
     expect(describeVRCombatCue('hit', 'melee')).toHaveLength(1);
@@ -65,8 +72,8 @@ describe('combat cue sounds', () => {
     expect(started).toHaveLength(2);
     expect(started[0]).toBeCloseTo(10.2, 6);
     expect(started[1]).toBeGreaterThan(started[0]);
-    // A critical layers the impact with the parry ring, each decoded once.
-    expect(loads.sort()).toEqual(['cb_ht_bladeleth1', 'cb_pa_blade1']);
+    // A critical doubles the impact into one heavier blow, decoded once.
+    expect(loads).toEqual(['cb_ht_bladeleth1']);
   });
 
   test('a sound that cannot load stays silent instead of throwing', async () => {

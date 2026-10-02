@@ -35,6 +35,8 @@ export interface VRPanelPresentOptions {
   readonly regionWidthMetres?: number;
   /** Scales the shown panel, keeping its place (dialogue text size). */
   readonly scale?: number;
+  /** 'top' keeps the top edge where it was, so a larger panel grows downward. */
+  readonly scaleAnchor?: 'centre' | 'top';
 }
 
 const FULL_REGION: VRPanelRegion = { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
@@ -179,8 +181,16 @@ export class VRPanelHost {
       : 1;
     const extra = Number.isFinite(options.scale) && (options.scale as number) > 0 ? (options.scale as number) : 1;
     this.object.scale.set(width * enlarge * extra, height * enlarge * extra, 1);
+    // A larger dialogue panel grows down, not up over the speaker (critic run 7).
+    if (this.placedZ !== null) {
+      this.object.position.z = options.scaleAnchor === 'top'
+        ? this.placedZ - (extra - 1) * height * enlarge / 2
+        : this.placedZ;
+    }
     this.object.visible = true;
   }
+
+  private placedZ: number | null = null;
 
   private place(owner: object, headPose: XRWorldPose, verticalOffsetMetres = 0): void {
 
@@ -198,6 +208,7 @@ export class VRPanelHost {
       this.options.distanceMetres
     );
     this.object.position.z = headPose.position.z + VRPanelHost.getVerticalOffset(owner) + verticalOffsetMetres;
+    this.placedZ = this.object.position.z;
 
     const worldUp = new THREE.Vector3(0, 0, 1);
     const panelNormal = forward.clone().negate();

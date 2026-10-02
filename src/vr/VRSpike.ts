@@ -202,6 +202,10 @@ export interface VRSpikeHooks {
   getComfortSettings?: () => VRComfortSettings;
   /** Where combat cue sounds go: the engine's audio context and GUI channel. */
   getCombatCueAudioOutput?: () => { context: BaseAudioContext; destination: AudioNode; loadSound: VRCombatCueSoundLoader } | null;
+  /** Every retail sound the combat cues may use, so the first of each is not late. */
+  getCombatCuePreloadSounds?: () => string[];
+  /** Why the player cannot act right now (stunned, knocked down, ...), or null. */
+  getPlayerDisabledState?: () => string | null;
   /** The attacker's own weaponsounds.2da sounds for a cue, and where it happened. */
   resolveCombatCueSounds?: (attackerId: string | number, targetId: string | number, cue: VRCombatCue) => VRCombatCuePlayOptions | null;
   /** The controlled character's HP and FP, for the wrist plate. */
@@ -3703,6 +3707,11 @@ export class VRSpike {
     const renderer = VRSpike.renderer;
     const scene = VRSpike.scene;
     if (!renderer || !scene || !VRSpike.camera || !VRSpike.rig) return;
+    // Off unless this frame's world submission turns it on: a theater frame
+    // returns early and used to inherit it (critic run 7).
+    VRSpike.presentLoadingFloor(false);
+    VRSpike.ensureCombatCueAudio();
+    VRSpike.watchPlayerDisabled();
 
     // WebXRManager binds this target before invoking the frame callback.
     // KOTOR's GUI texture renders may replace it with an offscreen target and
@@ -4531,12 +4540,41 @@ export class VRSpike {
     VRSpike.loadingFloor.visible = true;
   }
 
+  /**
+   * Creates the cue player as the session's frames begin and preloads every
+   * retail sound it may use (critic run 7: created on the first cue, and only
+   * the defaults were preloaded).
+   */
+  private static ensureCombatCueAudio(): void {
+    if (VRSpike.combatCueAudio) return;
+    try {
+      const output = VRSpike.hooks?.getCombatCueAudioOutput?.();
+      if (!output) return;
+      VRSpike.combatCueAudio = new VRCombatCueAudio(output.context, output.destination, output.loadSound);
+      void VRSpike.combatCueAudio.preload([
+        ...VRCombatCueAudio.defaultSounds(),
+        ...(VRSpike.hooks?.getCombatCuePreloadSounds?.() ?? []),
+      ]);
+    } catch (error) {
+      console.error('[VRSpike] combat cue audio setup rejected', error);
+    }
+  }
+
+  /** Shown for as long as the effect holds the player (critic run 7: 1.8 s of a 6 s stun, feat stuns only). */
+  private static lastDisabledState: string | null = null;
+  private static watchPlayerDisabled(): void {
+    let state: string | null = null;
+    try { state = VRSpike.hooks?.getPlayerDisabledState?.() ?? null; } catch { state = null; }
+    if (state) VRSpike.showNotice(state, 600);
+    VRSpike.lastDisabledState = state;
+  }
+
   /** A short line low in view, without the error sound (a status, not a refusal). */
-  static showNotice(text: string): void {
+  static showNotice(text: string, holdMs?: number): void {
     if (!text || !VRSpike.camera) return;
     try {
       if (!VRSpike.refusalNoticeHost) VRSpike.refusalNoticeHost = new VRRefusalNoticeHost(VRSpike.camera);
-      VRSpike.refusalNoticeHost.show(text, performance.now());
+      VRSpike.refusalNoticeHost.show(text, performance.now(), holdMs);
     } catch (error) {
       console.error('[VRSpike] notice rejected', error);
     }

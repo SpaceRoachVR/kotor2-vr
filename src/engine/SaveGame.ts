@@ -999,7 +999,7 @@ export class SaveGame {
     // Retail's FILETIME (100 ns since 1601). It was never written, so every
     // save read back as "made just now" and the defeat screen's "Load Last
     // Saved Game" followed listing order (critic run 6).
-    nfo.RootNode.addField(new GFFField(GFFDataType.DWORD64, 'TIMESTAMP')).value = BigInt(Date.now() - winEpoch) * 10000n;
+    nfo.RootNode.addField(new GFFField(GFFDataType.DWORD64, 'TIMESTAMP')).setValue(BigInt(Date.now() - winEpoch) * 10000n);
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE1')).value = '';
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE2')).value = '';
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE3')).value = '';

@@ -313,14 +313,19 @@ describe('feat penalties applied through addEffect', () => {
 
     // A second round's penalty replaces the first: one Defense, one attack.
     expect(object.effects).toHaveLength(2);
-    // Defense: the round and 3 s after. Attack: that round only (critic run 6).
+    // Defense: the round and 3 s after; attack: that round only (critic run
+    // 6) - each ending a little inside its window, so the next round's roll
+    // never sees the attack penalty (critic run 7).
     const durations = object.effects.map((e) => e.duration).sort();
-    expect(durations).toEqual([CombatRound.ROUND_LENGTH / 1000, 2 * CombatRound.ROUND_LENGTH / 1000]);
-    advance(object, CombatRound.ROUND_LENGTH / 1000 + 1);
+    expect(durations[0]).toBeLessThan(CombatRound.ROUND_LENGTH / 1000);
+    expect(durations[1]).toBeGreaterThan(CombatRound.ROUND_LENGTH / 1000);
+    expect(durations[1]).toBeLessThan(2 * CombatRound.ROUND_LENGTH / 1000);
+    // Stepped in frames, as the game does: gone before the next round begins.
+    for (let t = 0; t < CombatRound.ROUND_LENGTH / 1000; t += 0.05) advance(object, 0.05, 0.05);
     expect(object.effects).toHaveLength(1);
     // An effect that removes itself shifts the next one into its slot, which
     // then misses that frame — as in ModuleCreature's loop — so allow a lap.
-    advance(object, CombatRound.ROUND_LENGTH / 1000 + 1);
+    for (let t = 0; t < CombatRound.ROUND_LENGTH / 1000; t += 0.05) advance(object, 0.05, 0.05);
     expect(object.effects).toEqual([]);
   });
 });
