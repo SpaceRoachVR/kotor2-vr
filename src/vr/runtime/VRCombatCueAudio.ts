@@ -18,7 +18,7 @@
  * The roll is untouched; this only presents a result the engine has decided.
  */
 
-export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready';
+export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready' | 'refused';
 
 export interface VRCombatCueTone {
   /** Start, seconds after the cue. */
@@ -51,6 +51,9 @@ const CUES: Readonly<Record<VRCombatCue, readonly VRCombatCueTone[]>> = Object.f
   // every three seconds of a fight; the haptic tick it stands in for is not
   // available through Chrome on VDXR (critic run 3).
   ready: [tone(0, 1800, 1700, 0.035, 0.16, 'sine')],
+  // Something you asked for was refused (out of range, no target, can't save
+  // now): two short low falling blips, unlike any hit.
+  refused: [tone(0, 360, 300, 0.07, 0.35, 'square'), tone(0.1, 300, 250, 0.08, 0.35, 'square')],
 });
 
 export function describeVRCombatCue(cue: VRCombatCue): readonly VRCombatCueTone[] {

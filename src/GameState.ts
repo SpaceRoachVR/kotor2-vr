@@ -892,8 +892,14 @@ function findVRArmedGrenade(actor: ModuleCreature, sourceKey: string): VRGrenade
  */
 function describeVRConsumableInventory(actor: ModuleCreature): readonly VRGrenadeInventoryEntry[] {
   const descriptions: VRGrenadeInventoryEntry[] = [];
+  // Droids use repair kits and nothing else from this list; everyone else
+  // uses everything but repair kits. The wheel offered T3 medpacs and the
+  // Exile droid repair kits (critic run 3).
+  const isDroid = typeof actor.getRace === 'function' && actor.getRace() === VR_RACE_DROID;
   for (const item of getVRCombatInventory(actor)) {
     if (!item || !VR_CONSUMABLE_BASE_ITEM_IDS.has(item.getBaseItemId?.())) continue;
+    const repairKit = item.getBaseItemId?.() === BaseItemType.DROID_REPAIR_EQUIPMENT;
+    if (repairKit !== isDroid) continue;
     const properties = Array.isArray(item.properties) ? item.properties : [];
     for (let propertyIndex = 0; propertyIndex < properties.length; propertyIndex += 1) {
       const property = properties[propertyIndex];
@@ -930,7 +936,18 @@ function findVRArmedConsumable(actor: ModuleCreature, sourceKey: string): VRGren
 
 /** TEMPORARY (3.20): names the first few consumable outcomes for the headset. */
 let vrConsumableOutcomesReported = 0;
+/**
+ * A refused grenade, Force cast, medpac or quick save was a console line and
+ * nothing in the headset (critic run 3): the player did not know the throw was
+ * out of range or the save refused. Every refusal now also sounds.
+ */
+function signalVRRefusal(shape: string): void {
+  if (!shape.startsWith('refused')) return;
+  try { VRSpike.playRefusedCue(); } catch { /* sound is best effort */ }
+}
+
 function reportVRConsumableOutcome(shape: string, detail = ''): void {
+  signalVRRefusal(shape);
   if (vrConsumableOutcomesReported >= 12) return;
   vrConsumableOutcomesReported += 1;
   console.info(`[VR consumable] TEMPORARY ${shape}${detail ? ' || ' + detail : ''}`);
@@ -1266,6 +1283,7 @@ function dispatchVRDirectionalForceGesture(
 /** TEMPORARY (3.19): names the first few cast outcomes so the headset can tune the thrust. */
 let vrForceCastOutcomesReported = 0;
 function reportVRForceCastOutcome(shape: string, detail = ''): void {
+  signalVRRefusal(shape);
   if (vrForceCastOutcomesReported >= 12) return;
   vrForceCastOutcomesReported += 1;
   console.info(`[VR force cast] TEMPORARY ${shape}${detail ? ' || ' + detail : ''}`);
@@ -1307,6 +1325,7 @@ function dispatchVRForceCastGesture(actor: ModuleCreature, targetId: string | nu
 /** TEMPORARY (round 6): "grenades are still entirely broken". Names each refusal once. */
 const reportedVRGrenadeOutcomes = new Set<string>();
 function reportVRGrenadeOutcomeOnce(shape: string, detail = ''): void {
+  signalVRRefusal(shape);
   if (reportedVRGrenadeOutcomes.has(shape)) return;
   reportedVRGrenadeOutcomes.add(shape);
   console.info(`[VR grenade] TEMPORARY ${shape}${detail ? ' || ' + detail : ''}`);
@@ -3799,7 +3818,7 @@ export class GameState implements EngineContext {
            * seventh top-level item that would force the wheel to paginate.
            */
           openMenu: () => GameState.MenuManager.MenuCharacter.open(),
-          quickSave: () => { AutoSaveManager.quickSave(); },
+          quickSave: () => { if (!AutoSaveManager.quickSave()) signalVRRefusal('refused: quick save'); },
           canSwapWeapons: typeof actor.hasAlternateWeaponSet === 'function' && actor.hasAlternateWeaponSet(),
           swapWeapons: () => actor.swapWeaponSets(),
           // BTN_CLEARALL's exact behaviour, offered only when there is

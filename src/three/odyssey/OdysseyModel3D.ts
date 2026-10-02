@@ -276,7 +276,10 @@ export class OdysseyModel3D extends OdysseyObject3D {
       const object = node.children[i-1];
       node.remove(object);
       if (object.type === 'Mesh' || object.type === 'SkinnedMesh' || object.type === 'Points') {
-        if(object instanceof THREE.Mesh){
+        // Points (particle emitters) are not Meshes: their geometry and
+        // material were never released, and the renderer's geometry count
+        // climbed with every module load (critic run 3, ROADMAP 0.3).
+        if(object instanceof THREE.Mesh || object instanceof THREE.Points){
           if(Array.isArray(object.material)){
             while(object.material.length){
               let material = object.material.splice(0, 1)[0];
@@ -291,7 +294,11 @@ export class OdysseyModel3D extends OdysseyObject3D {
         }
       }else if(object.type === 'OdysseyLight'){
         if(!!this.context && !!this.context.lightManager){
-          this.context.lightManager.removeLight(node as OdysseyLight3D);
+          // The light itself, not the node holding it: passing the parent
+          // removed nothing, so every destroyed model's lights stayed in the
+          // light manager until the next area, competing for the 8 dynamic
+          // light slots and holding their models (critic run 3).
+          this.context.lightManager.removeLight(object as OdysseyLight3D);
         }
       }else{
         if(object.hasOwnProperty('mesh')){

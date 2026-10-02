@@ -692,7 +692,7 @@ export class ModuleObject {
     action.setParameter(4, ActionParameterType.INT, ignoreStartRange ? 1 : 0);
     action.setParameter(5, ActionParameterType.DWORD, ModuleObjectConstant.OBJECT_INVALID);
     action.clearable = clearable;
-    console.log('ModuleObject.actionDialogObject', action);
+    console.log('ModuleObject.actionDialogObject', this.getTag?.());
     this.actionQueue.add(action);
   }
 
@@ -3722,7 +3722,7 @@ export class ModuleObject {
    * @param attackResult 
    */
   attackCreature(target: ModuleObject, feat?: any, isCutsceneAttack: boolean = false, attackDamage:number = 0, attackAnimation?: any, attackResult?: any) {
-    console.warn("Method not implemented.", this.tag, target);
+    console.warn("Method not implemented.", this.tag, (target as any)?.getTag?.());
   }
   /**
    * Set the commandable state

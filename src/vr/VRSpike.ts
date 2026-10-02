@@ -4447,6 +4447,11 @@ export class VRSpike {
     sparks.spark(at, now, 120, 2.4, 0x9fe0ff);
   }
 
+  /** A refused request (grenade out of range, no target, save refused). */
+  static playRefusedCue(): void {
+    VRSpike.playCombatCue('refused');
+  }
+
   /** A combat result you can hear, unless Combat Sounds is off. */
   private static playCombatCue(cue: VRCombatCue, delayMs = 0): void {
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;

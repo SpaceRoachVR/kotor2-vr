@@ -106,7 +106,7 @@ export class MainMenu extends K1_MainMenu {
           // manageLighting: false,
           context: this._3dView
         }).then((model: OdysseyModel3D) => {
-          console.log('Model Loaded', model);
+          console.log('Model Loaded', model?.name);
           this._3dViewModel = model;
           
           this._3dView.camera.position.copy(model.camerahook.position);

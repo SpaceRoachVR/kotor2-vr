@@ -220,7 +220,7 @@ export class ModuleMGPlayer extends ModuleObject {
   }
 
   setTrack(model = new OdysseyObject3D()){
-    console.log('track', model);
+    console.log('track', model?.name);
     this.track = model;
     this.rotation.reorder('YZX');
 
