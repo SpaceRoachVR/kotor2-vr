@@ -70,7 +70,7 @@ export function revealVRInterfaceOverHiddenWorld(
   if (!worldScene || worldScene.visible) return () => {};
   const children = worldScene.children;
   if (!Array.isArray(children)) return () => {};
-  if (!children.some((child) => child?.visible && VR_LOADING_INTERFACE_NAMES.has(child.name))) return () => {};
+  if (!children.some((child) => child?.visible && child.name === 'Kotor2VR.VRPanelHost')) return () => {};
   const hidden: THREE.Object3D[] = [];
   for (const child of children) {
     if (!child || !child.visible || VR_LOADING_INTERFACE_NAMES.has(child.name)) continue;

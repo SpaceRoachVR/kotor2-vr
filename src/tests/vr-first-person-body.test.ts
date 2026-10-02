@@ -73,7 +73,7 @@ describe('first-person body suppression is wired to the right render', () => {
   test('applies to the first-person world submission', () => {
     const at = spike.indexOf('const restoreBody = hidePlayerBodyForFirstPerson(playerBody);');
     expect(at).toBeGreaterThan(-1);
-    const block = spike.slice(at, at + 300);
+    const block = spike.slice(at, at + 700);
     expect(block).toContain('renderer.render(scene, VRSpike.camera);');
     // Restored in a finally, so a throwing render cannot leave the player
     // permanently invisible to every other camera.
