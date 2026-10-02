@@ -912,11 +912,18 @@ export class ModuleCreature extends ModuleObject {
       const screen = ModuleCreature.partyDefeatScreen.defeated(delta);
       if(screen){
         console.warn(screen === 'reopen'
-          ? '[Party] the party is still defeated; reopening Load Game'
-          : '[Party] every party member is down; opening Load Game (the game-over screen is not wired yet)');
+          ? '[Party] the party is still defeated; reopening the defeat screen'
+          : '[Party] every party member is down; opening the defeat screen');
         try{
-          GameState.MenuManager.MenuSaveLoad.mode = MenuSaveLoadMode.LOADGAME;
-          GameState.MenuManager.MenuSaveLoad.open();
+          // The retail defeat screen (Last Save / Load Game / Quit); Load Game
+          // directly only if it could not be loaded.
+          const gameOver = GameState.MenuManager.MenuGameOver;
+          if(gameOver){
+            gameOver.open();
+          }else{
+            GameState.MenuManager.MenuSaveLoad.mode = MenuSaveLoadMode.LOADGAME;
+            GameState.MenuManager.MenuSaveLoad.open();
+          }
         }catch(e){
           console.error(e);
         }

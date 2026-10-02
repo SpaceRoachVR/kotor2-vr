@@ -79,6 +79,7 @@ export class MenuManager {
   static MenuSoundAdvanced: KOTOR.MenuSoundAdvanced;
   static MenuStore: KOTOR.MenuStore;
   static MenuSwoopUp: TSL.MenuSwoopUp;
+  static MenuGameOver: TSL.MenuGameOver;
   static MenuTop: KOTOR.MenuTop;
   static MenuToolTip: KOTOR.MenuToolTip;
   static MenuMouse: KOTOR.MenuMouse;
@@ -601,6 +602,13 @@ export class MenuManager {
 
       if(GameState.GameKey == GameEngineType.TSL){
         MenuManager.MenuPartySelection.childMenu = GameState.MenuManager.MenuTop;
+        // The defeat screen (retail gameover_p). Loaded on its own so a
+        // missing resource leaves the old fallback (Load Game) in place.
+        try{
+          MenuManager.MenuGameOver = await MenuManager.GameMenuLoader(TSL.MenuGameOver) as TSL.MenuGameOver;
+        }catch(e){
+          console.error('MenuManager: the game-over menu failed to load', e);
+        }
       }
     }catch(e){
       console.error(e);

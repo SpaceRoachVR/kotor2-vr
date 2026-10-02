@@ -41,7 +41,7 @@ import { VRTeleportMarkerHost } from "./runtime/VRTeleportMarkerHost";
 import { resolveVRTeleportAim } from "./runtime/VRTeleportAimResolver";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
-import { hideWorldForTheater } from "./runtime/VRTheaterWorldVisibility";
+import { hideWorldForTheater, revealVRInterfaceOverHiddenWorld } from "./runtime/VRTheaterWorldVisibility";
 import { hidePlayerBodyForFirstPerson, isCameraInsideBody } from "./runtime/VRFirstPersonBody";
 import { hideGuiRootsForPanel } from "./runtime/VRPanelSceneVisibility";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
@@ -3781,9 +3781,13 @@ export class VRSpike {
     // immediately, so nothing else - cutscenes, the theater path, the
     // flatscreen camera, portraits - observes it hidden.
     const restoreBody = hidePlayerBodyForFirstPerson(playerBody);
+    // While a module loads the engine hides the world scene, panel and all;
+    // draw the loading screen over the dark instead.
+    const restoreHiddenWorld = revealVRInterfaceOverHiddenWorld(scene);
     try {
       renderer.render(scene, VRSpike.camera);
     } finally {
+      restoreHiddenWorld();
       restoreBody();
     }
     VRSpike.perf.recordXRRender(frameTimestamp);
