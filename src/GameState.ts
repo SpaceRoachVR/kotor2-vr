@@ -144,7 +144,7 @@ function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
   }
   return vrSwoopGripPoses;
 }
-import { VRCombatTempoGate } from "@/vr/runtime/VRCombatTempoGate";
+import { VRCombatTempoGate, resolveVRRoundReadiness } from "@/vr/runtime/VRCombatTempoGate";
 import { addSwoopRideListener, type SwoopRideEventType } from "@/module/minigame/SwoopRideEvents";
 import { VRCombatSwingBuffer } from "@/vr/runtime/VRCombatSwingBuffer";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
@@ -258,10 +258,24 @@ const VR_IN_PLACE_SKILL_ACTION_LEASH_METRES = 1.0;
  * in the emulator: a 0.2 s stick deflection 0.6 s into the pick emptied the
  * queue through CreatureLocomotionAdapter.apply.
  */
+const VR_COMBAT_ACTIONS_KEPT_WHILE_MOVING: ReadonlySet<number> = new Set<number>([
+  ActionType.ActionCombat,
+  ActionType.ActionPhysicalAttacks,
+  ActionType.ActionItemCastSpell,
+  ActionType.ActionCastSpell,
+]);
+
 function retainVRInPlaceSkillActionsWhileMoving(actor: ModuleCreature): boolean {
   const queue = actor.actionQueue;
   if (!queue || queue.length === 0) return false;
   for (const action of Array.from(queue) as Action[]) {
+    // Fighting is done standing and strafing in VR: an attack round or a
+    // scheduled cast (a medpac at the neck, a grenade, a Force power) must
+    // survive the player moving. The desktop rule cleared them, so a medpac
+    // used while sidestepping vanished from the hand unused (critic run 3).
+    // The engine's own approach walk is suppressed in VR, so keeping these
+    // cannot drag the player.
+    if (VR_COMBAT_ACTIONS_KEPT_WHILE_MOVING.has(action?.type)) continue;
     const targetParameter = VR_IN_PLACE_SKILL_ACTION_TARGET_PARAMETER.get(action?.type);
     if (targetParameter === undefined) return false;
     const target = action.getParameter<ModuleObject>(targetParameter);
@@ -3523,7 +3537,12 @@ export class GameState implements EngineContext {
           stanceReadout: formatVRCombatQueueReadout(
             vrCombatIntentQueue.getSnapshot().entries.map((entry) => entry.label),
           ),
-          tempoReadiness: tempo.eligible ? 1 : 0,
+          tempoReadiness: resolveVRRoundReadiness({
+            eligible: tempo.eligible,
+            hasTarget: target !== null,
+            inCombat: actor.combatData.combatState === true,
+            round: actor.combatRound ?? null,
+          }),
           allowDominantTrigger: queuedIntent?.requiredInput === 'dominant-trigger',
           onCombatSwing: (event) => {
             if (event.actorId !== String(actor.id)) return;

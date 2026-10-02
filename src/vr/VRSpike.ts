@@ -2747,6 +2747,7 @@ export class VRSpike {
       ((context.tempoReadiness ?? 0) >= 1 || bufferedSwingReleased);
     if (open && !VRSpike.roundReadyLatched) {
       void VRSpike.haptics.pulse(session, VRSpike.dominantHand, ROUND_READY_HAPTIC);
+      VRSpike.playCombatCue('ready');
     }
     VRSpike.roundReadyLatched = open;
   }

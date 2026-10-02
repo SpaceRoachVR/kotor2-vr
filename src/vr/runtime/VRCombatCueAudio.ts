@@ -18,7 +18,7 @@
  * The roll is untouched; this only presents a result the engine has decided.
  */
 
-export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force';
+export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready';
 
 export interface VRCombatCueTone {
   /** Start, seconds after the cue. */
@@ -47,6 +47,10 @@ const CUES: Readonly<Record<VRCombatCue, readonly VRCombatCueTone[]>> = Object.f
   'hurt-critical': [tone(0, 420, 260, 0.18, 0.6, 'square'), tone(0.16, 380, 240, 0.2, 0.6, 'square')],
   // Rising, unlike every combat knock: your own Force power going off.
   force: [tone(0, 600, 1200, 0.24, 0.4, 'sine'), tone(0.06, 900, 1800, 0.22, 0.25, 'triangle')],
+  // The round is open: a swing now counts. Short and quiet, since it plays
+  // every three seconds of a fight; the haptic tick it stands in for is not
+  // available through Chrome on VDXR (critic run 3).
+  ready: [tone(0, 1800, 1700, 0.035, 0.16, 'sine')],
 });
 
 export function describeVRCombatCue(cue: VRCombatCue): readonly VRCombatCueTone[] {

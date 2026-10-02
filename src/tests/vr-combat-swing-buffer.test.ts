@@ -35,7 +35,7 @@ describe("VRCombatSwingBuffer", () => {
     expect(buffer.release(context())).toEqual({ state: "empty" });
   });
 
-  it.each(["round-active", "scheduled-action-pending", "player-action-committed"] as const)(
+  it.each(["round-paused", "round-active", "scheduled-action-pending", "player-action-committed"] as const)(
     "buffers %s",
     (reason) => expect(isVRCombatSwingBufferable(reason)).toBe(true),
   );
@@ -45,7 +45,6 @@ describe("VRCombatSwingBuffer", () => {
     "actor-unavailable",
     "target-unavailable",
     "combat-round-unavailable",
-    "round-paused",
     "engine-extra-attack-window",
   ] as const)("does not buffer %s", (reason) => {
     const buffer = new VRCombatSwingBuffer();

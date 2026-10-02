@@ -91,3 +91,37 @@ function validateGateInput(input: Readonly<VRCombatTempoGateInput>): void {
     throw new TypeError("combatRound is not a valid read-only CombatRound snapshot.");
   }
 }
+
+export interface VRRoundReadinessInput {
+  readonly eligible: boolean;
+  readonly hasTarget: boolean;
+  readonly inCombat: boolean;
+  readonly round: {
+    readonly roundStarted: boolean;
+    readonly roundPaused: boolean;
+    readonly pauseTimer: number;
+    readonly timer: number;
+    readonly roundLength: number;
+  } | null;
+}
+
+/**
+ * How far the next attack round has come, 0..1, for the hilt ring (3.5).
+ *
+ * The ring was fed `eligible ? 1 : 0`, so it never filled: it was either
+ * hidden or an empty grey circle, and with a weapon out and nobody to fight
+ * the empty circle stayed up for good (critic run 3). 1 hides the ring:
+ * ready to attack, or out of combat with nobody targeted.
+ */
+export function resolveVRRoundReadiness(input: VRRoundReadinessInput): number {
+  if (input.eligible) return 1;
+  if (!input.hasTarget && !input.inCombat) return 1;
+  const round = input.round;
+  if (!round || !round.roundStarted || !(round.roundLength > 0)) return input.hasTarget ? 0 : 1;
+  // The engine holds the round paused for the attack; the pause counts down
+  // from the round length, so what has elapsed is the rest.
+  const elapsed = round.roundPaused
+    ? round.roundLength - Math.max(0, round.pauseTimer)
+    : round.timer;
+  return Math.min(0.99, Math.max(0, elapsed / round.roundLength));
+}
