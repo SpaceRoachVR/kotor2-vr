@@ -22,7 +22,7 @@ No game files are included here, and none ever will be. You need your own copy o
 
 ## What works right now
 
-Everything below is built and has been through real headset testing, but "built" doesn't mean "done." I've been doing numbered test rounds in the headset (13 so far), and every round turns up new stuff.
+Everything below is built, but "built" doesn't mean "done." I test in the headset in numbered rounds (14 so far), and every round turns up new stuff. Some of what's listed has only been checked in a headset emulator since the last round; the open checklist for the next round says which.
 
 **Getting around**
 - Smooth locomotion and smooth turning by default. Snap turn, teleport and a comfort vignette are there if you want them.
@@ -37,15 +37,16 @@ Everything below is built and has been through real headset testing, but "built"
 - Blasters aim wherever the barrel points, with a laser sight. Pull the trigger to fire.
 - Force push and pull are hand flicks.
 - A timer in the lightsaber hilt shows when your next attack round is ready.
-- You can hear and see how your rolls land: a different sound for a miss, a hit and a crit, sparks on what you hit, and a buzz plus a red flash on the side you got hit from. (Controller vibration is written too, but Chrome over Virtual Desktop doesn't give the game any way to rumble the controllers.)
+- You can hear and see how your rolls land: the game's own swing, impact and parry sounds for a miss, a hit and a crit, sparks on what you hit, and a buzz plus a red flash on the side you got hit from. (Controller vibration is written too, but Chrome over Virtual Desktop doesn't give the game any way to rumble the controllers.)
 - A health watch on your off-hand wrist. Look at it like a real watch.
 - An optional pause you can call up to plan a fight. It never kicks in on its own.
 - Swing at a locked door or container to bash it open.
 - Party members fight on their own when they're in range, but any orders you gave them come first.
 
 **Menus and interacting**
-- Hold X for an action wheel. Inventory, character sheet, map, party orders, quick save, comfort settings and everything else live there.
+- Press X for an action wheel (A if you set your weapon hand to left). Inventory, character sheet, map, party orders, quick save, comfort settings and everything else live there.
 - The game autosaves when you arrive somewhere new, like the original.
+- The loading screen shows in the headset while an area loads, and a party wipe brings up the original "Your entire party has been killed" screen.
 - Walk up to a door, container, mine or console and the options pop up right there. No more getting dragged across the room to use something.
 - The regular game menus float in front of you as panels.
 

@@ -21,7 +21,7 @@
     "xr:benchmark:build": "node tools/xr-benchmark/build.js",
     "xr:benchmark:check": "tsc --noEmit -p tools/xr-benchmark/tsconfig.json && node tools/xr-benchmark/build.js",
     "material:audit": "node tools/material-audit/visual-manifest.js",
-    "vr:check": "node tools/vr-emulator/run-checks.js",
+    "vr:check": "node tools/vr-emulator/run-checks.js", "vr:check:combat": "node tools/vr-emulator/check-combat-round.js",
     "vr:play": "node tools/vr-emulator/launch-headset.js",
     "vr:sweep": "node tools/vr-emulator/module-sweep.js",
     "vr:sweep:test": "node --test tools/vr-emulator/module-sweep.test.js",

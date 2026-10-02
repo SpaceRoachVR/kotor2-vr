@@ -70,6 +70,7 @@ import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue, type VRComba
 import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateHost";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
 import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
+import { VRRefusalNoticeHost, describeVRRefusal } from "./runtime/VRRefusalNoticeHost";
 import { VRPauseIndicatorHost } from "./runtime/VRPauseIndicatorHost";
 import type { VRHapticPattern } from "./runtime/VRHapticFeedback";
 import { VRDroidExplosionHost } from "./runtime/VRDroidExplosionHost";
@@ -1213,6 +1214,8 @@ export class VRSpike {
     VRSpike.healthPlateHost = null;
     VRSpike.pauseIndicatorHost?.dispose();
     VRSpike.pauseIndicatorHost = null;
+    VRSpike.refusalNoticeHost?.dispose();
+    VRSpike.refusalNoticeHost = null;
     VRSpike.radialOpenWhilePaused = false;
     VRSpike.cutsceneFadeHost?.dispose();
     VRSpike.cutsceneFadeHost = null;
@@ -2695,6 +2698,7 @@ export class VRSpike {
         }
       }
     }
+    VRSpike.refusalNoticeHost?.update(performance.now());
     if (!paused && !VRSpike.pauseIndicatorHost) return;
     if (!VRSpike.camera) return;
     try {
@@ -2979,7 +2983,7 @@ export class VRSpike {
         new Set(['global', 'radial-wheel'])
       );
       const menuPressed = actions.some((action) =>
-        action.action === SemanticXRAction.Menu && action.hand === 'left' && action.pressed
+        action.action === SemanticXRAction.Menu && action.hand !== VRSpike.dominantHand && action.pressed
       );
       // No hand filter: the binding table already scopes radial-wheel Select to
       // 'either', and the wheel's ray follows whichever hand aims at it. Testing
@@ -3235,7 +3239,7 @@ export class VRSpike {
         new Set(['global']),
       );
       const menuPressed = actions.some((action) =>
-        action.action === SemanticXRAction.Menu && action.hand === 'left' && action.pressed
+        action.action === SemanticXRAction.Menu && action.hand !== VRSpike.dominantHand && action.pressed
       );
       VRSpike.radialMenuPressedLastFrame = menuPressed;
       VRSpike.radialMenuController.synchronizeMenuPressed(menuPressed);
@@ -4470,6 +4474,24 @@ export class VRSpike {
   static playRefusedCue(): void {
     VRSpike.playCombatCue('refused', 0, true);
   }
+
+  /**
+   * The retail error sound and, in view, why (critic runs 4-5: one sound
+   * for every refusal, nothing for a player who cannot hear it).
+   */
+  static signalRefusal(shape: string): void {
+    VRSpike.playRefusedCue();
+    const text = describeVRRefusal(shape);
+    if (!text || !VRSpike.camera) return;
+    try {
+      if (!VRSpike.refusalNoticeHost) VRSpike.refusalNoticeHost = new VRRefusalNoticeHost(VRSpike.camera);
+      VRSpike.refusalNoticeHost.show(text, performance.now());
+    } catch (error) {
+      console.error('[VRSpike] refusal notice rejected', error);
+    }
+  }
+
+  private static refusalNoticeHost: VRRefusalNoticeHost | null = null;
 
   static playSavedCue(): void {
     VRSpike.playCombatCue('saved', 0, true);

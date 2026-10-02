@@ -330,7 +330,7 @@ export class NWScriptInstance {
         return false;
       }
     }catch(e){
-      console.error(e, this);
+      console.error(e, (this as any).name, (this as any).caller?.getTag?.());
     }
   }
 

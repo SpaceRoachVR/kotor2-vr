@@ -966,7 +966,7 @@ function signalVRRefusal(shape: string): void {
   // A cancellation is a refusal the player did not ask for (the armed item
   // left the bag), so it blips too (critic run 4).
   if (!shape.startsWith('refused') && !shape.startsWith('cancelled')) return;
-  try { VRSpike.playRefusedCue(); } catch { /* sound is best effort */ }
+  try { VRSpike.signalRefusal(shape); } catch { /* feedback is best effort */ }
 }
 
 function reportVRConsumableOutcome(shape: string, detail = ''): void {

@@ -868,6 +868,15 @@ export class ModuleCreature extends ModuleObject {
 
     this.updateRegen(delta);
     this.updateDownedPartyMember(delta);
+    // Items hidden for a stunt are shown again by setCutsceneMode(false) from
+    // the conversation's release; a conversation that ended some other way
+    // (aborted, a module change) left them hidden while equipped (critic run
+    // 5). Once no conversation or cutscene holds this creature, show them.
+    if(this.cutsceneHiddenItemModels.length && !this.cutsceneMode && !GameState.CutsceneManager?.active
+      && GameState.Mode !== EngineMode.DIALOG){
+      for(const model of this.cutsceneHiddenItemModels) model.visible = true;
+      this.cutsceneHiddenItemModels = [];
+    }
 
     this.collisionTimer -= delta;
     if(this.collisionTimer < 0)

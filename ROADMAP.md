@@ -1101,6 +1101,17 @@ planner; hand-picked LYT vias were off the mesh in every module), and
 `probe-eval.js <checkpoint> "<expr>"` for one-shot state questions; the
 transition trace in `walkIntoTransition` caught defect 12 in the act.
 
+### 1.13 — T3-M4 rejoins the party before he is repaired ☐ candidate fix in, awaiting round 15 (Q3)
+
+**Round 14 [Headset]:** T3 was in the party with the Exile and Atton before
+the scene that repairs him. Candidate cause: `AddCreatureToParty` added a
+second copy of an NPC already in the party when the leader was that NPC (the
+duplicate check skipped `party[0]`), and grew the party past three. `0b7065e7`
+checks every member and stops a full party growing; a recruit offered to a
+full party is made available on the party-select screen instead. Close this
+only when round 15's Q3 shows T3 joining at the right story beat, and check
+he is not offered early on the party-select screen (critic run 5).
+
 ### 1.12 — Breadth-first module sweep ✅ built and first-run verified (2026-08-29)
 
 **The discovery loop was the bottleneck, not the fixing.** Every defect in

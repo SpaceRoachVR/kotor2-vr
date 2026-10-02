@@ -144,7 +144,7 @@ export class CombatRound {
    * Begin the combat round
    */
   beginCombatRound(){
-    console.log('beginCombatRound', this.owner.tag);
+    // (per-round begin/end logs removed: one line every 3 s per combatant)
     if(!BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)) return;
 
     const owner: ModuleCreature = this.owner as any;
@@ -214,7 +214,7 @@ export class CombatRound {
    * End the combat round
    */
   endCombatRound(){
-    console.log('endCombatRound', this.owner.tag);
+
     this.roundStarted = false;
     const combatData = this.owner.combatData;
     combatData.lastCombatFeatUsed = undefined;
