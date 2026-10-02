@@ -2942,11 +2942,17 @@ export class VRSpike {
   ): boolean {
     const armed = context.armedConsumable === true && typeof context.onConsumableUseGesture === 'function';
     try {
+      const wasDwelling = VRSpike.consumableUseGestureController.isDwelling;
       const gesture = VRSpike.consumableUseGestureController.process(inputFrame, {
         hand: offhandHand,
         armed,
         timestamp,
       });
+      // Entering the zone clicks, so the player knows to hold it there
+      // (critic run 5: nothing said you were in it).
+      if (!wasDwelling && VRSpike.consumableUseGestureController.isDwelling) {
+        VRSpike.playCombatCue('neck-zone', 0, true);
+      }
       if (!gesture || !armed) return false;
       return context.onConsumableUseGesture!(gesture) === true;
     } catch (error) {

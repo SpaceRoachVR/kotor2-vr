@@ -48,4 +48,15 @@ describe('VR round readiness (critic run 4)', () => {
     expect(latch.apply(1, false, false)).toBe(1);
     expect(latch.apply(0.2, false, true)).toBe(0.2);
   });
+
+  test('a new action in the round, or a new leader, starts the ring again (critic run 5)', () => {
+    const latch = new VRRoundReadinessLatch();
+    const attack = {}, medpac = {}, exile = {}, atton = {};
+    expect(latch.apply(0.95, false, true, exile, attack)).toBe(0.95);
+    // The medpac was scheduled into the busy round and now owns it.
+    expect(latch.apply(0.1, false, true, exile, medpac)).toBe(0.1);
+    expect(latch.apply(0.4, false, true, exile, medpac)).toBe(0.4);
+    // Switching leader mid-round does not carry the old mark.
+    expect(latch.apply(0.2, false, true, atton, medpac)).toBe(0.2);
+  });
 });

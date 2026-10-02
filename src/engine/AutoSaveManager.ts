@@ -73,20 +73,23 @@ export class AutoSaveManager {
    * The player asked for a save: it happens now or not at all. Retail refuses
    * to save in combat, and a conversation cannot be saved mid-line.
    */
-  static quickSave(): boolean {
+  static quickSave(onDone?: (written: boolean) => void): boolean {
     const world = AutoSaveManager.world;
     if(!world || AutoSaveManager.inFlight || !world.canSave() || world.inCombat()){
       console.log('AutoSaveManager: quick save refused (combat, conversation or a save in progress)');
       return false;
     }
     AutoSaveManager.inFlight = true;
-    AutoSaveManager.write('quicksave');
+    AutoSaveManager.write('quicksave', onDone);
     return true;
   }
 
-  private static write(slot: 'autosave' | 'quicksave'){
-    AutoSaveManager.world.save(slot).catch((e) => {
+  private static write(slot: 'autosave' | 'quicksave', onDone?: (written: boolean) => void){
+    AutoSaveManager.world.save(slot).then(() => {
+      try { onDone?.(true); } catch (e) { /* feedback only */ }
+    }, (e) => {
       console.error(`AutoSaveManager: ${slot} failed`, e);
+      try { onDone?.(false); } catch (err) { /* feedback only */ }
     }).finally(() => {
       AutoSaveManager.inFlight = false;
     });

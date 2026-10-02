@@ -23,6 +23,8 @@ export interface VRConsumableUseGesture {
 export interface VRConsumableUseGestureConfiguration {
   /** How far below the head centre the zone sits (the neck), metres. */
   readonly zoneDropMetres: number;
+  /** How far behind the eyes, toward the neck, metres. */
+  readonly zoneBackMetres: number;
   /** Radius of the zone around that point, metres. */
   readonly zoneRadiusMetres: number;
   /** How long the hand must stay in the zone before it counts. */
@@ -40,11 +42,13 @@ export interface VRConsumableUseGestureInput {
 
 const DEFAULT_CONFIGURATION: VRConsumableUseGestureConfiguration = {
   zoneDropMetres: 0.15,
-  // Tightened from 0.22 m / 150 ms (critic runs 3 and 4): a queued medpac
-  // now survives movement, so pulling an armed stim close to read its label
-  // must not fire it. A deliberate press to the neck still lands well inside.
-  zoneRadiusMetres: 0.12,
-  dwellMilliseconds: 300,
+  // 0.22 m / 150 ms fired while reading an armed stim (critic runs 3-4);
+  // 0.12 m centred under the eyes sat in front of the throat and was hard to
+  // hit (critic run 5). The centre now also moves back toward the neck
+  // (zoneBackMetres), and the player hears a click on entering the zone.
+  zoneBackMetres: 0.07,
+  zoneRadiusMetres: 0.15,
+  dwellMilliseconds: 250,
   cooldownMilliseconds: 800,
 };
 
@@ -86,6 +90,12 @@ export class VRConsumableUseGestureController {
       return null;
     }
     const zoneCentre = head.position.clone().addScaledVector(WORLD_UP, -this.configuration.zoneDropMetres);
+    // Back from the eyes toward the neck, along the head's level forward.
+    if (this.configuration.zoneBackMetres > 0 && head.orientation) {
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(head.orientation);
+      forward.z = 0;
+      if (forward.lengthSq() > 1e-8) zoneCentre.addScaledVector(forward.normalize(), -this.configuration.zoneBackMetres);
+    }
     const distance = hand.pose.position.distanceTo(zoneCentre);
     if (!Number.isFinite(distance) || distance > this.configuration.zoneRadiusMetres) {
       this.dwellStartedAt = null;

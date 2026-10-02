@@ -10,6 +10,7 @@ import { GameState } from "@/GameState";
 // import { TalentSpell } from "@/talents/TalentSpell";
 import { BitWise } from "@/utility/BitWise";
 import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
+import { releaseUnstartedCastSpellCombatAction } from "@/actions/ItemCastSpellRoundCleanup";
 import type { ModuleObject } from "@/module/ModuleObject";
 
 /**
@@ -57,6 +58,8 @@ export class ActionCastSpell extends Action {
         // power kept while moving could walk the player).
         if(ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
           console.info('ActionCastSpell: out of range, approach suppressed', this.spell?.id);
+          releaseUnstartedCastSpellCombatAction((this.owner as any).combatRound);
+          try { GameState.onItemCastRejected?.(this.owner); } catch { /* feedback is best effort */ }
           return ActionStatus.FAILED;
         }
 

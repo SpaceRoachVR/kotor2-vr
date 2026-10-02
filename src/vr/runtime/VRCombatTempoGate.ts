@@ -163,8 +163,22 @@ export function resolveVRRoundReadiness(input: VRRoundReadinessInput): number {
  */
 export class VRRoundReadinessLatch {
   private high = 0;
+  private actor: unknown = undefined;
+  private roundAction: unknown = undefined;
 
-  apply(readiness: number, roundOpen: boolean, inCombat: boolean): number {
+  /**
+   * `actor` and `roundAction` identify the wait: a new party leader, or a new
+   * action taking the round (an attack, then a medpac scheduled into the busy
+   * round), starts the ring again. Without them the ring froze near full for
+   * the whole of a chained round, and carried one leader's mark onto the next
+   * (critic run 5).
+   */
+  apply(readiness: number, roundOpen: boolean, inCombat: boolean, actor?: unknown, roundAction?: unknown): number {
+    if (actor !== this.actor || roundAction !== this.roundAction) {
+      this.actor = actor;
+      this.roundAction = roundAction;
+      this.high = 0;
+    }
     if (!inCombat || roundOpen || readiness >= 1) {
       this.high = 0;
       return readiness;

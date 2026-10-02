@@ -71,6 +71,24 @@ describe('VRConsumableUseGestureController', () => {
   });
 });
 
+// Critic run 5: a zone centred under the eyes sat in front of the throat. It
+// now sits back toward the neck, along the head's level forward.
+test('the neck zone sits behind the eyes, toward the neck', () => {
+  const controller = new VRConsumableUseGestureController({ dwellMilliseconds: 0 });
+  // Looking along +Y: camera forward (-Z) turned 90 degrees about X.
+  const lookingY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+  const at = (hand: THREE.Vector3) => {
+    const f = frame(new THREE.Vector3(0, 0, 1.6), hand);
+    (f.head as any).orientation = lookingY;
+    return f;
+  };
+  // At the throat, 7 cm behind the eyes: used.
+  expect(controller.process(at(new THREE.Vector3(0, -0.07, 1.45)), { hand: 'left', armed: true, timestamp: 1_000 })).not.toBeNull();
+  controller.reset();
+  // 10 cm in front of the face, where reading a label puts it: not used.
+  expect(controller.process(at(new THREE.Vector3(0, 0.1, 1.45)), { hand: 'left', armed: true, timestamp: 2_000 })).toBeNull();
+});
+
 function frame(headPosition: THREE.Vector3, handPosition: THREE.Vector3, hand: 'left' | 'right' = 'left'): XRInputFrame {
   const pose = (position: THREE.Vector3): XRWorldPose => ({
     position: position.clone(), orientation: new THREE.Quaternion(), linearVelocity: null, angularVelocity: null, trackingState: 'tracked',

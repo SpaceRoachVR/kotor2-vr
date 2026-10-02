@@ -678,6 +678,12 @@ const vrCombatTempoGate = new VRCombatTempoGate();
 /** ROADMAP 3.12 — one swing held while the round is busy. */
 const vrCombatSwingBuffer = new VRCombatSwingBuffer();
 const vrRoundReadinessLatch = new VRRoundReadinessLatch();
+/** When the held swing was offered; see VR_SWING_BUFFER_EXPIRY_MS. */
+let vrSwingBufferArmedAtMs = 0;
+/** A round and a half (ROUND_LENGTH 3 s): long enough for the next opening, not the one after. */
+const VR_SWING_BUFFER_EXPIRY_MS = 4500;
+/** The grenade last scheduled into a round, re-armed if the round rejects it. */
+let vrLastThrownGrenade: { actorId: number; sourceKey: string; itemId: unknown } | null = null;
 const vrArmedGrenadeState = new VRArmedGrenadeState();
 /**
  * ROADMAP 3.20 — the one medpac, stim or repair kit armed in the off hand,
@@ -1091,6 +1097,7 @@ function dispatchVREmbodiedCombatInput(
         input,
         weaponSignature: resolveVRCombatWeaponSignature(actor),
       }, tempo.reason)) {
+      vrSwingBufferArmedAtMs = performance.now();
       return false;
     }
     let distance = 'n/a';
@@ -1264,11 +1271,25 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
     // needs reach, so it fires when the target is back in it.
     isTargetLive: (targetId: string) => resolveVRLockedHostile(actor, targetId) !== null,
   };
+  // A held swing is for the next round, not any later one: after a round and
+  // a half it is dropped quietly. Without this, a swing at a droid that
+  // backed off fired whenever it came back into reach (critic run 5).
+  const heldFor = performance.now() - vrSwingBufferArmedAtMs;
+  if (heldFor > VR_SWING_BUFFER_EXPIRY_MS) {
+    vrCombatSwingBuffer.clear();
+    return { released: false, armed: false };
+  }
+  const pendingBefore = vrCombatSwingBuffer.peek();
   const dropped = vrCombatSwingBuffer.invalidate(context);
   if (dropped) {
-    // A swing the player was waiting on should not vanish silently.
-    if (dropped !== 'combat-ended') {
-      try { VRSpike.playRefusedCue(); } catch { /* sound is best effort */ }
+    // Only a lock that was lost is worth the refusal sound. The target dying
+    // (your first swing killed it) is a success, and a weapon swap or a
+    // leader change is the player's own doing (critic run 5: a kill sounded
+    // like "no").
+    const lost = resolveVRAimedObject(Number(pendingBefore?.targetId));
+    const targetDied = !lost || (typeof (lost as any).isDead === 'function' && (lost as any).isDead());
+    if (dropped === 'target-invalid' && !targetDied) {
+      signalVRRefusal('refused: swing target lost');
     }
     if (!reportedVRSwingBufferDrops.has(dropped)) {
       reportedVRSwingBufferDrops.add(dropped);
@@ -1304,6 +1325,10 @@ function dispatchVRDirectionalForceGesture(
   }
   if (!isVRForceCastSchedulable(getVREmbodiedTempoResult(actor, target, 'lock'))) {
     reportVRForceCastOutcome('refused: actor cannot act', `head=${intent.label}`);
+    return false;
+  }
+  if (!isVRCombatIntentInRange(actor, target, intent)) {
+    reportVRForceCastOutcome('refused: out of Force range', `head=${intent.label}`);
     return false;
   }
   if (!dispatchVRCombatIntent(actor, target, intent)) return false;
@@ -1353,6 +1378,13 @@ function dispatchVRForceCastGesture(actor: ModuleCreature, targetId: string | nu
   }
   if (!isVRForceCastSchedulable(getVREmbodiedTempoResult(actor, target, 'lock'))) {
     reportVRForceCastOutcome('refused: actor cannot act', `head=${intent.label}`);
+    return false;
+  }
+  // The power's own range, as grenades check theirs: the lock reaches 20 m,
+  // Medium powers 15 m and Small 10 m. Casting beyond it failed silently in
+  // the engine and used the power up (critic run 5). It stays queued.
+  if (!isVRCombatIntentInRange(actor, target, intent)) {
+    reportVRForceCastOutcome('refused: out of Force range', `head=${intent.label}`);
     return false;
   }
   if (!dispatchVRCombatIntent(actor, target, intent)) {
@@ -1442,6 +1474,7 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
       actor.actionQueue.add(new GameState.ActionFactory.ActionCombat(0xFFFF));
     }
     vrArmedGrenadeState.completeCommit({ sourceKey: source.descriptor.sourceKey, engineAccepted: true });
+    vrLastThrownGrenade = { actorId: actor.id, sourceKey: source.descriptor.sourceKey, itemId: source.item?.id };
     vrCombatIssuedTargetId = target.id;
     reportVRGrenadeOutcomeOnce('thrown: scheduled into the combat round', `spell=${source.spellId}`);
     return true;
@@ -1506,6 +1539,44 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   // activation, which would violate the player's explicitly selected order.
   vrCombatIntentQueue.enqueue(intent);
   return true;
+}
+
+/**
+ * Whether a queued power can reach `target` from here: the entry's own
+ * TalentSpell range. Anything without a spell (a feat) is not range-gated.
+ */
+function isVRCombatIntentInRange(actor: ModuleCreature, target: ModuleObject, intent: VRCombatIntent): boolean {
+  const entry = resolveVRCombatIntentEntry(actor, target, intent);
+  const talent: any = entry?.talent;
+  if (!talent || typeof talent.inRange !== 'function') return true;
+  try {
+    return talent.inRange(target, actor) !== false;
+  } catch {
+    return true;
+  }
+}
+
+function resolveVRCombatIntentEntry(actor: ModuleCreature, target: ModuleObject, intent: VRCombatIntent): VRActionMenuEntry | null {
+  const source = parseVRCombatIntentSourceKey(intent.sourceKey);
+  if (!source) return null;
+  try {
+    GameState.ActionMenuManager.SetPC(actor);
+    GameState.ActionMenuManager.SetTarget(target);
+    GameState.ActionMenuManager.UpdateMenuActions();
+    const panels = source.kind === 'target'
+      ? GameState.ActionMenuManager.ActionPanels.targetPanels
+      : GameState.ActionMenuManager.ActionPanels.selfPanels;
+    const panel = panels[source.panelIndex];
+    if (!panel || !Array.isArray(panel.actions)) return null;
+    return panel.actions.find((entry: VRActionMenuEntry) =>
+      createVRActionSourceKey(source.kind, source.panelIndex, {
+        ...entry,
+        playerFacingLabel: getVRActionLabel(entry, target),
+      }) === intent.sourceKey
+    ) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function dispatchVRCombatIntent(actor: ModuleCreature, target: ModuleObject, intent: VRCombatIntent): boolean {
@@ -2712,9 +2783,18 @@ export class GameState implements EngineContext {
   };
 
   /** A scheduled item cast was rejected at release; the player hears the refusal in VR (critic run 4). */
-  static onItemCastRejected: ((owner: unknown) => void) | null = (owner) => {
+  static onItemCastRejected: ((owner: unknown, item?: unknown) => void) | null = (owner, item) => {
     if (!VRSpike.isPresenting || owner !== GameState.getCurrentPlayer()) return;
     signalVRRefusal('refused: item cast rejected at release');
+    // A grenade that could not be thrown goes back to the off hand, still
+    // armed, rather than being lost with only a sound (critic run 5).
+    const thrown = vrLastThrownGrenade;
+    const actor = owner as ModuleCreature;
+    if (thrown && item && thrown.actorId === actor.id && (item as any).id === thrown.itemId) {
+      vrLastThrownGrenade = null;
+      const entry = findVRArmedGrenade(actor, thrown.sourceKey);
+      if (entry) vrArmedGrenadeState.arm(entry.descriptor);
+    }
   };
   
   static currentGamepad: Gamepad;
@@ -3626,7 +3706,7 @@ export class GameState implements EngineContext {
             inCombat: actor.combatData.combatState === true,
             roundOpen,
             round: actor.combatRound ?? null,
-          }), roundOpen, actor.combatData.combatState === true),
+          }), roundOpen, actor.combatData.combatState === true, actor, actor.combatRound?.action),
           allowDominantTrigger: queuedIntent?.requiredInput === 'dominant-trigger',
           onCombatSwing: (event) => {
             if (event.actorId !== String(actor.id)) return;
@@ -3883,9 +3963,14 @@ export class GameState implements EngineContext {
            * seventh top-level item that would force the wheel to paginate.
            */
           openMenu: () => GameState.MenuManager.MenuCharacter.open(),
+          // The cue follows the save itself: "saved" when it is written, the
+          // refusal if writing fails (critic run 5: it played on starting).
           quickSave: () => {
-            if (!AutoSaveManager.quickSave()) signalVRRefusal('refused: quick save');
-            else { try { VRSpike.playSavedCue(); } catch { /* sound is best effort */ } }
+            const started = AutoSaveManager.quickSave((written) => {
+              if (written) { try { VRSpike.playSavedCue(); } catch { /* sound is best effort */ } }
+              else signalVRRefusal('refused: quick save failed');
+            });
+            if (!started) signalVRRefusal('refused: quick save');
           },
           canSwapWeapons: typeof actor.hasAlternateWeaponSet === 'function' && actor.hasAlternateWeaponSet(),
           swapWeapons: () => actor.swapWeaponSets(),

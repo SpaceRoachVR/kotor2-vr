@@ -16,9 +16,9 @@ const RETAIL_WAVS = new Set([
   'cb_sw_blade1', 'cb_sw_unarmed1', 'cb_bu_metalmed',
   'cb_ht_bladeleth1', 'cb_ht_blastleth1', 'cb_ht_unarmleth1',
   'cb_pa_blade1', 'cb_pa_unarm1', 'cb_pa_blast1',
-  'v_useforce', 'gui_actqueue', 'gui_error', 'gui_complete',
+  'v_useforce', 'gui_actqueue', 'gui_error', 'gui_complete', 'gui_invselect',
 ]);
-const ALL_CUES = ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical', 'force', 'ready', 'refused', 'saved'] as const;
+const ALL_CUES = ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical', 'force', 'ready', 'refused', 'saved', 'neck-zone'] as const;
 
 describe('combat cue sounds', () => {
   test('every cue, for every weapon, is a retail TSL sound', () => {

@@ -22,7 +22,7 @@
  * The roll is untouched; this only presents a result the engine has decided.
  */
 
-export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready' | 'refused' | 'saved';
+export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready' | 'refused' | 'saved' | 'neck-zone';
 
 /** Which weapon family picks the sound; null when nothing is equipped or known. */
 export type VRCombatCueWeapon = 'melee' | 'ranged' | 'unarmed';
@@ -71,6 +71,8 @@ export function describeVRCombatCue(cue: VRCombatCue, weapon: VRCombatCueWeapon 
     case 'ready': return [sound('gui_actqueue', 0, 0.7)];
     case 'refused': return [sound('gui_error')];
     case 'saved': return [sound('gui_complete')];
+    // The armed item reached the neck: hold it there to use it.
+    case 'neck-zone': return [sound('gui_invselect', 0, 0.8)];
     default: return [];
   }
 }

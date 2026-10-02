@@ -121,7 +121,7 @@ export class ActionItemCastSpell extends Action {
     // A scheduled cast that dies at release (the target moved out of range,
     // the item is gone) used to vanish silently; VR plays its refusal cue
     // (critic run 4). See GameState.onItemCastRejected.
-    try { GameState.onItemCastRejected?.(owner); } catch { /* feedback is best effort */ }
+    try { GameState.onItemCastRejected?.(owner, this.getParameter<ModuleItem>(ItemCastSpellParameter.Item)); } catch { /* feedback is best effort */ }
     releaseUnstartedItemCastCombatAction(owner.combatRound);
     return ActionStatus.FAILED;
   }
