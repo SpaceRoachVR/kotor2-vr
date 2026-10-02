@@ -128,11 +128,11 @@ describe('featPrerequisiteRules', () => {
       expect(impFlurry.getArmorClassPenalty()).toBe(2);
 
       const masterFlurry = new TalentFeat();
-      masterFlurry.id = 51;
+      masterFlurry.id = 53;
       expect(masterFlurry.getArmorClassPenalty()).toBe(1);
 
       const critStrike = new TalentFeat();
-      critStrike.id = 28;
+      critStrike.id = 8;
       expect(critStrike.getArmorClassPenalty()).toBe(5);
 
       const sniperShot = new TalentFeat();
@@ -150,7 +150,7 @@ describe('featPrerequisiteRules', () => {
 
     test('correctly calculates attack penalties for combat stances', () => {
       const powerAttack = new TalentFeat();
-      powerAttack.id = 8;
+      powerAttack.id = 28;
       expect(powerAttack.getAttackPenalty()).toBe(3);
 
       const impPowerAttack = new TalentFeat();
@@ -170,7 +170,7 @@ describe('featPrerequisiteRules', () => {
       expect(impRapidShot.getAttackPenalty()).toBe(2);
 
       const masterRapidShot = new TalentFeat();
-      masterRapidShot.id = 21;
+      masterRapidShot.id = 26;
       expect(masterRapidShot.getAttackPenalty()).toBe(1);
     });
   });

@@ -111,12 +111,25 @@ export class ModuleItem extends ModuleObject {
 
   }
 
+  /**
+   * One item split off this one. The copy used to share this item's
+   * template, so setting the copy's StackSize to 1 rewrote the original's
+   * too, and the next load() collapsed the source stack (critic run 4).
+   * The template is now copied, without its ObjectId, so the two stay
+   * separate objects.
+   */
   clone(): ModuleItem {
-    const nItem = new ModuleItem(this.template);
-    nItem.initProperties();
-    if(nItem.template){
-      nItem.template.getFieldByLabel('StackSize')?.setValue(1);
+    let template: GFFObject;
+    try{
+      template = new GFFObject(this.template.getExportBuffer());
+    }catch(e){
+      template = new GFFObject();
+      for(const field of this.template.RootNode.fields) template.RootNode.addField(field);
     }
+    template.RootNode.removeFieldByLabel('ObjectId');
+    const nItem = new ModuleItem(template);
+    nItem.initProperties();
+    nItem.template.getFieldByLabel('StackSize')?.setValue(1);
     nItem.stackSize = 1;
     return nItem;
   }
@@ -836,7 +849,7 @@ export class ModuleItem extends ModuleObject {
 
   }
 
-  setPossessor( oCreature: ModuleCreature){
+  setPossessor( oCreature: ModuleObject){
     this.possessor = oCreature;
   }
 
@@ -862,15 +875,22 @@ export class ModuleItem extends ModuleObject {
     this.setPossessor(oCreature);
   }
 
-  onUnEquip(oCreature: ModuleCreature){
+  /**
+   * Returns the party-pool entry the item went back to (it may have merged
+   * into an identical copy already in the bag), or undefined when it was
+   * not returned. unequipSlot uses this so it never adds the item twice.
+   */
+  onUnEquip(oCreature: ModuleCreature): ModuleItem | undefined {
     console.log('ModuleItem.onUnEquip', oCreature?.getTag?.(), this.getTag?.());
     oCreature.removeEffectsByCreator(this);
+    let returned: ModuleItem | undefined;
     if(GameState.PartyManager.party.indexOf(oCreature) >= 0){
-      GameState.InventoryManager.addItem(this);
+      returned = GameState.InventoryManager.addItem(this);
     }else{
       //oCreature.inventory.push(this);
     }
     this.setPossessor(undefined);
+    return returned;
   }
 
   destroy(): void {
@@ -895,6 +915,14 @@ export class ModuleItem extends ModuleObject {
     itemStruct.addField( new GFFField(GFFDataType.WORD, 'StackSize') ).setValue(this.stackSize);
     itemStruct.addField( new GFFField(GFFDataType.BYTE, 'Stolen') ).setValue(this.stolen);
     itemStruct.addField( new GFFField(GFFDataType.DWORD, 'Upgrades') ).setValue(this.upgrades);
+    // TSL upgrade state. Nothing in the port edits it yet, so the template's
+    // own fields are the item's state; they used to be dropped on save, and an
+    // upgraded lightsaber came back plain (critic run 4).
+    itemStruct.addField( new GFFField(GFFDataType.BYTE, 'UpgradeLevel') ).setValue(this.upgradeLevel || 0);
+    for(let i = 0; i < 6; i++){
+      const label = 'UpgradeSlot' + i;
+      if(this.template?.RootNode?.hasField(label)) itemStruct.addField(this.template.getFieldByLabel(label));
+    }
     // An item with no flag was added by script (CreateItemOnObject) and is loot
     // by construction. Writing undefined read back as 0 and would have made it
     // vanish from a corpse after a save and load. See CorpseLoot.

@@ -469,12 +469,16 @@ NWScriptDefK1.Actions = {
         const item = new GameState.Module.ModuleArea.ModuleItem(new GFFObject(buffer));
         item.initProperties();
         item.setStackSize(args[2]);
+        // Return what the inventory holds: when the new item merged into an
+        // existing stack, the object built here is an orphan, and a script
+        // that equipped or destroyed it acted on nothing (critic run 4).
+        let held: any;
         if(GameState.PartyManager.party.indexOf(args[1] as any) > -1){
-          GameState.InventoryManager.addItem(item);
+          held = GameState.InventoryManager.addItem(item);
         }else{
-          args[1].addItem(item);
+          held = args[1].addItem(item);
         }
-        return item;
+        return held || item;
       }
       return undefined;
     }
@@ -3574,7 +3578,16 @@ NWScriptDefK1.Actions = {
       // The whole item moves, stack and all, as retail does. Taking one off
       // the source while handing the same object (and its stack) to the
       // destination left a stack in both inventories (critic run 3).
-      const possessor = item.possessor;
+      // An item in a container or an NPC's bag often has no possessor set,
+      // and the pool removal below then no-op'd and left it in the source
+      // too (critic run 4). Find the holder when it is not recorded.
+      let possessor: any = item.possessor;
+      if(!possessor && !GameState.InventoryManager.inventory.includes(item)){
+        const holders: any[] = [this.caller];
+        const area: any = GameState.module?.area;
+        if(area) holders.push(...(area.placeables || []), ...(area.creatures || []));
+        possessor = holders.find((o) => Array.isArray(o?.inventory) && o.inventory.includes(item));
+      }
       const whole = Math.max(1, Number(item.getStackSize()) || 1);
       if(BitWise.InstanceOfObject(possessor, ModuleObjectType.ModuleObject)){
         (possessor as ModuleObject).removeItem(item, whole);

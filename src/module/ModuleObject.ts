@@ -2011,9 +2011,11 @@ export class ModuleObject {
     const eItem = findItemStackTarget(this.inventory, item);
     if(eItem){
       eItem.setStackSize(eItem.getStackSize() + item.getStackSize());
+      eItem.setPossessor?.(this);
       return eItem;
     }else{
       this.inventory.push(item);
+      item.setPossessor?.(this);
       return item;
     }
   }
@@ -2025,7 +2027,9 @@ export class ModuleObject {
    * @returns 
    */
   removeItem(item: ModuleItem, nCount = 1): ModuleItem {
-    const eItem = this.getItemByTag(item.getTag());
+    // The very object first: by tag alone, removing an upgraded blade took the
+    // plain copy beside it instead (critic run 4).
+    const eItem = this.inventory.includes(item) ? item : this.getItemByTag(item.getTag());
 
     if(!eItem){
       return undefined;

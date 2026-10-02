@@ -1061,14 +1061,22 @@ export class PartyManager {
     creature = creature as ModuleCreature;
     // Already in the party (this creature, or this NPC slot's member): retail
     // reports success and adds nothing. A second add pushed a duplicate.
+    // Every member counts, the leader too: when the player controls an NPC
+    // (T3 in the fuel pipe), skipping party[0] let that NPC be added twice.
     if(PartyManager.party.includes(creature) ||
-      PartyManager.party.some((member) => member && member !== PartyManager.party[0] && member.npcId === slot)){
+      PartyManager.party.some((member) => member && member.npcId === slot)){
       return true;
     }
-    // No room: retail AddPartyMember fails rather than growing the party past
-    // three (critic run 3; a possible part of T3 rejoining early, round 14).
+    // No room: the party does not grow past three, but the NPC is not lost
+    // either. It joins the roster as available, so the party selection
+    // screen offers it, and the call reports failure as retail does. Refusing
+    // outright left a scripted recruit nowhere (critic run 4).
     if(PartyManager.party.length >= PartyManager.MaxSize){
-      console.warn('AddCreatureToParty: party is full; refused', slot, creature.getTag?.());
+      console.warn('AddCreatureToParty: party is full; NPC made available instead', slot, creature.getTag?.());
+      if(PartyManager.NPCS[slot]){
+        PartyManager.NPCS[slot].available = true;
+        PartyManager.NPCS[slot].template = creature.template;
+      }
       return false;
     }
     creature.isPM = true;

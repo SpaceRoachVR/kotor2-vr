@@ -1,3 +1,4 @@
+import { findItemStackTarget } from "@/managers/InventoryManager";
 import { CombatActionType } from "@/enums/combat/CombatActionType";
 import type { ModuleRoom } from "@/module/ModuleRoom";
 import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
@@ -687,12 +688,15 @@ export class ModulePlaceable extends ModuleObject {
     let item = new GameState.Module.ModuleArea.ModuleItem(template);
     item.initProperties();
     item.load();
-    let hasItem = this.getItemByTag(item.getTag());
+    // A container's authored stack (5 medpacs) merged as +1 (critic run 4);
+    // the same stacking rule as every other inventory now applies.
+    let hasItem = findItemStackTarget(this.inventory, item);
     if(hasItem){
-      hasItem.setStackSize(hasItem.getStackSize() + 1);
+      hasItem.setStackSize(hasItem.getStackSize() + Math.max(1, Number(item.getStackSize()) || 1));
       return hasItem;
     }else{
       this.inventory.push(item);
+      item.setPossessor?.(this);
       return item;
     }
   }

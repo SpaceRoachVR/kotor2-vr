@@ -213,10 +213,10 @@ export class TalentFeat extends TalentObject {
       case 91: //IMPROVED FLURRY
       case 92: //IMPROVED RAPID SHOT
         return 2;
-      case 51: //MASTER FLURRY
-      case 21: //MASTER RAPID SHOT
+      case 53: //MASTER FLURRY
+      case 26: //MASTER RAPID SHOT
         return 1;
-      case 28: //CRITICAL STRIKE
+      case 8: //CRITICAL STRIKE
       case 19: //IMPROVED CRITICAL STRIKE
       case 81: //MASTER CRITICAL STRIKE
       case 31: //SNIPER SHOT
@@ -235,10 +235,10 @@ export class TalentFeat extends TalentObject {
       case 91: //IMPROVED FLURRY
       case 92: //IMPROVED RAPID SHOT
         return 2;
-      case 51: //MASTER FLURRY
-      case 21: //MASTER RAPID SHOT
+      case 53: //MASTER FLURRY
+      case 26: //MASTER RAPID SHOT
         return 1;
-      case 8: //POWER ATTACK
+      case 28: //POWER ATTACK
         return 3;
       case 17: //IMPROVED POWER ATTACK
         return 3;

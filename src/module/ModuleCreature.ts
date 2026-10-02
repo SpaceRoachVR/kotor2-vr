@@ -3985,6 +3985,16 @@ export class ModuleCreature extends ModuleObject {
       return;
     }
 
+    // Equipping from a stack takes one off it. Equipping the stack object
+    // itself put "x3" in the hand and left the bag's entry pointing at the
+    // equipped object, so both screens edited the same item (critic run 4).
+    if(GameState.PartyManager.party.indexOf(this as any) >= 0 && Number(item.getStackSize()) > 1
+      && GameState.InventoryManager.inventory.includes(item)){
+      const single = item.clone();
+      item.setStackSize(item.getStackSize() - 1);
+      item = single;
+    }
+
     this.unequipSlot(slot, true);
     item.onEquip(this);
     await item.loadModel();
@@ -4063,8 +4073,9 @@ export class ModuleCreature extends ModuleObject {
     const item = equipment[rule.key];
     if(!item){ return; }
 
+    let returnedByUnEquip: any = undefined;
     try{
-      item.onUnEquip(this);
+      returnedByUnEquip = item.onUnEquip(this);
     }catch(e){
       console.error('unequipSlot: onUnEquip threw', rule.key, e);
     }
@@ -4090,8 +4101,11 @@ export class ModuleCreature extends ModuleObject {
         // onUnEquip above already returned a party member's item to the party
         // pool; adding it again doubled the stack (critic run 3). Anyone
         // else's item goes back to their own inventory.
+        // When it merged into an identical copy already in the bag, the item
+        // itself is not in the pool, and checking for it alone added it a
+        // second time: x1 in the bag became x3 (critic run 4).
         if(GameState.PartyManager.party.indexOf(this as any) >= 0){
-          if(!GameState.InventoryManager.inventory.includes(item)) GameState.InventoryManager.addItem(item);
+          if(!returnedByUnEquip && !GameState.InventoryManager.inventory.includes(item)) GameState.InventoryManager.addItem(item);
         }else{
           this.addItem(item);
         }
@@ -4140,8 +4154,17 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
+  /**
+   * Hidden like the hand items, not unequipped: unequipping without a
+   * return dropped an NPC's mask or visor for good, and a party member's
+   * went to the bag without the cutscene giving it back (critic run 4).
+   */
   UnequipHeadItem(){
-    this.unequipSlot(ModuleCreatureArmorSlot.HEAD);
+    const model = (this.equipment.HEAD as any)?.model;
+    if(model && model.visible){
+      model.visible = false;
+      this.cutsceneHiddenItemModels.push(model);
+    }
   }
 
   GetItemInSlot(slot = 0){
