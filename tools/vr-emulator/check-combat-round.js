@@ -140,24 +140,38 @@ const check = (ok, label, detail = '') => {
     await harness.evaluate(swing);
     await harness.waitFor(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound; return !!(r && (r.roundStarted || r.roundPaused)); })()`, 3000, 50).catch(() => undefined);
     await sleep(300);
+    // Close back to 1.6 m: the droid shifts after the first exchange, and at
+    // the edge of the 2.5 m reach the second swing could be refused for reach
+    // instead of held.
+    await harness.evaluate(`(() => { const p = window.KotOR.GameState.getCurrentPlayer(); const t = window.__checkTarget;
+      const v = t.position.clone().sub(p.position); v.z = 0; v.normalize(); p.position.copy(t.position.clone().sub(v.multiplyScalar(1.6))); return true; })()`);
     const held = await harness.evaluate(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound;
       window.__heldMark = (window.__xrHarness && window.__xrHarness.log || []).length;
       return { busy: !!(r && (r.roundStarted || r.roundPaused)) }; })()`);
+    // Count rounds begun from here by wrapping beginCombatRound: polling
+    // roundStarted missed a release that ends one round and begins the next
+    // in the same frame.
+    await harness.evaluate(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound; window.__begun = 0;
+      if (!r.__wrapBegin) { const orig = r.beginCombatRound.bind(r); r.beginCombatRound = (...a) => { if (!r.roundStarted) window.__begun++; return orig(...a); }; r.__wrapBegin = true; } return true; })()`);
     await harness.evaluate(swing);
-    let roundsAfter = 0, wasStarted = true;
-    for (let i = 0; i < 60; i++) {
-      const started = await harness.evaluate(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound; return !!(r && r.roundStarted); })()`);
-      if (started && !wasStarted) roundsAfter++;
-      wasStarted = started;
-      await sleep(100);
-    }
+    await sleep(6000);
+    const roundsAfter = await harness.evaluate(`window.__begun || 0`);
     // Expiry logs '[VR combat swing] held swing expired', so this can fail.
+    console.log('  held swing log ' + JSON.stringify(await harness.evaluate(`(window.__xrHarness && window.__xrHarness.log || []).slice(window.__heldMark || 0).filter((e) => /VR combat swing/.test(e.text)).slice(0, 3).map((e) => e.text.slice(0, 160))`)));
     const expiredLog = await harness.evaluate(`(window.__xrHarness && window.__xrHarness.log || []).slice(window.__heldMark || 0).some((e) => /held swing expired/i.test(e.text))`);
+    console.log('  held-swing state ' + JSON.stringify(await harness.evaluate(`(() => { const K = window.KotOR; const p = K.GameState.getCurrentPlayer(); const t = window.__checkTarget; const r = p.combatRound;
+      const c = ${ctx}; return { dist: +t.position.distanceTo(p.position).toFixed(2), dead: t.isDead(), inCombat: c && c.inCombat, nominated: c && c.nominatedTargetId, started: r.roundStarted, paused: r.roundPaused, pauseTimer: r.pauseTimer, action: !!r.action, scheduled: (r.scheduledActionList || []).length, ready: c && c.tempoReadiness, open: c && c.roundOpen }; })()`)));
     check(alive, 'the target is still alive for the held-swing check');
     check(held.busy, 'the swing was made while the round was busy');
     check(roundsAfter >= 1, 'a swing held through a busy round fires at the opening', `rounds started after it: ${roundsAfter}`);
     check(!expiredLog, 'the held swing does not expire on its way to the opening');
 
+    // Record the cues played and the player's lowest HP, to check that being
+    // hit is heard (critic run 10: ranged hits on the player were silent).
+    await harness.evaluate(`(() => { const VR = window.KotOR.VRSpike; window.__cues = []; window.__hpStart = window.KotOR.GameState.getCurrentPlayer().getHP(); window.__hpMin = window.__hpStart;
+      const tick = () => { const p = window.KotOR.GameState.getCurrentPlayer(); if (p) window.__hpMin = Math.min(window.__hpMin, p.getHP()); window.__hpTimer = setTimeout(tick, 50); }; tick();
+      const audio = VR.combatCueAudio; if (audio && !audio.__wrapped) { const orig = audio.play.bind(audio); audio.play = (cue, d, w, o) => { window.__cues.push(cue); return orig(cue, d, w, o); }; audio.__wrapped = true; }
+      return !!audio; })()`);
     // Blows reach the engine's Hit event as landed (the live round action;
     // the sound gates read a field nothing assigned, critic run 9).
     await harness.evaluate(`(() => { const gs = window.KotOR.GameState; window.__landed = 0; const orig = gs.onBlowLanded;
@@ -186,6 +200,19 @@ const check = (ok, label, detail = '') => {
     check(samples.some((s) => s && s.open), 'the round opens at least once');
     const landed = await harness.evaluate(`window.__landed || 0`);
     check(landed > 0, 'landed blows reach the Hit event (impact sound gate sees them)', `landed blows: ${landed}`);
+
+    const hurtInfo = await harness.evaluate(`(() => { clearTimeout(window.__hpTimer); return { start: window.__hpStart, min: window.__hpMin, hurt: (window.__cues || []).filter((c) => /^hurt/.test(c)).length, cues: (window.__cues || []).length }; })()`);
+    if (hurtInfo.min < hurtInfo.start) {
+      check(hurtInfo.hurt > 0, 'being hit by the droid is heard', `HP ${hurtInfo.start} -> ${hurtInfo.min}, hurt cues ${hurtInfo.hurt} of ${hurtInfo.cues}`);
+    } else {
+      // The droid did not land a damaging blow this run: take 3 HP the way
+      // a grenade or Force power would (an HP drop with no animation event),
+      // which is the path the hurt sound now follows.
+      const forced = await harness.evaluate(`(async () => { const p = window.KotOR.GameState.getCurrentPlayer(); const before = (window.__cues || []).filter((c) => /^hurt/.test(c)).length;
+        const hp = p.getHP(); p.addHP(-3, true); await new Promise((r) => setTimeout(r, 1200));
+        return { hp, after: p.getHP(), hurt: (window.__cues || []).filter((c) => /^hurt/.test(c)).length - before }; })()`);
+      check(forced.hurt > 0, 'an HP drop on the player is heard (no animation event needed)', `HP ${forced.hp} -> ${forced.after}, hurt cues ${forced.hurt}`);
+    }
 
     // 3. Medpac queued, then strafe.
     const med = await harness.evaluate(`(() => { const vr = window.KotOR.VRSpike; const wheel = vr.hooks.createActionWheel(null); const all = [];

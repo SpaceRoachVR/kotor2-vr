@@ -126,7 +126,8 @@ export class OdysseyModelAnimation {
 
   getDamageDelay(){
     for(let i = 0, len = this.events.length; i < len; i++){
-      if(this.events[i].name == 'Hit'){
+      // Either case: Peragus's mining droids name it 'hit' (critic run 10).
+      if(String(this.events[i].name).toLowerCase() == 'hit'){
         return this.events[i].length;
       }
     }

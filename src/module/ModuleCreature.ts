@@ -1,4 +1,4 @@
-import { shouldPlayEngineCombatSound, type EngineCombatSoundEvent } from "@/engine/rules/EngineCombatSoundGate";
+import { canonicalAnimationEvent, shouldPlayEngineCombatSound, type EngineCombatSoundEvent } from "@/engine/rules/EngineCombatSoundGate";
 import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
 import { GFFObject } from "@/resource/GFFObject";
 import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
@@ -2069,7 +2069,9 @@ export class ModuleCreature extends ModuleObject {
   private currentAttackForSound(): { target: any; landed: boolean; critical: boolean } {
     const action: any = this.combatRound?.action;
     const result = action?.attackResult;
-    const landed = result === AttackResult.HIT_SUCCESSFUL || result === AttackResult.CRITICAL_HIT || result === AttackResult.AUTOMATIC_HIT;
+    // No round action: a scripted attack animation, which retail voices as a
+    // hit (critic run 10: it lost its impact sound).
+    const landed = !action || result === AttackResult.HIT_SUCCESSFUL || result === AttackResult.CRITICAL_HIT || result === AttackResult.AUTOMATIC_HIT;
     return { target: action?.target, landed, critical: result === AttackResult.CRITICAL_HIT };
   }
 
@@ -2098,7 +2100,10 @@ export class ModuleCreature extends ModuleObject {
     let footstepSoundResRef = '';
     let footstepIsLooping = false;
 
-    switch(event.event){
+    // Retail models spell events in either case: the Peragus mining droids send
+    // 'hit' and every parry and dodge sends 'contact'. Exact matching left a
+    // droid's blow and every duel clash silent (critic run 10).
+    switch(canonicalAnimationEvent(event.event)){
       case 'snd_footstep':
         if(footstepSounds){
           const isRolling = footstepSounds.isRolling();

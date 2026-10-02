@@ -36,3 +36,14 @@ export function shouldPlayEngineCombatSound(input: EngineCombatSoundInput): bool
       return !input.vrVoices;
   }
 }
+
+const CANONICAL_ANIMATION_EVENTS: ReadonlyMap<string, string> = new Map([
+  ['snd_footstep', 'snd_footstep'], ['swingshort', 'Swingshort'], ['swinglong', 'Swinglong'],
+  ['hitparry', 'HitParry'], ['contact', 'Contact'], ['clash', 'Clash'], ['hit', 'Hit'],
+]);
+
+/** An animation event name in the spelling playEvent matches, whatever case the model used. */
+export function canonicalAnimationEvent(name: unknown): string {
+  const raw = String(name ?? '');
+  return CANONICAL_ANIMATION_EVENTS.get(raw.toLowerCase()) ?? raw;
+}

@@ -30,3 +30,15 @@ describe('engine combat sounds', () => {
     expect(source).toContain('const action: any = this.combatRound?.action;');
   });
 });
+
+// Critic run 10: retail models send 'hit' (Peragus mining droids) and
+// 'contact' (every parry); exact matching left them silent.
+import { canonicalAnimationEvent } from '@/engine/rules/EngineCombatSoundGate';
+test('animation events match whatever case the model used', () => {
+  expect(canonicalAnimationEvent('hit')).toBe('Hit');
+  expect(canonicalAnimationEvent('Hit')).toBe('Hit');
+  expect(canonicalAnimationEvent('contact')).toBe('Contact');
+  expect(canonicalAnimationEvent('HITPARRY')).toBe('HitParry');
+  expect(canonicalAnimationEvent('snd_footstep')).toBe('snd_footstep');
+  expect(canonicalAnimationEvent('custom')).toBe('custom');
+});

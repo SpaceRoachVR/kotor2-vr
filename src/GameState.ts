@@ -1051,7 +1051,13 @@ function resolveVRCombatCueSounds(attackerId: string | number, targetId: string 
     const weapon: any = resolveVRAttackWeapon(attacker);
     // A melee miss is the attacker's whoosh, at the attacker; a missed bolt
     // strikes past the target, so it is heard there (critic run 8).
-    const position = cue === 'miss' && attacker?.position && !weapon?.baseItem?.rangedWeapon ? chest(attacker) : chest(target);
+    let position = cue === 'miss' && attacker?.position && !weapon?.baseItem?.rangedWeapon ? chest(attacker) : chest(target);
+    // A missed bolt strikes past the target: 1.5 m beyond it along the shot.
+    if (cue === 'miss' && weapon?.baseItem?.rangedWeapon && attacker?.position) {
+      const dx = target.position.x - attacker.position.x, dy = target.position.y - attacker.position.y;
+      const len = Math.hypot(dx, dy) || 1;
+      position = { x: target.position.x + dx / len * 1.5, y: target.position.y + dy / len * 1.5, z: target.position.z + 1.0 };
+    }
     const material = resolveVRImpactMaterialFor(target);
     const impactCue = cue === 'hit' || cue === 'hurt' || cue === 'critical' || cue === 'hurt-critical';
     const critical = cue === 'critical' || cue === 'hurt-critical';
@@ -1101,15 +1107,11 @@ function resolveVRAttackWeapon(attacker: any): any {
 function resolveVRBoltImpact(weapon: any, material: string): string {
   const row = GameState.TwoDAManager?.datatables?.get('ammunitiontypes')?.rows?.[Number(weapon?.baseItem?.ammunitionType)];
   const base = String(row?.impactsound0 ?? '');
-  const sound = base && base !== '****' ? base : 'cb_ht_blastleth1';
-  // The ammunition row names the family (blast / medbl / hvybl); the archives
-  // carry that family per struck material, so a bolt on a droid is metal, not
-  // leather (critic run 9). Unknown materials keep the row's own sound.
-  const family = /^(cb_ht_(?:blast|medbl|hvybl))leth1$/i.exec(sound)?.[1];
-  const suffix: Record<string, string> = {
-    cloth: 'clth1', leather: 'leth1', armor: 'arm1', forceField: 'frce1', metal: 'metal', stone: 'stne', wood: 'wood',
-  };
-  return family && suffix[material] ? `${family}${suffix[material]}` : sound;
+  // Retail plays the ammunition row's one impact whatever is struck: the
+  // tables and the executable's strings show no per-material bolt lookup
+  // (critic run 10, checked against the retail files; run 9's material
+  // variant is reverted).
+  return base && base !== '****' ? base : 'cb_ht_blastleth1';
 }
 
 /**
@@ -3012,10 +3014,12 @@ export class GameState implements EngineContext {
   };
 
   /** A blow landed (the attack animation's Hit): a blow on the VR player is voiced now (critic run 9). */
-  static onBlowLanded: ((attacker: unknown, target: unknown, critical: boolean) => void) | null = (attacker, target, critical) => {
-    if (!VRSpike.isPresenting || target !== GameState.getCurrentPlayer()) return;
-    try { VRSpike.playHurtCue((attacker as any)?.id, (target as any)?.id, critical); } catch { /* feedback only */ }
-  };
+  /**
+   * A blow landed (an attack animation's Hit event). The VR hurt sound no
+   * longer comes from here: ranged attacks have no Hit event, so it follows
+   * the HP drop instead (critic run 10). Kept as the landing hook for checks.
+   */
+  static onBlowLanded: ((attacker: unknown, target: unknown, critical: boolean) => void) | null = () => {};
 
   /** The player was stunned or knocked down: say so in VR (critic run 6). */
   static onPlayerDisabled: ((target: unknown, what: string, seconds: number) => void) | null = (target, what) => {

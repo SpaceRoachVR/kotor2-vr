@@ -4371,6 +4371,7 @@ export class VRSpike {
     worldScene: THREE.Object3D,
     nowMs: number,
   ): void {
+    VRSpike.voiceUnhurtHitOnPlayer(nowMs);
     const events = VRSpike.attackResultObserver.observe(snapshots);
     const session = VRSpike.session;
     if (!session) return;
@@ -4379,6 +4380,12 @@ export class VRSpike {
       // that follows can be shown on the right side.
       if (localActorId !== null && event.targetId === localActorId) {
         VRSpike.lastAttackOnPlayer = { attackerId: event.attackerId, targetId: event.targetId };
+        if (HIT_ATTACK_RESULTS.has(event.attackResult)) {
+          VRSpike.pendingHitOnPlayer = {
+            atMs: nowMs, critical: event.attackResult === CRITICAL_ATTACK_RESULT,
+            attackerId: event.attackerId, targetId: event.targetId,
+          };
+        }
 
       }
       if (localActorId !== null && event.targetId === localActorId && HIT_ATTACK_RESULTS.has(event.attackResult)) {
@@ -4451,9 +4458,15 @@ export class VRSpike {
       : damage.critical ? DAMAGE_CRITICAL_HAPTIC : DAMAGE_HAPTIC;
     const hands: XRHandRole[] = damage.side === 'left' ? ['left'] : damage.side === 'right' ? ['right'] : ['left', 'right'];
     for (const hand of hands) void VRSpike.haptics.pulse(session, hand, pattern);
-    // The hurt sound is voiced when the blow lands (playHurtCue, from the
-    // engine's Hit event), damage or not; the HP drop drives only the flash
-    // and haptics here (critic run 9).
+    // The hurt sound plays with the red edge, on the HP drop, whatever did
+    // the damage (a blaster, a grenade, a Force power, poison). Voicing it
+    // from the attacker's Hit event left every ranged hit silent: retail
+    // ranged attack animations have no Hit event (critic run 10).
+    VRSpike.pendingHitOnPlayer = null;
+    const hurtCue = damage.critical ? 'hurt-critical' : 'hurt';
+    const lastHit = VRSpike.lastAttackOnPlayer;
+    VRSpike.playCombatCue(hurtCue, 0, false,
+      lastHit ? VRSpike.hooks?.resolveCombatCueSounds?.(lastHit.attackerId, lastHit.targetId, hurtCue) ?? null : null);
 
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
     if (comfort.damageFlashEnabled === false || !VRSpike.camera) return;
@@ -4594,7 +4607,20 @@ export class VRSpike {
   }
 
   /** A combat result you can hear, unless Combat Sounds is off. */
-  /** A blow landed on the player: the attacker's weapon on the player's material, now. */
+  /**
+   * A hit on the player that the HP drop has not voiced yet. Damage is applied
+   * with the roll, so a hit that takes HP is voiced within a frame or two; one
+   * that takes none (a shield) is voiced 0.3 s after the roll.
+   */
+  private static pendingHitOnPlayer: { atMs: number; critical: boolean; attackerId: string | number; targetId: string | number } | null = null;
+  private static voiceUnhurtHitOnPlayer(nowMs: number): void {
+    const pending = VRSpike.pendingHitOnPlayer;
+    if (!pending || nowMs - pending.atMs < 300) return;
+    VRSpike.pendingHitOnPlayer = null;
+    VRSpike.playHurtCue(pending.attackerId, pending.targetId, pending.critical);
+  }
+
+  /** A blow on the player: the attacker's weapon on the player's material. */
   static playHurtCue(attackerId: string | number, targetId: string | number, critical: boolean): void {
     const cue = critical ? 'hurt-critical' : 'hurt';
     VRSpike.playCombatCue(cue, 0, false, VRSpike.hooks?.resolveCombatCueSounds?.(attackerId, targetId, cue) ?? null);
