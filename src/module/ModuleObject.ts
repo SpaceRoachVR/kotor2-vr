@@ -1,3 +1,4 @@
+import { findItemStackTarget } from "@/managers/InventoryManager";
 import * as THREE from "three";
 import type { Action } from "@/actions/Action";
 import { ActionQueue } from "@/actions/ActionQueue";
@@ -2000,9 +2001,14 @@ export class ModuleObject {
    * @returns 
    */
   addItem(item: ModuleItem){
+    // load() re-reads the template's StackSize; keep a stack the caller set
+    // (CreateItemOnObject on a container or NPC used to give one).
+    const presetStack = item.getStackSize();
     item.load();
-    
-    const eItem = this.getItemByTag(item.getTag());
+    if(presetStack !== undefined && presetStack > 0) item.setStackSize(presetStack);
+    if(this.inventory.includes(item)) return item;
+
+    const eItem = findItemStackTarget(this.inventory, item);
     if(eItem){
       eItem.setStackSize(eItem.getStackSize() + item.getStackSize());
       return eItem;

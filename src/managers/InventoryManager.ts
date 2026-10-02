@@ -10,6 +10,32 @@ import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { canEquipInSlot } from "@/engine/rules/EquipmentSlotRules";
 // import { PartyManager } from "@/managers/PartyManager";
 
+/** Whether items of this base type stack (baseitems.2da `stacking` > 1). */
+export function isStackableItem(item: { getBaseItem?: () => { stacking?: number } | undefined }): boolean {
+  try { return Number(item?.getBaseItem?.()?.stacking ?? 1) > 1; } catch (e) { return false; }
+}
+
+/** Whether an item carries any upgrade (TSL workbench). */
+export function hasItemUpgrades(item: any): boolean {
+  if (!item) return false;
+  if (Number(item.upgrades) > 0) return true;
+  if (item.upgradeItems && Object.keys(item.upgradeItems).length > 0) return true;
+  for (let i = 0; i < 6; i++) if (Number(item['upgradeSlot' + i]) >= 0) return true;
+  return false;
+}
+
+/**
+ * The held item a new one should stack onto, or undefined to keep it apart.
+ * Identical items stack, as retail does (weapons too: baseitems.2da gives them
+ * 99), but an upgraded item never merges with another copy: its upgrades were
+ * lost into the stack (critic run 3).
+ */
+export function findItemStackTarget<T extends { getTag(): string }>(held: readonly T[], item: T): T | undefined {
+  if (!isStackableItem(item as any) || hasItemUpgrades(item)) return undefined;
+  const tag = item.getTag().toLowerCase();
+  return held.find((other) => other !== item && other.getTag().toLowerCase() === tag && !hasItemUpgrades(other));
+}
+
 /**
  * InventoryManager class.
  * 
@@ -120,6 +146,7 @@ export class InventoryManager {
     // template's StackSize.
     const presetStack = template instanceof GameState.Module.ModuleArea.ModuleItem ? item.getStackSize() : undefined;
     item.initProperties();
+    if(presetStack !== undefined && presetStack > 0) item.setStackSize(presetStack);
     if(item.getBaseItemId() == BaseItemType.CREDITS){
       GameState.PartyManager.AddGold(item.getStackSize());
       GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.CREDITS_RECEIVED);
@@ -133,7 +160,12 @@ export class InventoryManager {
       // sets 3 and then adds, and used to arrive as 1.
       item.load();
       if(presetStack !== undefined && presetStack > 0) item.setStackSize(presetStack);
-      let hasItem = InventoryManager.getItemByTag(item.getTag());
+      // Already held: adding the same object again used to merge it into
+      // itself and double its stack (unequip added it twice; repeated
+      // GiveItem did the same). Critic run 3.
+      if(InventoryManager.inventory.includes(item)) return item;
+      // Identical items stack; an upgraded one stays its own entry.
+      let hasItem = findItemStackTarget(InventoryManager.inventory, item);
       if(hasItem){
 
         if(!limitOne){

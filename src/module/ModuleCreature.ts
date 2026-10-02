@@ -4063,7 +4063,14 @@ export class ModuleCreature extends ModuleObject {
 
     if(returnToInventory){
       try{
-        GameState.InventoryManager.addItem(item);
+        // onUnEquip above already returned a party member's item to the party
+        // pool; adding it again doubled the stack (critic run 3). Anyone
+        // else's item goes back to their own inventory.
+        if(GameState.PartyManager.party.indexOf(this as any) >= 0){
+          if(!GameState.InventoryManager.inventory.includes(item)) GameState.InventoryManager.addItem(item);
+        }else{
+          this.addItem(item);
+        }
       }catch(e){
         console.error('unequipSlot: returning the item to inventory threw', rule.key, e);
       }
@@ -4082,10 +4089,31 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
+  /**
+   * A stunt cutscene asks for empty hands. This used to unequip both hands
+   * without returning them, and those slots destroy their item on unequip,
+   * so a party member lost their weapon to a cutscene for good (critic run
+   * 3). The hand items are now only hidden, and shown again when the
+   * cutscene releases the creature (setCutsceneMode(false)).
+   */
   UnequipItems(){
-    //this.unequipSlot(ModuleCreatureArmorSlot.ARMOR);
-    this.unequipSlot(ModuleCreatureArmorSlot.LEFTHAND);
-    this.unequipSlot(ModuleCreatureArmorSlot.RIGHTHAND);
+    for(const item of [this.equipment.LEFTHAND, this.equipment.RIGHTHAND]){
+      const model = (item as any)?.model;
+      if(model && model.visible){
+        model.visible = false;
+        this.cutsceneHiddenItemModels.push(model);
+      }
+    }
+  }
+
+  cutsceneHiddenItemModels: THREE.Object3D[] = [];
+
+  setCutsceneMode(state: boolean = false){
+    super.setCutsceneMode(state);
+    if(!state){
+      for(const model of this.cutsceneHiddenItemModels) model.visible = true;
+      this.cutsceneHiddenItemModels = [];
+    }
   }
 
   UnequipHeadItem(){

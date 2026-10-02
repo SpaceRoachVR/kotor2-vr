@@ -3571,14 +3571,19 @@ NWScriptDefK1.Actions = {
       // initAreaObjects, with the main thread wedged hard enough that the page
       // could not service CDP. That is a hang on entering the module, not just
       // a sweep failure.
+      // The whole item moves, stack and all, as retail does. Taking one off
+      // the source while handing the same object (and its stack) to the
+      // destination left a stack in both inventories (critic run 3).
       const possessor = item.possessor;
+      const whole = Math.max(1, Number(item.getStackSize()) || 1);
       if(BitWise.InstanceOfObject(possessor, ModuleObjectType.ModuleObject)){
-        (possessor as ModuleObject).removeItem(item, 1);
+        (possessor as ModuleObject).removeItem(item, whole);
       }else{
         // Not held by an object: the party pool is the only other owner. This
         // no-ops silently when the item is in neither.
-        GameState.InventoryManager.removeItem(item, 1);
+        GameState.InventoryManager.removeItem(item, whole);
       }
+      item.setStackSize(whole);
 
       if(GameState.PartyManager.party.indexOf(giveTo as any) >= 0){
         GameState.InventoryManager.addItem(item);
