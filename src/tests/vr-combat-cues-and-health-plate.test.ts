@@ -9,17 +9,37 @@ import { VRBladeSparkHost } from '@/vr/runtime/VRBladeSparkHost';
 
 // Critic review 2026-09-29: round 12 felt no haptics, so every combat result
 // also has a sound and, for the player's own hits, a spark on the target.
+// Allen, 2026-10-02: "make sure any sounds you add to the game are
+// appropriate retail sounds". Every cue names a WAV that TSL's chitin.key
+// lists (read from the retail install), never a synthesized tone.
+const RETAIL_WAVS = new Set([
+  'cb_sw_blade1', 'cb_sw_unarmed1', 'cb_bu_metalmed',
+  'cb_ht_bladeleth1', 'cb_ht_blastleth1', 'cb_ht_unarmleth1',
+  'cb_pa_blade1', 'cb_pa_unarm1', 'cb_pa_blast1',
+  'v_useforce', 'gui_actqueue', 'gui_error', 'gui_complete',
+]);
+const ALL_CUES = ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical', 'force', 'ready', 'refused', 'saved'] as const;
+
 describe('combat cue sounds', () => {
-  test('hit, miss and critical are told apart by count, pitch and loudness', () => {
-    const miss = describeVRCombatCue('miss');
-    const hit = describeVRCombatCue('hit');
-    const crit = describeVRCombatCue('critical');
-    expect(miss).toHaveLength(1);
-    expect(hit).toHaveLength(1);
-    expect(crit).toHaveLength(2);
-    expect(hit[0].gain).toBeGreaterThan(miss[0].gain * 2);
-    expect(crit[0].frequency).toBeGreaterThan(hit[0].frequency);
-    expect(miss[0].frequency).toBeLessThan(hit[0].frequency);
+  test('every cue, for every weapon, is a retail TSL sound', () => {
+    for (const cue of ALL_CUES) {
+      for (const weapon of ['melee', 'ranged', 'unarmed'] as const) {
+        const sounds = describeVRCombatCue(cue, weapon);
+        expect(sounds.length).toBeGreaterThan(0);
+        for (const s of sounds) expect(RETAIL_WAVS.has(s.resref)).toBe(true);
+      }
+    }
+  });
+
+  test('hit, miss and critical are told apart; the weapon picks the sound', () => {
+    expect(describeVRCombatCue('miss', 'melee')[0].resref).toBe('cb_sw_blade1');
+    expect(describeVRCombatCue('miss', 'ranged')[0].resref).toBe('cb_bu_metalmed');
+    expect(describeVRCombatCue('hit', 'ranged')[0].resref).toBe('cb_ht_blastleth1');
+    expect(describeVRCombatCue('critical', 'melee')).toHaveLength(2);
+    expect(describeVRCombatCue('hit', 'melee')).toHaveLength(1);
+    expect(describeVRCombatCue('refused')[0].resref).toBe('gui_error');
+    expect(describeVRCombatCue('saved')[0].resref).toBe('gui_complete');
+    expect(describeVRCombatCue('force')[0].resref).toBe('v_useforce');
   });
 
   test('every 3.13 outcome has a cue', () => {
@@ -29,28 +49,30 @@ describe('combat cue sounds', () => {
     expect(cueForVRCombatOutcome('something-else')).toBeNull();
   });
 
-  test('plays one oscillator per tone into the destination, delayed when asked', () => {
+  test('decodes each retail sound once and plays it into the destination, delayed when asked', async () => {
     const started: number[] = [];
-    const osc = () => ({
-      type: 'sine',
-      frequency: { setValueAtTime: jest.fn(), exponentialRampToValueAtTime: jest.fn() },
-      connect: jest.fn(),
-      disconnect: jest.fn(),
-      start: (t: number) => started.push(t),
-      stop: jest.fn(),
-      onended: null as any,
-    });
-    const gain = () => ({
-      gain: { setValueAtTime: jest.fn(), exponentialRampToValueAtTime: jest.fn() },
-      connect: jest.fn(),
-      disconnect: jest.fn(),
-    });
-    const context: any = { currentTime: 10, createOscillator: osc, createGain: gain };
-    const audio = new VRCombatCueAudio(context, {} as AudioNode);
-    audio.play('critical', 200);
+    const loads: string[] = [];
+    const context: any = {
+      currentTime: 10,
+      decodeAudioData: jest.fn(async () => ({ duration: 0.2 })),
+      createBufferSource: () => ({ buffer: null as unknown, connect: jest.fn(), disconnect: jest.fn(), start: (t: number) => started.push(t), onended: null as any }),
+      createGain: () => ({ gain: { setValueAtTime: jest.fn() }, connect: jest.fn(), disconnect: jest.fn() }),
+    };
+    const audio = new VRCombatCueAudio(context, {} as AudioNode, async (resref) => { loads.push(resref); return new Uint8Array([1, 2, 3]); });
+    await audio.play('critical', 200, 'melee');
     expect(started).toHaveLength(2);
     expect(started[0]).toBeCloseTo(10.2, 6);
     expect(started[1]).toBeGreaterThan(started[0]);
+    expect(loads).toEqual(['cb_ht_bladeleth1']);
+  });
+
+  test('a sound that cannot load stays silent instead of throwing', async () => {
+    const context: any = { currentTime: 0, decodeAudioData: jest.fn(), createBufferSource: jest.fn(), createGain: jest.fn() };
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const audio = new VRCombatCueAudio(context, {} as AudioNode, async () => { throw new Error('missing'); });
+    await expect(audio.play('refused')).resolves.toBeUndefined();
+    expect(context.createBufferSource).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 
@@ -96,22 +118,11 @@ describe('settings', () => {
   });
 });
 
-// Round 14: the first cues (55-420 Hz) were played but never noticed through
-// the Quest's built-in speakers. Keep every tone where those speakers work.
-test('every cue sits where headset speakers reproduce it', () => {
-  for (const cue of ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical', 'force', 'ready', 'refused'] as const) {
-    for (const tone of describeVRCombatCue(cue)) {
-      expect(Math.min(tone.frequency, tone.endFrequency)).toBeGreaterThanOrEqual(240);
-    }
-  }
-});
-
 // Round 14: "Force powers didn't seem to work at all" - they cast, unseen.
 test('your own Force power cast is announced in VR', () => {
   const area = fs.readFileSync(path.join(__dirname, '..', 'module', 'ModuleArea.ts'), 'utf8');
   expect(area).toContain('GameState.onSpellCast?.(spellInstance.owner, spellInstance.spell);');
   const game = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
   expect(game).toMatch(/classifyVRForcePower\(spell\) !== true\) return;\s+VRSpike\.presentLocalForceCast\(\);/);
-  const force = describeVRCombatCue('force');
-  expect(force[0].endFrequency).toBeGreaterThan(force[0].frequency);
+  expect(describeVRCombatCue('force')[0].resref).toBe('v_useforce');
 });

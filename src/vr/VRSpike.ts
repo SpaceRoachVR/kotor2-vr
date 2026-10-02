@@ -66,7 +66,7 @@ import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
 import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
 import { VRPanelStickScroll } from "./runtime/VRPanelStickScroll";
 import { VRControlsGuideHost } from "./runtime/VRControlsGuide";
-import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue } from "./runtime/VRCombatCueAudio";
+import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue, type VRCombatCueWeapon, type VRCombatCueSoundLoader } from "./runtime/VRCombatCueAudio";
 import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateHost";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
 import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
@@ -200,7 +200,7 @@ export interface VRSpikeHooks {
   /** Comfort settings (ROADMAP 2.5/2.6): locomotion/turn mode and vignette. */
   getComfortSettings?: () => VRComfortSettings;
   /** Where combat cue sounds go: the engine's audio context and GUI channel. */
-  getCombatCueAudioOutput?: () => { context: BaseAudioContext; destination: AudioNode } | null;
+  getCombatCueAudioOutput?: () => { context: BaseAudioContext; destination: AudioNode; loadSound: VRCombatCueSoundLoader } | null;
   /** The controlled character's HP and FP, for the wrist plate. */
   getPlayerVitals?: () => VRPlayerVitals | null;
   setComfortSettings?: (patch: Partial<VRComfortSettings>) => void;
@@ -2803,6 +2803,7 @@ export class VRSpike {
     stanceReadout = '',
     swingArmed = false,
   ): void {
+    VRSpike.lastCombatWeaponMode = weaponMode;
     // The hilt timer is a diegetic ring on the weapon itself, so it belongs on
     // the grip anchor. The blaster laser is an *aiming* line and must use the
     // target-ray anchor instead — grip and target-ray orientations differ
@@ -4468,6 +4469,15 @@ export class VRSpike {
     VRSpike.playCombatCue('saved', 0, true);
   }
 
+  /** The weapon family whose retail sounds the combat cues use. */
+  private static lastCombatWeaponMode: CombatWeaponMode = 'unarmed';
+  private static combatCueWeapon(): VRCombatCueWeapon {
+    const mode = VRSpike.lastCombatWeaponMode;
+    if (mode === 'blaster') return 'ranged';
+    if (mode === 'unarmed') return 'unarmed';
+    return 'melee';
+  }
+
   /** A combat result you can hear, unless Combat Sounds is off. */
   private static playCombatCue(cue: VRCombatCue, delayMs = 0, always = false): void {
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
@@ -4476,9 +4486,9 @@ export class VRSpike {
       if (!VRSpike.combatCueAudio) {
         const output = VRSpike.hooks?.getCombatCueAudioOutput?.();
         if (!output) return;
-        VRSpike.combatCueAudio = new VRCombatCueAudio(output.context, output.destination);
+        VRSpike.combatCueAudio = new VRCombatCueAudio(output.context, output.destination, output.loadSound);
       }
-      VRSpike.combatCueAudio.play(cue, delayMs);
+      void VRSpike.combatCueAudio.play(cue, delayMs, VRSpike.combatCueWeapon());
     } catch (error) {
       if (!VRSpike.combatCueAudioErrorReported) {
         VRSpike.combatCueAudioErrorReported = true;

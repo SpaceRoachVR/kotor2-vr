@@ -26,6 +26,7 @@ import { INIConfig } from "@/engine/INIConfig";
 
 // import { OdysseyObject3D } from "@/three/odyssey";
 import { AudioEngine, AudioEmitter } from "@/audio";
+import { AudioLoader } from "@/audio/AudioLoader";
 import { TGAObject } from "@/resource/TGAObject";
 
 import { IGameStateGroups } from "@/interface/engine/IGameStateGroups";
@@ -3416,7 +3417,10 @@ export class GameState implements EngineContext {
       getCombatCueAudioOutput: () => {
         const engine = AudioEngine.GetAudioEngine();
         const destination = AudioEngine.guiChannel?.getGainNode();
-        return engine?.audioCtx && destination ? { context: engine.audioCtx, destination } : null;
+        // Retail WAVs from the game's archives (gui_error, cb_ht_*, ...).
+        return engine?.audioCtx && destination
+          ? { context: engine.audioCtx, destination, loadSound: (resref: string) => AudioLoader.LoadSound(resref) }
+          : null;
       },
       getPlayerVitals: () => {
         const actor = GameState.getCurrentPlayer() as ModuleCreature | undefined;

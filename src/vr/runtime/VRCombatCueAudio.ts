@@ -3,63 +3,76 @@
  *
  * The combat-feel pass (3.13, 3.14) told a hit, a miss and a critical apart
  * through controller haptics, and round 12 felt no pulse at all through
- * Chrome + Virtual Desktop. Whatever the cause turns out to be, feedback may
- * not depend on one channel the game does not control. These are short
- * synthesized knocks on the GUI channel, chosen, like the haptic patterns, to
- * be told apart with eyes closed:
+ * Chrome + Virtual Desktop. Feedback may not depend on one channel the game
+ * does not control, so each result also plays a sound on the GUI channel.
  *
- * - miss: one soft, low tap
- * - hit: one firm knock
- * - critical: two hard, higher knocks
- * - parry / clash: a short bright ring
- * - deflect: a higher ping
- * - hurt: a dull thump
+ * Every cue is a retail TSL sound from the game's own archives (Allen,
+ * 2026-10-02: "make sure any sounds you add to the game are appropriate
+ * retail sounds"). The first two versions synthesized tones. Chosen to match
+ * what retail plays for the same event, by weapon where that differs:
+ *
+ * - miss: the swing whoosh (cb_sw_*); a blaster miss, a bolt striking metal
+ * - hit: the weapon's flesh impact (cb_ht_*leth1); a critical plays it twice
+ * - parried / deflected: the retail parry sounds (cb_pa_*)
+ * - hurt: a body impact on the player
+ * - force: the retail Force-use sound (v_useforce)
+ * - ready / refused / saved: the retail interface sounds gui_actqueue,
+ *   gui_error and gui_complete
  *
  * The roll is untouched; this only presents a result the engine has decided.
  */
 
 export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready' | 'refused' | 'saved';
 
-export interface VRCombatCueTone {
+/** Which weapon family picks the sound; null when nothing is equipped or known. */
+export type VRCombatCueWeapon = 'melee' | 'ranged' | 'unarmed';
+
+export interface VRCombatCueSound {
+  /** Retail WAV resref. */
+  readonly resref: string;
   /** Start, seconds after the cue. */
   readonly at: number;
-  readonly frequency: number;
-  /** Frequency at the end of the tone; a falling pitch reads as an impact. */
-  readonly endFrequency: number;
-  readonly duration: number;
   readonly gain: number;
-  readonly wave: 'sine' | 'triangle' | 'square';
 }
 
-const tone = (at: number, frequency: number, endFrequency: number, duration: number, gain: number, wave: VRCombatCueTone['wave']): VRCombatCueTone =>
-  Object.freeze({ at, frequency, endFrequency, duration, gain, wave });
+const sound = (resref: string, at = 0, gain = 1): VRCombatCueSound => Object.freeze({ resref, at, gain });
 
-const CUES: Readonly<Record<VRCombatCue, readonly VRCombatCueTone[]>> = Object.freeze({
-  // Round 14: the first set sat at 55-420 Hz and went unnoticed through the
-  // Quest's built-in speakers, which barely reproduce that range. Everything
-  // now sits at 260-2600 Hz, where they are loudest, in the same order.
-  miss: [tone(0, 520, 380, 0.08, 0.25, 'sine')],
-  hit: [tone(0, 900, 600, 0.11, 0.6, 'triangle')],
-  critical: [tone(0, 1300, 900, 0.1, 0.75, 'triangle'), tone(0.12, 1500, 1000, 0.13, 0.8, 'triangle')],
-  parried: [tone(0, 2000, 1800, 0.08, 0.35, 'square')],
-  deflected: [tone(0, 2600, 2400, 0.06, 0.3, 'sine')],
-  hurt: [tone(0, 420, 260, 0.18, 0.55, 'square')],
-  'hurt-critical': [tone(0, 420, 260, 0.18, 0.6, 'square'), tone(0.16, 380, 240, 0.2, 0.6, 'square')],
-  // Rising, unlike every combat knock: your own Force power going off.
-  force: [tone(0, 600, 1200, 0.24, 0.4, 'sine'), tone(0.06, 900, 1800, 0.22, 0.25, 'triangle')],
-  // The round is open: a swing now counts. Short and quiet, since it plays
-  // every three seconds of a fight; the haptic tick it stands in for is not
-  // available through Chrome on VDXR (critic run 3).
-  ready: [tone(0, 1800, 1700, 0.035, 0.16, 'sine')],
-  // Something you asked for was refused (out of range, no target, can't save
-  // now): two short low falling blips, unlike any hit.
-  refused: [tone(0, 360, 300, 0.07, 0.35, 'square'), tone(0.1, 300, 250, 0.08, 0.35, 'square')],
-  // A quick save went through: two short rising notes, the refusal reversed.
-  saved: [tone(0, 700, 720, 0.07, 0.3, 'sine'), tone(0.09, 1050, 1080, 0.09, 0.3, 'sine')],
+const IMPACT: Readonly<Record<VRCombatCueWeapon, string>> = Object.freeze({
+  melee: 'cb_ht_bladeleth1',
+  ranged: 'cb_ht_blastleth1',
+  unarmed: 'cb_ht_unarmleth1',
 });
 
-export function describeVRCombatCue(cue: VRCombatCue): readonly VRCombatCueTone[] {
-  return CUES[cue] ?? [];
+const MISS: Readonly<Record<VRCombatCueWeapon, string>> = Object.freeze({
+  melee: 'cb_sw_blade1',
+  ranged: 'cb_bu_metalmed',
+  unarmed: 'cb_sw_unarmed1',
+});
+
+const PARRY: Readonly<Record<VRCombatCueWeapon, string>> = Object.freeze({
+  melee: 'cb_pa_blade1',
+  ranged: 'cb_pa_blade1',
+  unarmed: 'cb_pa_unarm1',
+});
+
+/** The retail sounds a cue plays, for the player's weapon family. */
+export function describeVRCombatCue(cue: VRCombatCue, weapon: VRCombatCueWeapon = 'melee'): readonly VRCombatCueSound[] {
+  switch (cue) {
+    case 'miss': return [sound(MISS[weapon], 0, 0.8)];
+    case 'hit': return [sound(IMPACT[weapon])];
+    case 'critical': return [sound(IMPACT[weapon]), sound(IMPACT[weapon], 0.09)];
+    case 'parried': return [sound(PARRY[weapon])];
+    case 'deflected': return [sound('cb_pa_blast1')];
+    case 'hurt': return [sound('cb_ht_unarmleth1')];
+    case 'hurt-critical': return [sound('cb_ht_unarmleth1'), sound('cb_ht_unarmleth1', 0.12)];
+    case 'force': return [sound('v_useforce')];
+    // gui_actscroll decodes to 3 ms of sound; gui_actqueue is retail's
+    // "action queued" click, 0.1 s.
+    case 'ready': return [sound('gui_actqueue', 0, 0.7)];
+    case 'refused': return [sound('gui_error')];
+    case 'saved': return [sound('gui_complete')];
+    default: return [];
+  }
 }
 
 /** Maps a 3.13 feedback outcome to the cue that sounds for it. */
@@ -74,37 +87,62 @@ export function cueForVRCombatOutcome(outcome: string): VRCombatCue | null {
   }
 }
 
+/** Fetches a retail WAV as encoded bytes (AudioLoader.LoadSound). */
+export type VRCombatCueSoundLoader = (resref: string) => Promise<ArrayBuffer | ArrayBufferLike | Uint8Array | undefined>;
+
 export class VRCombatCueAudio {
+  private readonly buffers = new Map<string, Promise<AudioBuffer | null>>();
+
   constructor(
     private readonly context: BaseAudioContext,
     private readonly destination: AudioNode,
+    private readonly loadSound: VRCombatCueSoundLoader,
   ) {
     if (!context || !destination) throw new TypeError('VR combat cue audio needs an audio context and a destination');
+    if (typeof loadSound !== 'function') throw new TypeError('VR combat cue audio needs a retail sound loader');
   }
 
   /** Plays `cue` now, or `delayMs` from now (a deflection waits for the bolt). */
-  play(cue: VRCombatCue, delayMs = 0): void {
-    const start = this.context.currentTime + Math.max(0, Number.isFinite(delayMs) ? delayMs : 0) / 1000;
-    for (const spec of describeVRCombatCue(cue)) {
-      const oscillator = this.context.createOscillator();
+  play(cue: VRCombatCue, delayMs = 0, weapon: VRCombatCueWeapon = 'melee'): Promise<void> {
+    const requested = this.context.currentTime + Math.max(0, Number.isFinite(delayMs) ? delayMs : 0) / 1000;
+    return Promise.all(describeVRCombatCue(cue, weapon).map(async (spec) => {
+      const buffer = await this.decode(spec.resref);
+      if (!buffer) return;
+      // A sound decoded late (first use) still starts as close to the event
+      // as it can, never in the past.
+      const t0 = Math.max(this.context.currentTime, requested + spec.at);
+      const source = this.context.createBufferSource();
       const gain = this.context.createGain();
-      const t0 = start + spec.at;
-      const t1 = t0 + spec.duration;
-      oscillator.type = spec.wave;
-      oscillator.frequency.setValueAtTime(spec.frequency, t0);
-      oscillator.frequency.exponentialRampToValueAtTime(spec.endFrequency, t1);
-      // A 4 ms attack avoids the click of a tone starting at full volume.
-      gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.exponentialRampToValueAtTime(spec.gain, t0 + 0.004);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t1);
-      oscillator.connect(gain);
+      source.buffer = buffer;
+      gain.gain.setValueAtTime(spec.gain, t0);
+      source.connect(gain);
       gain.connect(this.destination);
-      oscillator.start(t0);
-      oscillator.stop(t1 + 0.01);
-      oscillator.onended = () => {
-        oscillator.disconnect();
+      source.onended = () => {
+        source.disconnect();
         gain.disconnect();
       };
+      source.start(t0);
+    })).then((): void => undefined);
+  }
+
+  /** Decodes each retail sound once; a sound that cannot load stays silent. */
+  private decode(resref: string): Promise<AudioBuffer | null> {
+    let pending = this.buffers.get(resref);
+    if (!pending) {
+      pending = (async (): Promise<AudioBuffer | null> => {
+        try {
+          const data = await this.loadSound(resref);
+          if (!data) return null;
+          const bytes = data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
+          // decodeAudioData detaches its input; hand it a copy.
+          return await this.context.decodeAudioData(bytes.slice().buffer);
+        } catch (error) {
+          console.warn(`[VR combat cue] retail sound ${resref} could not be played`, error);
+          return null;
+        }
+      })();
+      this.buffers.set(resref, pending);
     }
+    return pending;
   }
 }
