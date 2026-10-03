@@ -56,6 +56,9 @@ const check = (ok, label, detail = '') => {
       const id = Object.keys(rows).find((k) => /FORCE_PUSH/i.test(String(rows[k].label)));
       if (id === undefined) return { skipped: 'no Force Push row' };
       if (!p.getSpells().some((s) => s.id === Number(id))) p.classes[0].addSpell(new K.TalentSpell(Number(id)));
+      // Enough Force points to afford it: casts are charged since critic run 11,
+      // and an unaffordable pick is refused before range is checked.
+      p.addFP(100, true);
       const castRange = new K.TalentSpell(Number(id)).getCastRange();
       window.__forceTarget = t;
       return { id: t.id, dist: +bd.toFixed(1), castRange, selectable: gs.ModuleObjectManager.playerSelectableObjects.includes(t) }; })()`);

@@ -1,8 +1,13 @@
 import * as THREE from 'three';
 
-const VIGNETTE_DISTANCE_METRES = 0.12;
+/**
+ * Far enough that both eyes see one ring. At 0.12 m in front of the head
+ * centre each eye's clear zone sat ~15 degrees toward the nose and the ring
+ * would not fuse (critic run 13). At 5 m the eyes differ by under a degree.
+ */
+const VIGNETTE_DISTANCE_METRES = 5;
 /** Covers about 76 degrees off centre: past the edge of a Quest's view. */
-const VIGNETTE_SIZE_METRES = 1.0;
+const VIGNETTE_SIZE_METRES = 1.0 * VIGNETTE_DISTANCE_METRES / 0.12;
 /**
  * Clear within 28 degrees of centre, fully dark from 50. The clear zone was
  * 48.7 degrees, so it never darkened the top or bottom of a Quest's view and

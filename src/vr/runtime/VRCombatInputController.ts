@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { handVelocity } from './XRPoseMotion';
+import { handVelocity, MAX_HAND_SPEED_METRES_PER_SECOND } from './XRPoseMotion';
 import { CombatWeaponMode, XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 export interface VRCombatInputConfiguration {
@@ -163,15 +163,35 @@ export class VRCombatInputController {
       ? VRCombatInputController.resolveBladeSamplePoint(
         dominantPose, grip.offhandPose, this.configuration.bladeSampleDistanceMetres)
       : dominantPose.position.clone();
+    // A two-handed swing moves the hands too. Sampling the blade alone made
+    // tracking jitter at the hilt an attack: with the hands 7 cm apart, 5 mm
+    // of off-hand jitter swings a 0.6 m blade tip several metres a second
+    // (critic run 13: a still, two-handed grip killed a droid). The dominant
+    // hands must themselves be moving - either one, since rotating the blade
+    // about a still rear hand is a real swing - at a third of the swing speed.
+    const handSpeed = this.resolveSpeed(dominantPose, context.timestamp);
+    const offhandSpeed = grip ? this.resolveOffhandSpeed(grip.offhandPose, context.timestamp) : 0;
     const speed = grip
-      ? this.resolveSampledSpeed(samplePoint, context.timestamp, dominantPose)
-      : this.resolveSpeed(dominantPose, context.timestamp);
+      ? (Math.max(handSpeed, offhandSpeed) >= this.configuration.minimumSwingSpeedMetresPerSecond / 3
+        ? this.resolveSampledSpeed(samplePoint, context.timestamp, dominantPose)
+        : 0)
+      : handSpeed;
+    this.previousOffhandPose = grip ? VRCombatInputController.clonePose(grip.offhandPose) : null;
 
     this.previousPose = VRCombatInputController.clonePose(dominantPose);
     this.previousSamplePoint = samplePoint.clone();
     this.previousTimestamp = context.timestamp;
 
-    const fast = speed >= this.configuration.minimumSwingSpeedMetresPerSecond;
+    // A controller reacquired after occlusion (behind the head, at the neck)
+    // changes tracking state and jumps; at 16-24 fps a 0.25-0.4 m jump reads
+    // as an ordinary swing speed, and killed droids (critic run 13). No swing
+    // within 150 ms of a tracking state change.
+    if (dominantPose.trackingState !== this.previousTrackingState) {
+      this.previousTrackingState = dominantPose.trackingState;
+      this.trackingSettledAt = context.timestamp + 150;
+    }
+    const fast = speed >= this.configuration.minimumSwingSpeedMetresPerSecond &&
+      context.timestamp >= this.trackingSettledAt;
     const volume = context.nominatedTargetVolume ?? null;
     let contactMetres: number | undefined;
     if (volume) {
@@ -296,7 +316,9 @@ export class VRCombatInputController {
     distance: number,
   ): THREE.Vector3 {
     const along = offhandPose.position.clone().sub(dominantPose.position);
-    const direction = along.lengthSq() < 1e-6
+    // Under 10 cm apart the hand-to-hand line is mostly tracking noise: aim
+    // the blade along the dominant controller instead (critic run 13).
+    const direction = along.lengthSq() < 0.01
       ? new THREE.Vector3(0, 0, -1).applyQuaternion(dominantPose.orientation)
       : along.normalize();
     return dominantPose.position.clone().addScaledVector(direction, distance);
@@ -358,9 +380,21 @@ export class VRCombatInputController {
     }];
   }
 
+  private previousOffhandPose: XRWorldPose | null = null;
+  private previousTrackingState: XRWorldPose['trackingState'] = 'tracked';
+  private trackingSettledAt = Number.NEGATIVE_INFINITY;
+
+  private resolveOffhandSpeed(pose: XRWorldPose, timestamp: number): number {
+    if (!this.previousOffhandPose || this.previousTimestamp === null) return 0;
+    const elapsedSeconds = (timestamp - this.previousTimestamp) / 1_000;
+    if (!(elapsedSeconds > 0)) return 0;
+    return handVelocity(this.previousOffhandPose.position, this.previousOffhandPose, pose.position, pose, elapsedSeconds).length();
+  }
+
   private resolveSpeed(pose: XRWorldPose, timestamp: number): number {
     if (pose.linearVelocity && Number.isFinite(pose.linearVelocity.length())) {
-      return pose.linearVelocity.length();
+      const runtimeSpeed = pose.linearVelocity.length();
+      return runtimeSpeed > MAX_HAND_SPEED_METRES_PER_SECOND ? 0 : runtimeSpeed;
     }
     if (!this.previousPose || this.previousTimestamp === null) return 0;
     const elapsedSeconds = (timestamp - this.previousTimestamp) / 1_000;

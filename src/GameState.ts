@@ -1237,6 +1237,13 @@ function commitVRArmedConsumable(actor: ModuleCreature): boolean {
     return false;
   }
   if (typeof actor.isDead === 'function' && actor.isDead()) return false;
+  // A medpac at full health would be wasted: an accidental brush of the
+  // neck used one at 36/36 HP (critic run 13). It stays armed.
+  if (Number((source.item as any).baseItemId) === 55 && actor.getHP() >= actor.getMaxHP()) {
+    vrArmedConsumableState.completeCommit({ sourceKey: source.descriptor.sourceKey, engineAccepted: false });
+    reportVRConsumableOutcome('refused: already at full health', source.descriptor.label);
+    return false;
+  }
   try {
     const inCombat = actor.combatData?.combatState === true ||
       actor.actionQueue.actionTypeExists(ActionType.ActionCombat);
@@ -1776,6 +1783,21 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   if (!actor) return false;
   const target = GameState.ActionMenuManager.oTarget as ModuleObject | null;
   if (kind === 'target' && !isVRCombatTarget(actor, target)) return false;
+  // A power the pool can't pay for is refused when picked, in or out of
+  // combat, with the cue: picking Burst of Speed (25 FP) at 15 FP did
+  // nothing at all, silently (critic run 13).
+  if (panelIndex === 1) {
+    try {
+      const picked = (kind === 'target'
+        ? GameState.ActionMenuManager.ActionPanels.targetPanels[1]
+        : GameState.ActionMenuManager.ActionPanels.selfPanels[1])?.getSelectedAction();
+      const talent: any = picked?.talent;
+      if (talent && typeof talent.getForcePointCostFor === 'function' && talent.getForcePointCostFor(actor) > actor.getFP()) {
+        reportVRForceCastOutcome('refused: not enough Force points', `power=${getVRActionLabel(picked, target)}`);
+        return true;
+      }
+    } catch { /* fall through to the normal path */ }
+  }
   // Friendly powers outside combat (a heal after the fight, a buff before it)
   // have no hostile target to spend a tempo window on, so the intent queue
   // could never dispatch them. Let the engine cast them immediately.
@@ -2827,7 +2849,8 @@ function resolveHeldItemClassFallback(item: VREquippedHeldItem): HeldItemClassFa
   // hand: about 30 cm tall with their origin at the base, so the armed medpac
   // stood 20 cm above the palm and hid the target (critic run 11). Centre it
   // in the palm and keep it palm-sized. Weapons and grenades keep theirs.
-  if (itemClass.startsWith('i_') && model instanceof THREE.Object3D) {
+  // Grenades too: the armed frag was bigger than the hand (critic run 13).
+  if ((itemClass.startsWith('i_') || /gren/.test(itemClass)) && model instanceof THREE.Object3D) {
     const cached = vrHeldConsumableFit.get(model);
     if (cached) return cached;
     model.updateMatrixWorld(true);
@@ -3168,6 +3191,17 @@ export class GameState implements EngineContext {
   };
 
   /** A scheduled item cast was rejected at release; the player hears the refusal in VR (critic run 4). */
+  /** A Force power was resisted: tell the VR player who cast it or resisted it. */
+  static onForceResisted: ((target: unknown, caster: unknown) => void) | null = (target, caster) => {
+    if (!VRSpike.isPresenting) return;
+    const player = GameState.getCurrentPlayer();
+    // A script-applied effect may carry no creator; a resisted power on someone
+    // else is then most likely the player's own.
+    const casterIsPlayer = !!player && target !== player && (caster == null || caster === player || Number(caster) === (player as any).id || (caster as any)?.id === (player as any).id);
+    if (casterIsPlayer) VRSpike.showNotice(`${(target ? resolveVRWorldPromptName(target as ModuleObject) : '') || 'The target'} resisted the Force`, 2500);
+    else if (target === player) VRSpike.showNotice('You resisted the Force', 2500);
+  };
+
   static onItemCastRejected: ((owner: unknown, item?: unknown, reason?: string) => void) | null = (owner, item, reason) => {
     if (!VRSpike.isPresenting || owner !== GameState.getCurrentPlayer()) return;
     // The real reason, not always "out of range" (critic run 6).

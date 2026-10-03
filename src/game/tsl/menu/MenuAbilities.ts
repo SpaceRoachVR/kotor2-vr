@@ -66,6 +66,7 @@ export class MenuAbilities extends K1_MenuAbilities {
         this.close();
       });
       this._button_b = this.BTN_EXIT;
+      this.LB_ABILITY.onSelected = (node: any) => this.describeAbility(node);
 
       this.BTN_SKILLS.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -112,6 +113,7 @@ export class MenuAbilities extends K1_MenuAbilities {
     const groups = [];
     for (let i = 0; i < knownFeats.length; i++) {
       const feat = knownFeats[i];
+      if (!feat || /^XXXX/i.test(String((feat as any).label ?? ''))) continue;
       const group: TalentFeat[] = [];
       const prereqfeat1 = feats[feat.prereqFeat1];
       const prereqfeat2 = feats[feat.prereqFeat2];
@@ -119,7 +121,11 @@ export class MenuAbilities extends K1_MenuAbilities {
         group.push(feat);
         for (let j = 0; j < featCount; j++) {
           const chainFeat = feats[j];
-          if (chainFeat.prereqFeat1 == i || chainFeat.prereqFeat2 == i) {
+          // Successors of THIS feat, by feat id: comparing against the list
+          // position `i` chained unrelated feats (Power Attack -> Improved
+          // Flurry, critic run 13). Internal rows (XXXX_*) are never shown.
+          if (!chainFeat || /^XXXX/i.test(String((chainFeat as any).label ?? ''))) continue;
+          if (chainFeat.prereqFeat1 == feat.id || chainFeat.prereqFeat2 == feat.id) {
             if (chainFeat.prereqFeat1 != -1 && chainFeat.prereqFeat2 != -1) {
               group[2] = chainFeat;
             } else {
@@ -269,7 +275,62 @@ export class MenuAbilities extends K1_MenuAbilities {
     console.log(this.LB_ABILITY.GUIProtoItemClass);
 
     this.LB_ABILITY.setItems(items);
+    // Describe the first entry: nothing was selected on open, so the pane
+    // showed the GUI's placeholder ("Super duper advanced lightning", +00).
+    this.describeAbility(items[0]);
 
+  }
+
+  /**
+   * Fills the name, value boxes and description for the selected entry (none
+   * of it was ever filled; critic runs 12-13). Skills: rank, ability and feat
+   * bonus, total. Powers: base Force point cost, alignment adjustment, cost
+   * for this character.
+   */
+  describeAbility(node: any){
+    const creature: any = GameState.PartyManager.party[0];
+    const signed = (n: number) => (n >= 0 ? '+' : '') + String(n).padStart(2, '0');
+    const tlk = (id: unknown) => {
+      const n = Number(id);
+      return Number.isInteger(n) && n >= 0 ? String(GameState.TLKManager.GetStringById(n)?.Value ?? '') : '';
+    };
+    try{
+      if(!node){
+        this.LBL_NAME?.setText('');
+        this.getDescriptionList()?.setItem(null);
+        return;
+      }
+      if(this.filter === AbilityFilter.SKILLS){
+        const rank = Number(node.rank) || 0;
+        const total = typeof creature?.getSkillTotal === 'function' ? creature.getSkillTotal(node.id) : rank;
+        this.LBL_NAME?.setText(node.getName?.() ?? '');
+        this.LBL_RANKVAL?.setText(String(rank).padStart(2, '0'));
+        this.LBL_BONUSVAL?.setText(signed(total - rank));
+        this.LBL_TOTALVAL?.setText(String(total).padStart(2, '0'));
+        this.LB_DESC.setItem(node.getDescription?.() || null);
+        return;
+      }
+      if(this.filter === AbilityFilter.POWERS){
+        const group: any[] = Array.isArray(node) ? node.filter(Boolean) : [node];
+        const row = group[group.length - 1];
+        const id = Number(row?.__index);
+        const base = Number.parseInt(String(row?.forcepoints ?? '0'), 10) || 0;
+        let cost = base;
+        try{ cost = new GameState.TalentSpell(id).getForcePointCostFor(creature); }catch(e){}
+        this.LBL_NAME?.setText(tlk(row?.name));
+        this.LBL_RANKVAL?.setText(String(base).padStart(2, '0'));
+        this.LBL_BONUSVAL?.setText(signed(cost - base));
+        this.LBL_TOTALVAL?.setText(String(cost).padStart(2, '0'));
+        this.LB_DESC.setItem(tlk(row?.spelldesc) || null);
+        return;
+      }
+      const group: any[] = Array.isArray(node) ? node.filter(Boolean) : [node];
+      const feat = group[group.length - 1];
+      this.LBL_NAME?.setText(tlk(feat?.name));
+      this.LB_DESC_FEATS.setItem(tlk(feat?.description) || null);
+    }catch(e){
+      console.warn('MenuAbilities: describe failed', e);
+    }
   }
   
 }

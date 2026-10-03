@@ -91,6 +91,34 @@ describe('VRCombatInputController', () => {
     expect(swing[0].speedMetresPerSecond).toBeGreaterThan(0.8);
   });
 
+  test('a still two-handed grip with tracking jitter never attacks (critic run 13)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, bladeSampleDistanceMetres: 0.6 });
+    let swings = 0;
+    // Hands 7 cm apart on the hilt; the off hand jitters +/-5 mm every frame
+    // for 4 s at 72 Hz while the dominant hand holds still.
+    for (let i = 0; i < 288; i++) {
+      const t = i * (1000 / 72);
+      const jitter = (i % 2 === 0 ? 1 : -1) * 0.005;
+      swings += controller.process(
+        frame(t, 0, new THREE.Vector3(jitter, 0.07, -0.4)),
+        context('melee-one-handed', t, true),
+      ).length;
+    }
+    expect(swings).toBe(0);
+  });
+
+  test('a reacquisition jump (tracking state change) is not a swing (critic run 13)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+    const withState = (f: XRInputFrame, state: 'tracked' | 'emulated'): XRInputFrame =>
+      ({ ...f, hands: { right: { ...f.hands.right!, pose: { ...f.hands.right!.pose, trackingState: state } } } });
+    controller.process(withState(frame(0, 0), 'emulated'), context('melee-one-handed', 0));
+    // Tracking comes back 0.3 m away, 40 ms later.
+    expect(controller.process(withState(frame(40, 0.3), 'tracked'), context('melee-one-handed', 40))).toHaveLength(0);
+    // A real swing once tracking has settled still counts.
+    controller.process(withState(frame(200, 0.3), 'tracked'), context('melee-one-handed', 200));
+    expect(controller.process(withState(frame(240, 0.5), 'tracked'), context('melee-one-handed', 240))).toHaveLength(1);
+  });
+
   test('a double-bladed or dual-wield stance is never promoted', () => {
     // Adding a second hand to an already-two-weapon stance means something
     // other than a two-handed grip, and is not modelled.

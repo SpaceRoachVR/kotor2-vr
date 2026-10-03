@@ -229,6 +229,10 @@ export class MainMenu extends GameMenu {
   }
 
   triggerControllerBPress() {
+    // In the headset B is Back, and Quit there now ends the VR session: a
+    // tap of B at the main menu threw the player out with no confirm
+    // (critic run 13). Quit is the button.
+    if (GameState.isVREmbodiedCombatInputActive) return;
     this.BTN_EXIT.click();
   }
   

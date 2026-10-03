@@ -19,8 +19,9 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
     title: 'Your body',
     lines: [
       ['Swing a weapon', 'Attack the ringed enemy, on the round timer'],
-      ['Both grips on a saber', 'Two-handed grip'],
-      ['Medpac or stim to the neck', 'Use it (arm it from the wheel)'],
+      ['Off-hand grip on the hilt', 'Two-handed grip, any melee weapon'],
+      ['Arm an item', 'Action wheel, Items page: a medpac, stim or grenade goes to your off hand'],
+      ['Armed medpac or stim to the neck', 'Use it'],
       ['Turn your wrist', 'Check your health watch'],
     ],
   };
@@ -32,7 +33,8 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
     lines: [
       ['Choose a power', 'Action wheel, Force page: it joins your queue'],
       ['Cast it', `Thrust your open ${otherHand} hand at the ringed target, or pull the ${weaponHand} trigger`],
-      ['Push or Pull', `Hold the ${weaponHand} grip and flick forward (Push) or back (Pull)`],
+      // TSL has Force Push but no Pull (critic run 13).
+      ['Force Push', `Hold the ${weaponHand} grip and flick forward`],
     ],
   };
   // The wheel and party switch sit on the off hand's face buttons, so a
@@ -52,10 +54,9 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       {
         title: 'Right hand',
         lines: [
-          ['Trigger', 'Select, talk, shoot'],
+          ['Trigger', 'Select; use what you point at; talk; shoot'],
           ['Stick', 'Turn (or scroll a menu list)'],
           ['Stick click, hold', 'Recenter'],
-          ['A', 'Use what you point at'],
           ['B, tap', 'Back / pause'],
           ['B, hold', 'Stop attacking'],
         ],
@@ -68,10 +69,9 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
     {
       title: 'Left hand (weapon)',
       lines: [
-        ['Trigger', 'Select, talk, shoot'],
+        ['Trigger', 'Select; use what you point at; talk; shoot'],
         ['Stick', 'Turn (or scroll a menu list)'],
         ['Stick click, hold', 'Recenter'],
-        ['X', 'Use what you point at'],
         ['Y, tap', 'Back / pause'],
         ['Y, hold', 'Stop attacking'],
       ],

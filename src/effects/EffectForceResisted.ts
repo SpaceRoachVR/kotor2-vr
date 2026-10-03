@@ -1,3 +1,4 @@
+import { GameState } from "@/GameState";
 import { GameEffect } from "@/effects/GameEffect";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
 
@@ -24,6 +25,9 @@ export class EffectForceResisted extends GameEffect {
       return;
       
     super.onApply();
+    // Say so: a resisted power cost its Force points with no sign of why
+    // (critic runs 12-13). Retail floats "Resisted" over the target.
+    try { GameState.onForceResisted?.(this.object, this.creator); } catch { /* feedback only */ }
   }
 
 }

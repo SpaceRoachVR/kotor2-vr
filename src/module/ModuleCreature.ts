@@ -968,11 +968,16 @@ export class ModuleCreature extends ModuleObject {
   /** Fractional Force points carried between frames (TSL regeneration). */
   private forceRegenCarry = 0;
   private healthRegenCarry = 0;
+  private regenCombatGraceSeconds = 0;
 
   /** TSL's key/value regeneration rules; see combat/TSLRegeneration. */
   private updateTSLRegen(delta: number, table: TSLRegenerationTable){
+    // The combat flag can drop between rounds of a running fight, and FP came
+    // back at the out-of-combat rate mid-duel (critic run 13: 5 FP in 120 s
+    // where the table allows 2). A fight counts until 6 s after it was last on.
+    this.regenCombatGraceSeconds = this.combatData.combatState ? 6 : Math.max(0, this.regenCombatGraceSeconds - delta);
     const input = {
-      inCombat: !!this.combatData.combatState,
+      inCombat: this.regenCombatGraceSeconds > 0,
       constitutionModifier: abilityModifier(this.getCON()),
       wisdomModifier: abilityModifier(this.getWIS()),
       treatInjuryRank: Number(this.getSkillLevel?.(SkillType.TREAT_INJURY)) || 0,
@@ -3722,6 +3727,24 @@ export class ModuleCreature extends ModuleObject {
     const rank = this.skills[value].rank;
     const featBonus = resolveFeatSkillBonus(value, rank, (featId) => this.getHasFeat(featId));
     return resolveEffectiveSkillRank(rank + featBonus, this.effects, value);
+  }
+
+  /**
+   * The skill total retail reports (GetSkillRank, the character sheet, the
+   * terminal counters): effective rank plus the key ability's modifier from
+   * skills.2da. Rolls that add the ability themselves (the Security unlock
+   * check adds INT) keep using getSkillLevel. Without it an INT 14 Exile's
+   * terminal read Computer 0 where d20 gives 2, and every dialogue skill
+   * check ran 1-2 points low (critic run 13).
+   */
+  getSkillTotal(value: number): number {
+    const level = this.getSkillLevel(value);
+    const row = GameState.TwoDAManager?.datatables?.get('skills')?.rows?.[value];
+    const key = String(row?.keyability ?? '').trim().toUpperCase();
+    const score = key === 'STR' ? this.getSTR() : key === 'DEX' ? this.getDEX() : key === 'CON' ? this.getCON()
+      : key === 'INT' ? this.getINT() : key === 'WIS' ? this.getWIS() : key === 'CHA' ? this.getCHA() : NaN;
+    const total = Number.isFinite(score) ? level + abilityModifier(score) : level;
+    return Math.max(0, total);
   }
 
   getHasSpell(id = 0){

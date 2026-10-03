@@ -147,11 +147,12 @@ const log = (harness, re) => harness.evaluate(`(window.__xrHarness && window.__x
       // 6. Force regenerates out of combat (TSL regeneration.2da: the pool in
       // 90 s; critic run 12: it never came back). Leave the fight first.
       await harness.evaluate(`(() => { const p = window.KotOR.GameState.getCurrentPlayer(); const t = window.__t;
-        try { t.setHP && t.setHP(-50); } catch (e) {} p.clearAllActions && p.clearAllActions(); p.combatData.combatState = false; return true; })()`);
+        try { t.setHP && t.setHP(-50); } catch (e) {} p.clearAllActions && p.clearAllActions(); p.excitedDuration = 0; p.combatData.combatState = false; return true; })()`);
       const fp0 = await harness.evaluate(`window.KotOR.GameState.getCurrentPlayer().getFP()`);
-      await sleep(12000);
+      // In-combat grace (6 s) first, then out-of-combat refill.
+      await sleep(16000);
       const fp1 = await harness.evaluate(`(() => { const p = window.KotOR.GameState.getCurrentPlayer(); return { fp: p.getFP(), inCombat: !!p.combatData.combatState }; })()`);
-      check(fp1.fp > fp0, 'Force points regenerate out of combat', `${fp0} -> ${fp1.fp} in 12 s (inCombat=${fp1.inCombat})`);
+      check(fp1.fp > fp0, 'Force points regenerate out of combat', `${fp0} -> ${fp1.fp} in 16 s (inCombat=${fp1.inCombat})`);
     }
   } finally {
     await harness.close().catch(() => undefined);

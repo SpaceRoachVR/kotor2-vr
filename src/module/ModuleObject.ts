@@ -65,6 +65,9 @@ const ONE_SHOT_EFFECT_TYPES: ReadonlySet<number> = new Set([
   GameEffectType.EffectHeal,
   GameEffectType.EffectDamageForcePoints,
   GameEffectType.EffectHealForcePoints,
+  // Markers of a cast that failed; they lingered for minutes (critic run 13).
+  GameEffectType.EffectForceResisted,
+  GameEffectType.EffectForceFizzle,
 ]);
 
 /**

@@ -307,9 +307,17 @@ export class PartyManager {
     GameState.JournalManager.ClearEntries();
     if(gff.RootNode.hasField('JNL_Entries')){
       const entries = gff.RootNode.getFieldByLabel('JNL_Entries').getChildStructs();
+      // One entry per plot, at its highest state: saves written while
+      // loading doubled the journal hold duplicates (the round-15 QUICKSAVE
+      // has 16 for 8 plots; critic run 13).
+      const byPlot = new Map<string, JournalEntry>();
       for(let i = 0; i < entries.length; i++){
-        GameState.JournalManager.AddEntry(JournalEntry.FromStruct(entries[i]));
+        const entry = JournalEntry.FromStruct(entries[i]);
+        const key = String(entry.plot_id ?? '').toLowerCase();
+        const held = byPlot.get(key);
+        if(!held || entry.state > held.state) byPlot.set(key, entry);
       }
+      for(const entry of byPlot.values()) GameState.JournalManager.AddEntry(entry);
     }
 
     if(gff.RootNode.hasField('PT_DLG_MSG_LIST')){

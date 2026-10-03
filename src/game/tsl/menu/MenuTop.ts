@@ -84,7 +84,9 @@ export class MenuTop extends K1_MenuTop {
       this.BTN_MSG.addEventListener('click', (e) => {
         e.stopPropagation();
         this.CloseAllOtherMenus();
-        this.manager.MenuPartySelection.open();
+        // Messages (the dialogue and combat logs), not Party Selection,
+        // which this opened (critic run 13).
+        this.manager.MenuMessages.open();
       });
 
       this.BTN_JOU.addEventListener('click', (e) => {

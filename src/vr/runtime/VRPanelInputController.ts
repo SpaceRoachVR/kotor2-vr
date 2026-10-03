@@ -34,6 +34,14 @@ export class VRPanelInputController {
   private owner: VRPanelMenuController | null = null;
   private awaitingRelease = false;
   private readonly previousPressed = new Map<PanelButton, boolean>();
+  private activatedButton: PanelButton | null = null;
+
+  /** The button this controller acted on since the last call, then clears it. */
+  takeActivatedButton(): PanelButton | null {
+    const button = this.activatedButton;
+    this.activatedButton = null;
+    return button;
+  }
 
   process(
     owner: VRPanelMenuController | null,
@@ -68,6 +76,7 @@ export class VRPanelInputController {
 
     for (const button of ['select', 'a', 'b', 'x', 'y'] as const) {
       if (pressed.get(button) && !this.previousPressed.get(button)) {
+        this.activatedButton = button;
         VRPanelInputController.activate(
           owner,
           button,

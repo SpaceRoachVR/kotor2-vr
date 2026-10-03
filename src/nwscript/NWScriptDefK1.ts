@@ -4099,7 +4099,8 @@ NWScriptDefK1.Actions = {
     args: [NWScriptDataType.INTEGER, NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [number, ModuleObject]){
       if(BitWise.InstanceOfObject(args[1], ModuleObjectType.ModuleCreature)){
-        return args[1].getSkillLevel(args[0]);
+        // The total, with the key ability modifier, as retail returns it.
+        return (args[1] as ModuleCreature).getSkillTotal(args[0]);
       }else{
         return 0;
       }

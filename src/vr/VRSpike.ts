@@ -506,6 +506,13 @@ export interface VRSpikeHooks {
 /** How long B must be held to cancel combat; a tap is Pause (round 15, PF4). */
 const VR_COMBAT_CANCEL_HOLD_MS = 600;
 
+/** Thumbstick deadzone for walking and smooth turning. */
+const VR_STICK_DEADZONE = 0.15;
+function applyStickDeadzone(magnitude: number): number {
+  if (!Number.isFinite(magnitude) || magnitude <= VR_STICK_DEADZONE) return 0;
+  return Math.min(1, (magnitude - VR_STICK_DEADZONE) / (1 - VR_STICK_DEADZONE));
+}
+
 export class VRSpike {
   static readonly perf = new PerfSampler();
 
@@ -1635,12 +1642,17 @@ export class VRSpike {
         VRSpike.panelStickScroll.reset();
         VRSpike.panelStickScrollAt = null;
       }
-      return VRSpike.panelInputController.process(
+      const owned = VRSpike.panelInputController.process(
         menu,
         actions,
         pointerHit?.guiPosition ?? null,
         context.pointerSink
       );
+      // B pressed Back on a menu: the same press must not also toggle Pause
+      // when it is released over the game (critic run 13: closing the
+      // Character screen with B left the game paused).
+      if (VRSpike.panelInputController.takeActivatedButton() === 'b') VRSpike.pausePressConsumed = true;
+      return owned;
     } catch (error) {
       if (!VRSpike.panelInputErrorReported) {
         VRSpike.panelInputErrorReported = true;
@@ -2752,6 +2764,14 @@ export class VRSpike {
         }
       }
     }
+    // Once per session, the first time there is a player to control: how to
+    // reach the wheel and the Controls Guide. Nothing pointed a first-time
+    // player at either (critic runs 12-13).
+    if (!VRSpike.controlsHintShown && !foregroundSurfaceOwnsInput && VRSpike.hooks?.getPlayerPosition?.()) {
+      VRSpike.controlsHintShown = true;
+      const wheelButton = VRSpike.dominantHand === 'left' ? 'A' : 'X';
+      VRSpike.showNotice(`Hold ${wheelButton}: action wheel  ·  VR Menu > Controls Guide`, 8000);
+    }
     VRSpike.refusalNoticeHost?.update(performance.now());
     if (!paused && !VRSpike.pauseIndicatorHost) return;
     if (!VRSpike.camera) return;
@@ -2890,6 +2910,7 @@ export class VRSpike {
         VRSpike.weaponStanceHost = new VRWeaponStanceHost(gripAnchor);
       }
       VRSpike.weaponStanceHost.present(stanceReadout);
+      VRSpike.weaponStanceHost.faceViewer(VRSpike.camera);
     } catch (error) {
       VRSpike.weaponStanceHost?.clear();
       if (!VRSpike.weaponStanceErrorReported) {
@@ -3438,7 +3459,9 @@ export class VRSpike {
 
       const rawMoveAxes = new THREE.Vector2(move.axes[0], -move.axes[1]);
       const inputDirection = rawMoveAxes.clone();
-      const inputMagnitude = Math.min(1, inputDirection.length());
+      // A stick resting a little off centre moved the player; rescaled so
+      // movement starts from zero past the deadzone (critic run 13).
+      const inputMagnitude = applyStickDeadzone(Math.min(1, inputDirection.length()));
       if (inputMagnitude > 0) inputDirection.divideScalar(inputMagnitude);
 
       const orientation = viewerPose.transform.orientation;
@@ -3457,7 +3480,10 @@ export class VRSpike {
 
       // Match the legacy KOTOR camera convention: stick-right decreases
       // world yaw and therefore turns the view and creature to the right.
-      const turnAxisValue = -(turn?.axes?.[0] ?? 0);
+      // Deadzoned: a drifting stick turned the world at 3.5 deg/s from a 0.03
+      // deflection, and flickered the vignette (critic run 13).
+      const rawTurn = -(turn?.axes?.[0] ?? 0);
+      const turnAxisValue = Math.sign(rawTurn) * applyStickDeadzone(Math.abs(rawTurn));
       const useSnapTurn = comfortSettings.turnMode === 'snap';
       const snapTurnDeltaRadians = useSnapTurn
         ? VRSpike.snapTurnController.process(
@@ -4627,6 +4653,7 @@ export class VRSpike {
   }
 
   private static refusalNoticeHost: VRRefusalNoticeHost | null = null;
+  private static controlsHintShown = false;
 
 
   /**

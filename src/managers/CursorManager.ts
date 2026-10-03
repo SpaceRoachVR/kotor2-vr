@@ -457,6 +457,10 @@ export class CursorManager {
 			CursorManager.selectedObject = undefined;
 			CursorManager.selected = undefined;
 		}
+		if(BitWise.InstanceOfObject(CursorManager.hoveredObject, ModuleObjectType.ModuleCreature) && (CursorManager.hoveredObject as any).isDead?.()){
+			CursorManager.hoveredObject = undefined;
+			CursorManager.hovered = undefined;
+		}
 		if(GameState.Mode == EngineMode.INGAME && CursorManager.selected instanceof OdysseyObject3D && !CursorManager.MenuManager.MenuContainer.bVisible){
 			CursorManager.selected.getWorldPosition(CursorManager.reticle2.position);
 			CursorManager.reticle2.visible = true;

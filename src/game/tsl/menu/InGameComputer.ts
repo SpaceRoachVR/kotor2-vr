@@ -74,8 +74,8 @@ export class InGameComputer extends K1_InGameComputer {
         .filter((item: any) => String(item?.getTag?.() ?? '').toUpperCase() === tag)
         .reduce((sum: number, item: any) => sum + (Number(item.getStackSize?.()) || 0), 0);
       const values = [
-        player?.getSkillLevel?.(SkillType.COMPUTER_USE) ?? 0,
-        player?.getSkillLevel?.(SkillType.REPAIR) ?? 0,
+        player?.getSkillTotal?.(SkillType.COMPUTER_USE) ?? 0,
+        player?.getSkillTotal?.(SkillType.REPAIR) ?? 0,
         carried('K_COMPUTER_SPIKE'),
         carried('K_REPAIR_PART'),
       ].map(String);
