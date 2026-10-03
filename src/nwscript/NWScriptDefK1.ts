@@ -6560,7 +6560,11 @@ NWScriptDefK1.Actions = {
     comment: "529: - oTrapObject: a placeable, door or trigger\n- oCreature\n* Returns TRUE if oCreature has detected oTrapObject\n",
     name: "GetTrapDetectedBy",
     type: NWScriptDataType.INTEGER,
-    args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT]
+    args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT],
+    // Detection is shared by the party, as the engine tracks one flag per trap.
+    action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject]){
+      return (args[0] as any)?.trapDetected ? NW_TRUE : NW_FALSE;
+    }
   },
   530:{
     comment: "530: - oTrapObject: a placeable, door or trigger\n* Returns TRUE if oTrapObject has been flagged as visible to all creatures.\n",
@@ -6758,7 +6762,15 @@ NWScriptDefK1.Actions = {
     comment: "550: Set oDetector to have detected oTrap.\n",
     name: "SetTrapDetectedBy",
     type: NWScriptDataType.INTEGER,
-    args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT]
+    args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT],
+    // Unimplemented, so scripts that reveal a trap to the player did nothing
+    // (headset round 16: invisible 001EBO hull mines).
+    action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject]){
+      const trap: any = args[0];
+      if(!trap || typeof trap.detectTrap !== 'function') return NW_FALSE;
+      trap.detectTrap();
+      return NW_TRUE;
+    }
   },
   551:{
     comment: "551: Note: Only placeables, doors and triggers can be trapped.\n* Returns TRUE if oObject is trapped.\n",

@@ -16,12 +16,19 @@ describe('buildPartySwitchEntries', () => {
     ]);
   });
 
-  test('with a companion in control, the Exile is offered by her recorded name', () => {
-    // 106PER Hangar Control: T3-M4 possessed, the Exile not in the world.
-    const entries = buildPartySwitchEntries([t3, atton], 'Torm Hobaar', 'po_pmhh');
+  test('with a companion in control and the Exile following, the Exile is offered by her recorded name', () => {
+    // A leader switch keeps the Exile in the party as a follower.
+    const entries = buildPartySwitchEntries([t3, atton, exile], 'Torm Hobaar', 'po_pmhh');
     expect(entries).toEqual([
       { id: '2', label: 'Atton', icon: 'po_patton', npcId: 0 },
       { id: PLAYER_SWITCH_ENTRY_ID, label: 'Torm Hobaar', icon: 'po_pmhh', npcId: -1 },
+    ]);
+  });
+
+  test('in a scripted possession (the Exile not in the party) the Exile is not offered (headset round 16)', () => {
+    // 001EBO prologue as T3: offering the Exile built a second one who joined for good.
+    expect(buildPartySwitchEntries([t3, atton], 'Torm Hobaar', 'po_pmhh')).toEqual([
+      { id: '2', label: 'Atton', icon: 'po_patton', npcId: 0 },
     ]);
   });
 

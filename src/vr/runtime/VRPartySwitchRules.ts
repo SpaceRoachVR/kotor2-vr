@@ -49,7 +49,12 @@ export function buildPartySwitchEntries(
       npcId: member.npcId,
     });
   }
-  if (leader && !leader.isPlayer && typeof playerName === 'string' && playerName.trim().length > 0) {
+  // The Exile only while they are actually in the party as a follower (a
+  // leader switch keeps them). In a scripted possession - the 001EBO prologue
+  // as T3 - they are not, and offering them built a second Exile who joined
+  // the prologue for good (headset round 16).
+  const exileFollowing = party.slice(1).some((member) => !!member?.isPlayer);
+  if (leader && !leader.isPlayer && exileFollowing && typeof playerName === 'string' && playerName.trim().length > 0) {
     entries.push({
       id: PLAYER_SWITCH_ENTRY_ID,
       label: playerName.trim(),
