@@ -287,6 +287,15 @@ export class MenuAbilities extends K1_MenuAbilities {
    * bonus, total. Powers: base Force point cost, alignment adjustment, cost
    * for this character.
    */
+  /** The Powers icons report here: name, text and the cost boxes together (critic run 14). */
+  describeSpell(spell: any){
+    this.describeAbility(spell);
+  }
+
+  describeFeat(feat: any){
+    this.describeAbility(feat);
+  }
+
   describeAbility(node: any){
     const creature: any = GameState.PartyManager.party[0];
     const signed = (n: number) => (n >= 0 ? '+' : '') + String(n).padStart(2, '0');
@@ -301,6 +310,11 @@ export class MenuAbilities extends K1_MenuAbilities {
         return;
       }
       if(this.filter === AbilityFilter.SKILLS){
+        // The boxes' captions are the Powers tab's by default ("Base Cost /
+        // Dark Side / Total Rank" over a skill; critic run 14).
+        this.LBL_SKILLRANK?.setText(tlk(1579));
+        this.LBL_BONUS?.setText(tlk(32129));
+        this.LBL_TOTAL?.setText(tlk(41904));
         const rank = Number(node.rank) || 0;
         const total = typeof creature?.getSkillTotal === 'function' ? creature.getSkillTotal(node.id) : rank;
         this.LBL_NAME?.setText(node.getName?.() ?? '');
@@ -317,6 +331,10 @@ export class MenuAbilities extends K1_MenuAbilities {
         const base = Number.parseInt(String(row?.forcepoints ?? '0'), 10) || 0;
         let cost = base;
         try{ cost = new GameState.TalentSpell(id).getForcePointCostFor(creature); }catch(e){}
+        const side = String(row?.goodevil ?? '').trim().toUpperCase();
+        this.LBL_SKILLRANK?.setText(tlk(37655));
+        this.LBL_BONUS?.setText(side === 'G' ? tlk(41891) : side === 'E' ? tlk(41890) : '');
+        this.LBL_TOTAL?.setText('Cost');
         this.LBL_NAME?.setText(tlk(row?.name));
         this.LBL_RANKVAL?.setText(String(base).padStart(2, '0'));
         this.LBL_BONUSVAL?.setText(signed(cost - base));
@@ -325,7 +343,10 @@ export class MenuAbilities extends K1_MenuAbilities {
         return;
       }
       const group: any[] = Array.isArray(node) ? node.filter(Boolean) : [node];
-      const feat = group[group.length - 1];
+      // The highest feat of the chain this character owns: the last of the
+      // chain described an unowned Weapon Specialization (critic run 14).
+      const owned = group.filter((f: any) => typeof creature?.getHasFeat !== 'function' || creature.getHasFeat(f?.id));
+      const feat = owned[owned.length - 1] ?? group[0];
       this.LBL_NAME?.setText(tlk(feat?.name));
       this.LB_DESC_FEATS.setItem(tlk(feat?.description) || null);
     }catch(e){

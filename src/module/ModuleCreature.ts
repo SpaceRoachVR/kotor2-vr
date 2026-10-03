@@ -647,8 +647,10 @@ export class ModuleCreature extends ModuleObject {
 
       this.speed += (this.getMovementSpeed() * 2.5) * this.force * delta;
 
-      if(this.speed > this.getMovementSpeed()){
-        this.speed = this.getMovementSpeed();
+      // VR stick deflection caps the speed (CreatureLocomotionAdapter).
+      const speedCap = this.getMovementSpeed() * (Number.isFinite(this.locomotionScale) ? this.locomotionScale : 1);
+      if(this.speed > speedCap){
+        this.speed = speedCap;
       }
       
       let forceDelta = Math.max(this.force * delta, this.speed * delta);
@@ -968,14 +970,17 @@ export class ModuleCreature extends ModuleObject {
   /** Fractional Force points carried between frames (TSL regeneration). */
   private forceRegenCarry = 0;
   private healthRegenCarry = 0;
+  /** Fraction of full movement speed asked for by VR locomotion (1 = run). */
+  locomotionScale = 1;
   private regenCombatGraceSeconds = 0;
 
   /** TSL's key/value regeneration rules; see combat/TSLRegeneration. */
   private updateTSLRegen(delta: number, table: TSLRegenerationTable){
     // The combat flag can drop between rounds of a running fight, and FP came
     // back at the out-of-combat rate mid-duel (critic run 13: 5 FP in 120 s
-    // where the table allows 2). A fight counts until 6 s after it was last on.
-    this.regenCombatGraceSeconds = this.combatData.combatState ? 6 : Math.max(0, this.regenCombatGraceSeconds - delta);
+    // where the table allows 2; run 14 saw 10 s gaps). A fight counts until
+    // 12 s after it was last on.
+    this.regenCombatGraceSeconds = this.combatData.combatState ? 12 : Math.max(0, this.regenCombatGraceSeconds - delta);
     const input = {
       inCombat: this.regenCombatGraceSeconds > 0,
       constitutionModifier: abilityModifier(this.getCON()),

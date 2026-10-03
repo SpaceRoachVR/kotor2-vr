@@ -1651,7 +1651,9 @@ export class VRSpike {
       // B pressed Back on a menu: the same press must not also toggle Pause
       // when it is released over the game (critic run 13: closing the
       // Character screen with B left the game paused).
-      if (VRSpike.panelInputController.takeActivatedButton() === 'b') VRSpike.pausePressConsumed = true;
+      // Only when the menu has a Back for B; otherwise the press did nothing
+      // and swallowed the next pause (critic run 14).
+      if (VRSpike.panelInputController.takeActivatedButton() === 'b' && (menu as any)?._button_b) VRSpike.pausePressConsumed = true;
       return owned;
     } catch (error) {
       if (!VRSpike.panelInputErrorReported) {
@@ -3525,8 +3527,18 @@ export class VRSpike {
         // Smooth turning is vection too (critic run 12: the vignette stayed
         // off for a whole smooth turn); a snap turn is not.
         const smoothTurning = useSnapTurn ? 0 : Math.min(1, Math.abs(turnAxisValue));
+        // How fast the player actually moves, not how far the stick is
+        // pushed: against a wall the view darkened fully with no movement
+        // (critic run 14). Full strength at a run (about 4 m/s).
+        const position = VRSpike.hooks?.getPlayerPosition?.() ?? null;
+        let movedSpeed = 0;
+        if (position && VRSpike.vignetteLastPosition && deltaSeconds > 0) {
+          movedSpeed = Math.hypot(position.x - VRSpike.vignetteLastPosition.x, position.y - VRSpike.vignetteLastPosition.y) / deltaSeconds;
+        }
+        VRSpike.vignetteLastPosition = position ? { x: position.x, y: position.y } : null;
+        const moving = resolvedLocomotion.magnitude > 0 ? Math.min(1, movedSpeed / 4) : 0;
         VRSpike.updateComfortVignette(
-          comfortSettings.vignetteEnabled ? Math.max(resolvedLocomotion.magnitude, smoothTurning) : 0,
+          comfortSettings.vignetteEnabled ? Math.max(moving, smoothTurning) : 0,
           deltaSeconds,
         );
       }
@@ -3540,6 +3552,7 @@ export class VRSpike {
 
   /** The vignette eases in and out over ~150 ms; it snapped in one frame (critic run 12). */
   private static comfortVignetteLevel = 0;
+  private static vignetteLastPosition: { x: number; y: number } | null = null;
   private static updateComfortVignette(intensity: number, deltaSeconds = 1 / 72): void {
     if (!VRSpike.camera) return;
     const target = Number.isFinite(intensity) ? Math.min(1, Math.max(0, intensity)) : 0;
@@ -4571,13 +4584,20 @@ export class VRSpike {
       headForward: head ? new THREE.Vector3(0, 0, -1).applyQuaternion(head.orientation) : null,
       nowMs,
     });
-    if (damage) VRSpike.presentDamage(session, damage, nowMs);
+    // Already down before this drop: no hurt sound, haptics or flash over
+    // the defeat screen (critic run 14: two hurt cues after death).
+    const hp = typeof local?.hitPoints === 'number' ? local.hitPoints : null;
+    const wasDown = VRSpike.lastLocalHitPoints !== null && VRSpike.lastLocalHitPoints <= 0;
+    VRSpike.lastLocalHitPoints = hp;
+    if (damage && !wasDown) VRSpike.presentDamage(session, damage, nowMs);
   }
 
   /**
    * ROADMAP 3.14 — a red edge on the side the hit came from, and a pulse in
    * that side's hand. Front, behind and unattributed hits use both.
    */
+  private static lastLocalHitPoints: number | null = null;
+
   private static presentDamage(session: XRSession, damage: VRDamageEvent, nowMs: number): void {
     const pattern = damage.side === 'unknown'
       ? DAMAGE_UNATTRIBUTED_HAPTIC

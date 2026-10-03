@@ -4,6 +4,10 @@ export interface CreatureLocomotionTarget {
   force: number;
   forceVector: { x: number; y: number };
   controlled: boolean;
+  /** Current speed (m/s); zeroed when the stick is released. Optional for test doubles. */
+  speed?: number;
+  /** Fraction of full movement speed the stick asks for (1 = run). */
+  locomotionScale?: number;
   canMove(): boolean;
   clearAllActions(includeCombatActions?: boolean): void;
   setFacing(facing: number, instant?: boolean, speed?: number): void;
@@ -41,6 +45,10 @@ export class CreatureLocomotionAdapter<TTarget extends CreatureLocomotionTarget 
       // KOTOR decelerates on every frame where force is below one. Its W key
       // and legacy gamepad therefore use full force after accepting movement.
       target.force = 1;
+      // Speed follows the stick: a light push walks, full deflection runs. It
+      // ran at full speed from a 0.2 push (critic run 14).
+      target.locomotionScale = Math.min(1, Math.max(0.35, locomotion.magnitude));
+      this.wasMoving = true;
       // The native collision and avoidance code advances creatures through
       // forceVector, not merely their visual facing. ActionMoveToPoint writes
       // this vector every frame; omitting it from VR caused locomotion to stall
@@ -56,10 +64,23 @@ export class CreatureLocomotionAdapter<TTarget extends CreatureLocomotionTarget 
       return true;
     }
 
+    // Stop on release: the engine's deceleration coasted the player about a
+    // metre after the stick returned to centre (critic run 14). Only on the
+    // release frame, so scripted walks keep their own speed.
+    if (this.wasMoving) {
+      this.wasMoving = false;
+      target.speed = 0;
+      target.force = 0;
+      target.forceVector.x = 0;
+      target.forceVector.y = 0;
+      target.locomotionScale = 1;
+    }
     // Body yaw has already been dead-zoned and rate-limited by the controller.
     target.setFacing(locomotion.bodyFacing, true);
     return true;
   }
+
+  private wasMoving = false;
 
   private shouldRetainActions(target: TTarget): boolean {
     if (!this.retainActionsWhileMoving) return false;

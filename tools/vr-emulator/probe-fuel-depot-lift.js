@@ -11,7 +11,7 @@
  * 150 ms through the opening of the conversation, then plays it out and
  * reports where the PC ends up.
  *
- *   node tools/vr-emulator/probe-fuel-depot-lift.js [--no-vr] [--checkpoint name]
+ *   node tools/vr-emulator/probe-fuel-depot-lift.js [--no-vr] [--checkpoint name] [--port 8491] [--user <saves folder>]
  *
  * Never saves (the harness guard stops autosaves).
  */
@@ -22,7 +22,8 @@ const steps = require('./playthrough-steps');
 const args = process.argv.slice(2);
 const VR = !args.includes('--no-vr');
 const CHECKPOINT = args.includes('--checkpoint') ? args[args.indexOf('--checkpoint') + 1] : 'containment-fields-down';
-const ASSET_PORT = 8491;
+const ASSET_PORT = args.includes('--port') ? Number(args[args.indexOf('--port') + 1]) : 8491;
+const USER_ROOT = args.includes('--user') ? args[args.indexOf('--user') + 1] : undefined;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const SAMPLE = `(() => {
@@ -44,9 +45,9 @@ const SAMPLE = `(() => {
 })()`;
 
 (async () => {
-  const service = await startAssetService({ port: ASSET_PORT });
+  const service = await startAssetService({ port: ASSET_PORT, userRoot: USER_ROOT });
   await waitForPort(ASSET_PORT).catch(() => undefined);
-  const harness = new VrHarness({ port: 9453, headless: true });
+  const harness = new VrHarness({ port: ASSET_PORT + 962, headless: true });
   try {
     await steps.boot(harness, service.url);
     await steps.resumeFromCheckpoint(harness, CHECKPOINT);

@@ -23,6 +23,10 @@ export function describeVRRefusal(shape: string): string | null {
   const s = String(shape || '').toLowerCase();
   if (!s.startsWith('refused') && !s.startsWith('cancelled')) return null;
   if (s.includes('force range')) return 'Out of Force range';
+  // Say why (critic run 14: the medpac refusal said only "Can't do that").
+  if (s.includes('full health')) return 'Already at full health';
+  if (s.includes('not enough force points')) return 'Not enough Force points';
+  if (s.includes('attack is queued before the power')) return 'An attack is queued first';
   if (s.includes('throw range')) return 'Out of throwing range';
   if (s.includes('no locked hostile') || s.includes('no target')) return 'No target';
   if (s.includes('quick save failed')) return 'Save failed';

@@ -180,7 +180,8 @@ export class VRComfortSettingsHost {
     this.context.textAlign = 'left';
     this.context.fillStyle = '#62e8ff';
     this.context.fillText(VR_MENU_TITLE, 30, rowHeight / 2);
-    this.context.font = '28px Arial';
+    // Legible at 1.4 m (critic run 14: the close hint could not be read).
+    this.context.font = 'bold 34px Arial';
     this.context.textAlign = 'right';
     this.context.fillStyle = '#c9d6d8';
     this.context.fillText(this.closeHint, width - 30, rowHeight / 2);

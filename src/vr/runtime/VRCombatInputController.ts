@@ -190,7 +190,12 @@ export class VRCombatInputController {
       this.previousTrackingState = dominantPose.trackingState;
       this.trackingSettledAt = context.timestamp + 150;
     }
-    const fast = speed >= this.configuration.minimumSwingSpeedMetresPerSecond &&
+    // Two-handed: the blade must be fast on two samples running. One fast
+    // sample from hilt jitter at 7-12 cm still swung (critic run 14); a real
+    // two-handed swing lasts several frames.
+    const rawFast = speed >= this.configuration.minimumSwingSpeedMetresPerSecond;
+    this.gripFastStreak = grip && rawFast ? this.gripFastStreak + 1 : 0;
+    const fast = rawFast && (!grip || this.gripFastStreak >= 2) &&
       context.timestamp >= this.trackingSettledAt;
     const volume = context.nominatedTargetVolume ?? null;
     let contactMetres: number | undefined;
@@ -381,6 +386,7 @@ export class VRCombatInputController {
   }
 
   private previousOffhandPose: XRWorldPose | null = null;
+  private gripFastStreak = 0;
   private previousTrackingState: XRWorldPose['trackingState'] = 'tracked';
   private trackingSettledAt = Number.NEGATIVE_INFINITY;
 

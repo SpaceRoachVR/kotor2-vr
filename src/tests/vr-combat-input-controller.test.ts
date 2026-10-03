@@ -36,6 +36,8 @@ describe('VRCombatInputController', () => {
     const nearHilt = (y: number) => new THREE.Vector3(0, y, -0.55);
 
     controller.process(frame(0, 0, nearHilt(0)), context('melee-one-handed', 0, true));
+    // A two-handed swing must be fast on two samples running (critic run 14).
+    expect(controller.process(frame(80, -0.15, nearHilt(-0.15)), context('melee-one-handed', 80, true))).toHaveLength(0);
     const swing = controller.process(frame(160, -0.3, nearHilt(-0.3)), context('melee-one-handed', 160, true));
 
     expect(swing[0]).toMatchObject({ weaponMode: 'melee-two-handed', hand: 'right' });
@@ -79,6 +81,10 @@ describe('VRCombatInputController', () => {
     controller.process(
       frame(0, rearHandY, new THREE.Vector3(0, 0.15, -0.4)),
       context('melee-one-handed', 0, true),
+    );
+    controller.process(
+      frame(60, rearHandY, new THREE.Vector3(0.075, 0.075, -0.4)),
+      context('melee-one-handed', 60, true),
     );
     const swing = controller.process(
       // Off hand swings across; dominant hand has not moved at all.

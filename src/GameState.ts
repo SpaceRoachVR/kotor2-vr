@@ -1227,6 +1227,7 @@ function reportVRConsumableOutcome(shape: string, detail = ''): void {
  * fights never drags the actor into combat state. Either way the item's
  * spell, and the charge or stack it costs, are the engine's.
  */
+let vrFullHealthRefusedUntil = 0;
 function commitVRArmedConsumable(actor: ModuleCreature): boolean {
   const request = vrArmedConsumableState.requestCommit();
   if (request.state !== 'armed') return false;
@@ -1241,7 +1242,10 @@ function commitVRArmedConsumable(actor: ModuleCreature): boolean {
   // neck used one at 36/36 HP (critic run 13). It stays armed.
   if (Number((source.item as any).baseItemId) === 55 && actor.getHP() >= actor.getMaxHP()) {
     vrArmedConsumableState.completeCommit({ sourceKey: source.descriptor.sourceKey, engineAccepted: false });
-    reportVRConsumableOutcome('refused: already at full health', source.descriptor.label);
+    // Once per touch: held at the neck it refused every 1.3 s (critic run 14).
+    const now = performance.now();
+    if (now >= vrFullHealthRefusedUntil) reportVRConsumableOutcome('refused: already at full health', source.descriptor.label);
+    vrFullHealthRefusedUntil = now + 3000;
     return false;
   }
   try {

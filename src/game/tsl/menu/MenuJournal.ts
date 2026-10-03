@@ -1,3 +1,4 @@
+import { JournalQuestMode } from "@/game/kotor/menu/MenuJournal";
 import type { GUIListBox, GUILabel, GUIButton } from "@/gui";
 import type { JournalEntry } from "@/engine/JournalEntry";
 import { MenuJournal as K1_MenuJournal } from "@/game/kotor/KOTOR";
@@ -105,6 +106,15 @@ export class MenuJournal extends K1_MenuJournal {
         this.close();
       });
       this._button_b = this.BTN_EXIT;
+
+      // The Active / Completed toggle was never wired in TSL either, so
+      // Completed Quests could not be opened (critic run 14).
+      this.BTN_SWAPTEXT?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.mode = this.mode === JournalQuestMode.ACTIVE ? JournalQuestMode.COMPLETED : JournalQuestMode.ACTIVE;
+        this.updateList();
+        this.UpdateLabels();
+      });
 
       resolve();
     });

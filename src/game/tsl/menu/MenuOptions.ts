@@ -50,6 +50,8 @@ export class MenuOptions extends K1_MenuOptions {
         e.stopPropagation();
         this.close();
       });
+      // B closes it, as the Exit button does (critic run 14: B did nothing here).
+      this._button_b = this.BTN_EXIT;
 
       this.BTN_LOADGAME.addEventListener('click', (e) => {
         e.stopPropagation();

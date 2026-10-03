@@ -2910,14 +2910,32 @@ export class ModuleObject {
    * @param oCaster 
    * @returns 
    */
+  /**
+   * ResistForce: Force resistance works as spell resistance. A target with
+   * none (most creatures, every Peragus droid) never resists; one with some
+   * resists when the caster's d20 + caster level fails to beat it. The old
+   * rule (d20 + target level against 10 + caster level, from a forum post)
+   * let a droid shrug off Stun Droid after its 15 FP were spent (critic run 14).
+   */
   resistForce(oCaster: ModuleObject){
     if(BitWise.InstanceOfObject(this, ModuleObjectType.ModuleCreature) && BitWise.InstanceOfObject(oCaster, ModuleObjectType.ModuleCreature)){
-      //https://gamefaqs.gamespot.com/boards/516675-star-wars-knights-of-the-old-republic/62811657
-      //1d20 + their level vs. a DC of your level plus 10
-      let roll = Dice.roll(1, DiceType.d20, (this as any).getTotalClassLevel());
-      return (roll > 10 + (oCaster as any).getTotalClassLevel());
+      const resistance = this.getForceResistance();
+      if(resistance <= 0) return false;
+      const roll = Dice.roll(1, DiceType.d20, (oCaster as any).getTotalClassLevel());
+      return roll < resistance;
     }
     return 0;
+  }
+
+  /** Force resistance from effects (items apply theirs as effects). */
+  getForceResistance(): number {
+    let total = 0;
+    for(const effect of this.effects){
+      if(!effect) continue;
+      if(effect.type == GameEffectType.EffectForceResistanceIncrease) total += Number(effect.getInt(0)) || 0;
+      else if(effect.type == GameEffectType.EffectForceResistanceDecrease) total -= Number(effect.getInt(0)) || 0;
+    }
+    return Math.max(0, total);
   }
 
   /**

@@ -11,7 +11,7 @@ enum JournalSort {
   PLANET = 3,
 }
 
-enum JournalQuestMode {
+export enum JournalQuestMode {
   ACTIVE = 0,
   COMPLETED = 1,
 }
