@@ -200,9 +200,16 @@ export class ActionUnlockObject extends Action {
     if(!this.oItem) return;
     if(this.oItem.charges > 1){
       this.oItem.charges -= 1;
-    }else{
-      this.owner.removeItem(this.oItem, 1);
+      return;
     }
+    // A party member's tunneler is in the party pool, as a medpac is
+    // (ActionItemCastSpell); take it from there directly.
+    const party = GameState.PartyManager?.party;
+    if(Array.isArray(party) && party.includes(this.owner as any) && GameState.InventoryManager?.inventory?.includes(this.oItem)){
+      GameState.InventoryManager.removeItem(this.oItem, 1);
+      return;
+    }
+    this.owner.removeItem(this.oItem, 1);
   }
 
   private signalFailure(): void {

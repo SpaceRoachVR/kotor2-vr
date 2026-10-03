@@ -303,7 +303,7 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
   // the correct outcome rather than a missing-texture warning.
   items.push(createStaticAction(
     'menu:comfort-settings',
-    'Comfort Settings',
+    'VR Menu',
     undefined,
     context.openComfortSettings,
   ));

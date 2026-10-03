@@ -91,6 +91,30 @@ describe('VRForceCastGestureController', () => {
     })).toBeNull();
   });
 
+  test('without pose velocity (Virtual Desktop) a thrust is measured from successive positions', () => {
+    // Round 15: VDXR reports no linearVelocity, so the cast never fired.
+    const controller = new VRForceCastGestureController();
+    const input = { hand: 'left' as const, palmOpen: true, targetPoint: target };
+    const at = (z: number) => positionedFrame(new THREE.Vector3(-0.2, 0, z));
+
+    expect(controller.process(at(0), { ...input, timestamp: 1_000 })).toBeNull();
+    const gesture = controller.process(at(-0.05), { ...input, timestamp: 1_020 });
+
+    expect(gesture).toMatchObject({ kind: 'cast', hand: 'left', towardTarget: true });
+    expect(gesture?.speedMetresPerSecond).toBeCloseTo(2.5, 1);
+  });
+
+  test('without pose velocity a held-still hand, or a long frame gap, never casts', () => {
+    const controller = new VRForceCastGestureController();
+    const input = { hand: 'left' as const, palmOpen: true, targetPoint: target };
+    const at = (z: number) => positionedFrame(new THREE.Vector3(-0.2, 0, z));
+
+    controller.process(at(0), { ...input, timestamp: 1_000 });
+    expect(controller.process(at(0), { ...input, timestamp: 1_020 })).toBeNull();
+    // 0.5 s later, 1 m away: a tracking jump, not a thrust.
+    expect(controller.process(at(-1), { ...input, timestamp: 1_520 })).toBeNull();
+  });
+
   test('rejects impossible configuration', () => {
     expect(() => new VRForceCastGestureController({ minimumThrustSpeedMetresPerSecond: 0 })).toThrow(RangeError);
     expect(() => new VRForceCastGestureController({ minimumAlignmentCosine: 1.5 })).toThrow(RangeError);
@@ -114,4 +138,10 @@ function frame(velocity: THREE.Vector3, hand: 'left' | 'right'): XRInputFrame {
     },
     activeInteractionProfiles: ['oculus-touch-v3'],
   };
+}
+
+function positionedFrame(position: THREE.Vector3): XRInputFrame {
+  const base = frame(new THREE.Vector3(), 'left');
+  const hand = base.hands.left!;
+  return { ...base, hands: { left: { ...hand, pose: { ...hand.pose, position, linearVelocity: null } } } };
 }

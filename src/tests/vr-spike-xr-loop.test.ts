@@ -1421,7 +1421,7 @@ describe('VRSpike XR loop ownership', () => {
     expect(process).not.toHaveBeenCalled();
   });
 
-  test('cancels an active VR combat request with Quest B exactly once', () => {
+  test('cancels an active VR combat request when Quest B is held, exactly once; a tap is only Pause', () => {
     const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
     let cancelCount = 0;
     VRSpike.session = {
@@ -1442,18 +1442,36 @@ describe('VRSpike XR loop ownership', () => {
       }),
     };
 
-    buttons[5] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processCombatCancel();
-    (VRSpike as any).processCombatCancel();
+    let now = 10_000;
+    const clock = jest.spyOn(performance, 'now').mockImplementation(() => now);
+    let paused = false;
+    const pause = jest.spyOn(VRSpike as any, 'isPlayerPaused').mockImplementation(() => paused);
+    const press = (down: boolean) => {
+      buttons[5] = down ? { pressed: true, touched: true, value: 1 } : { pressed: false, touched: false, value: 0 };
+      (VRSpike as any).processCombatCancel();
+    };
+    try {
+      // Round 15 (PF4): a tap of B pauses; it must not clear the queue.
+      press(true); now += 200; press(true); press(false);
+      expect(cancelCount).toBe(0);
 
-    expect(cancelCount).toBe(1);
+      // Held for 0.6 s it cancels, once, however long it is held.
+      press(true); now += 600; press(true); now += 500; press(true);
+      expect(cancelCount).toBe(1);
 
-    // A genuine release and re-press cancels again.
-    buttons[5] = { pressed: false, touched: false, value: 0 };
-    (VRSpike as any).processCombatCancel();
-    buttons[5] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processCombatCancel();
-    expect(cancelCount).toBe(2);
+      // A genuine release and a new hold cancels again.
+      press(false); press(true); now += 650; press(true);
+      expect(cancelCount).toBe(2);
+
+      // Never while paused, even held, nor when the hold began in the pause.
+      press(false); paused = true; press(true); now += 700; press(true);
+      paused = false; now += 700; press(true);
+      expect(cancelCount).toBe(2);
+      press(false);
+    } finally {
+      clock.mockRestore();
+      pause.mockRestore();
+    }
   });
 
   test('cancels combat even when the nominated target no longer qualifies', () => {
@@ -1483,8 +1501,18 @@ describe('VRSpike XR loop ownership', () => {
       },
     };
 
-    buttons[5] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processCombatCancel();
+    let now = 20_000;
+    const clock = jest.spyOn(performance, 'now').mockImplementation(() => now);
+    const pause = jest.spyOn(VRSpike as any, 'isPlayerPaused').mockImplementation(() => false);
+    try {
+      buttons[5] = { pressed: true, touched: true, value: 1 };
+      (VRSpike as any).processCombatCancel();
+      now += 600;
+      (VRSpike as any).processCombatCancel();
+    } finally {
+      clock.mockRestore();
+      pause.mockRestore();
+    }
 
     expect(cancelCount).toBe(1);
     expect(requestedTargets).toEqual([null]);

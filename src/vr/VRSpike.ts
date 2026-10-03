@@ -173,6 +173,11 @@ interface VRCutsceneInputContext extends VRMovieInputContext {
    * dialogue as a floating panel. Absent is treated as 'theater'.
    */
   readonly presentation?: 'theater' | 'world';
+  /**
+   * Show the theater over black, as a movie is: the conversation moves the
+   * player, so the room around them is about to change (round 15).
+   */
+  readonly hideWorld?: boolean;
 }
 
 interface VRMovieInputContexts {
@@ -496,6 +501,9 @@ export interface VRSpikeHooks {
   /** Current world reticle target for the headset-readable name label. */
   getWorldTargetIndicator?: () => VRWorldTargetIndicator | null;
 }
+
+/** How long B must be held to cancel combat; a tap is Pause (round 15, PF4). */
+const VR_COMBAT_CANCEL_HOLD_MS = 600;
 
 export class VRSpike {
   static readonly perf = new PerfSampler();
@@ -2413,9 +2421,23 @@ export class VRSpike {
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['combat', 'interaction', 'ui'])
       );
-      const cancelPressed = actions.some((action) =>
+      const buttonDown = actions.some((action) =>
         action.action === SemanticXRAction.Cancel && action.hand === VRSpike.dominantHand && action.pressed
       );
+      // B is also Pause. A tap pauses or resumes and nothing else; cancelling
+      // combat needs B held for VR_COMBAT_CANCEL_HOLD_MS, never while paused.
+      // A tap used to cancel too, clearing the actions just queued in the
+      // pause (round 15, PF4). A press that began paused never cancels.
+      const now = performance.now();
+      if (!buttonDown) {
+        VRSpike.combatCancelDownSince = null;
+      } else if (VRSpike.isPlayerPaused()) {
+        VRSpike.combatCancelDownSince = Number.POSITIVE_INFINITY;
+      } else if (VRSpike.combatCancelDownSince === null) {
+        VRSpike.combatCancelDownSince = now;
+      }
+      const cancelPressed = buttonDown && VRSpike.combatCancelDownSince !== null &&
+        now - VRSpike.combatCancelDownSince >= VR_COMBAT_CANCEL_HOLD_MS;
       if (cancelPressed && !VRSpike.combatCancelHeld) {
         // Resolve the context without a nominated target: a cancel must still
         // work when the thing that started the round no longer qualifies.
@@ -2464,6 +2486,8 @@ export class VRSpike {
   }
 
   private static pendingCancelTraceFrames = 0;
+  /** When B went down this press; +Infinity if it went down while paused. */
+  private static combatCancelDownSince: number | null = null;
   private static combatCancelErrorReported = false;
 
   private static processCombatInput(timestamp: number): void {
@@ -3709,7 +3733,6 @@ export class VRSpike {
     if (!renderer || !scene || !VRSpike.camera || !VRSpike.rig) return;
     // Off unless this frame's world submission turns it on: a theater frame
     // returns early and used to inherit it (critic run 7).
-    VRSpike.presentLoadingFloor(false);
     VRSpike.ensureCombatCueAudio();
     VRSpike.watchPlayerDisabled();
 
@@ -3726,6 +3749,7 @@ export class VRSpike {
     // physical head pose.
     const cutsceneContext = VRSpike.hooks?.getCutsceneContext?.() ?? null;
     const theaterCutscene = !!cutsceneContext && cutsceneContext.presentation !== 'world';
+    VRSpike.theaterHidesWorld = theaterCutscene && cutsceneContext?.hideWorld === true;
     if (VRSpike.followCamera && worldCamera) {
       // A scripted cutscene/dialogue camera cut moves the *player*/*camera*
       // to frame a shot — invisible on flatscreen because FollowerCamera is
@@ -3804,9 +3828,8 @@ export class VRSpike {
     // flatscreen camera, portraits - observes it hidden.
     const restoreBody = hidePlayerBodyForFirstPerson(playerBody);
     // While a module loads the engine hides the world scene, panel and all;
-    // draw the loading screen over the dark instead.
-    const engineHidWorld = scene.visible === false;
-    VRSpike.presentLoadingFloor(engineHidWorld);
+    // draw the loading screen over the dark instead. No floor is drawn: the
+    // blue disc critic run 6 asked for confused the headset player (round 15).
     const restoreHiddenWorld = revealVRInterfaceOverHiddenWorld(scene);
     try {
       renderer.render(scene, VRSpike.camera);
@@ -3816,6 +3839,18 @@ export class VRSpike {
     }
     VRSpike.perf.recordXRRender(frameTimestamp);
     renderer.autoClear = prevAutoClear;
+  }
+
+  /**
+   * The theater shows a whole movie or world frame, never a cut-out. World
+   * pixels carry their texture's alpha, which on heads and bodies is the
+   * envmap mask, not coverage: blended, the room behind the theater showed
+   * through faces in the security-camera feeds (round 15, F16).
+   */
+  private static makeTheaterOpaque(host: VRPanelHost): void {
+    const material = host.object.material as THREE.Material;
+    material.transparent = false;
+    material.needsUpdate = true;
   }
 
   private static reportMissingMovieRenderPrerequisite(kind: 'movie' | 'cutscene', hadInputFrame: boolean): void {
@@ -3864,6 +3899,7 @@ export class VRSpike {
           distanceMetres: 2.25,
           widthMetres: 2.4,
         });
+        VRSpike.makeTheaterOpaque(VRSpike.movieHost);
       }
       VRSpike.movieHost.present(
         VRSpike.movieOwner,
@@ -3976,6 +4012,7 @@ export class VRSpike {
     try {
       if (!VRSpike.movieHost) {
         VRSpike.movieHost = new VRPanelHost(worldScene, VRSpike.THEATER_PANEL_OPTIONS);
+        VRSpike.makeTheaterOpaque(VRSpike.movieHost);
       }
       VRSpike.movieHost.present(
         VRSpike.cutsceneOwner,
@@ -4041,7 +4078,14 @@ export class VRSpike {
       if (VRSpike.xrFrameRenderTarget) renderer.setRenderTarget(VRSpike.xrFrameRenderTarget);
       const previousAutoClear = renderer.autoClear;
       renderer.autoClear = true;
-      renderer.render(worldScene, VRSpike.camera);
+      const restoreWorld = VRSpike.theaterHidesWorld
+        ? hideWorldForTheater(worldScene, VRSpike.movieHost.object)
+        : () => {};
+      try {
+        renderer.render(worldScene, VRSpike.camera);
+      } finally {
+        restoreWorld();
+      }
       VRSpike.perf.recordXRRender(frameTimestamp);
       renderer.autoClear = previousAutoClear;
     } catch (error) {
@@ -4049,6 +4093,9 @@ export class VRSpike {
       console.error('[VRSpike] cutscene theater presentation rejected', error);
     }
   }
+
+  /** This frame's theater is shown over black (VRCutsceneInputContext.hideWorld). */
+  private static theaterHidesWorld = false;
 
   /** Places a newly focused keyboard only after this frame's rig synchronization. */
   private static renderKeyboard(): void {
@@ -4528,30 +4575,6 @@ export class VRSpike {
 
   private static refusalNoticeHost: VRRefusalNoticeHost | null = null;
 
-  /**
-   * A dim ring on the floor while a module loads, so the loading screen does
-   * not float in a void with no ground (critic run 6). It lives on the rig,
-   * whose origin is the XR floor, in the rig's Y-up space.
-   */
-  private static loadingFloor: THREE.Mesh | null = null;
-  private static presentLoadingFloor(show: boolean): void {
-    if (!show) {
-      if (VRSpike.loadingFloor) VRSpike.loadingFloor.visible = false;
-      return;
-    }
-    if (!VRSpike.rig || typeof (VRSpike.rig as any).add !== 'function') return;
-    if (!VRSpike.loadingFloor) {
-      const floor = new THREE.Mesh(
-        new THREE.RingGeometry(0.35, 2.4, 64, 1),
-        new THREE.MeshBasicMaterial({ color: 0x1f6b78, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }),
-      );
-      floor.name = 'Kotor2VR.LoadingFloor';
-      floor.rotation.x = -Math.PI / 2;
-      VRSpike.rig.add(floor);
-      VRSpike.loadingFloor = floor;
-    }
-    VRSpike.loadingFloor.visible = true;
-  }
 
   /**
    * Creates the cue player as the session's frames begin and preloads every

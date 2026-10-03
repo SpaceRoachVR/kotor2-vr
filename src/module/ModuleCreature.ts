@@ -726,6 +726,13 @@ export class ModuleCreature extends ModuleObject {
             }
           }
         }
+        // A creature in a room that is not drawn this frame poses on every
+        // other frame only, as a distant one does: 102PER poses 35 skinned
+        // droids a frame, most behind the rock (round 15 perf, sim 23 ms).
+        if(this.model.animateFrame && GameState.PartyManager.party.indexOf(this) == -1 &&
+          this.room?.model instanceof OdysseyModel3D && this.room.model.visible === false){
+          this.model.animateFrame = this.model.oddFrame;
+        }
         //END: Animation Optimization
 
         if(GameState.Mode != EngineMode.DIALOG){

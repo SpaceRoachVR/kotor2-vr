@@ -297,17 +297,18 @@ export class ModuleObjectManager {
     results = results.concat(this.module.area.doors);
     results = results.concat(this.module.area.placeables);
 
-    results.sort(
-      function(a,b) {
-        try{
-          let distanceA = a.position.distanceTo(oObject.position);
-          let distanceB = b.position.distanceTo(oObject.position);
-          return (distanceB > distanceA) ? -1 : ((distanceA > distanceB) ? 1 : 0);
-        }catch(e){
-          return 0;
-        }
+    // Nearest first, from the given object or else the leader. Called every
+    // frame with no object (the cursor's hover scan), the old comparator threw
+    // on every comparison, ~900 caught exceptions a frame in 102PER, and left
+    // the list unsorted (round 15 perf).
+    const origin: any = oObject?.position ?? (PartyManager.party[0] as any)?.position;
+    if(origin){
+      const distance = new Map<ModuleObject, number>();
+      for(const o of results){
+        distance.set(o, o?.position ? o.position.distanceToSquared(origin) : Infinity);
       }
-    );
+      results.sort((a, b) => distance.get(a) - distance.get(b));
+    }
 
     let result: any;
     let count = results.length;

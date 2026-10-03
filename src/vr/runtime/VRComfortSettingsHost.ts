@@ -49,6 +49,10 @@ export class VRComfortSettingsHost {
     this.context = context;
 
     this.texture = new THREE.CanvasTexture(this.canvas);
+    // No mipmaps, so a non-power-of-two canvas is not resized on the CPU at
+    // every upload (round 15: 382 resize warnings).
+    this.texture.generateMipmaps = false;
+    this.texture.minFilter = THREE.LinearFilter;
     this.object = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.MeshBasicMaterial({

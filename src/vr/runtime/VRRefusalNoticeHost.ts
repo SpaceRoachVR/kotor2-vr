@@ -56,6 +56,10 @@ export class VRRefusalNoticeHost {
     if (!context) throw new Error('VR refusal notice canvas context unavailable');
     this.context = context;
     this.texture = new THREE.CanvasTexture(this.canvas);
+    // No mipmaps: a 768x124 canvas is then uploaded as is, not resized to a
+    // power of two (round 15 console warning).
+    this.texture.generateMipmaps = false;
+    this.texture.minFilter = THREE.LinearFilter;
     this.object = new THREE.Mesh(
       new THREE.PlaneGeometry(WIDTH_METRES, HEIGHT_METRES),
       new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }),

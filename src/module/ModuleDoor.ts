@@ -675,8 +675,11 @@ export class ModuleDoor extends ModuleObject {
     ){
       this.collisionDelay = 0;
     }else{
-      this.collisionDelay -= delta;
-      if(this.collisionDelay < 0) this.collisionDelay = 0;
+      // A closing door does not block until it has closed. A 0.75 s grace
+      // stopped a scripted run out of the Peragus fuel-depot lift 0.85 m
+      // short, inside the car, as the script closed and locked the door
+      // behind the player: stuck for good (round 15).
+      this.collisionDelay = 1;
     }
 
     if(this.isDead() && !this.isOpen()){
@@ -732,7 +735,7 @@ export class ModuleDoor extends ModuleObject {
               this.animStateInfo.currentAnimState == ModuleDoorAnimState.CLOSING1 || 
               this.animStateInfo.currentAnimState == ModuleDoorAnimState.CLOSING2
             ){
-              this.collisionDelay = 0.75;
+              this.collisionDelay = 1;
             }
             this.animStateInfo.started = true;
             const aLooping = (!parseInt(animation.fireforget) && parseInt(animation.looping) == 1);

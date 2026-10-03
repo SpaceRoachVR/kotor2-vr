@@ -60,6 +60,8 @@ const DEFAULT_CONFIGURATION: VRForceCastGestureConfiguration = {
 export class VRForceCastGestureController {
   private readonly configuration: VRForceCastGestureConfiguration;
   private nextGestureAt = Number.NEGATIVE_INFINITY;
+  /** The last position and time per hand, for runtimes that report no pose velocity. */
+  private readonly previous: Partial<Record<XRHandRole, { position: THREE.Vector3; timestamp: number }>> = {};
 
   constructor(configuration: Partial<VRForceCastGestureConfiguration> = {}) {
     this.configuration = { ...DEFAULT_CONFIGURATION, ...configuration };
@@ -82,13 +84,24 @@ export class VRForceCastGestureController {
     if (input.hand !== 'left' && input.hand !== 'right') {
       throw new RangeError('hand must be left or right');
     }
-    if (!input.palmOpen || input.timestamp < this.nextGestureAt) return null;
     const controller = inputFrame.hands[input.hand];
-    const velocity = controller?.pose.linearVelocity;
-    if (!controller || controller.pose.trackingState === 'unavailable' || !velocity ||
-      !Number.isFinite(velocity.lengthSq())) {
+    if (!controller || controller.pose.trackingState === 'unavailable') {
+      delete this.previous[input.hand];
       return null;
     }
+    // Virtual Desktop's runtime (VDXR) reports no pose velocity, so the thrust
+    // never registered there and a queued Force power could not be cast
+    // (round 15, N7/N20). As the swing detector does, the velocity is taken
+    // from the change in position when the runtime gives none.
+    let velocity = controller.pose.linearVelocity;
+    const before = this.previous[input.hand];
+    this.previous[input.hand] = { position: controller.pose.position.clone(), timestamp: input.timestamp };
+    if (!velocity || !Number.isFinite(velocity.lengthSq())) {
+      const dt = before ? (input.timestamp - before.timestamp) / 1000 : 0;
+      if (!before || !(dt > 0.001 && dt < 0.2)) return null;
+      velocity = controller.pose.position.clone().sub(before.position).divideScalar(dt);
+    }
+    if (!input.palmOpen || input.timestamp < this.nextGestureAt) return null;
     const speed = velocity.length();
     if (speed < this.configuration.minimumThrustSpeedMetresPerSecond) return null;
 
@@ -113,6 +126,8 @@ export class VRForceCastGestureController {
 
   reset(): void {
     this.nextGestureAt = Number.NEGATIVE_INFINITY;
+    delete this.previous.left;
+    delete this.previous.right;
   }
 
   private static resolveDirection(

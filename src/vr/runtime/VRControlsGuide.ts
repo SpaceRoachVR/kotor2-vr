@@ -21,8 +21,18 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       ['Swing a weapon', 'Attack the ringed enemy, on the round timer'],
       ['Both grips on a saber', 'Two-handed grip'],
       ['Medpac or stim to the neck', 'Use it (arm it from the wheel)'],
-      ['Grip and flick', 'Force push / pull'],
       ['Turn your wrist', 'Check your health watch'],
+    ],
+  };
+  // Round 15: the guide never said how to use a Force power.
+  const weaponHand = dominant === 'right' ? 'right' : 'left';
+  const otherHand = dominant === 'right' ? 'left' : 'right';
+  const force: VRControlsGuideSection = {
+    title: 'Force powers',
+    lines: [
+      ['Choose a power', 'Action wheel, Force page: it joins your queue'],
+      ['Cast it', `Thrust your open ${otherHand} hand at the ringed target, or pull the ${weaponHand} trigger`],
+      ['Push or Pull', `Hold the ${weaponHand} grip and flick forward (Push) or back (Pull)`],
     ],
   };
   // The wheel and party switch sit on the off hand's face buttons, so a
@@ -34,7 +44,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
         lines: [
           ['Stick', 'Move'],
           ['Stick click', 'Walk / run'],
-          ['X', 'Action wheel (inventory, map, party, save, settings)'],
+          ['X', 'Action wheel (inventory, map, party, save, VR Menu)'],
           ['Y', 'Switch party member'],
           ['Trigger', 'Throw an armed grenade'],
         ],
@@ -46,10 +56,11 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
           ['Stick', 'Turn (or scroll a menu list)'],
           ['Stick click, hold', 'Recenter'],
           ['A', 'Use what you point at'],
-          ['B', 'Back / pause'],
+          ['B', 'Back / pause; hold to stop attacking'],
         ],
       },
       body,
+      force,
     ];
   }
   return [
@@ -60,7 +71,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
         ['Stick', 'Turn (or scroll a menu list)'],
         ['Stick click, hold', 'Recenter'],
         ['X', 'Use what you point at'],
-        ['Y', 'Back / pause'],
+        ['Y', 'Back / pause; hold to stop attacking'],
       ],
     },
     {
@@ -68,12 +79,13 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       lines: [
         ['Stick', 'Move'],
         ['Stick click', 'Walk / run'],
-        ['A', 'Action wheel (inventory, map, party, save, settings)'],
+        ['A', 'Action wheel (inventory, map, party, save, VR Menu)'],
         ['B', 'Switch party member'],
         ['Trigger', 'Throw an armed grenade'],
       ],
     },
     body,
+    force,
   ];
 }
 
@@ -97,6 +109,8 @@ export class VRControlsGuideHost {
     if (!context) throw new Error('VR controls guide canvas context unavailable');
     this.context = context;
     this.texture = new THREE.CanvasTexture(this.canvas);
+    this.texture.generateMipmaps = false;
+    this.texture.minFilter = THREE.LinearFilter;
     this.object = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, side: THREE.DoubleSide, depthTest: false, depthWrite: false }),
@@ -134,9 +148,54 @@ export class VRControlsGuideHost {
     this.texture.dispose();
   }
 
+  /**
+   * Lays the guide out before drawing: the effect column starts after the
+   * widest input, and a long effect wraps instead of being squeezed. A long
+   * input ("Medpac or stim to the neck") ran into its effect (round 15).
+   */
   private draw(sections: readonly VRControlsGuideSection[]): void {
     const c = this.context;
-    const { width, height } = this.canvas;
+    const width = this.canvas.width;
+    const inputFont = 'bold 25px Arial';
+    const effectFont = '25px Arial';
+    c.font = inputFont;
+    const inputWidth = Math.max(...sections.flatMap((section) => section.lines.map(([input]) => c.measureText(input).width)));
+    const effectX = Math.min(40 + inputWidth + 24, width * 0.5);
+    const effectWidth = width - effectX - 30;
+    c.font = effectFont;
+    const wrap = (text: string, maxWidth: number, font: string): string[] => {
+      c.font = font;
+      const out: string[] = [];
+      let line = '';
+      for (const word of text.split(' ')) {
+        const next = line ? `${line} ${word}` : word;
+        if (line && c.measureText(next).width > maxWidth) { out.push(line); line = word; } else { line = next; }
+      }
+      if (line) out.push(line);
+      return out;
+    };
+    type Row = { input: string[]; effect: string[] };
+    const laid = sections.map((section) => ({
+      title: section.title,
+      rows: section.lines.map(([input, effect]): Row => ({
+        input: wrap(input, effectX - 40 - 16, inputFont),
+        effect: wrap(effect, effectWidth, effectFont),
+      })),
+    }));
+    const lineHeight = 31;
+    let height = 80;
+    for (const section of laid) {
+      height += 44;
+      for (const row of section.rows) height += 9 + lineHeight * Math.max(row.input.length, row.effect.length);
+      height += 10;
+    }
+    height += 24;
+    if (this.canvas.height !== height) {
+      this.canvas.height = height;
+      // WebGL2 textures are allocated at a fixed size: reallocate.
+      this.texture.dispose();
+    }
+
     c.clearRect(0, 0, width, height);
     c.fillStyle = 'rgba(2, 12, 16, 0.94)';
     c.fillRect(0, 0, width, height);
@@ -149,19 +208,20 @@ export class VRControlsGuideHost {
     c.font = 'bold 40px Arial';
     c.fillText('Controls', 30, y);
     y += 30;
-    for (const section of sections) {
-      y += 34;
+    for (const section of laid) {
+      y += 44;
       c.fillStyle = '#62e8ff';
       c.font = 'bold 30px Arial';
-      c.fillText(section.title, 30, y);
-      for (const [input, effect] of section.lines) {
-        y += 40;
-        c.fillStyle = '#d7f45b';
-        c.font = 'bold 25px Arial';
-        c.fillText(input, 40, y);
-        c.fillStyle = '#f4feff';
-        c.font = '25px Arial';
-        c.fillText(effect, 320, y, width - 350);
+      c.fillText(section.title, 30, y - 10);
+      for (const row of section.rows) {
+        y += 9;
+        const lines = Math.max(row.input.length, row.effect.length);
+        for (let i = 0; i < lines; i++) {
+          const lineY = y + lineHeight * (i + 0.5);
+          if (row.input[i]) { c.fillStyle = '#d7f45b'; c.font = inputFont; c.fillText(row.input[i], 40, lineY); }
+          if (row.effect[i]) { c.fillStyle = '#f4feff'; c.font = effectFont; c.fillText(row.effect[i], effectX, lineY); }
+        }
+        y += lineHeight * lines;
       }
       y += 10;
     }

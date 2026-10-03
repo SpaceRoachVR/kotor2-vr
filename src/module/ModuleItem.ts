@@ -642,6 +642,32 @@ export class ModuleItem extends ModuleObject {
     }
   }
 
+  /**
+   * The item's own 3D model for holding in a VR hand, without touching
+   * `this.model`. Medpacs and stims name `I_Null` as their default model,
+   * which loadModel loads literally (an empty model); their real models are
+   * `<itemclass>_<variation>` (i_medeqpmnt_001, i_adrnaline_002...). Round 15
+   * asked to see an armed medpac, stim or grenade in the hand.
+   */
+  async loadHeldPresentationModel(): Promise<OdysseyModel3D | null> {
+    if(!this.baseItem) return null;
+    const itemclass = String(this.baseItem.itemClass ?? '').replace(/ [\s\S]*$/g,'').trim().toLowerCase();
+    let resref = String(this.baseItem.defaultModel ?? '').replace(/ [\s\S]*$/g,'').trim().toLowerCase();
+    const variation = ('000'+this.getModelVariation()).substr(-3);
+    if(!resref || resref == 'i_null'){
+      resref = itemclass+'_'+variation;
+    }else{
+      resref = this.nthStringConverter(resref, this.getModelVariation());
+      if(!parseInt(resref.substr(-3))) resref = itemclass+'_'+variation;
+    }
+    try{
+      const mdl = await MDLLoader.loader.load(resref);
+      return await OdysseyModel3D.FromMDL(mdl, { context: this.context, lighting: true });
+    }catch(e){
+      return null;
+    }
+  }
+
   nthStringConverter(name = '', nth = 1){
     let value = nth.toString();
     name = name.substr(0, name.length - value.length);

@@ -494,6 +494,10 @@ export class VRRadialMenuHost {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('radial menu canvas context unavailable');
     const texture = new THREE.CanvasTexture(canvas);
+    // No mipmaps, so a non-power-of-two canvas is not resized on the CPU at
+    // every upload (round 15: 382 resize warnings).
+    texture.generateMipmaps = false;
+    texture.minFilter = THREE.LinearFilter;
     texture.encoding = THREE.sRGBEncoding;
     texture.needsUpdate = true;
     this.ownedCanvasTextures.add(texture);

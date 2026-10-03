@@ -743,7 +743,7 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       if (!hooks || !hooks.createActionWheel || !hooks.getComfortSettingsPanelContext) return { hooks: false };
       const wheel = hooks.createActionWheel(null);
       const entry = wheel && wheel.pages.flatMap((page) => page.entries)
-        .find((e) => e.label === 'Comfort Settings');
+        .find((e) => e.label === 'VR Menu');
       const activate = entry && (entry.activate || (entry.item && entry.item.activate));
       if (typeof activate !== 'function') return { hooks: true, entry: false };
       const errors = [];

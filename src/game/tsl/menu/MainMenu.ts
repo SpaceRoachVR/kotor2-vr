@@ -87,6 +87,7 @@ export class MainMenu extends K1_MainMenu {
             window.close();
             return;
           }
+          if(GameState.onMenuQuit?.()) return;
           alert('To exit the game in your browser, close this tab or window. For the best experience, open the game from the KotOR.js launcher so Exit Game works from the menu.');
         }
       });

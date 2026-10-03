@@ -305,6 +305,13 @@ let vrTheaterConversation: object | null = null;
 const vrCutsceneMoveHold = new VRCutsceneMoveHold();
 
 /**
+ * The conversation that has moved the player, if any. The rest of it stays in
+ * the theater, over black like a movie: round 15's lift scene ran the player
+ * out of the lift and pulled the view after it, in the open room.
+ */
+let vrMovedConversation: object | null = null;
+
+/**
  * Advances the hold once per XR frame. Called from getCutsceneContext, which
  * runs every frame: syncRig does not, since it deliberately skips theater
  * frames, and the walk being watched is on the theater.
@@ -312,6 +319,8 @@ const vrCutsceneMoveHold = new VRCutsceneMoveHold();
 function observeVRCutsceneMove(): void {
   const active = VRSpike.isPresenting && GameState.Mode !== EngineMode.MINIGAME && !!GameState.CutsceneManager?.active;
   const state = vrCutsceneMoveHold.update(active, GameState.getCurrentPlayer()?.position ?? null, performance.now());
+  if (!active) vrMovedConversation = null;
+  else if (state.moving) vrMovedConversation = (GameState.CutsceneManager.dialog ?? null) as object | null;
   if (state.arrived) {
     console.info('[VR cutscene move] arrived; teleporting the view and re-placing the dialogue');
     VRSpike.requestRigReanchor();
@@ -334,6 +343,7 @@ function resolveCurrentVRCutscenePresentation(): VRCutscenePresentation {
   if (vrCutsceneMoveHold.isMoving) return 'theater';
   const cutscene = GameState.CutsceneManager;
   const dialog = (cutscene.dialog ?? null) as object | null;
+  if (dialog && vrMovedConversation === dialog) return 'theater';
   if (vrTheaterConversation !== dialog) vrTheaterConversation = null;
   const player = GameState.getCurrentPlayer();
   const cameraState = cutscene.cameraState;
@@ -516,7 +526,9 @@ function saveVRComfortSettings(): void {
     .catch((error: unknown) => console.warn('[VR comfort] settings could not be saved to disk', error));
 }
 
-const VR_DIALOGUE_TEXT_SCALES = [1, 1.25, 1.45] as const;
+// Round 15: Large and Largest were too large and blurred; halfway back
+// toward Normal.
+const VR_DIALOGUE_TEXT_SCALES = [1, 1.125, 1.225] as const;
 const VR_DIALOGUE_TEXT_LABELS = ['Normal', 'Large', 'Largest'] as const;
 let vrComfortSettingsPanelOpen = false;
 let vrControlsGuideOpen = false;
@@ -1280,8 +1292,14 @@ function dispatchVREmbodiedCombatInput(
   targetId: string | null,
   input: VRCombatRequiredInput,
 ): boolean {
-  const initialTarget = resolveVRLiveCombatTarget(actor, targetId);
   const head = vrCombatIntentQueue.getHead();
+  // A trigger pull with a trigger-cast Force power at the head casts it,
+  // checked against the power's own range and the lock - not the melee
+  // weapon's 2.5 m reach, which refused Droid Stun at 4.9 m (round 15, N7).
+  if (input === 'dominant-trigger' && head?.kind === 'force-power' && head.requiredInput === 'dominant-trigger') {
+    return dispatchVRForceCastGesture(actor, targetId);
+  }
+  const initialTarget = resolveVRLiveCombatTarget(actor, targetId);
   const headLabel = head ? `${head.label}(${head.requiredInput},${head.weaponSignature})` : 'none';
   const tempo = getVREmbodiedTempoResult(actor, initialTarget);
   if (!tempo.eligible) {
@@ -2487,6 +2505,8 @@ function readVRWorldPromptActorActionState(
         getVRWorldPromptObjectIdentity(item),
         item.id,
         item.baseItemId,
+        // The stack size too: 3 tunnelers becoming 2 must rebuild the prompt.
+        typeof item.getStackSize === 'function' ? item.getStackSize() : null,
         readCallableString(item.getName, item),
         readCallableString(item.getIcon, item),
       ])),
@@ -2628,6 +2648,27 @@ function resolveVRCombatWeaponMode(actor: ModuleCreature): CombatWeaponMode {
     default:
       return 'unarmed';
   }
+}
+
+/**
+ * Models for armed items shown in the off hand, loaded once per item object.
+ * Presentation only: the item's own `model` is never written.
+ */
+const vrArmedItemModels = new WeakMap<object, THREE.Object3D | 'loading' | 'none'>();
+function resolveVRArmedItemVisual(item: ModuleItem | null): VREquippedHeldItem | null {
+  if (!item) return null;
+  const cached = vrArmedItemModels.get(item);
+  if (cached instanceof THREE.Object3D) {
+    return { model: cached, baseItem: item.baseItem as any, baseItemId: item.baseItemId };
+  }
+  if (!cached && typeof (item as any).loadHeldPresentationModel === 'function') {
+    vrArmedItemModels.set(item, 'loading');
+    (item as any).loadHeldPresentationModel()
+      .then((model: THREE.Object3D | null) => vrArmedItemModels.set(item, model ?? 'none'))
+      .catch(() => vrArmedItemModels.set(item, 'none'));
+  }
+  // The hand stays empty for the frame or two the load takes.
+  return null;
 }
 
 export interface VREquippedHeldItem {
@@ -3019,6 +3060,18 @@ export class GameState implements EngineContext {
    * longer comes from here: ranged attacks have no Hit event, so it follows
    * the HP drop instead (critic run 10). Kept as the landing hook for checks.
    */
+  /**
+   * Quit on the main menu in a browser. In the headset it ends the VR session
+   * and leaves the game on its main menu on the desktop: the browser's
+   * blocking "close this tab" alert froze the headset (round 15). Returns
+   * true when handled.
+   */
+  static onMenuQuit: (() => boolean) | null = () => {
+    if (!VRSpike.isPresenting) return false;
+    VRSpike.exit();
+    return true;
+  };
+
   static onBlowLanded: ((attacker: unknown, target: unknown, critical: boolean) => void) | null = () => {};
 
   /** The player was stunned or knocked down: say so in VR (critic run 6). */
@@ -3691,7 +3744,12 @@ export class GameState implements EngineContext {
         // presentation-only off-hand copy until the engine accepts the throw
         // (or, for a medpac, the hold to the neck).
         const equipmentVisuals = describeVRHeldItemVisuals({
-          LEFTHAND: grenade ?? consumable ?? player.equipment?.LEFTHAND ?? null,
+          // The armed item's own model in the hand (round 15: "a visible
+          // medpac in your hand when armed"); a grenade or item still loading
+          // shows nothing rather than the equipped off-hand item.
+          LEFTHAND: (grenade || consumable)
+            ? resolveVRArmedItemVisual(grenade ?? consumable)
+            : player.equipment?.LEFTHAND ?? null,
           RIGHTHAND: player.equipment?.RIGHTHAND ?? null,
         });
         // Equipment slots are authored as left/right. Controller dominance is
@@ -4427,8 +4485,10 @@ export class GameState implements EngineContext {
                   GameState.ResolutionManager.getViewportWidth(),
                   GameState.ResolutionManager.getViewportHeight(),
                 ),
-                // ~45 degrees wide at 1.5 m: as large as a panel should get.
+                // Round 14 enlarged a trimmed menu to 1.25 m; round 15 found that
+                // too large and blurred, so it gets half that enlargement.
                 regionWidthMetres: 1.25,
+                regionEnlargeFraction: 0.5,
               }
               : undefined,
         };
@@ -4470,6 +4530,8 @@ export class GameState implements EngineContext {
         return GameState.CutsceneManager.active && !computerOwnsInput
           ? {
             presentation,
+            hideWorld: presentation === 'theater' && vrMovedConversation !== null &&
+              vrMovedConversation === (GameState.CutsceneManager.dialog ?? null),
             canSkip: currentEntry?.skippable === true,
             skip: () => {
               if (currentEntry) GameState.CutsceneManager.playerSkipEntry(currentEntry);

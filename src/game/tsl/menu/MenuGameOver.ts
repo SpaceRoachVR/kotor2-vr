@@ -1,3 +1,4 @@
+import { EngineMode } from "@/enums/engine/EngineMode";
 import { GameMenu } from "@/gui";
 import type { GUIButton, GUILabel } from "@/gui";
 import { GameState } from "@/GameState";
@@ -107,6 +108,9 @@ export class MenuGameOver extends GameMenu {
       return;
     }
     this.manager.ClearMenus();
+    // Loading from here on: ClearMenus restores the in-game mode, and one
+    // UpdateIngame against the disposed module threw (round 15).
+    GameState.SetEngineMode(EngineMode.LOADING);
     if(GameState.module){
       GameState.module.dispose();
       GameState.module = undefined;

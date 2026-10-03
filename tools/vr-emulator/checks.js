@@ -227,7 +227,7 @@ const CHECKS = [
   },
   {
     id: 'comfort-panel-draws',
-    describe: 'Comfort Settings opens from the wheel and shows every row',
+    describe: 'the VR Menu (was Comfort Settings) opens from the wheel and shows every row',
     // Round 13: six settings rows against a panel fixed at four threw every
     // frame, and the headset froze with no menu. No route check opened it.
     run: (m) => {

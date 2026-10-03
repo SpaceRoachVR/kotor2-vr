@@ -162,6 +162,7 @@ class CollisionState {
  * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
  */
 export class CollisionManager {
+  private static readonly roomlessWarned = new WeakSet<object>();
   // Core object references
   object: ModuleObject;
 
@@ -374,7 +375,12 @@ export class CollisionManager {
     }
 
     if (!this.object.room?.collisionManager?.walkmesh) {
-      console.warn('CollisionManager: Object not in valid room with walkmesh');
+      // Once per object: one roomless creature logged this every frame,
+      // 2,739 times in round 15.
+      if (!CollisionManager.roomlessWarned.has(this.object)) {
+        CollisionManager.roomlessWarned.add(this.object);
+        console.warn('CollisionManager: Object not in valid room with walkmesh', (this.object as any)?.getTag?.());
+      }
       return false;
     }
 

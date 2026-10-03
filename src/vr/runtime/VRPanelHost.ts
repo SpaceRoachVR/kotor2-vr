@@ -33,6 +33,8 @@ export interface VRPanelPresentOptions {
    * left it 0.8 m wide - smaller text than the guidelines allow.
    */
   readonly regionWidthMetres?: number;
+  /** How much of the growth to regionWidthMetres to apply (0..1, default 1). */
+  readonly regionEnlargeFraction?: number;
   /** Scales the shown panel, keeping its place (dialogue text size). */
   readonly scale?: number;
   /** 'top' keeps the top edge where it was, so a larger panel grows downward. */
@@ -159,7 +161,15 @@ export class VRPanelHost {
     // A legacy menu owns one world-space surface for its entire visible
     // lifetime. Recomputing this pose every XR frame turns it into a
     // head-locked HUD and makes controller rays appear to drift with the
-    // player. Only place it when a different menu opens.
+    // player. Only place it when a different menu opens, or when the player
+    // has been moved far from it: a module load moves the rig to the new
+    // area partway through the loading screen, which left the screen behind
+    // in the old area, far away (round 15).
+    if (this.activeOwner === owner && this.object.visible) {
+      const dx = this.object.position.x - headPose.position.x;
+      const dy = this.object.position.y - headPose.position.y;
+      if (Math.hypot(dx, dy) > Math.max(3, this.options.distanceMetres * 2)) this.activeOwner = null;
+    }
     if (this.activeOwner !== owner) {
       // Never pin a panel from a pose that has not arrived yet. A head exactly
       // at the world origin is the first frame of a session before tracking
@@ -176,9 +186,13 @@ export class VRPanelHost {
     const aspect = viewportWidth / viewportHeight;
     const width = this.options.widthMetres * (region.uMax - region.uMin);
     const height = (this.options.widthMetres / aspect) * (region.vMax - region.vMin);
-    const enlarge = options.region && Number.isFinite(options.regionWidthMetres) && (options.regionWidthMetres as number) > 0 && width > 0
+    const fullEnlarge = options.region && Number.isFinite(options.regionWidthMetres) && (options.regionWidthMetres as number) > 0 && width > 0
       ? (options.regionWidthMetres as number) / width
       : 1;
+    const fraction = Number.isFinite(options.regionEnlargeFraction)
+      ? Math.min(1, Math.max(0, options.regionEnlargeFraction as number))
+      : 1;
+    const enlarge = 1 + (fullEnlarge - 1) * fraction;
     const extra = Number.isFinite(options.scale) && (options.scale as number) > 0 ? (options.scale as number) : 1;
     this.object.scale.set(width * enlarge * extra, height * enlarge * extra, 1);
     // A larger dialogue panel grows down, not up over the speaker (critic run 7).
