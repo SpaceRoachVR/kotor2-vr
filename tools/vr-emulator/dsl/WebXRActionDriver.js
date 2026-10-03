@@ -216,7 +216,8 @@ class WebXRActionDriver {
     const hand = options.hand || 'right';
     const direction = options.direction || 'horizontal';
     const speed = options.speed || 2.5;
-    const durationMs = options.durationMs || 250;
+    // An 0.8 m arc at the requested speed, unless a duration is given.
+    const durationMs = options.durationMs || Math.round((0.8 / speed) * 1000);
 
     return this.harness.evaluate(`(async () => {
       const dev = window.__xrDevice;
@@ -227,27 +228,30 @@ class WebXRActionDriver {
       const duration = ${durationMs};
       const speed = ${speed};
       const dir = ${JSON.stringify(direction)};
+      // From wherever the hand is now, one way only: the swing used to jump
+      // to the start of a fixed arc on its first frame, which read as a
+      // sweep the other way and was dropped by the heading check (run 18).
+      const x0 = c.position ? c.position.x : 0;
+      const y0 = c.position ? c.position.y : 0;
 
-      // Perform smooth swing interpolation over duration
       return new Promise((resolve) => {
         const interval = setInterval(() => {
           const elapsed = performance.now() - startTime;
           const t = Math.min(1, elapsed / duration);
-          // Arc from -0.4 to +0.4 on swing axis
-          const arc = (t - 0.5) * 0.8;
+          const arc = t * 0.8;
           if (c.position) {
             if (dir === 'horizontal') {
-              c.position.x = 0.2 + arc;
+              c.position.x = x0 + arc;
             } else if (dir === 'overhead') {
-              c.position.y = 1.6 - arc;
+              c.position.y = y0 - arc;
             } else {
-              c.position.x = 0.2 + arc * 0.7;
-              c.position.y = 1.4 - arc * 0.7;
+              c.position.x = x0 + arc * 0.7;
+              c.position.y = y0 - arc * 0.7;
             }
           }
           if (t >= 1) {
             clearInterval(interval);
-            resolve({ swingCompleted: true, peakSpeed: speed });
+            resolve({ swingCompleted: true, peakSpeed: speed, durationMs: duration });
           }
         }, 16);
       });

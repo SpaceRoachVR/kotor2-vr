@@ -3085,15 +3085,24 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
-  /** Force points by the retail per-level rule: Force die + WIS modifier per Jedi level. */
+  /**
+   * The pool retail gives a template-built companion. Allen's retail save
+   * (written by swkotor2.exe) has Kreia at 49 from a 0 base: WIS +3 per Jedi
+   * level (3 levels) plus 40 from Force Sensitive (feat 116, "grants 40
+   * additional Force Points to the character's base total"). The class Force
+   * die is rolled only at level-up (LevelUpRules), not for template levels
+   * (critic run 18: Force die + WIS gave 33).
+   */
   getForcePointsFromClasses(): number {
     const wis = abilityModifier(this.getWIS(false));
-    let total = 0;
+    let jediLevels = 0;
     for(const creatureClass of this.classes){
-      const die = Number(creatureClass?.forcedie) || 0;
-      if(die <= 0) continue;
-      total += (Number(creatureClass.level) || 0) * Math.max(1, die + wis);
+      if((Number(creatureClass?.forcedie) || 0) <= 0) continue;
+      jediLevels += Number(creatureClass.level) || 0;
     }
+    if(jediLevels <= 0) return 0;
+    let total = jediLevels * Math.max(0, wis);
+    try { if(this.getFeat(CombatFeatType.FORCE_SENSITIVE)) total += 40; } catch { /* no feat list */ }
     return total;
   }
 
@@ -4585,7 +4594,6 @@ export class ModuleCreature extends ModuleObject {
         this.maxForcePoints = this.forcePoints || 0;
       }
 
-      if(this.isPM) this.ensureForcePointsFromClasses();
 
       // Template saving-throw bonuses (UTC fortbonus/refbonus/willbonus) were
       // written by save() but never read back, so every creature lost them.
@@ -4700,6 +4708,9 @@ export class ModuleCreature extends ModuleObject {
     
       if(this.template.RootNode.hasField('Wis'))
         this.wis = this.template.getFieldByLabel('Wis').getValue();
+
+      // After classes, feats and WIS are read.
+      if(this.isPM) this.ensureForcePointsFromClasses();
     
       if(this.template.RootNode.hasField('Int'))
         this.int = this.template.getFieldByLabel('Int').getValue();

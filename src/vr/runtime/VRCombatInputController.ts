@@ -104,6 +104,10 @@ export interface VRCombatSwingMiss {
 const WINDOWED_SAME_HEADING_DOT = 0.35;
 /** A windowed swing covers at least this much ground (hand or blade tip). */
 const WINDOWED_MINIMUM_ARC_METRES = 0.12;
+/** After a swing, motion this far against its heading (cos ~107 degrees) ... */
+const WINDOWED_REVERSAL_DOT = -0.3;
+/** ... within this long is the recovery stroke. */
+const WINDOWED_RECOVERY_MS = 1000;
 
 const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
   minimumSwingSpeedMetresPerSecond: 0.8,
@@ -258,6 +262,12 @@ export class VRCombatInputController {
     }
     if (context.timestamp - this.lastVisualSwingAt < this.configuration.visualSwingCooldownMilliseconds) {
       return triggerEvents;
+    }
+    // A slow 0.7-1 s sweep is one stroke: it emitted again once the cooldown
+    // passed and rolled twice (critic run 17).
+    if (windowed) {
+      if (this.windowedStrokeEmitted === this.windowedStrokeId) return triggerEvents;
+      this.windowedStrokeEmitted = this.windowedStrokeId;
     }
 
     this.lastVisualSwingAt = context.timestamp;
@@ -424,6 +434,12 @@ export class VRCombatInputController {
   private readonly fastPoseTimes: number[] = [];
   /** Unit play-space heading of each fast pose, parallel to fastPoseTimes. */
   private readonly fastPoseDirections: THREE.Vector3[] = [];
+  /** Heading and time of the latest pose that confirmed a swing (recovery lockout). */
+  private lastSwingHeading: THREE.Vector3 | null = null;
+  /** One event per stroke: the stroke being measured, and the last one that swung. */
+  private windowedStrokeId = 0;
+  private windowedStrokeEmitted = -1;
+  private lastSwingMotionAt = Number.NEGATIVE_INFINITY;
   /** The window start each fast pose was measured from, parallel to fastPoseTimes. */
   private readonly fastPoseStarts: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 }[] = [];
   private windowedGripped = false;
@@ -483,19 +499,31 @@ export class VRCombatInputController {
     // heading: the fast poses that confirm it must point within ~70 degrees
     // of each other, and it must cover a real arc (an 8 cm jab swung).
     const direction = displacement.clone().normalize();
+    // The return stroke: for a second after a recognised swing, motion back
+    // the way it came is recovery, not a new swing (critic runs 17-18: out
+    // 0.77 m in 260 ms, back 0.62 m in 700 ms bought a second attack).
+    if (this.lastSwingHeading && now - this.lastSwingMotionAt < WINDOWED_RECOVERY_MS &&
+      direction.dot(this.lastSwingHeading) < WINDOWED_REVERSAL_DOT) {
+      return false;
+    }
     const previous = this.fastPoseDirections[this.fastPoseDirections.length - 1];
     if (previous && previous.dot(direction) < WINDOWED_SAME_HEADING_DOT) {
       this.fastPoseTimes.length = 0;
       this.fastPoseDirections.length = 0;
       this.fastPoseStarts.length = 0;
     }
+    // A new stroke begins when no fast pose of the last one is left.
+    if (this.fastPoseTimes.length === 0) this.windowedStrokeId += 1;
     this.fastPoseTimes.push(now);
     this.fastPoseDirections.push(direction);
     this.fastPoseStarts.push(reference);
     if (this.fastPoseTimes.length < 2) return false;
     // The arc from where this run of fast poses began.
     const start = this.fastPoseStarts[0];
-    return playSpaceDelta(start.position, start, point, pose).length() >= WINDOWED_MINIMUM_ARC_METRES;
+    if (playSpaceDelta(start.position, start, point, pose).length() < WINDOWED_MINIMUM_ARC_METRES) return false;
+    this.lastSwingHeading = direction.clone();
+    this.lastSwingMotionAt = now;
+    return true;
   }
   private lastFastAt = Number.NEGATIVE_INFINITY;
   private previousTrackingState: XRWorldPose['trackingState'] = 'tracked';
@@ -524,6 +552,8 @@ export class VRCombatInputController {
     this.fastPoseTimes.length = 0;
     this.fastPoseDirections.length = 0;
     this.fastPoseStarts.length = 0;
+    this.lastSwingHeading = null;
+    this.lastSwingMotionAt = Number.NEGATIVE_INFINITY;
     this.previousPose = null;
     this.previousSamplePoint = null;
     this.previousTimestamp = null;

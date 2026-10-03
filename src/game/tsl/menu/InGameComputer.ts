@@ -63,9 +63,21 @@ export class InGameComputer extends K1_InGameComputer {
     this._button_b = { click: () => this.logOutWithB() } as any;
   }
 
-  /** The last shown reply that leads nowhere ("Log out", "[End]"), if any. */
+  /**
+   * B is Back: a sub-page's own "Return to ..." reply when it has one (critic
+   * run 18: B on the logs page logged out), else the reply that leads
+   * nowhere ("Log out", "[End]").
+   */
   logOutWithB(): boolean {
     const shown = (GameState.CutsceneManager.currentReplies || []).filter((reply: any) => !reply?.isContinueDialog?.());
+    for(let i = shown.length - 1; i >= 0; i--){
+      let text = '';
+      try { text = String(shown[i]?.getCompiledString?.() ?? ''); } catch { /* no text */ }
+      if(/^\s*\[?\s*(return|back|previous)/i.test(text)){
+        GameState.CutsceneManager.selectReplyAtIndex(i);
+        return true;
+      }
+    }
     for(let i = shown.length - 1; i >= 0; i--){
       const reply: any = shown[i];
       if(Array.isArray(reply?.entries) && reply.entries.length === 0){

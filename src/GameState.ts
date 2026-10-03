@@ -1365,9 +1365,11 @@ function dispatchVREmbodiedCombatInput(
   // then rolled a second attack with no input (critic runs 15-16). Swing
   // events within 600 ms of one that was taken belong to the same swing.
   const nowMs = performance.now();
-  // Measured from the latest event of the swing, so a slow 1 s sweep that
-  // keeps producing events stays one swing (critic run 17: it rolled twice).
-  if (input === 'dominant-swing' && nowMs - vrSwingTakenAt < 600) { vrSwingTakenAt = nowMs; return false; }
+  // Fixed from the swing that was taken. Restarting it on every event (run
+  // 17's fix for a slow sweep rolling twice) let continuous swinging hold it
+  // shut: swinging harder gave fewer attacks (critic run 18). The controller
+  // now emits one event per stroke, which is what fixes the slow sweep.
+  if (input === 'dominant-swing' && nowMs - vrSwingTakenAt < 600) return false;
   const tempo = getVREmbodiedTempoResult(actor, initialTarget);
   if (!tempo.eligible) {
     // ROADMAP 3.12: a swing made while the round is busy waits for it to open
@@ -1391,6 +1393,13 @@ function dispatchVREmbodiedCombatInput(
       const locked = resolveVRLockedHostile(actor, targetId);
       if (locked) distance = distanceVRCombat2D(actor, locked).toFixed(1);
     } catch { /* diagnostic only */ }
+    // Out of reach said nothing (critic run 18: a swing at a droid 2.9 m
+    // away, reach 2.5, was refused silently).
+    if ((input === 'dominant-swing' || input === 'dominant-trigger') && /unavailable|range|reach/i.test(String(tempo.reason))
+      && distance !== 'n/a' && Number(distance) > Number(resolveVRCombatRange(actor)) && nowMs - vrSwingTooFarNoticeAt > 3000) {
+      vrSwingTooFarNoticeAt = nowMs;
+      try { VRSpike.showNotice(`Too far: step in (${distance} m)`, 1500); } catch { /* notice only */ }
+    }
     reportVRSwingOutcomeOnce(
       `refused input=${input} reason=${tempo.reason} head=${head ? head.label : 'none'}`,
       `target=${targetId} distance=${distance} reach=${resolveVRCombatRange(actor)} weapon=${resolveVRCombatWeaponSignature(actor)} head=${headLabel}`,
@@ -1428,6 +1437,8 @@ function dispatchVREmbodiedCombatInput(
   }
   return false;
 }
+
+let vrSwingTooFarNoticeAt = Number.NEGATIVE_INFINITY;
 
 /** When a physical swing last started or was held for an attack (ms). */
 let vrSwingTakenAt = Number.NEGATIVE_INFINITY;
@@ -1643,6 +1654,9 @@ function dispatchVRDirectionalForceGesture(
     return false;
   }
   if (isVRCombatIntentUnaffordable(actor, target, intent)) {
+    // Dropped, not held: a power the pool can't pay stayed on the hilt at
+    // 0 FP and blocked everything queued behind it (critic run 18).
+    vrCombatIntentQueue.consumeHead();
     reportVRForceCastOutcome('refused: not enough Force points', `head=${intent.label}`);
     return false;
   }
@@ -1707,6 +1721,9 @@ function dispatchVRForceCastGesture(actor: ModuleCreature, targetId: string | nu
     return false;
   }
   if (isVRCombatIntentUnaffordable(actor, target, intent)) {
+    // Dropped, not held: a power the pool can't pay stayed on the hilt at
+    // 0 FP and blocked everything queued behind it (critic run 18).
+    vrCombatIntentQueue.consumeHead();
     reportVRForceCastOutcome('refused: not enough Force points', `head=${intent.label}`);
     return false;
   }
@@ -1793,10 +1810,21 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
   if (source !== undefined && target !== null) {
     const distance = distanceVRCombat2D(actor, target);
     const now = performance.now();
-    if (distance < VR_GRENADE_SELF_BLAST_METRES && now - vrGrenadeTooCloseWarnedAt > VR_GRENADE_CONFIRM_MS) {
+    // Companions too (critic run 18: a frag from 6 m at a droid 1.5 m from
+    // Atton took him from 24 to 5 without a word).
+    let caught: ModuleCreature | null = null;
+    try {
+      for (const member of GameState.PartyManager.party) {
+        if (!member || member === actor || (member.isDead && member.isDead())) continue;
+        if (distanceVRCombat2D(member, target) < VR_GRENADE_SELF_BLAST_METRES) { caught = member; break; }
+      }
+    } catch { /* party unreadable: warn for the thrower only */ }
+    const self = distance < VR_GRENADE_SELF_BLAST_METRES;
+    if ((self || caught) && now - vrGrenadeTooCloseWarnedAt > VR_GRENADE_CONFIRM_MS) {
       vrGrenadeTooCloseWarnedAt = now;
-      try { VRSpike.showNotice('Too close: you’re in the blast. Pull again to throw', 3000); } catch { /* notice only */ }
-      reportVRGrenadeOutcomeOnce('warned: thrower inside blast', `distance=${distance.toFixed(1)}`);
+      const who = self ? 'you’re' : `${resolveVRWorldPromptName(caught as ModuleObject) || 'a companion'} is`;
+      try { VRSpike.showNotice(`Too close: ${who} in the blast. Pull again to throw`, 3000); } catch { /* notice only */ }
+      reportVRGrenadeOutcomeOnce('warned: party inside blast', `distance=${distance.toFixed(1)} self=${self}`);
       return false;
     }
     vrGrenadeTooCloseWarnedAt = -Infinity;
@@ -1912,6 +1940,11 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   };
   // A full queue is feedback-only: never fall through to immediate authored
   // activation, which would violate the player's explicitly selected order.
+  // Picking a queued power again queued it twice (critic run 18).
+  if (vrCombatIntentQueue.getSnapshot().entries.some((queued) => queued.sourceKey === intent.sourceKey)) {
+    try { VRSpike.showNotice(`${label} is already queued`, 1500, 'info'); } catch { /* notice only */ }
+    return true;
+  }
   vrCombatIntentQueue.enqueue(intent);
   return true;
 }
@@ -3276,7 +3309,9 @@ export class GameState implements EngineContext {
     try {
       const strref = Number((GameState.SWRuleSet as any)?.spells?.[spellId]?.name);
       if (!(strref >= 0)) return '';
-      return stripTLKSortPrefix(String(GameState.TLKManager.GetStringById(strref)?.Value ?? ''));
+      const name = stripTLKSortPrefix(String(GameState.TLKManager.GetStringById(strref)?.Value ?? ''));
+      // spells.2da names grenades "Grenade: Frag"; the item is "Frag Grenade".
+      return name.replace(/^Grenade:\s*(.+)$/i, '$1 Grenade');
     } catch { return ''; }
   }
 
@@ -3287,7 +3322,21 @@ export class GameState implements EngineContext {
     if (!name) return;
     const what = GameState.describeSpellForLog(spellId);
     const by = source && source !== target ? (source as any)?.getName?.() : '';
-    GameState.FeedbackMessageManager.AddLine(`${name} damaged for ${amount}${what ? ` (${what}${by ? `, ${by}` : ''})` : by ? ` by ${by}` : ''}`);
+    // Retail's lines (dialog.tlk 1403 / 1402): "<source> damages <target> for <n> damage", or "<target> damaged: <n>".
+    GameState.FeedbackMessageManager.AddLine(by
+      ? `${by} damages ${name} for ${amount} damage${what ? ` (${what})` : ''}`
+      : `${name} damaged: ${amount}${what ? ` (${what})` : ''}`);
+    // In VR there are no floating numbers: say when the player's own throw or
+    // power hurts the player or a companion (critic run 18).
+    if (!VRSpike.isPresenting) return;
+    const player = GameState.getCurrentPlayer();
+    if (!player || source !== player) return;
+    const party = GameState.PartyManager.party as unknown[];
+    if (target === player) {
+      try { VRSpike.showNotice(`You took ${amount}${what ? ` (your ${what})` : ''}`, 2500, 'info'); } catch { /* notice only */ }
+    } else if (party.includes(target)) {
+      try { VRSpike.showNotice(`${name} took ${amount} from your ${what || 'attack'}`, 2500, 'info'); } catch { /* notice only */ }
+    }
   };
 
   /** Combat log: every save against a power or grenade, with the roll ("Atton: Reflex 17 vs DC 15, saved"). */
@@ -3295,7 +3344,10 @@ export class GameState implements EngineContext {
     if (!versus) return; // scripted checks with no opponent are not combat
     const name = (saver as any)?.getName?.();
     if (!name) return;
-    GameState.FeedbackMessageManager.AddLine(`${name}: ${kind} save ${total} (roll ${roll}) vs DC ${dc}, ${total >= dc ? 'saved' : 'failed'}`);
+    // Retail's Combat line (dialog.tlk 1406): "<who> <save>. <result>! <total> (roll <d20><bonus>) vs. DC <n>".
+    const bonus = total - roll;
+    GameState.FeedbackMessageManager.AddLine(
+      `${name} ${kind} Save. ${total >= dc ? 'Success' : 'Failure'}! ${total} (roll ${roll} ${bonus < 0 ? '-' : '+'} ${Math.abs(bonus)}) vs. DC ${dc}`);
   };
 
   /** A creature made its save against the player's power: say so in VR. */
@@ -3304,9 +3356,9 @@ export class GameState implements EngineContext {
     const player = GameState.getCurrentPlayer();
     if (!player) return;
     // Whatever the source, the player's own grenade included (critic run 17).
-    if (saver === player && versus) { VRSpike.showNotice('You saved', 2000); return; }
+    if (saver === player && versus) { VRSpike.showNotice('You saved', 2000, 'info'); return; }
     if (saver === player || versus !== player) return;
-    VRSpike.showNotice(`${resolveVRWorldPromptName(saver as ModuleObject) || 'The target'} saved`, 2000);
+    VRSpike.showNotice(`${resolveVRWorldPromptName(saver as ModuleObject) || 'The target'} saved`, 2000, 'info');
   };
 
   /** A Force power was resisted: tell the VR player who cast it or resisted it. */
@@ -3321,10 +3373,10 @@ export class GameState implements EngineContext {
     // resistance says "resisted" (critic run 15).
     const reallyResisted = Date.now() - (Number((target as any)?.lastForceResistedAt) || 0) < 2000;
     if (casterIsPlayer && !reallyResisted) return;
-    if (casterIsPlayer) VRSpike.showNotice(`${(target ? resolveVRWorldPromptName(target as ModuleObject) : '') || 'The target'} resisted the Force`, 2500);
+    if (casterIsPlayer) VRSpike.showNotice(`${(target ? resolveVRWorldPromptName(target as ModuleObject) : '') || 'The target'} resisted the Force`, 2500, 'info');
     // Same for the player: a save against an enemy power is "saved", not
     // "resisted" (critic run 16).
-    else if (target === player && reallyResisted) VRSpike.showNotice('You resisted the Force', 2500);
+    else if (target === player && reallyResisted) VRSpike.showNotice('You resisted the Force', 2500, 'info');
   };
 
   static onItemCastRejected: ((owner: unknown, item?: unknown, reason?: string) => void) | null = (owner, item, reason) => {
@@ -3970,6 +4022,14 @@ export class GameState implements EngineContext {
         const miniGameSeat = GameState.getMiniGameSeat();
         if (miniGameSeat) return miniGameSeat.position;
         return resolveVRRigStandingPoint(GameState.getCurrentPlayer()?.position ?? null);
+      },
+      getRecentWallNormals: () => {
+        if (GameState.getMiniGameSeat()) return [];
+        const cm: any = (GameState.getCurrentPlayer() as any)?.collisionManager;
+        const now = performance.now();
+        return Array.isArray(cm?.recentWallNormals)
+          ? cm.recentWallNormals.filter((n: any) => now - n.at < 600 && Number.isFinite(n.x) && Number.isFinite(n.y))
+          : [];
       },
       getFacing: () => {
         const miniGameSeat = GameState.getMiniGameSeat();

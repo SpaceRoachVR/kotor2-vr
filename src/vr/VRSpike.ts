@@ -191,6 +191,8 @@ export interface VRSpikeHooks {
   update: (timestamp: number, source: EngineFrameSource) => void;
   /** Player's feet in world space, or null before a module is loaded. */
   getPlayerPosition: () => THREE.Vector3 | null;
+  /** Unit wall normals the player touched in the last 600 ms (wall-slide steadying). */
+  getRecentWallNormals?: () => readonly { x: number; y: number }[];
   /**
    * The player's current room walkmesh, for the wall soft-block check —
    * room-scale head tracking can cross a wall the joystick-driven avatar
@@ -628,6 +630,53 @@ export class VRSpike {
   // dropped it, and the next cast thrust failed silently (critic run 12).
   private static readonly combatTargetLock = new VRCombatTargetLock({ switchDwellMilliseconds: 400, aimLossGraceMilliseconds: 2500 });
   private static offhandGrenadeTriggerHeld = false;
+  private static steadiedFeet: THREE.Vector3 | null = null;
+  private static steadiedRawFeet: THREE.Vector3 | null = null;
+
+  /**
+   * Sliding along a wall the engine pushes the player into it and back out
+   * every frame, and the camera copied it: a 15 Hz, 1-4 cm sideways buzz, and
+   * 10 cm lurches at corners (critic runs 17-18). While a wall was touched in
+   * the last 600 ms, the camera follows motion along the wall in full and
+   * motion into or away from it at a quarter rate, never more than 8 cm
+   * behind the player.
+   */
+  private static steadyFeetAtWalls(feet: THREE.Vector3, snap: boolean): THREE.Vector3 {
+    const previous = VRSpike.steadiedFeet;
+    const lastRaw = VRSpike.steadiedRawFeet;
+    VRSpike.steadiedRawFeet = feet.clone();
+    let normals: readonly { x: number; y: number }[] = [];
+    try { normals = VRSpike.hooks?.getRecentWallNormals?.() ?? []; } catch { normals = []; }
+    if (!previous || !lastRaw || snap || previous.distanceTo(feet) > 0.5) {
+      VRSpike.steadiedFeet = feet.clone();
+      return VRSpike.steadiedFeet;
+    }
+    // The player's own step this frame, always taken in full along the wall.
+    const delta = feet.clone().sub(lastRaw);
+    for (const n of normals) {
+      const along = delta.x * n.x + delta.y * n.y;
+      delta.x -= n.x * along * 0.75;
+      delta.y -= n.y * along * 0.75;
+    }
+    const next = previous.clone().add(delta);
+    // Any lag left from the wall eases out: a quarter per frame at a wall,
+    // faster once off it.
+    const ease = normals.length ? 0.1 : 0.35;
+    next.x += (feet.x - next.x) * ease;
+    next.y += (feet.y - next.y) * ease;
+    next.z = feet.z;
+    const lag = Math.hypot(feet.x - next.x, feet.y - next.y);
+    if (lag < 0.002) {
+      next.x = feet.x; next.y = feet.y;
+    } else if (lag > 0.08) {
+      const k = 0.08 / lag;
+      next.x = feet.x + (next.x - feet.x) * k;
+      next.y = feet.y + (next.y - feet.y) * k;
+    }
+    VRSpike.steadiedFeet = next;
+    return next;
+  }
+  private static pausedUseNoticeAt = Number.NEGATIVE_INFINITY;
   /** Follows the off hand for a few seconds after a grenade trigger, as the projectile's launch point. */
   private static readonly throwHandAnchor = new THREE.Object3D();
   private static throwHandAnchorUntil = Number.NEGATIVE_INFINITY;
@@ -2024,7 +2073,10 @@ export class VRSpike {
       // panel, the off hand's trigger changed its own, unhighlighted row
       // (critic run 17). A hand pointing alone owns the highlight anyway.
       const highlightHand = VRSpike.comfortSettingsPointerHand.pointingHand;
-      const selectingHand = pressedHand && highlightHand && pressedHand !== highlightHand ? null : pressedHand;
+      // Run 18: nulling the hand only moved the click to the other ray's row.
+      // A press by the hand that doesn't own the highlight does nothing.
+      const offHandPress = !!(pressedHand && highlightHand && pressedHand !== highlightHand);
+      const selectingHand = offHandPress ? null : pressedHand;
       const resolution = VRSpike.comfortSettingsPointerHand.resolve(
         inputFrame,
         (pose) => VRSpike.comfortSettingsHost?.rowAtRay(pose) ?? null,
@@ -2040,7 +2092,7 @@ export class VRSpike {
         VRSpike.controlsGuideHost?.clear();
       }
 
-      if (selectPressed && !VRSpike.comfortSettingsSelectHeld && resolution) {
+      if (selectPressed && !offHandPress && !VRSpike.comfortSettingsSelectHeld && resolution) {
         context.activateRow(resolution.hit);
       }
       VRSpike.comfortSettingsSelectHeld = selectPressed;
@@ -2600,6 +2652,19 @@ export class VRSpike {
     // plan can be read. Latching the triggers now means a trigger held through
     // the pause does not fire the moment it ends.
     if (VRSpike.isPlayerPaused()) {
+      // A medpac held to the neck while paused did nothing and said nothing
+      // (critic run 18). It still waits for the pause to end; now it says so.
+      try {
+        const frame = VRSpike.latestInputFrame;
+        if (frame && (context as any).armedConsumable === true) {
+          const hand: XRHandRole = VRSpike.dominantHand === 'right' ? 'left' : 'right';
+          VRSpike.consumableUseGestureController.process(frame, { hand, armed: true, timestamp });
+          if (VRSpike.consumableUseGestureController.isInZone && timestamp - VRSpike.pausedUseNoticeAt > 3000) {
+            VRSpike.pausedUseNoticeAt = timestamp;
+            VRSpike.showNotice('Paused: tap B to resume, then use it', 2500, 'info');
+          }
+        }
+      } catch { /* notice only */ }
       VRSpike.updateHiltTimer(context.weaponMode, 0, context.inCombat, context.stanceReadout, false);
       VRSpike.updateCombatTargetHighlight();
       VRSpike.roundReadyLatched = false;
@@ -2803,7 +2868,7 @@ export class VRSpike {
     if (!VRSpike.controlsHintShown && !foregroundSurfaceOwnsInput && VRSpike.hooks?.getPlayerPosition?.()) {
       VRSpike.controlsHintShown = true;
       const wheelButton = VRSpike.dominantHand === 'left' ? 'A' : 'X';
-      VRSpike.showNotice(`Hold ${wheelButton}: action wheel  ·  VR Menu > Controls Guide`, 8000);
+      VRSpike.showNotice(`Hold ${wheelButton}: action wheel  ·  VR Menu > Controls Guide`, 8000, 'info');
     }
     VRSpike.refusalNoticeHost?.update(performance.now());
     if (!paused && !VRSpike.pauseIndicatorHost) return;
@@ -2942,7 +3007,10 @@ export class VRSpike {
       if (!VRSpike.weaponStanceHost) {
         VRSpike.weaponStanceHost = new VRWeaponStanceHost(gripAnchor);
       }
-      VRSpike.weaponStanceHost.present(stanceReadout);
+      // Not over an open VR Menu: "STUN DROID" hid a row's value (critic run 18).
+      let panelOpen = false;
+      try { panelOpen = !!VRSpike.hooks?.getComfortSettingsPanelContext?.(); } catch { /* treat as closed */ }
+      VRSpike.weaponStanceHost.present(panelOpen ? '' : stanceReadout);
       VRSpike.weaponStanceHost.faceViewer(VRSpike.camera);
     } catch (error) {
       VRSpike.weaponStanceHost?.clear();
@@ -3054,7 +3122,7 @@ export class VRSpike {
   ): boolean {
     const armed = context.armedConsumable === true && typeof context.onConsumableUseGesture === 'function';
     try {
-      const wasDwelling = VRSpike.consumableUseGestureController.isDwelling;
+      const wasInZone = VRSpike.consumableUseGestureController.isInZone;
       const gesture = VRSpike.consumableUseGestureController.process(inputFrame, {
         hand: offhandHand,
         armed,
@@ -3063,8 +3131,10 @@ export class VRSpike {
       // Entering the zone clicks, so the player knows to hold it there
       // (critic run 5: nothing said you were in it).
       // Once per stay: a refused use restarts the dwell, and the chime
-      // repeated every second while the item rested there (critic run 15).
-      if (!wasDwelling && VRSpike.consumableUseGestureController.isDwelling && timestamp - VRSpike.neckZoneChimedAt > 3000) {
+      // repeated every second while the item rested there (critic run 15),
+      // then every 3 s (critic run 17). Entering the zone chimes; staying in
+      // it through refusals does not.
+      if (!wasInZone && VRSpike.consumableUseGestureController.isInZone && timestamp - VRSpike.neckZoneChimedAt > 1000) {
         VRSpike.neckZoneChimedAt = timestamp;
         VRSpike.playCombatCue('neck-zone', 0, true);
       }
@@ -4746,11 +4816,11 @@ export class VRSpike {
   }
 
   /** A short line low in view, without the error sound (a status, not a refusal). */
-  static showNotice(text: string, holdMs?: number): void {
+  static showNotice(text: string, holdMs?: number, tone: 'refusal' | 'info' = 'refusal'): void {
     if (!text || !VRSpike.camera) return;
     try {
       if (!VRSpike.refusalNoticeHost) VRSpike.refusalNoticeHost = new VRRefusalNoticeHost(VRSpike.camera);
-      VRSpike.refusalNoticeHost.show(text, performance.now(), holdMs);
+      VRSpike.refusalNoticeHost.show(text, performance.now(), holdMs, tone);
     } catch (error) {
       console.error('[VRSpike] notice rejected', error);
     }
@@ -5054,7 +5124,7 @@ export class VRSpike {
     VRSpike.lastRigFacing = facing;
 
     if (feet) {
-      rig.position.copy(feet);
+      rig.position.copy(VRSpike.steadyFeetAtWalls(feet, resumedAfterGap));
     } else {
       if (!VRSpike.syncRigFallbackReported) {
         VRSpike.syncRigFallbackReported = true;

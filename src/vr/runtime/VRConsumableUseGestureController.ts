@@ -58,6 +58,7 @@ export class VRConsumableUseGestureController {
   private readonly configuration: VRConsumableUseGestureConfiguration;
   private dwellStartedAt: number | null = null;
   private nextGestureAt = Number.NEGATIVE_INFINITY;
+  private inZone = false;
 
   constructor(configuration: Partial<VRConsumableUseGestureConfiguration> = {}) {
     this.configuration = { ...DEFAULT_CONFIGURATION, ...configuration };
@@ -72,6 +73,11 @@ export class VRConsumableUseGestureController {
     return this.dwellStartedAt !== null;
   }
 
+  /** True while the armed hand is inside the zone, through refusals and cooldowns. */
+  get isInZone(): boolean {
+    return this.inZone;
+  }
+
   process(inputFrame: XRInputFrame, input: VRConsumableUseGestureInput): VRConsumableUseGesture | null {
     if (!Number.isFinite(input.timestamp) || input.timestamp < 0) {
       throw new RangeError('timestamp must be finite and non-negative');
@@ -79,6 +85,7 @@ export class VRConsumableUseGestureController {
     if (input.hand !== 'left' && input.hand !== 'right') {
       throw new RangeError('hand must be left or right');
     }
+    this.inZone = false;
     if (!input.armed) {
       this.dwellStartedAt = null;
       return null;
@@ -101,6 +108,7 @@ export class VRConsumableUseGestureController {
       this.dwellStartedAt = null;
       return null;
     }
+    this.inZone = true;
     if (input.timestamp < this.nextGestureAt) return null;
     if (this.dwellStartedAt === null) this.dwellStartedAt = input.timestamp;
     if (input.timestamp - this.dwellStartedAt < this.configuration.dwellMilliseconds) return null;
@@ -111,6 +119,7 @@ export class VRConsumableUseGestureController {
   }
 
   reset(): void {
+    this.inZone = false;
     this.dwellStartedAt = null;
     this.nextGestureAt = Number.NEGATIVE_INFINITY;
   }

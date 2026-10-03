@@ -256,7 +256,7 @@ export class CollisionManager {
         if (same) same.at = now;
         else this.recentWallNormals.push({ x, y, at: now });
       }
-      while (this.recentWallNormals.length && (this.recentWallNormals.length > 8 || now - this.recentWallNormals[0].at > 250)) {
+      while (this.recentWallNormals.length && (this.recentWallNormals.length > 8 || now - this.recentWallNormals[0].at > 600)) {
         this.recentWallNormals.shift();
       }
     }

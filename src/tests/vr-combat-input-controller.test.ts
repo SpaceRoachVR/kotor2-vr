@@ -172,6 +172,43 @@ describe('VRCombatInputController', () => {
     expect(strokes).toBeGreaterThan(0);
   });
 
+  test('in game, a quick return stroke is recovery, not a second swing (critic run 18)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    // Out 0.75 m in ~250 ms at 50 ms frames, then back 0.6 m over ~700 ms.
+    const out = [0, 0, 0.15, 0.3, 0.45, 0.6, 0.75];
+    const back = [0.66, 0.57, 0.48, 0.39, 0.3, 0.21, 0.15, 0.15, 0.15];
+    out.forEach((y, i) => { swings += controller.process(frame(i * 50, y), context('melee-one-handed', i * 50)).length; });
+    expect(swings).toBeGreaterThan(0);
+    const afterOut = swings;
+    back.forEach((y, i) => { const t = 400 + i * 80; swings += controller.process(frame(t, y), context('melee-one-handed', t)).length; });
+    expect(swings).toBe(afterOut);
+    // A fresh swing the same way later still counts.
+    const again = [0.15, 0.15, 0.3, 0.45, 0.6, 0.75];
+    again.forEach((y, i) => { const t = 2500 + i * 50; swings += controller.process(frame(t, y), context('melee-one-handed', t)).length; });
+    expect(swings).toBeGreaterThan(afterOut);
+  });
+
+  test('in game, continuous forehand/backhand strokes keep swinging (critic run 18)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    // 0.6 m strokes of 300 ms, alternating, at 60 ms frames, for 9 s.
+    for (let t = 0, i = 0; t < 9000; t += 60, i++) {
+      const phase = (t % 600) / 300;
+      const y = phase < 1 ? phase * 0.6 : (2 - phase) * 0.6;
+      swings += controller.process(frame(t, y), context('melee-one-handed', t)).length;
+    }
+    expect(swings).toBeGreaterThanOrEqual(5);
+  });
+
+  test('in game, one slow 1 s sweep is one swing event (critic run 17)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    for (let t = 0; t <= 1000; t += 50) swings += controller.process(frame(t, (t / 1000) * 1.3), context('melee-one-handed', t)).length;
+    for (let t = 1050; t <= 2000; t += 50) swings += controller.process(frame(t, 1.3), context('melee-one-handed', t)).length;
+    expect(swings).toBe(1);
+  });
+
   test('in game, a pop that stays put is not a swing', () => {
     const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
     let swings = 0;

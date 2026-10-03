@@ -31,7 +31,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
   const force: VRControlsGuideSection = {
     title: 'Force powers',
     lines: [
-      ['Choose a power', 'Action wheel, Force page: it joins your queue'],
+      ['Choose a power', 'Action wheel, Force page: queued in a fight; out of one, a power on yourself casts at once'],
       ['Cast it', `Thrust your open ${otherHand} hand at the ringed target, or pull the ${weaponHand} trigger`],
       // TSL has Force Push but no Pull (critic run 13).
       ['Force Push, if known', `Hold the ${weaponHand} grip and flick forward`],
@@ -46,7 +46,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
         lines: [
           ['Stick', 'Move'],
           ['Stick click', 'Walk / run'],
-          ['X, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, VR Menu; Quick Save out of combat, Clear Actions in it)'],
+          ['X, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, VR Menu; Quick Save out of combat, Clear Upcoming or Clear Actions in it)'],
           ['Y', 'Switch party member'],
           ['Trigger', 'Throw an armed grenade'],
         ],
@@ -81,7 +81,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       lines: [
         ['Stick', 'Move'],
         ['Stick click', 'Walk / run'],
-        ['A, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, VR Menu; Quick Save out of combat, Clear Actions in it)'],
+        ['A, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, VR Menu; Quick Save out of combat, Clear Upcoming or Clear Actions in it)'],
         ['B', 'Switch party member'],
         ['Trigger', 'Throw an armed grenade'],
       ],

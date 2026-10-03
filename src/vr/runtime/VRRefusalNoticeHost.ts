@@ -18,6 +18,9 @@ const HEIGHT_METRES = 0.031;
 const DROP_METRES = 0.17;
 const SHOW_MS = 1800;
 const RENDER_ORDER = 1_000_002;
+const MERGE_MS = 400;
+
+export type VRNoticeTone = 'refusal' | 'info';
 
 /** The player-facing reason for a refusal shape ('refused: ...', 'cancelled: ...'), or null to stay quiet. */
 export function describeVRRefusal(shape: string): string | null {
@@ -50,6 +53,10 @@ export class VRRefusalNoticeHost {
   private readonly texture: THREE.CanvasTexture;
   private hideAt = 0;
   private shownText = '';
+  private shownTone: VRNoticeTone = 'refusal';
+  private shownAt = Number.NEGATIVE_INFINITY;
+  /** The text of the notice on screen, before merging. */
+  private shownParts: string[] = [];
 
   constructor(camera: THREE.Object3D) {
     if (!camera) throw new TypeError('VR refusal notice requires a camera');
@@ -76,10 +83,21 @@ export class VRRefusalNoticeHost {
     camera.add(this.object);
   }
 
-  show(text: string, nowMs: number, holdMs: number = SHOW_MS): void {
-    if (text !== this.shownText) {
-      this.draw(text);
-      this.shownText = text;
+  show(text: string, nowMs: number, holdMs: number = SHOW_MS, tone: VRNoticeTone = 'refusal'): void {
+    // Two notices in the same instant ("Droid saved", "You saved") were drawn
+    // over each other, and only the last could be read (critic run 18).
+    // Within 400 ms they share the plate.
+    if (this.object.visible && nowMs - this.shownAt < MERGE_MS && !this.shownParts.includes(text) && this.shownParts.length < 2) {
+      this.shownParts = [...this.shownParts, text];
+    } else {
+      this.shownParts = [text];
+    }
+    this.shownAt = nowMs;
+    const merged = this.shownParts.join(' · ');
+    if (merged !== this.shownText || tone !== this.shownTone) {
+      this.draw(merged, tone);
+      this.shownText = merged;
+      this.shownTone = tone;
     }
     this.hideAt = Math.max(this.hideAt, nowMs + holdMs);
     if (holdMs === SHOW_MS) this.hideAt = nowMs + SHOW_MS;
@@ -97,13 +115,15 @@ export class VRRefusalNoticeHost {
     this.texture.dispose();
   }
 
-  private draw(text: string): void {
+  private draw(text: string, tone: VRNoticeTone = 'refusal'): void {
     const c = this.context;
     const w = this.canvas.width, h = this.canvas.height;
     c.clearRect(0, 0, w, h);
-    c.fillStyle = 'rgba(28, 10, 8, 0.82)';
+    // Refusals and warnings in the error colours; outcomes and hints in the
+    // menus' teal (critic run 18: "saved" and the first-play hint read as errors).
+    c.fillStyle = tone === 'info' ? 'rgba(8, 24, 28, 0.85)' : 'rgba(28, 10, 8, 0.82)';
     c.fillRect(0, 0, w, h);
-    c.strokeStyle = '#ff8a62';
+    c.strokeStyle = tone === 'info' ? '#5fd3c4' : '#ff8a62';
     c.lineWidth = 6;
     c.strokeRect(3, 3, w - 6, h - 6);
     c.fillStyle = '#fff1ea';
