@@ -1343,6 +1343,9 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
           timeoutMs: null,
           label: `${label} waypoint ${index + 1}/${planned.points.length}`,
           usePath: false,
+          // Passed on: the legs healed with medpacs even when the caller
+          // asked not to (critic run 16).
+          autoHeal,
         });
       }
       // Finish directly. The planner's last waypoint is not the target: smooth()
@@ -1356,6 +1359,7 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
         label: `${label} final approach`,
         usePath: false,
         timeoutMs: 30000,
+        autoHeal,
       });
     }
   }

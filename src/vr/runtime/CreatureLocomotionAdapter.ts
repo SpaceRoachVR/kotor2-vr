@@ -59,8 +59,14 @@ export class CreatureLocomotionAdapter<TTarget extends CreatureLocomotionTarget 
       // at narrow walkmesh turns despite a valid controller direction.
       let dirX = locomotion.worldDirection.x;
       let dirY = locomotion.worldDirection.y;
-      // Slide along a wall touched in the last 200 ms instead of pushing into
-      // it (see CollisionManager.lastWallNormal).
+      // The wall tests work on the unit direction: the direction carries the
+      // stick's magnitude, so a light push looked "too short" and froze the
+      // player at railings (critic run 16).
+      const stickLength = Math.hypot(dirX, dirY) || 1;
+      const stickX = dirX / stickLength;
+      const stickY = dirY / stickLength;
+      dirX = stickX;
+      dirY = stickY;
       // Every wall touched in the last 250 ms: in a corner the two walls take
       // turns, and sliding along one pushed into the other (critic run 15).
       const now = performance.now();
@@ -75,9 +81,7 @@ export class CreatureLocomotionAdapter<TTarget extends CreatureLocomotionTarget 
         }
         const length = Math.hypot(dirX, dirY);
         // What remains must still go roughly where the stick points.
-        const along = length > 1e-6
-          ? (dirX * locomotion.worldDirection.x + dirY * locomotion.worldDirection.y) / length
-          : 0;
+        const along = length > 1e-6 ? (dirX * stickX + dirY * stickY) / length : 0;
         if (length < 0.15 || along < 0.2) blocked = true;
         // A V-shaped corner: no direction slides along one wall without going
         // into the other, so what is left still points into a wall.
@@ -90,7 +94,8 @@ export class CreatureLocomotionAdapter<TTarget extends CreatureLocomotionTarget 
           // still collides with nothing, so keep these walls remembered while
           // the stick still points into them, or every 250 ms the player
           // bumped in again.
-          for (const n of walls) (n as { at: number }).at = now;
+          // Only the walls the stick points into, so turning away frees it.
+          for (const n of walls) if (stickX * n.x + stickY * n.y < 0) (n as { at: number }).at = now;
           // Speed too: with no force vector the engine keeps walking along the
           // facing while any speed is left, straight into the corner.
           target.speed = 0;

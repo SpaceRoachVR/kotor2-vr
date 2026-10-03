@@ -156,6 +156,9 @@ const check = (ok, label, detail = '') => {
     // in the same frame.
     await harness.evaluate(`(() => { const r = window.KotOR.GameState.getCurrentPlayer().combatRound; window.__begun = 0;
       if (!r.__wrapBegin) { const orig = r.beginCombatRound.bind(r); r.beginCombatRound = (...a) => { if (!r.roundStarted) window.__begun++; return orig(...a); }; r.__wrapBegin = true; } return true; })()`);
+    // A separate physical swing: events within 600 ms of a taken swing are the
+    // same swing (critic run 16), so leave a clear gap.
+    await sleep(700);
     await harness.evaluate(swing);
     await sleep(6000);
     const roundsAfter = await harness.evaluate(`window.__begun || 0`);

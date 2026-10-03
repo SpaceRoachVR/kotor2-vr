@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { handVelocity, MAX_HAND_SPEED_METRES_PER_SECOND } from './XRPoseMotion';
+import { handVelocity, MAX_HAND_SPEED_METRES_PER_SECOND, playSpaceDelta } from './XRPoseMotion';
 import { CombatWeaponMode, XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 export interface VRCombatInputConfiguration {
@@ -205,9 +205,23 @@ export class VRCombatInputController {
     // frame, and a strict consecutive count never reached two (critic run 15).
     const rawFast = speed >= this.configuration.minimumSwingSpeedMetresPerSecond;
     const needsTwo = grip || this.configuration.minimumFastSamples >= 2;
-    const confirmed = rawFast && context.timestamp - this.lastFastAt <= 120;
+    // 200 ms: at 16-24 fps with a runtime repeating poses, a quick 150 ms
+    // swing produced its two fast samples further apart than 120 ms and was
+    // dropped (critic run 16).
+    const confirmed = rawFast && context.timestamp - this.lastFastAt <= 200;
     this.lastFastAt = rawFast ? context.timestamp : this.lastFastAt;
-    const fast = rawFast && (!needsTwo || confirmed) &&
+    const runtimeVelocity = !!dominantPose.linearVelocity && Number.isFinite(dominantPose.linearVelocity.length());
+    // Two-handed too, on the blade point: hilt jitter alternating frame to
+    // frame nets out over the window (critic run 16: +/-1 cm of off-hand
+    // noise gave 44 swings in 6 s). The hands must still be moving.
+    const windowed = this.configuration.minimumFastSamples >= 2 && (grip || !runtimeVelocity);
+    const handsMoving = !grip || Math.max(handSpeed, offhandSpeed) >= this.configuration.minimumSwingSpeedMetresPerSecond / 3;
+    const windowedFast = windowed
+      ? this.resolveWindowedFast(grip ? samplePoint : dominantPose.position, dominantPose, context.timestamp, !!grip)
+      : false;
+    const fast = (windowed
+      ? windowedFast && handsMoving
+      : rawFast && (!needsTwo || confirmed)) &&
       context.timestamp >= this.trackingSettledAt;
     const volume = context.nominatedTargetVolume ?? null;
     let contactMetres: number | undefined;
@@ -398,6 +412,59 @@ export class VRCombatInputController {
   }
 
   private previousOffhandPose: XRWorldPose | null = null;
+
+  /** Distinct dominant-hand poses (newest last), for windowed speed. */
+  private readonly poseHistory: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 }[] = [];
+  /** Times of distinct poses that were fast over their window. */
+  private readonly fastPoseTimes: number[] = [];
+  private windowedGripped = false;
+
+  /**
+   * One-handed swing detection without runtime velocity (Virtual Desktop),
+   * in game. Speed is the hand's play-space displacement over about 60-250
+   * ms, measured only on frames where the pose actually changed, and a swing
+   * needs two such fast poses within 250 ms.
+   *
+   * Per-frame speed failed both ways at low frame rates (critic runs 13-16):
+   * a pop out and back, or a wrist snap and back, swung; and at 67-90 ms
+   * frames with each pose repeated, deliberate swings never produced two
+   * fast samples close enough together. Over a window a pop out and back
+   * nets to nothing, a pop that stays put is one fast pose, and repeated
+   * poses neither count nor reset anything.
+   */
+  private resolveWindowedFast(point: THREE.Vector3, pose: XRWorldPose, now: number, gripped: boolean): boolean {
+    // One history per mode: switching between one hand and two must not
+    // compare a hand position with a blade tip.
+    if (gripped !== this.windowedGripped) {
+      this.windowedGripped = gripped;
+      this.poseHistory.length = 0;
+      this.fastPoseTimes.length = 0;
+    }
+    const history = this.poseHistory;
+    const last = history[history.length - 1];
+    if (last) {
+      const moved = playSpaceDelta(last.position, last, point, pose).length();
+      // A repeated pose: no new motion, but the hand was there until now, so
+      // a swing from rest measures from this frame, not from when it stopped.
+      if (moved < 0.001) { last.t = now; return false; }
+    }
+    while (history.length && now - history[0].t > 300) history.shift();
+    let reference: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 } | undefined;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (now - history[i].t >= 60) { reference = history[i]; break; }
+    }
+    if (!reference || now - reference.t > 250) {
+      reference = history.find((entry) => now - entry.t >= 15 && now - entry.t <= 250);
+    }
+    history.push({ t: now, position: point.clone(), trackingToWorld: pose.trackingToWorld?.clone() });
+    if (!reference) return false;
+    const seconds = (now - reference.t) / 1000;
+    const speed = playSpaceDelta(reference.position, reference, point, pose).length() / seconds;
+    if (speed > MAX_HAND_SPEED_METRES_PER_SECOND || speed < this.configuration.minimumSwingSpeedMetresPerSecond) return false;
+    while (this.fastPoseTimes.length && now - this.fastPoseTimes[0] > 250) this.fastPoseTimes.shift();
+    this.fastPoseTimes.push(now);
+    return this.fastPoseTimes.length >= 2;
+  }
   private lastFastAt = Number.NEGATIVE_INFINITY;
   private previousTrackingState: XRWorldPose['trackingState'] = 'tracked';
   private trackingSettledAt = Number.NEGATIVE_INFINITY;
@@ -421,6 +488,8 @@ export class VRCombatInputController {
   }
 
   private resetMeleeSample(): void {
+    this.poseHistory.length = 0;
+    this.fastPoseTimes.length = 0;
     this.previousPose = null;
     this.previousSamplePoint = null;
     this.previousTimestamp = null;

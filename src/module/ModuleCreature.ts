@@ -653,7 +653,9 @@ export class ModuleCreature extends ModuleObject {
         this.speed = speedCap;
       }
       
-      let forceDelta = Math.max(this.force * delta, this.speed * delta);
+      // The force term is a 1 m/s floor; scaled by the VR stick so a light
+      // push can walk slower than that (critic run 16: the floor stayed ~1 m/s).
+      let forceDelta = Math.max(this.force * delta * (Number.isFinite(this.locomotionScale) ? this.locomotionScale : 1), this.speed * delta);
       let gravityDelta = -1 * delta;
       
       if(this.speed){
@@ -3462,7 +3464,10 @@ export class ModuleCreature extends ModuleObject {
    * level + Wisdom modifier + Charisma modifier (critic run 15).
    */
   getSpellSaveDC(){
-    return 5 + this.getSpellCasterLevel() + abilityModifier(this.getWIS()) + abilityModifier(this.getCHA());
+    // Character level, as the power text says, and Force Focus (+2, Improved
+    // +3, Master +4; feat.2da 88-90), the strongest owned (critic run 16).
+    const focus = this.getHasFeat(90) ? 4 : this.getHasFeat(89) ? 3 : this.getHasFeat(88) ? 2 : 0;
+    return 5 + this.getTotalClassLevel() + abilityModifier(this.getWIS()) + abilityModifier(this.getCHA()) + focus;
   }
 
   getSpellCasterLevel(){

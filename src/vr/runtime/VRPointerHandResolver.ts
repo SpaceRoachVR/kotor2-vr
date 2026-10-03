@@ -46,6 +46,13 @@ export class VRPointerHandResolver {
      * trigger and opened the wrong item (critic run 12).
      */
     selectingHand: XRHandRole | null = null,
+    /**
+     * Tried first when no trigger is down, ahead of the sticky hand, so the
+     * highlight shows what that hand's trigger would pick (critic run 16: the
+     * highlight followed the off hand while the weapon hand's trigger
+     * changed another row).
+     */
+    preferredHand: XRHandRole | null = null,
   ): VRResolvedPointerHand<THit> | null {
     if (!frame) {
       this.activeHand = null;
@@ -57,9 +64,11 @@ export class VRPointerHandResolver {
     // hand never answers for it.
     const order: readonly XRHandRole[] = selectingHand
       ? [selectingHand]
-      : this.activeHand
-        ? [this.activeHand, ...SCAN_ORDER.filter((role) => role !== this.activeHand)]
-        : SCAN_ORDER;
+      : preferredHand
+        ? [preferredHand, ...SCAN_ORDER.filter((role) => role !== preferredHand)]
+        : this.activeHand
+          ? [this.activeHand, ...SCAN_ORDER.filter((role) => role !== this.activeHand)]
+          : SCAN_ORDER;
 
     for (const hand of order) {
       const pose = VRPointerHandResolver.trackedRay(frame.hands[hand]);

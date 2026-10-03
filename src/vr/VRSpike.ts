@@ -2005,6 +2005,7 @@ export class VRSpike {
         inputFrame,
         (pose) => VRSpike.comfortSettingsHost?.rowAtRay(pose) ?? null,
         selectingHand === 'left' || selectingHand === 'right' ? selectingHand : null,
+        VRSpike.dominantHand,
       );
       VRSpike.drawComfortSettingsPointer(scene, panel, resolution?.pose ?? VRSpike.anyTrackedRay(inputFrame));
       VRSpike.comfortSettingsHost.setHighlightedRow(resolution?.hit ?? null);

@@ -136,6 +136,48 @@ describe('VRCombatInputController', () => {
     expect(controller.process(frame(480, 0.35), context('melee-one-handed', 480))).toHaveLength(1);
   });
 
+  test('in game at low frame rate with repeated poses, a deliberate swing lands (critic run 16)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    // 75 ms frames, each pose shown twice; the hand sweeps 0.6 m in 300 ms.
+    const ys = [0, 0, 0, 0, 0.15, 0.15, 0.3, 0.3, 0.45, 0.45, 0.6, 0.6];
+    let swings = 0;
+    ys.forEach((y, i) => { swings += controller.process(frame(i * 75, y), context('melee-one-handed', i * 75)).length; });
+    expect(swings).toBeGreaterThan(0);
+  });
+
+  test('in game, a pop out and back is not a swing (critic run 16)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    [0, 0, 0.06, 0, 0, 0].forEach((y, i) => { swings += controller.process(frame(i * 40, y), context('melee-one-handed', i * 40)).length; });
+    [0, 0.25, 0, 0].forEach((y, i) => { swings += controller.process(frame(1000 + i * 40, y), context('melee-one-handed', 1000 + i * 40)).length; });
+    expect(swings).toBe(0);
+  });
+
+  test('in game, a pop that stays put is not a swing', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    [0, 0, 0.25, 0.25, 0.25, 0.25].forEach((y, i) => { swings += controller.process(frame(i * 40, y), context('melee-one-handed', i * 40)).length; });
+    expect(swings).toBe(0);
+  });
+
+  test('in game, +/-1 cm hilt jitter in a two-handed grip never swings, a real two-handed sweep does (critic run 16)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    for (let i = 0; i < 150; i++) {
+      const t = i * 40;
+      const jitter = (i % 2 === 0 ? 1 : -1) * 0.01;
+      swings += controller.process(frame(t, 0, new THREE.Vector3(jitter, 0.12, -0.4)), context('melee-one-handed', t, true)).length;
+    }
+    expect(swings).toBe(0);
+    // Both hands sweep down together.
+    let sweep = 0;
+    [0, 0.1, 0.2, 0.3, 0.4].forEach((d, i) => {
+      const t = 7000 + i * 50;
+      sweep += controller.process(frame(t, -d, new THREE.Vector3(0, 0.12 - d, -0.4)), context('melee-one-handed', t, true)).length;
+    });
+    expect(sweep).toBeGreaterThan(0);
+  });
+
   test('a double-bladed or dual-wield stance is never promoted', () => {
     // Adding a second hand to an already-two-weapon stance means something
     // other than a two-handed grip, and is not modelled.

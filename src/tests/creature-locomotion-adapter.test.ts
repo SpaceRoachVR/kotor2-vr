@@ -38,7 +38,10 @@ describe('CreatureLocomotionAdapter', () => {
     expect(adapter.apply(creature, locomotion({ magnitude: 0.7, worldDirection: new THREE.Vector2(0, 0.7) }))).toBe(true);
     expect(creature.clearAllActions).toHaveBeenCalledWith(true);
     expect(creature.force).toBe(1);
-    expect(creature.forceVector).toEqual({ x: 0, y: 0.7 });
+    // A unit direction; the stick's 0.7 sets the speed through locomotionScale
+    // (critic runs 14-16), not by shrinking the direction as well.
+    expect(creature.forceVector).toEqual({ x: 0, y: 1 });
+    expect((creature as any).locomotionScale).toBeCloseTo(0.7);
     expect(creature.setFacing).toHaveBeenCalledWith(0, false, Math.PI * 3);
     expect(creature.controlled).toBe(true);
   });

@@ -650,6 +650,12 @@ export class ModuleObjectManager {
 
     if((oType & NWModuleObjectType.CREATURE) == NWModuleObjectType.CREATURE){ //CREATURE
       object_pool = object_pool.concat(this.module.area.creatures);
+      // The party is not in the area's creature list: no grenade, area power
+      // or explosion could reach the player or companions, enemy or own
+      // (critic run 16: a frag at 2.6 m gave the thrower no Reflex save).
+      for (const member of PartyManager.party) {
+        if (member && !object_pool.includes(member as any)) object_pool.push(member as any);
+      }
     }
 
     if((oType & NWModuleObjectType.ITEM) == NWModuleObjectType.ITEM){ //ITEM

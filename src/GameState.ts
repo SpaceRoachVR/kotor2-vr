@@ -508,7 +508,13 @@ function applyStoredVRComfortSettings(stored: any): void {
     for (const key of ['vignetteEnabled', 'damageFlashEnabled', 'unpauseOnWheelClose', 'combatSoundsEnabled', 'healthPlateEnabled'] as const) {
       if (typeof stored[key] === 'boolean') (vrComfortSettings as any)[key] = stored[key];
     }
-    if ([1, 1.25, 1.45].includes(Number(stored.dialogueTextScale))) vrComfortSettings.dialogueTextScale = Number(stored.dialogueTextScale);
+    // The current sizes, and the round-14 sizes mapped onto them: Large and
+    // Largest reset to Normal on every launch once the sizes changed (critic run 16).
+    {
+      const storedScale = Number(stored.dialogueTextScale);
+      const migrated = storedScale === 1.25 ? VR_DIALOGUE_TEXT_SCALES[1] : storedScale === 1.45 ? VR_DIALOGUE_TEXT_SCALES[2] : storedScale;
+      if ((VR_DIALOGUE_TEXT_SCALES as readonly number[]).includes(migrated)) vrComfortSettings.dialogueTextScale = migrated;
+    }
     if (stored.dominantHand === 'left' || stored.dominantHand === 'right') VRSpike.setDominantHand(stored.dominantHand);
   } catch (error) {
     console.warn('[VR comfort] stored settings could not be read', error);
@@ -1344,6 +1350,13 @@ function dispatchVREmbodiedCombatInput(
   }
   const initialTarget = resolveVRLiveCombatTarget(actor, targetId);
   const headLabel = head ? `${head.label}(${head.requiredInput},${head.weaponSignature})` : 'none';
+  // One physical swing is one attack. The detector reports a swing every
+  // 120 ms while the blade is fast, so a 400 ms swing sent three or four;
+  // the first attacked and a later one was held for the next round, which
+  // then rolled a second attack with no input (critic runs 15-16). Swing
+  // events within 600 ms of one that was taken belong to the same swing.
+  const nowMs = performance.now();
+  if (input === 'dominant-swing' && nowMs - vrSwingTakenAt < 600) return false;
   const tempo = getVREmbodiedTempoResult(actor, initialTarget);
   if (!tempo.eligible) {
     // ROADMAP 3.12: a swing made while the round is busy waits for it to open
@@ -1359,6 +1372,7 @@ function dispatchVREmbodiedCombatInput(
       vrSwingBufferMissedOpenings = 0;
       vrSwingBufferRoundWasOpen = false;
       vrSwingBufferHeldSeconds = 0;
+      if (input === 'dominant-swing') vrSwingTakenAt = nowMs;
       return false;
     }
     let distance = 'n/a';
@@ -1398,10 +1412,14 @@ function dispatchVREmbodiedCombatInput(
     result.state === 'intent-skipped-invalid' || result.state === 'deferred-input-mismatch' ||
     result.state === 'deferred-weapon-mismatch') {
     vrCombatIssuedTargetId = initialTarget.id;
+    if (input === 'dominant-swing') vrSwingTakenAt = nowMs;
     return true;
   }
   return false;
 }
+
+/** When a physical swing last started or was held for an attack (ms). */
+let vrSwingTakenAt = Number.NEGATIVE_INFINITY;
 
 /**
  * ROADMAP 3.16 — the space a melee swing must pass through to count: a
@@ -3216,7 +3234,9 @@ export class GameState implements EngineContext {
   static onSavingThrowMade: ((saver: unknown, versus: unknown) => void) | null = (saver, versus) => {
     if (!VRSpike.isPresenting) return;
     const player = GameState.getCurrentPlayer();
-    if (!player || saver === player || versus !== player) return;
+    if (!player) return;
+    if (saver === player && versus && versus !== player) { VRSpike.showNotice('You saved', 2000); return; }
+    if (saver === player || versus !== player) return;
     VRSpike.showNotice(`${resolveVRWorldPromptName(saver as ModuleObject) || 'The target'} saved`, 2000);
   };
 
@@ -3233,7 +3253,9 @@ export class GameState implements EngineContext {
     const reallyResisted = Date.now() - (Number((target as any)?.lastForceResistedAt) || 0) < 2000;
     if (casterIsPlayer && !reallyResisted) return;
     if (casterIsPlayer) VRSpike.showNotice(`${(target ? resolveVRWorldPromptName(target as ModuleObject) : '') || 'The target'} resisted the Force`, 2500);
-    else if (target === player) VRSpike.showNotice('You resisted the Force', 2500);
+    // Same for the player: a save against an enemy power is "saved", not
+    // "resisted" (critic run 16).
+    else if (target === player && reallyResisted) VRSpike.showNotice('You resisted the Force', 2500);
   };
 
   static onItemCastRejected: ((owner: unknown, item?: unknown, reason?: string) => void) | null = (owner, item, reason) => {
