@@ -87,6 +87,16 @@ export class ActionCastSpell extends Action {
 
         if(this.owner.combatRound){
           const combatRound = this.owner.combatRound;
+          // A Force power costs Force points; one the caster cannot afford is
+          // not cast. Nothing charged them, so powers were free (critic run 11).
+          const caster: any = this.owner;
+          const cost = typeof caster.getFP === 'function' ? this.spell.getForcePointCostFor(caster) : 0;
+          if(!combatRound.roundPaused && cost > 0 && caster.getFP() < cost){
+            console.info('ActionCastSpell: not enough Force points', this.spell?.id, caster.getFP(), cost);
+            releaseUnstartedCastSpellCombatAction(combatRound);
+            try { GameState.onItemCastRejected?.(this.owner, undefined, 'not enough Force points'); } catch { /* feedback is best effort */ }
+            return ActionStatus.FAILED;
+          }
           if(!combatRound.roundPaused) {
             
             combatRound.beginCombatRound();
@@ -99,6 +109,7 @@ export class ActionCastSpell extends Action {
               const spellCastInstance = new SpellCastInstance(this.owner, combatRound.action.target, combatRound.action.spell);
               this.owner.area.attachSpellInstance(spellCastInstance);
               spellCastInstance.init();
+              if(cost > 0) caster.subtractFP(cost);
 
               return ActionStatus.COMPLETE;
             }

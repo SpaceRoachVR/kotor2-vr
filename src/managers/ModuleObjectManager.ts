@@ -807,8 +807,11 @@ export class ModuleObjectManager {
         continue;
       }
 
-      //Ignore objects that we don't have line of sight to
-      const hasLineOfSight = obj.hasLineOfSight(player, GameState.maxSelectableDistance);
+      //Ignore objects that we don't have line of sight to. The player's sight
+      //line, not the object's perception: a mining droid in plain view 6 m
+      //away could not be targeted because its own perception range is short
+      //(critic run 11).
+      const hasLineOfSight = player.hasLineOfSight(obj, GameState.maxSelectableDistance, true);
       if(!hasLineOfSight){
         continue;
       }

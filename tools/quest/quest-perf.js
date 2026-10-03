@@ -163,7 +163,7 @@ async function main() {
   }
 
   console.log(`
-Next, in the headset: accept the EULA, load a save, press "Enter VR (spike)".
+Next, in the headset: accept the EULA, load a save, press "Enter VR".
 
 Then capture the compositor side from this machine. Through the metavr MCP:
 

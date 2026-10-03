@@ -39,6 +39,11 @@ export interface VRPanelPresentOptions {
   readonly scale?: number;
   /** 'top' keeps the top edge where it was, so a larger panel grows downward. */
   readonly scaleAnchor?: 'centre' | 'top';
+  /**
+   * A dark plate behind the panel, 0..1 opacity. The in-world dialogue's text
+   * floated over the scene with nothing behind it (critic run 11).
+   */
+  readonly backingOpacity?: number;
 }
 
 const FULL_REGION: VRPanelRegion = { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
@@ -202,6 +207,30 @@ export class VRPanelHost {
         : this.placedZ;
     }
     this.object.visible = true;
+    this.applyBacking(options.backingOpacity);
+  }
+
+  private backing: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null = null;
+
+  private applyBacking(opacity: number | undefined): void {
+    const wanted = Number.isFinite(opacity) && (opacity as number) > 0 ? Math.min(1, opacity as number) : 0;
+    if (!wanted) {
+      if (this.backing) this.backing.visible = false;
+      return;
+    }
+    if (!this.backing) {
+      this.backing = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.04, 1.06),
+        new THREE.MeshBasicMaterial({ color: 0x02080b, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      this.backing.name = 'Kotor2VR.VRPanelHost.backing';
+      this.backing.frustumCulled = false;
+      this.backing.renderOrder = this.object.renderOrder - 1;
+      this.backing.position.z = -0.001;
+      this.object.add(this.backing);
+    }
+    this.backing.material.opacity = wanted;
+    this.backing.visible = true;
   }
 
   private placedZ: number | null = null;

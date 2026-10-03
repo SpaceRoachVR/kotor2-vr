@@ -127,7 +127,7 @@ const WORLD_STATE = `(() => {
 
   // --- Enter VR in-game ---------------------------------------------------
   await new Promise((r) => setTimeout(r, 5000));
-  await clickButtonByText(harness, 'Enter VR (spike)');
+  await clickButtonByText(harness, 'Enter VR');
   await new Promise((r) => setTimeout(r, 6000));
   const session = await harness.evaluate(`(() => {
     const d = window.__xrDevice;

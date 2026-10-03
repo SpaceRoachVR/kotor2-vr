@@ -1,3 +1,4 @@
+import { isUsableXRPose } from './runtime/XRTypes';
 import * as THREE from "three";
 import { XRCoordinateConverter } from "./runtime/XRCoordinateConverter";
 import { HeadHeightCalibration } from './runtime/HeadHeightCalibration';
@@ -719,6 +720,10 @@ export class VRSpike {
   private static comfortSettingsPointerHost: VRPanelPointerHost | null = null;
   private static readonly comfortSettingsPointerHand = new VRPointerHandResolver();
   private static comfortSettingsSelectHeld = false;
+  /** When B went down this press, for tap (Pause) versus hold (cancel combat). */
+  private static pauseDownAt: number | null = null;
+  /** This B press was used by a panel (closing the VR Menu) and must not pause. */
+  private static pausePressConsumed = false;
   private static comfortSettingsCancelHeld = false;
   private static keyboardSelectHeld = false;
   private static keyboardCancelHeld = false;
@@ -876,7 +881,7 @@ export class VRSpike {
   private static addButton(supported: boolean, unavailableText = 'VR unavailable'): void {
     const btn = document.createElement('button');
     btn.id = 'vr-spike-button';
-    btn.textContent = supported ? 'Enter VR (spike)' : unavailableText;
+    btn.textContent = supported ? 'Enter VR' : unavailableText;
     Object.assign(btn.style, {
       position: 'fixed',
       right: '12px',
@@ -1237,7 +1242,7 @@ export class VRSpike {
     VRSpike.lastCutsceneCamera = null;
 
     const btn = document.getElementById('vr-spike-button');
-    if (btn) btn.textContent = 'Enter VR (spike)';
+    if (btn) btn.textContent = 'Enter VR';
 
     // A successful XR bind lets the queued desktop callback drain while Three
     // presents. Failed binds leave that existing desktop chain intact and must
@@ -1945,12 +1950,17 @@ export class VRSpike {
     const scene = VRSpike.scene;
     if (!context || !inputFrame || !session || !scene) {
       VRSpike.clearComfortSettingsPointer();
-      VRSpike.comfortSettingsSelectHeld = false;
-      VRSpike.comfortSettingsCancelHeld = false;
+      // Held while closed: the trigger press that opens the panel from the
+      // wheel must be released before the panel takes a click. It clicked the
+      // row under the ray in the same press (critic run 11: Dominant Hand
+      // switched to Left on opening).
+      VRSpike.comfortSettingsSelectHeld = true;
+      VRSpike.comfortSettingsCancelHeld = true;
       return false;
     }
     try {
       if (!VRSpike.comfortSettingsHost) VRSpike.comfortSettingsHost = new VRComfortSettingsHost(scene);
+      VRSpike.comfortSettingsHost.setCloseButton(VRSpike.dominantHand === 'left' ? 'Y' : 'B');
       VRSpike.comfortSettingsHost.present(inputFrame.head, context.rows);
 
       const actions = VRSpike.inputRouter.route(
@@ -1985,7 +1995,11 @@ export class VRSpike {
       }
       VRSpike.comfortSettingsSelectHeld = selectPressed;
 
-      if (cancelPressed && !VRSpike.comfortSettingsCancelHeld) context.close();
+      if (cancelPressed && !VRSpike.comfortSettingsCancelHeld) {
+        context.close();
+        // B closed the panel; the same press must not also pause the game.
+        VRSpike.pausePressConsumed = true;
+      }
       VRSpike.comfortSettingsCancelHeld = cancelPressed;
     } catch (error) {
       VRSpike.clearComfortSettingsPointer();
@@ -2021,7 +2035,7 @@ export class VRSpike {
   private static anyTrackedRay(inputFrame: XRInputFrame): XRWorldPose | null {
     for (const hand of ['right', 'left'] as const) {
       const pose = inputFrame.hands[hand]?.targetRayPose;
-      if (pose?.trackingState === 'tracked') return pose;
+      if (isUsableXRPose(pose)) return pose;
     }
     return null;
   }
@@ -2174,7 +2188,7 @@ export class VRSpike {
 
   private static resolveRayPreview(inputFrame: XRInputFrame, hand: XRHandRole) {
     const handFrame = inputFrame.hands[hand];
-    if (!handFrame || handFrame.targetRayPose.trackingState !== 'tracked') return null;
+    if (!handFrame || !isUsableXRPose(handFrame.targetRayPose)) return null;
     const preview = VRSpike.interactionSystem.preview(inputFrame, hand);
     return preview?.interactionMode === 'ray' ? preview : null;
   }
@@ -2212,7 +2226,7 @@ export class VRSpike {
     hand: XRHandRole,
   ): string | null {
     const pose = inputFrame.hands[hand]?.targetRayPose;
-    return pose?.trackingState === 'tracked' ? host.resolveRay(hand, pose) : null;
+    return isUsableXRPose(pose) ? host.resolveRay(hand, pose) : null;
   }
 
   private static filterWorldPromptSelectEdges(actions: readonly RoutedXRAction[]): readonly RoutedXRAction[] {
@@ -2369,7 +2383,7 @@ export class VRSpike {
    */
   private static resolveAimedCombatTargetId(): number | null {
     const rayPose = VRSpike.latestInputFrame?.hands[VRSpike.dominantHand]?.targetRayPose;
-    if (!rayPose || rayPose.trackingState !== 'tracked') return null;
+    if (!rayPose || !isUsableXRPose(rayPose)) return null;
     try {
       const context = VRSpike.hooks?.getCombatAimCandidates?.() ?? null;
       if (!context || !context.candidates.length) return null;
@@ -3088,7 +3102,7 @@ export class VRSpike {
     host: VRRadialMenuHost,
     targetRayPose: XRWorldPose | undefined,
   ) {
-    return targetRayPose?.trackingState === 'tracked'
+    return isUsableXRPose(targetRayPose)
       ? host.resolveTouch(targetRayPose.position)
       : null;
   }
@@ -3355,15 +3369,30 @@ export class VRSpike {
       // Pause and PartyCommand are 'global' context, routed here alongside
       // Recenter for the same reason: this path already runs every XR frame
       // that gameplay owns. Both are edge-triggered.
+      // B is Pause and, held, Cancel combat. Pause toggles when a short press
+      // is RELEASED: toggling on the press paused the game at once, and the
+      // combat cancel (which never fires while paused) could never be reached
+      // by holding B (critic run 11). A press a panel used (closing the VR
+      // Menu) does not pause either.
       const pausePressed = routedActions.some((action) =>
         action.action === SemanticXRAction.Pause && action.pressed
       );
+      const pauseNow = performance.now();
       if (pausePressed && !VRSpike.pauseToggleHeld) {
-        try {
-          VRSpike.hooks?.togglePause?.();
-        } catch (error) {
-          console.error('[VRSpike] pause toggle rejected', error);
+        VRSpike.pauseDownAt = pauseNow;
+      }
+      if (!pausePressed && VRSpike.pauseToggleHeld) {
+        const tap = !VRSpike.pausePressConsumed && VRSpike.pauseDownAt !== null &&
+          pauseNow - VRSpike.pauseDownAt < VR_COMBAT_CANCEL_HOLD_MS;
+        if (tap) {
+          try {
+            VRSpike.hooks?.togglePause?.();
+          } catch (error) {
+            console.error('[VRSpike] pause toggle rejected', error);
+          }
         }
+        VRSpike.pauseDownAt = null;
+        VRSpike.pausePressConsumed = false;
       }
       VRSpike.pauseToggleHeld = pausePressed;
 

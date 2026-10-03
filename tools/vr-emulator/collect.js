@@ -182,7 +182,7 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       if (gs.Mode !== 1) gs.MenuManager.InGameOverlay.open();
       return { mode: gs.Mode, state: gs.State };
     })()`);
-    await clickButtonByText(harness, 'Enter VR (spike)');
+    await clickButtonByText(harness, 'Enter VR');
     await wait(6000);
     metrics.session = await harness.evaluate(`(() => {
       const d = window.__xrDevice;

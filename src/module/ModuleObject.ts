@@ -11,6 +11,7 @@ import { applyEffectDuration, inheritLinkDuration } from "@/effects/GameEffectDu
 import EngineLocation from "@/engine/EngineLocation";
 import { ActionParameterType } from "@/enums/actions/ActionParameterType";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
+import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
 import { ModulePlaceableAnimState } from "@/enums/module/ModulePlaceableAnimState";
 import { NWScriptEventType } from "@/enums/nwscript/NWScriptEventType";
@@ -57,6 +58,14 @@ import { TURN_SPEED_SLOW } from "@/engine/TurnSpeeds";
 import { actionParameterToStruct } from "@/actions/actionParameterStructs";
 import { compileTalkString } from "@/resource/TalkStringCompiler";
 
+
+/** Effects that act once when applied and leave nothing to keep. */
+const ONE_SHOT_EFFECT_TYPES: ReadonlySet<number> = new Set([
+  GameEffectType.EffectDamage,
+  GameEffectType.EffectHeal,
+  GameEffectType.EffectDamageForcePoints,
+  GameEffectType.EffectHealForcePoints,
+]);
 
 /**
 * ModuleObject class.
@@ -2953,6 +2962,12 @@ export class ModuleObject {
     effect.setAttachedObject(this);
     effect.loadModel();
     effect.onApply(this);
+    // An instant hit or heal has done its work in onApply. Kept, they piled up
+    // on every creature in a fight (16 after one, critic run 11), and each
+    // was walked every frame for the rest of the session.
+    if(effect.getDurationType() == GameEffectDurationType.INSTANT && ONE_SHOT_EFFECT_TYPES.has(effect.type)){
+      return;
+    }
     this.effects.push(effect);
   }
 
@@ -3587,7 +3602,12 @@ export class ModuleObject {
    * @param max_distance 
    * @returns 
    */
-  hasLineOfSight(oTarget: ModuleObject, max_distance = 30){
+  /**
+   * @param ignorePerceptionRange measure only the sight line, not how far this
+   *   object perceives: the player selecting a target asks whether the player
+   *   can see it, not whether it would notice the player.
+   */
+  hasLineOfSight(oTarget: ModuleObject, max_distance = 30, ignorePerceptionRange = false){
     if(!this.spawned || !GameState.module.readyToProcessEvents)
       return false;
     
@@ -3619,7 +3639,7 @@ export class ModuleObject {
     this.#tmpPositionB.z += 1;
     const distance = this.#tmpPositionA.distanceTo(this.#tmpPositionB);
 
-    if(this.perceptionRange){
+    if(this.perceptionRange && !ignorePerceptionRange){
       const primaryRange = this.getPerceptionRangePrimary();
       if(distance > primaryRange){
         return false;
@@ -3648,7 +3668,8 @@ export class ModuleObject {
 
     for(let j = 0, jl = doors.length; j < jl; j++){
       const door = doors[j];
-      if(!door || door == (this as any) || door.isOpen()) continue;
+      // Neither end of the sight line blocks it: a closed door is not hidden by itself.
+      if(!door || door == (this as any) || door == (oTarget as any) || door.isOpen()) continue;
       const box3 = door.box;
       if(!box3) continue;
       if(GameState.raycaster.ray.intersectsBox(box3) || box3.containsPoint(this.#tmpPositionA)){

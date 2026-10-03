@@ -44,7 +44,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
         lines: [
           ['Stick', 'Move'],
           ['Stick click', 'Walk / run'],
-          ['X', 'Action wheel (inventory, map, party, save, VR Menu)'],
+          ['X, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (inventory, map, party, save, VR Menu)'],
           ['Y', 'Switch party member'],
           ['Trigger', 'Throw an armed grenade'],
         ],
@@ -56,7 +56,8 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
           ['Stick', 'Turn (or scroll a menu list)'],
           ['Stick click, hold', 'Recenter'],
           ['A', 'Use what you point at'],
-          ['B', 'Back / pause; hold to stop attacking'],
+          ['B, tap', 'Back / pause'],
+          ['B, hold', 'Stop attacking'],
         ],
       },
       body,
@@ -71,7 +72,8 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
         ['Stick', 'Turn (or scroll a menu list)'],
         ['Stick click, hold', 'Recenter'],
         ['X', 'Use what you point at'],
-        ['Y', 'Back / pause; hold to stop attacking'],
+        ['Y, tap', 'Back / pause'],
+        ['Y, hold', 'Stop attacking'],
       ],
     },
     {
@@ -79,7 +81,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       lines: [
         ['Stick', 'Move'],
         ['Stick click', 'Walk / run'],
-        ['A', 'Action wheel (inventory, map, party, save, VR Menu)'],
+        ['A, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (inventory, map, party, save, VR Menu)'],
         ['B', 'Switch party member'],
         ['Trigger', 'Throw an armed grenade'],
       ],
@@ -89,7 +91,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
   ];
 }
 
-const WIDTH_METRES = 0.75;
+const WIDTH_METRES = 0.9;
 const PIXELS_PER_METRE = 1200;
 const GAP_METRES = 0.05;
 
@@ -156,8 +158,10 @@ export class VRControlsGuideHost {
   private draw(sections: readonly VRControlsGuideSection[]): void {
     const c = this.context;
     const width = this.canvas.width;
-    const inputFont = 'bold 25px Arial';
-    const effectFont = '25px Arial';
+    // As large as the VR Menu's rows beside it: the guide was half their size
+    // (critic run 11).
+    const inputFont = 'bold 32px Arial';
+    const effectFont = '32px Arial';
     c.font = inputFont;
     const inputWidth = Math.max(...sections.flatMap((section) => section.lines.map(([input]) => c.measureText(input).width)));
     const effectX = Math.min(40 + inputWidth + 24, width * 0.5);
@@ -182,7 +186,7 @@ export class VRControlsGuideHost {
         effect: wrap(effect, effectWidth, effectFont),
       })),
     }));
-    const lineHeight = 31;
+    const lineHeight = 39;
     let height = 80;
     for (const section of laid) {
       height += 44;

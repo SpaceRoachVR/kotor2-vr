@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { playSpaceDelta } from './XRPoseMotion';
 import { XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 export type VRForceGestureKind = 'push' | 'pull';
@@ -26,7 +27,7 @@ export class VRForceGestureController {
   private readonly configuration: VRForceGestureConfiguration;
   private nextGestureAt = Number.NEGATIVE_INFINITY;
   /** Last pose per hand, to measure speed when the runtime reports none. */
-  private readonly previous: Partial<Record<XRHandRole, { position: THREE.Vector3; timestamp: number }>> = {};
+  private readonly previous: Partial<Record<XRHandRole, { position: THREE.Vector3; trackingToWorld?: THREE.Matrix4; timestamp: number }>> = {};
 
   constructor(configuration: Partial<VRForceGestureConfiguration> = {}) {
     this.configuration = { ...DEFAULT_CONFIGURATION, ...configuration };
@@ -53,11 +54,11 @@ export class VRForceGestureController {
     // the headset (round 15); measure it from the last frame's position.
     let velocity = controller.pose.linearVelocity;
     const before = this.previous[dominantHand];
-    this.previous[dominantHand] = { position: controller.pose.position.clone(), timestamp };
+    this.previous[dominantHand] = { position: controller.pose.position.clone(), trackingToWorld: controller.pose.trackingToWorld?.clone(), timestamp };
     if (!velocity || !Number.isFinite(velocity.lengthSq())) {
       const dt = before ? (timestamp - before.timestamp) / 1000 : 0;
       if (!before || !(dt > 0.001 && dt < 0.2)) return null;
-      velocity = controller.pose.position.clone().sub(before.position).divideScalar(dt);
+      velocity = playSpaceDelta(before.position, before, controller.pose.position, controller.pose).divideScalar(dt);
     }
     if (!gripModifierHeld || timestamp < this.nextGestureAt) return null;
 

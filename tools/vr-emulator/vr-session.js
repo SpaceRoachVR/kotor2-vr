@@ -97,7 +97,7 @@ async function clickButtonByText(harness, text) {
 
   // --- Enter the immersive session ----------------------------------------
   const before = harness.consoleMessages.length;
-  await clickButtonByText(harness, 'Enter VR (spike)');
+  await clickButtonByText(harness, 'Enter VR');
   await new Promise((r) => setTimeout(r, 6000));
 
   const sessionState = await harness.evaluate(`(() => {

@@ -116,7 +116,7 @@ function startAssetService() {
   console.log('\nReminders:');
   console.log('  · VR runtime (VDXR via Virtual Desktop) must already be up.');
   console.log('  · Disable Synchronous Spacewarp and select 72 Hz.');
-  console.log('  · Accept the EULA, load your save, then press "Enter VR (spike)".');
+  console.log('  · Accept the EULA, load your save, then press "Enter VR".');
   console.log('  · Leave DevTools open — the console is the evidence for several open items.');
   console.log(`  · CDP is on http://127.0.0.1:${CDP_PORT} — diagnostics can be pulled from outside.`);
   console.log('\nCtrl+C here stops the asset service when you are done.\n');

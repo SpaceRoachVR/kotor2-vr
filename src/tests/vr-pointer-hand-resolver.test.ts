@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, test } from '@jest/globals';
 import { VRPointerHandResolver } from '@/vr/runtime/VRPointerHandResolver';
 import { XRHandRole, XRInputFrame, XRWorldPose } from '@/vr/runtime/XRTypes';
 
-function pose(x: number, tracked = true): XRWorldPose {
+function pose(x: number, tracked: boolean | 'emulated' = true): XRWorldPose {
   return {
     position: { x, y: 0, z: 0 },
     orientation: { x: 0, y: 0, z: 0, w: 1 },
-    trackingState: tracked ? 'tracked' : 'emulated',
+    trackingState: tracked === 'emulated' ? 'emulated' : tracked ? 'tracked' : 'unavailable',
   } as unknown as XRWorldPose;
 }
 
@@ -58,6 +58,10 @@ describe('VRPointerHandResolver', () => {
   test('untracked rays are ignored', () => {
     // A controller that has been put down still reports a stale pose.
     expect(resolver.resolve(frame({ right: pose(2, false) }), hitsAt(2))).toBeNull();
+  });
+
+  test('an emulated ray (tracking briefly lost, or the emulator) still points (critic run 11)', () => {
+    expect(resolver.resolve(frame({ right: pose(2, 'emulated') }), hitsAt(2))?.hand).toBe('right');
   });
 
   test('a hit test that throws is a miss for that hand only', () => {

@@ -112,16 +112,16 @@ class WebXRActionDriver {
       const c = dev && dev.controllers && dev.controllers[${JSON.stringify(hand)}];
       if (!c) throw new Error('Controller not available: ' + ${JSON.stringify(hand)});
       if (c.position) {
-        c.position[0] = ${Number(position.x)};
-        c.position[1] = ${Number(position.y)};
-        c.position[2] = ${Number(position.z)};
+        c.position.x = ${Number(position.x)};
+        c.position.y = ${Number(position.y)};
+        c.position.z = ${Number(position.z)};
       }
       if (c.quaternion && ${JSON.stringify(orientation || null)}) {
         const o = ${JSON.stringify(orientation || null)};
-        if (o.x !== undefined) c.quaternion[0] = o.x;
-        if (o.y !== undefined) c.quaternion[1] = o.y;
-        if (o.z !== undefined) c.quaternion[2] = o.z;
-        if (o.w !== undefined) c.quaternion[3] = o.w;
+        if (o.x !== undefined) c.quaternion.x = o.x;
+        if (o.y !== undefined) c.quaternion.y = o.y;
+        if (o.z !== undefined) c.quaternion.z = o.z;
+        if (o.w !== undefined) c.quaternion.w = o.w;
       }
       return true;
     })()`);
@@ -173,16 +173,32 @@ class WebXRActionDriver {
       const c = dev && dev.controllers && dev.controllers[${JSON.stringify(hand)}];
       if (!c) throw new Error('Controller not available: ' + ${JSON.stringify(hand)});
 
-      const cPos = c.position || [0.2, 1.2, -0.4];
-      const dx = targetPos.x - cPos[0];
-      const dy = targetPos.y - cPos[1];
-      const dz = targetPos.z - cPos[2];
+      // The target is in engine world space; the controller lives in the
+      // tracking space of the VR rig. Carry the target into rig space, then
+      // turn the controller so its -Z ray points at it. (This used to mix the
+      // two spaces and never set an orientation: critic run 11.)
+      const rig = K.VRSpike && K.VRSpike.rig;
+      let local = { x: targetPos.x, y: targetPos.y, z: targetPos.z };
+      if (rig && rig.worldToLocal) {
+        rig.updateMatrixWorld(true);
+        const v = rig.worldToLocal(rig.position.clone().set(targetPos.x, targetPos.y, targetPos.z));
+        local = { x: v.x, y: v.y, z: v.z };
+      }
+      const cPos = c.position || { x: 0.2, y: 1.2, z: -0.4 };
+      const dx = local.x - cPos.x;
+      const dy = local.y - cPos.y;
+      const dz = local.z - cPos.z;
       const len = Math.hypot(dx, dy, dz) || 1;
-
-      // Point -Z axis along normalized direction
       const forwardX = dx / len;
       const forwardY = dy / len;
       const forwardZ = dz / len;
+      // Shortest rotation from (0,0,-1) to the forward vector.
+      let qx = forwardY, qy = -forwardX, qz = 0, qw = 1 - forwardZ;
+      if (qw < 1e-6) { qx = 0; qy = 1; qz = 0; qw = 0; }
+      const qn = Math.hypot(qx, qy, qz, qw) || 1;
+      if (c.quaternion) {
+        c.quaternion.x = qx / qn; c.quaternion.y = qy / qn; c.quaternion.z = qz / qn; c.quaternion.w = qw / qn;
+      }
 
       return { targetFound: true, targetPos, rayDirection: [forwardX, forwardY, forwardZ] };
     })()`);
@@ -221,12 +237,12 @@ class WebXRActionDriver {
           const arc = (t - 0.5) * 0.8;
           if (c.position) {
             if (dir === 'horizontal') {
-              c.position[0] = 0.2 + arc;
+              c.position.x = 0.2 + arc;
             } else if (dir === 'overhead') {
-              c.position[1] = 1.6 - arc;
+              c.position.y = 1.6 - arc;
             } else {
-              c.position[0] = 0.2 + arc * 0.7;
-              c.position[1] = 1.4 - arc * 0.7;
+              c.position.x = 0.2 + arc * 0.7;
+              c.position.y = 1.4 - arc * 0.7;
             }
           }
           if (t >= 1) {
@@ -260,7 +276,7 @@ class WebXRActionDriver {
       const dev = window.__xrDevice;
       const c = dev && dev.controllers[${JSON.stringify(hand)}];
       if (c && c.position) {
-        c.position[2] += ${zDelta};
+        c.position.z += ${zDelta};
       }
       return true;
     })()`);

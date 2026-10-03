@@ -72,6 +72,11 @@ export interface XRWorldPose {
   readonly linearVelocity: THREE.Vector3 | null;
   readonly angularVelocity: THREE.Vector3 | null;
   readonly trackingState: XRTrackingState;
+  /**
+   * The rig's world matrix this frame (play space to world). Lets hand motion
+   * be measured without the rig's own movement; see XRPoseMotion.
+   */
+  readonly trackingToWorld?: THREE.Matrix4;
 }
 
 export interface XRButtonState {
@@ -139,4 +144,14 @@ export interface AreaVRPatch {
   readonly collisionProxyIds: readonly string[];
   readonly hiddenObjectIds: readonly string[];
   readonly metadata: Readonly<Record<string, string>>;
+}
+
+/**
+ * A pose good enough to aim with. A Quest reports a controller as emulated
+ * (position estimated) for moments when it loses sight of it - at the neck,
+ * behind the head - and the emulator always does; requiring 'tracked' killed
+ * aim mid-gesture and made the emulator unable to aim at all (critic run 11).
+ */
+export function isUsableXRPose(pose: { readonly trackingState?: XRTrackingState } | null | undefined): boolean {
+  return !!pose && pose.trackingState !== 'unavailable';
 }

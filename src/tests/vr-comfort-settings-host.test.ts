@@ -40,7 +40,8 @@ describe('VRComfortSettingsHost', () => {
     host.present(head, rows(4));
     const four = host.object.scale.y;
     host.present(head, rows(6));
-    expect(host.object.scale.y).toBeCloseTo(four * 6 / 4, 6);
+    // Plus one row-high title band (critic run 11).
+    expect(host.object.scale.y).toBeCloseTo(four * (6 + 1) / (4 + 1), 6);
   });
 
   test('rejects an empty or oversized row list instead of drawing nonsense', () => {

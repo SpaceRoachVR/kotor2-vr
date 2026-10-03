@@ -253,7 +253,10 @@ export class ModuleItem extends ModuleObject {
   }
 
   getName(){
-    return this.getLocalizedName();
+    // dialog.tlk item names carry {..} sort prefixes ("{05}Vibroblade") that
+    // retail never shows (critic run 11).
+    const name = this.getLocalizedName();
+    return typeof name === 'string' ? name.replace(/\{[^}]*\}/g, '').trim() : name;
   }
 
   getEquippedRes(){

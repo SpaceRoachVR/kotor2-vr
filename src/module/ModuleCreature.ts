@@ -2997,8 +2997,14 @@ export class ModuleCreature extends ModuleObject {
     this.min1HP = bMinOneHP ? true : false;
   }
 
+  /**
+   * Current Force points, kept as HP is: `forcePoints` is the base pool,
+   * `currentForce` the current value against it, `maxForcePoints` the max.
+   * This returned the base pool, so spending or regaining Force never showed
+   * and powers were free (critic run 11).
+   */
   getFP(){
-    return this.forcePoints;
+    return (this.maxForcePoints + this.currentForce) - this.forcePoints;
   }
 
   getMaxFP(){

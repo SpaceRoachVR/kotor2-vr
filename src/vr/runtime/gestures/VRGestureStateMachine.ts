@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { playSpaceDelta } from '../XRPoseMotion';
 import { XRHandRole, XRInputFrame, XRWorldPose } from '../XRTypes';
 import {
   GestureDefinition,
@@ -36,6 +37,7 @@ export class VRGestureStateMachine {
     right: Number.NEGATIVE_INFINITY,
   };
 
+  private readonly previousMatrices: Record<XRHandRole, THREE.Matrix4 | null> = { left: null, right: null };
   private readonly previousPositions: Record<XRHandRole, THREE.Vector3 | null> = {
     left: null,
     right: null,
@@ -97,13 +99,15 @@ export class VRGestureStateMachine {
         const prevTime = this.lastSampleTime[role];
         const dt = (timestamp - prevTime) / 1000;
         if (prevPos && dt > 0.001 && dt < 0.2) {
-          vel = hand.pose.position.clone().sub(prevPos).divideScalar(dt);
+          // In play space: the rig's own motion is not a throw (critic run 11).
+          vel = playSpaceDelta(prevPos, { trackingToWorld: this.previousMatrices[role] ?? undefined }, hand.pose.position, hand.pose).divideScalar(dt);
         } else {
           vel = new THREE.Vector3(0, 0, 0);
         }
       }
 
       this.previousPositions[role] = hand.pose.position.clone();
+      this.previousMatrices[role] = hand.pose.trackingToWorld?.clone() ?? null;
       this.lastSampleTime[role] = timestamp;
 
       const sample: GestureTrajectorySample = {

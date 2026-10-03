@@ -329,6 +329,20 @@ export class SaveGame {
     GameState.isLoadingSave = true;
     GameState.TutorialWindowTracker = [];
 
+    // A save replaces the game in progress. Loading one during play used to
+    // add the save's items to the bag already carried (Medpac 4 -> 7 on each
+    // "Load Last Save"; round 15's tunnelers that never ran out) and kept the
+    // live player - HP, position, gear - instead of the saved one (critic run
+    // 11). The saved player is rebuilt from the save's template.
+    GameState.InventoryManager.inventory = [];
+    GameState.PartyManager.Gold = 0;
+    const stalePlayer: any = GameState.PartyManager.Player;
+    if(stalePlayer){
+      try{ stalePlayer.container?.removeFromParent?.(); }catch(e){}
+      GameState.PartyManager.Player = undefined;
+    }
+    try{ GameState.onSaveLoadStarted?.(); }catch(e){ console.error(e); }
+
     try{
       GameState.time = this.TIMEPLAYED;
     }catch(e){}
@@ -1205,6 +1219,11 @@ export class SaveGame {
    */
   static AddSaveGame( savegame: SaveGame ){
     if(!(savegame instanceof SaveGame)){ return; }
+    // GetSaveGames runs on every list open: listing a folder already listed
+    // added it again, and the Load list showed duplicate rows (critic run 11).
+    // Keep the listed one: its details (name, area, time) load in the
+    // background, and a fresh copy reads blank until they do.
+    if(savegame.directory && SaveGame.saves.some((s) => s.directory === savegame.directory)){ return; }
 
     const len = SaveGame.saves.push( savegame );
     const lastSave = SaveGame.saves[len - 1];

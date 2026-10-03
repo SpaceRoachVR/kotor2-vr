@@ -23,6 +23,10 @@ export const VR_COMFORT_SETTINGS_MAX_ROWS = 11;
  * hit-tested the same way as VRKeyboardHost.keyAtRay: point at a row,
  * press Select to cycle its value.
  */
+/** The VR Menu's title band, one row tall, above the settings rows. */
+const HEADER_ROWS = 1;
+const VR_MENU_TITLE = 'VR Menu';
+
 export class VRComfortSettingsHost {
   readonly object: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private readonly raycaster = new THREE.Raycaster();
@@ -43,7 +47,7 @@ export class VRComfortSettingsHost {
     if (typeof document === 'undefined') throw new Error('VR comfort settings requires a browser document');
     this.canvas = document.createElement('canvas');
     this.canvas.width = 900;
-    this.canvas.height = ROW_HEIGHT_PIXELS * this.rowCount;
+    this.canvas.height = ROW_HEIGHT_PIXELS * (this.rowCount + HEADER_ROWS);
     const context = this.canvas.getContext('2d');
     if (!context) throw new Error('VR comfort settings canvas context unavailable');
     this.context = context;
@@ -60,7 +64,7 @@ export class VRComfortSettingsHost {
       })
     );
     this.object.name = 'Kotor2VR.ComfortSettings';
-    this.object.scale.set(PANEL_WIDTH_METRES, ROW_HEIGHT_METRES * this.rowCount, 1);
+    this.object.scale.set(PANEL_WIDTH_METRES, ROW_HEIGHT_METRES * (this.rowCount + HEADER_ROWS), 1);
     this.object.visible = false;
     this.object.renderOrder = 1_000_004;
     scene.add(this.object);
@@ -91,6 +95,14 @@ export class VRComfortSettingsHost {
   }
 
   private highlightedRow: number | null = null;
+  private closeHint = 'Trigger: change   B: close';
+  /** The close button is on the weapon hand: B, or Y for a left-hander. */
+  setCloseButton(button: 'B' | 'Y'): void {
+    const hint = `Trigger: change   ${button}: close`;
+    if (hint === this.closeHint) return;
+    this.closeHint = hint;
+    if (this.lastDrawnRows) this.draw(this.lastDrawnRows);
+  }
 
   clear(): void {
     this.object.visible = false;
@@ -114,10 +126,12 @@ export class VRComfortSettingsHost {
     this.object.updateWorldMatrix(true, false);
     const hit = this.raycaster.intersectObject(this.object, false)[0];
     if (!hit?.uv) return null;
-    const rowHeight = 1 / this.rowCount;
+    const rowHeight = 1 / (this.rowCount + HEADER_ROWS);
     // Canvas row 0 is drawn at the top, but UV.y = 0 is the plane's bottom.
-    const rowFromTop = Math.floor((1 - hit.uv.y) / rowHeight);
-    return Math.min(this.rowCount - 1, Math.max(0, rowFromTop));
+    // The title band above the rows is not a row.
+    const rowFromTop = Math.floor((1 - hit.uv.y) / rowHeight) - HEADER_ROWS;
+    if (rowFromTop < 0) return null;
+    return Math.min(this.rowCount - 1, rowFromTop);
   }
 
   /** Rows the panel is laid out for. */
@@ -128,8 +142,8 @@ export class VRComfortSettingsHost {
   /** Resizes the canvas and the panel for `count` rows and forces a redraw. */
   private layoutRows(count: number): void {
     this.rowCount = count;
-    this.canvas.height = ROW_HEIGHT_PIXELS * count;
-    this.object.scale.set(PANEL_WIDTH_METRES, ROW_HEIGHT_METRES * count, 1);
+    this.canvas.height = ROW_HEIGHT_PIXELS * (count + HEADER_ROWS);
+    this.object.scale.set(PANEL_WIDTH_METRES, ROW_HEIGHT_METRES * (count + HEADER_ROWS), 1);
     // A resized canvas needs a fresh GPU upload, and the old image is gone.
     this.texture.dispose();
     this.lastDrawnRows = null;
@@ -154,13 +168,23 @@ export class VRComfortSettingsHost {
   private draw(rows: readonly VRComfortSettingsRow[]): void {
     const width = this.canvas.width;
     const height = this.canvas.height;
-    const rowHeight = height / this.rowCount;
+    const rowHeight = height / (this.rowCount + HEADER_ROWS);
     this.context.fillStyle = 'rgba(2, 12, 16, 0.94)';
     this.context.fillRect(0, 0, width, height);
-    this.context.font = 'bold 34px Arial';
     this.context.textBaseline = 'middle';
+    // Title band: the panel had no name, and nothing said how to leave it
+    // (critic run 11).
+    this.context.font = 'bold 40px Arial';
+    this.context.textAlign = 'left';
+    this.context.fillStyle = '#62e8ff';
+    this.context.fillText(VR_MENU_TITLE, 30, rowHeight / 2);
+    this.context.font = '28px Arial';
+    this.context.textAlign = 'right';
+    this.context.fillStyle = '#c9d6d8';
+    this.context.fillText(this.closeHint, width - 30, rowHeight / 2);
+    this.context.font = 'bold 34px Arial';
     rows.forEach((row, index) => {
-      const y = index * rowHeight;
+      const y = (index + HEADER_ROWS) * rowHeight;
       const hovered = index === this.highlightedRow;
       this.context.fillStyle = hovered ? 'rgba(40, 120, 140, 0.95)' : index % 2 === 0 ? 'rgba(8, 48, 58, 0.7)' : 'rgba(8, 48, 58, 0.5)';
       this.context.fillRect(0, y, width, rowHeight);

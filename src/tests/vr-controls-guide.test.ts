@@ -8,7 +8,7 @@ describe('the controls guide', () => {
 
   test('right-handed: the wheel on left X, moving on the left stick, shooting on the right trigger', () => {
     const lines = flat('right');
-    expect(lines).toContain('Left hand: X = Action wheel (inventory, map, party, save, VR Menu)');
+    expect(lines).toContain('Left hand: X, hold = Action wheel: point at a choice with either hand and pull its trigger; let go to close (inventory, map, party, save, VR Menu)');
     expect(lines).toContain('Left hand: Stick = Move');
     expect(lines).toContain('Right hand: Trigger = Select, talk, shoot');
   });

@@ -76,6 +76,7 @@ export class XRInputFrameBuilder {
       linearVelocity: XRInputFrameBuilder.toWorldVelocity(pose.linearVelocity, rigWorldOrientation),
       angularVelocity: XRInputFrameBuilder.toWorldVelocity(pose.angularVelocity, rigWorldOrientation),
       trackingState: XRInputFrameBuilder.getTrackingState(pose),
+      trackingToWorld: rig.matrixWorld.clone(),
     };
   }
 

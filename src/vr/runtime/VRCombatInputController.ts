@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { playSpaceDelta } from './XRPoseMotion';
 import { CombatWeaponMode, XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 export interface VRCombatInputConfiguration {
@@ -163,7 +164,7 @@ export class VRCombatInputController {
         dominantPose, grip.offhandPose, this.configuration.bladeSampleDistanceMetres)
       : dominantPose.position.clone();
     const speed = grip
-      ? this.resolveSampledSpeed(samplePoint, context.timestamp)
+      ? this.resolveSampledSpeed(samplePoint, context.timestamp, dominantPose)
       : this.resolveSpeed(dominantPose, context.timestamp);
 
     this.previousPose = VRCombatInputController.clonePose(dominantPose);
@@ -306,11 +307,11 @@ export class VRCombatInputController {
    * velocity cannot be used here — it describes the hand, not a point offset
    * from it, and would discard the rotational contribution this exists for.
    */
-  private resolveSampledSpeed(samplePoint: THREE.Vector3, timestamp: number): number {
+  private resolveSampledSpeed(samplePoint: THREE.Vector3, timestamp: number, currentPose: XRWorldPose): number {
     if (!this.previousSamplePoint || this.previousTimestamp === null) return 0;
     const elapsedSeconds = (timestamp - this.previousTimestamp) / 1_000;
     if (!(elapsedSeconds > 0)) return 0;
-    return samplePoint.distanceTo(this.previousSamplePoint) / elapsedSeconds;
+    return playSpaceDelta(this.previousSamplePoint, this.previousPose, samplePoint, currentPose).length() / elapsedSeconds;
   }
 
   /**
@@ -364,7 +365,7 @@ export class VRCombatInputController {
     if (!this.previousPose || this.previousTimestamp === null) return 0;
     const elapsedSeconds = (timestamp - this.previousTimestamp) / 1_000;
     if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return 0;
-    return pose.position.distanceTo(this.previousPose.position) / elapsedSeconds;
+    return playSpaceDelta(this.previousPose.position, this.previousPose, pose.position, pose).length() / elapsedSeconds;
   }
 
   private resetMeleeSample(): void {
@@ -384,6 +385,7 @@ export class VRCombatInputController {
       linearVelocity: pose.linearVelocity?.clone() ?? null,
       angularVelocity: pose.angularVelocity?.clone() ?? null,
       trackingState: pose.trackingState,
+      trackingToWorld: pose.trackingToWorld?.clone(),
     };
   }
 

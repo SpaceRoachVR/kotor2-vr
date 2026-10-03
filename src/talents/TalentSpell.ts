@@ -260,6 +260,13 @@ export class TalentSpell extends TalentObject {
     });
   }
 
+  /** The cost for this caster: its alignment and Charisma modifier. */
+  getForcePointCostFor(caster: any): number {
+    const alignment = typeof caster?.getGoodEvil === 'function' ? Number(caster.getGoodEvil()) : 50;
+    const cha = typeof caster?.getCHA === 'function' ? Number(caster.getCHA()) : 10;
+    return this.getForcePointCost(Number.isFinite(alignment) ? alignment : 50, Math.floor(((Number.isFinite(cha) ? cha : 10) - 10) / 2));
+  }
+
   static From2DA( row: any ){
     const spell = new TalentSpell();
     spell.parseTwoDARow(row);

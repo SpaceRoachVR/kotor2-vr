@@ -214,7 +214,7 @@ async function enterImmersiveSession(harness, onProgress) {
         return !!b && !b.disabled; })()`,
       30_000, 1000
     );
-    await clickButtonByText(harness, 'Enter VR (spike)');
+    await clickButtonByText(harness, 'Enter VR');
     await harness.waitFor(
       `!!(window.KotOR && window.KotOR.VRSpike && window.KotOR.VRSpike.isPresenting)`,
       30_000, 1000

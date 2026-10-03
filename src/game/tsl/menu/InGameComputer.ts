@@ -1,4 +1,5 @@
 import { GameState } from "@/GameState";
+import { SkillType } from "@/enums/nwscript/SkillType";
 import type { GUILabel, GUIListBox } from "@/gui";
 import { InGameComputer as K1_InGameComputer } from "@/game/kotor/KOTOR";
 
@@ -48,6 +49,43 @@ export class InGameComputer extends K1_InGameComputer {
       }
       resolve();
     });
+  }
+
+  show(){
+    super.show();
+    this.fillCounters();
+  }
+
+  /**
+   * The four counters retail shows beside the terminal text: Computer Use and
+   * Repair skill, spikes and repair parts carried. Nothing filled them, so
+   * they read 0 with 12 spikes in the bag (critic run 11).
+   */
+  private countersKey = '';
+
+  fillCounters(){
+    try{
+      const player: any = GameState.getCurrentPlayer?.();
+      const carried = (tag: string) => (GameState.InventoryManager?.inventory ?? [])
+        .filter((item: any) => String(item?.getTag?.() ?? '').toUpperCase() === tag)
+        .reduce((sum: number, item: any) => sum + (Number(item.getStackSize?.()) || 0), 0);
+      const values = [
+        player?.getSkillLevel?.(SkillType.COMPUTER_USE) ?? 0,
+        player?.getSkillLevel?.(SkillType.REPAIR) ?? 0,
+        carried('K_COMPUTER_SPIKE'),
+        carried('K_REPAIR_PART'),
+      ].map(String);
+      // show() runs every frame while the terminal is up; set text on change only.
+      const key = values.join('|');
+      if(key === this.countersKey) return;
+      this.countersKey = key;
+      this.LBL_COMP_SKILL_VAL?.setText(values[0]);
+      this.LBL_REP_SKILL_VAL?.setText(values[1]);
+      this.LBL_COMP_SPIKES_VAL?.setText(values[2]);
+      this.LBL_REP_UNITS_VAL?.setText(values[3]);
+    }catch(e){
+      console.warn('InGameComputer: counters not filled', e);
+    }
   }
   
 }

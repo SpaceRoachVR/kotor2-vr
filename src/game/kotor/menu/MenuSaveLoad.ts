@@ -164,8 +164,23 @@ export class MenuSaveLoad extends GameMenu {
     } else {
       this.BTN_SAVELOAD.setText(GameState.TLKManager.TLKStrings[1589].Value); // Load
     }
+    // The panel's authored title reads SAVE GAME in both modes; the Load list
+    // said "SAVE GAME" (critic run 11). The game's own strings, found by text.
+    const title = MenuSaveLoad.findTLKText(this.mode === MenuSaveLoadMode.SAVEGAME ? 'Save Game' : 'Load Game');
+    if (title) this.LBL_PANELNAME?.setText(title.toUpperCase());
 
     TextureLoader.LoadQueue();
+  }
+
+  private static tlkTextCache = new Map<string, string | null>();
+  /** A dialog.tlk string equal to `text` (any case), so the shown title is the game's own. */
+  static findTLKText(text: string): string | null {
+    if (MenuSaveLoad.tlkTextCache.has(text)) return MenuSaveLoad.tlkTextCache.get(text) ?? null;
+    const wanted = text.toLowerCase();
+    const found = (GameState.TLKManager?.TLKStrings ?? []).find((s: any) => String(s?.Value ?? '').trim().toLowerCase() === wanted);
+    const value = found ? String(found.Value).trim() : null;
+    MenuSaveLoad.tlkTextCache.set(text, value);
+    return value;
   }
 
   getSaveGames(): SaveGame[] {

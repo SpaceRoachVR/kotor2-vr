@@ -715,10 +715,17 @@ function getVRActionLabel(entry: VRActionMenuEntry, target: ModuleObject | null)
   // type is the one unambiguous signal available here.
   if (entry.action?.type === ActionType.ActionSetMine) return 'Mine';
 
+  // The game's own name for a power or feat ("Stun Droid"), from dialog.tlk;
+  // the 2DA label read "Force Power Droid Stun" (critic run 11).
+  const talentStrRef = Number(entry.talent?.name);
+  if (Number.isInteger(talentStrRef) && talentStrRef >= 0) {
+    const tlkName = stripTLKSortPrefix(String(GameState.TLKManager?.GetStringById?.(talentStrRef)?.Value ?? ''));
+    if (tlkName) return tlkName;
+  }
   const talentLabel = entry.talent?.label ?? entry.talent?.name;
   if (typeof talentLabel === 'string' && talentLabel.trim()) return toPlayerFacingActionLabel(talentLabel);
   const itemName = entry.item?.getName?.();
-  if (typeof itemName === 'string' && itemName.trim()) return toPlayerFacingActionLabel(itemName);
+  if (typeof itemName === 'string' && itemName.trim()) return toPlayerFacingActionLabel(stripTLKSortPrefix(itemName));
   const icon = typeof entry.icon === 'string' ? entry.icon.toLowerCase() : '';
   // ActionMenuManager represents an authored Bash on either a locked door or
   // a locked placeable as `ActionPhysicalAttacks` with the same attack icon.
@@ -734,6 +741,11 @@ function getVRActionLabel(entry: VRActionMenuEntry, target: ModuleObject | null)
   if (icon.includes('recmine')) return 'Recover';
   if (icon.includes('mine')) return 'Mine';
   return 'Action';
+}
+
+/** dialog.tlk names some entries with a sort prefix, "{05}Vibroblade"; never shown in game. */
+export function stripTLKSortPrefix(text: string): string {
+  return text.replace(/^\s*\{\d+\}\s*/, '').trim();
 }
 
 function toPlayerFacingActionLabel(label: string): string {
@@ -1570,6 +1582,10 @@ function dispatchVRDirectionalForceGesture(
     reportVRForceCastOutcome('refused: out of Force range', `head=${intent.label}`);
     return false;
   }
+  if (isVRCombatIntentUnaffordable(actor, target, intent)) {
+    reportVRForceCastOutcome('refused: not enough Force points', `head=${intent.label}`);
+    return false;
+  }
   if (!dispatchVRCombatIntent(actor, target, intent)) return false;
   vrCombatIntentQueue.consumeHead();
   vrCombatIssuedTargetId = target.id;
@@ -1624,6 +1640,10 @@ function dispatchVRForceCastGesture(actor: ModuleCreature, targetId: string | nu
   // the engine and used the power up (critic run 5). It stays queued.
   if (!isVRCombatIntentInRange(actor, target, intent)) {
     reportVRForceCastOutcome('refused: out of Force range', `head=${intent.label}`);
+    return false;
+  }
+  if (isVRCombatIntentUnaffordable(actor, target, intent)) {
+    reportVRForceCastOutcome('refused: not enough Force points', `head=${intent.label}`);
     return false;
   }
   if (!dispatchVRCombatIntent(actor, target, intent)) {
@@ -1792,6 +1812,18 @@ function isVRCombatIntentInRange(actor: ModuleCreature, target: ModuleObject, in
     return talent.inRange(target, actor) !== false;
   } catch {
     return true;
+  }
+}
+
+/** The queued Force power costs more than the caster has (critic run 11: powers were free). */
+function isVRCombatIntentUnaffordable(actor: ModuleCreature, target: ModuleObject, intent: VRCombatIntent): boolean {
+  if (intent.kind !== 'force-power') return false;
+  const talent: any = resolveVRCombatIntentEntry(actor, target, intent)?.talent;
+  if (!talent || typeof talent.getForcePointCostFor !== 'function' || typeof (actor as any).getFP !== 'function') return false;
+  try {
+    return talent.getForcePointCostFor(actor) > (actor as any).getFP();
+  } catch {
+    return false;
   }
 }
 
@@ -2758,10 +2790,38 @@ function resolveVRCharacterEyeHeight(actor: ModuleCreature | null | undefined): 
   }
 }
 
-function resolveHeldItemClassFallback(_item: VREquippedHeldItem): HeldItemClassFallbackTransform {
+/** The longest side a held medpac or stim is drawn at: palm-sized. */
+const VR_HELD_CONSUMABLE_MAX_METRES = 0.11;
+/** Measured once per model: this runs every frame for the held hand. */
+const vrHeldConsumableFit = new WeakMap<THREE.Object3D, HeldItemClassFallbackTransform>();
+
+function resolveHeldItemClassFallback(item: VREquippedHeldItem): HeldItemClassFallbackTransform {
+  const rotation = new THREE.Euler(Math.PI, 0, 0);
+  const itemClass = typeof item.baseItem?.itemClass === 'string' ? item.baseItem.itemClass.trim().toLowerCase() : '';
+  const model = item.model;
+  // Medpacs and stims (i_* item classes) are modelled for the ground, not the
+  // hand: about 30 cm tall with their origin at the base, so the armed medpac
+  // stood 20 cm above the palm and hid the target (critic run 11). Centre it
+  // in the palm and keep it palm-sized. Weapons and grenades keep theirs.
+  if (itemClass.startsWith('i_') && model instanceof THREE.Object3D) {
+    const cached = vrHeldConsumableFit.get(model);
+    if (cached) return cached;
+    model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    if (!box.isEmpty()) {
+      const size = box.getSize(new THREE.Vector3());
+      const longest = Math.max(size.x, size.y, size.z);
+      const scale = longest > VR_HELD_CONSUMABLE_MAX_METRES ? VR_HELD_CONSUMABLE_MAX_METRES / longest : 1;
+      const centre = box.getCenter(new THREE.Vector3());
+      const position = centre.multiplyScalar(-scale).applyEuler(rotation);
+      const fit = { position, rotation, scale };
+      vrHeldConsumableFit.set(model, fit);
+      return fit;
+    }
+  }
   return {
     position: new THREE.Vector3(0, 0, 0),
-    rotation: new THREE.Euler(Math.PI, 0, 0),
+    rotation,
     scale: 1,
   };
 }
@@ -3071,6 +3131,9 @@ export class GameState implements EngineContext {
     VRSpike.exit();
     return true;
   };
+
+  /** A save is being loaded: VR combat state (queue, armed items) belongs to the old game. */
+  static onSaveLoadStarted: (() => void) | null = () => resetVREmbodiedCombatState();
 
   static onBlowLanded: ((attacker: unknown, target: unknown, critical: boolean) => void) | null = () => {};
 
@@ -4476,6 +4539,7 @@ export class GameState implements EngineContext {
               verticalOffsetMetres: VR_WORLD_DIALOGUE_VERTICAL_OFFSET_METRES,
               scale: vrComfortSettings.dialogueTextScale ?? 1,
               scaleAnchor: 'top',
+              backingOpacity: 0.72,
             }
             : menu && !VR_UNTRIMMED_MENU_RESREFS.has(String((menu as any).gui_resref || '').toLowerCase())
               ? {
@@ -4489,6 +4553,12 @@ export class GameState implements EngineContext {
                 // too large and blurred, so it gets half that enlargement.
                 regionWidthMetres: 1.25,
                 regionEnlargeFraction: 0.5,
+                // A computer terminal is a page of text read at arm's length:
+                // it was ~4 px a line in the emulator and ignored the Dialogue
+                // Text size (critic run 11). It takes the text size too.
+                ...(menu === GameState.MenuManager.InGameComputer
+                  ? { regionWidthMetres: 1.3, regionEnlargeFraction: 1, scale: vrComfortSettings.dialogueTextScale ?? 1, scaleAnchor: 'top' as const }
+                  : {}),
               }
               : undefined,
         };

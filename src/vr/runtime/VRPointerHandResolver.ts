@@ -1,3 +1,4 @@
+import { isUsableXRPose } from './XRTypes';
 import { XRHandInputFrame, XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 /**
@@ -82,6 +83,6 @@ export class VRPointerHandResolver {
 
   private static trackedRay(hand: XRHandInputFrame | undefined): XRWorldPose | null {
     const pose = hand?.targetRayPose;
-    return pose?.trackingState === 'tracked' ? pose : null;
+    return isUsableXRPose(pose) ? pose : null;
   }
 }
