@@ -34,7 +34,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       ['Choose a power', 'Action wheel, Force page: it joins your queue'],
       ['Cast it', `Thrust your open ${otherHand} hand at the ringed target, or pull the ${weaponHand} trigger`],
       // TSL has Force Push but no Pull (critic run 13).
-      ['Force Push', `Hold the ${weaponHand} grip and flick forward`],
+      ['Force Push, if known', `Hold the ${weaponHand} grip and flick forward`],
     ],
   };
   // The wheel and party switch sit on the off hand's face buttons, so a
@@ -46,7 +46,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
         lines: [
           ['Stick', 'Move'],
           ['Stick click', 'Walk / run'],
-          ['X, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (inventory, map, party, save, VR Menu)'],
+          ['X, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, quick save, VR Menu)'],
           ['Y', 'Switch party member'],
           ['Trigger', 'Throw an armed grenade'],
         ],
@@ -81,7 +81,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       lines: [
         ['Stick', 'Move'],
         ['Stick click', 'Walk / run'],
-        ['A, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (inventory, map, party, save, VR Menu)'],
+        ['A, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, quick save, VR Menu)'],
         ['B', 'Switch party member'],
         ['Trigger', 'Throw an armed grenade'],
       ],

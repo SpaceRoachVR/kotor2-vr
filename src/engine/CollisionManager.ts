@@ -222,8 +222,44 @@ export class CollisionManager {
   public static getChokeSlideVelocity = getChokeSlideVelocity;
 
   private tmpNormal1 = new THREE.Vector3();
+  /**
+   * The averaged normal of the walls last collided with, and when (ms). VR
+   * locomotion removes the into-the-wall part of the stick with it: pushing
+   * into a wall penetrated, was pushed back out, and penetrated again every
+   * frame, which the first-person rig showed as shake (critic runs 14-15).
+   */
+  readonly lastWallNormal = new THREE.Vector3();
+  lastWallAt = Number.NEGATIVE_INFINITY;
+  /** Every wall normal touched recently (a corner has two), newest last. */
+  readonly recentWallNormals: { x: number; y: number; at: number }[] = [];
+
   private applyCollideAndSlide(collisions: ProcessedCollision[]): void {
     if (collisions.length === 0) return;
+    {
+      const sum = new THREE.Vector3();
+      for (const collision of collisions) if (collision.edge.normal) sum.add(collision.edge.normal);
+      sum.z = 0;
+      const now = performance.now();
+      if (sum.lengthSq() > 1e-8) {
+        this.lastWallNormal.copy(sum.normalize());
+        this.lastWallAt = now;
+      }
+      for (const collision of collisions) {
+        const n = collision.edge.normal;
+        if (!n) continue;
+        const len = Math.hypot(n.x, n.y);
+        if (len < 1e-6) continue;
+        const x = n.x / len, y = n.y / len;
+        // One entry per wall: repeats of one wall crowded out the other wall
+        // of a corner.
+        const same = this.recentWallNormals.find((w) => w.x * x + w.y * y > 0.98);
+        if (same) same.at = now;
+        else this.recentWallNormals.push({ x, y, at: now });
+      }
+      while (this.recentWallNormals.length && (this.recentWallNormals.length > 8 || now - this.recentWallNormals[0].at > 250)) {
+        this.recentWallNormals.shift();
+      }
+    }
 
     const velocity = this.object.forceVector.clone();
     const finalVelocity = velocity.clone();

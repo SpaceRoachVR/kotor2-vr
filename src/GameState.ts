@@ -1710,7 +1710,24 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
   // The lock, not weapon reach: holding a Vibroblade used to cap every throw
   // at 2 m, so a grenade armed at a droid across the room could never leave
   // the hand. The spell's own inRange check below decides the throw distance.
-  const target = resolveVRLockedHostile(actor, targetId);
+  // The lock, or else the nearest hostile in view within throwing range: the
+  // lock follows the weapon hand's aim, and a grenade thrown from the other
+  // hand at a droid that was already attacking said "No target" (critic run
+  // 15).
+  let target = resolveVRLockedHostile(actor, targetId);
+  if (target === null && source !== undefined) {
+    try {
+      const spell = new GameState.TalentSpell(source.spellId);
+      let best: ModuleObject | null = null;
+      let bestDistance = Infinity;
+      for (const candidate of GameState.ModuleObjectManager.playerSelectableObjects) {
+        if (!isVRCombatTarget(actor, candidate) || !spell.inRange(candidate, actor)) continue;
+        const d = distanceVRCombat2D(actor, candidate);
+        if (d < bestDistance) { bestDistance = d; best = candidate; }
+      }
+      target = best;
+    } catch { /* no fallback */ }
+  }
   // A trigger pulled at empty space is a miss-aim, not an invalid target: keep
   // the grenade armed. A locked target that became invalid is cancelled by
   // onCombatTargetInvalidated instead. `resolveVRLiveCombatTarget` returns
@@ -3195,6 +3212,14 @@ export class GameState implements EngineContext {
   };
 
   /** A scheduled item cast was rejected at release; the player hears the refusal in VR (critic run 4). */
+  /** A creature made its save against the player's power: say so in VR. */
+  static onSavingThrowMade: ((saver: unknown, versus: unknown) => void) | null = (saver, versus) => {
+    if (!VRSpike.isPresenting) return;
+    const player = GameState.getCurrentPlayer();
+    if (!player || saver === player || versus !== player) return;
+    VRSpike.showNotice(`${resolveVRWorldPromptName(saver as ModuleObject) || 'The target'} saved`, 2000);
+  };
+
   /** A Force power was resisted: tell the VR player who cast it or resisted it. */
   static onForceResisted: ((target: unknown, caster: unknown) => void) | null = (target, caster) => {
     if (!VRSpike.isPresenting) return;
@@ -3202,6 +3227,11 @@ export class GameState implements EngineContext {
     // A script-applied effect may carry no creator; a resisted power on someone
     // else is then most likely the player's own.
     const casterIsPlayer = !!player && target !== player && (caster == null || caster === player || Number(caster) === (player as any).id || (caster as any)?.id === (player as any).id);
+    // Retail applies the resisted marker after a successful save too; that
+    // case is announced as "saved" (onSavingThrowMade). Only a real Force
+    // resistance says "resisted" (critic run 15).
+    const reallyResisted = Date.now() - (Number((target as any)?.lastForceResistedAt) || 0) < 2000;
+    if (casterIsPlayer && !reallyResisted) return;
     if (casterIsPlayer) VRSpike.showNotice(`${(target ? resolveVRWorldPromptName(target as ModuleObject) : '') || 'The target'} resisted the Force`, 2500);
     else if (target === player) VRSpike.showNotice('You resisted the Force', 2500);
   };

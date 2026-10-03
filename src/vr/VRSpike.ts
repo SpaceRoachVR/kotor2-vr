@@ -715,7 +715,8 @@ export class VRSpike {
   private static panelHost: VRPanelHost | null = null;
   private static keyboardHost: VRKeyboardHost | null = null;
   private static readonly keyboardInputController = new VRKeyboardInputController();
-  private static readonly combatInputController = new VRCombatInputController();
+  // Two fast samples within 120 ms: one-frame pops and wrist snaps are not swings (critic runs 13-15).
+  private static readonly combatInputController = new VRCombatInputController({ minimumFastSamples: 2 });
   private static readonly forceGestureController = new VRForceGestureController();
   private static readonly forceCastGestureController = new VRForceCastGestureController();
   private static readonly consumableUseGestureController = new VRConsumableUseGestureController();
@@ -3031,7 +3032,10 @@ export class VRSpike {
       });
       // Entering the zone clicks, so the player knows to hold it there
       // (critic run 5: nothing said you were in it).
-      if (!wasDwelling && VRSpike.consumableUseGestureController.isDwelling) {
+      // Once per stay: a refused use restarts the dwell, and the chime
+      // repeated every second while the item rested there (critic run 15).
+      if (!wasDwelling && VRSpike.consumableUseGestureController.isDwelling && timestamp - VRSpike.neckZoneChimedAt > 3000) {
+        VRSpike.neckZoneChimedAt = timestamp;
         VRSpike.playCombatCue('neck-zone', 0, true);
       }
       if (!gesture || !armed) return false;
@@ -4597,6 +4601,7 @@ export class VRSpike {
    * that side's hand. Front, behind and unattributed hits use both.
    */
   private static lastLocalHitPoints: number | null = null;
+  private static neckZoneChimedAt = Number.NEGATIVE_INFINITY;
 
   private static presentDamage(session: XRSession, damage: VRDamageEvent, nowMs: number): void {
     const pattern = damage.side === 'unknown'

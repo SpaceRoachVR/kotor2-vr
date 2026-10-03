@@ -2479,6 +2479,12 @@ export class ModuleCreature extends ModuleObject {
 
     if(this.isDead() || !this.combatData.combatState)
       return true;
+    // The character the player controls runs no party AI, as in retail (and
+    // as onBlocked already does): its end-of-round script (k_hen_combend01)
+    // cast k_sup_healing and spent the player's medpacs on its own, three in
+    // 16 s (critic run 15).
+    if(this == GameState.getCurrentPlayer())
+      return true;
     
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnEndRound];
     if(!nwscript){ return true; }
@@ -2539,6 +2545,7 @@ export class ModuleCreature extends ModuleObject {
   }
 
   onAttacked(attackType: CombatActionType){
+    if(this == GameState.getCurrentPlayer()) return;
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnAttacked];
     if(!nwscript){ return; }
     const instance = nwscript.newInstance();
@@ -2551,6 +2558,7 @@ export class ModuleCreature extends ModuleObject {
       return true;
 
     this.resetExcitedDuration();
+    if(this == GameState.getCurrentPlayer()) return true;
     
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnDamaged];
     if(!nwscript){ return true; }
@@ -3449,8 +3457,12 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
+  /**
+   * Force power save DC as the game's own power text gives it: 5 + caster
+   * level + Wisdom modifier + Charisma modifier (critic run 15).
+   */
   getSpellSaveDC(){
-    return 10 + this.getSpellCasterLevel();
+    return 5 + this.getSpellCasterLevel() + abilityModifier(this.getWIS()) + abilityModifier(this.getCHA());
   }
 
   getSpellCasterLevel(){

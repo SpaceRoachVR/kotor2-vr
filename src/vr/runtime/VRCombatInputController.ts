@@ -4,6 +4,13 @@ import { CombatWeaponMode, XRHandRole, XRInputFrame, XRWorldPose } from './XRTyp
 
 export interface VRCombatInputConfiguration {
   readonly minimumSwingSpeedMetresPerSecond: number;
+  /**
+   * Fast samples a one-handed swing needs within 120 ms. A real swing spans
+   * several frames; a tracking pop or a one-frame snap of the wrist is one
+   * sample, and both swung and killed droids (critic runs 13-15). The game
+   * uses 2; 1 keeps the bare speed rule. Two-handed grips always need 2.
+   */
+  readonly minimumFastSamples: number;
   readonly visualSwingCooldownMilliseconds: number;
   /**
    * How far along the blade, in metres, the swing is measured when both hands
@@ -95,6 +102,7 @@ export interface VRCombatSwingMiss {
 
 const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
   minimumSwingSpeedMetresPerSecond: 0.8,
+  minimumFastSamples: 1,
   visualSwingCooldownMilliseconds: 120,
   bladeSampleDistanceMetres: 0.6,
   twoHandedGripMaxSeparationMetres: 0.35,
@@ -193,9 +201,13 @@ export class VRCombatInputController {
     // Two-handed: the blade must be fast on two samples running. One fast
     // sample from hilt jitter at 7-12 cm still swung (critic run 14); a real
     // two-handed swing lasts several frames.
+    // "Running" means within 120 ms: a runtime can repeat a pose on the next
+    // frame, and a strict consecutive count never reached two (critic run 15).
     const rawFast = speed >= this.configuration.minimumSwingSpeedMetresPerSecond;
-    this.gripFastStreak = grip && rawFast ? this.gripFastStreak + 1 : 0;
-    const fast = rawFast && (!grip || this.gripFastStreak >= 2) &&
+    const needsTwo = grip || this.configuration.minimumFastSamples >= 2;
+    const confirmed = rawFast && context.timestamp - this.lastFastAt <= 120;
+    this.lastFastAt = rawFast ? context.timestamp : this.lastFastAt;
+    const fast = rawFast && (!needsTwo || confirmed) &&
       context.timestamp >= this.trackingSettledAt;
     const volume = context.nominatedTargetVolume ?? null;
     let contactMetres: number | undefined;
@@ -386,7 +398,7 @@ export class VRCombatInputController {
   }
 
   private previousOffhandPose: XRWorldPose | null = null;
-  private gripFastStreak = 0;
+  private lastFastAt = Number.NEGATIVE_INFINITY;
   private previousTrackingState: XRWorldPose['trackingState'] = 'tracked';
   private trackingSettledAt = Number.NEGATIVE_INFINITY;
 

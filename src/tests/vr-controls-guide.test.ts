@@ -8,7 +8,7 @@ describe('the controls guide', () => {
 
   test('right-handed: the wheel on left X, moving on the left stick, shooting on the right trigger', () => {
     const lines = flat('right');
-    expect(lines).toContain('Left hand: X, hold = Action wheel: point at a choice with either hand and pull its trigger; let go to close (inventory, map, party, save, VR Menu)');
+    expect(lines).toContain('Left hand: X, hold = Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, quick save, VR Menu)');
     expect(lines).toContain('Left hand: Stick = Move');
     expect(lines).toContain('Right hand: Trigger = Select; use what you point at; talk; shoot');
   });
@@ -27,6 +27,6 @@ describe('the controls guide', () => {
   });
   test('every guide says how to use a Force power, with the right hands (round 15)', () => {
     expect(flat('right')).toContain('Force powers: Cast it = Thrust your open left hand at the ringed target, or pull the right trigger');
-    expect(flat('left')).toContain('Force powers: Force Push = Hold the left grip and flick forward');
+    expect(flat('left')).toContain('Force powers: Force Push, if known = Hold the left grip and flick forward');
   });
 });

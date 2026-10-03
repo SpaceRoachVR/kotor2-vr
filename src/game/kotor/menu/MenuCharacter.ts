@@ -263,6 +263,10 @@ export class MenuCharacter extends GameMenu {
     (this as any).LBL_FORTITUDE_STAT?.setText(saveTotal(character.getFortitudeSave(), character.getCON()));
     (this as any).LBL_REFLEX_STAT?.setText(saveTotal(character.getReflexSave(), character.getDEX()));
     (this as any).LBL_WILL_STAT?.setText(saveTotal(character.getWillSave(), character.getWIS()));
+    // "Light Mastery: +3 STR" is the GUI's placeholder; it showed to a neutral
+    // Guardian (critic run 15). Only a character at mastery keeps the line.
+    const alignment = Number((character as any).getGoodEvil?.());
+    if (!(alignment >= 100 || alignment <= 0)) (this as any).LBL_FORCEMASTERY?.setText('');
     this.LBL_STR?.setText(character.getSTR());
     this.LBL_DEX?.setText(character.getDEX());
     this.LBL_CON?.setText(character.getCON());

@@ -1548,8 +1548,10 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [],
     action: function(this: NWScriptInstance, args: []){
+      // The caster's DC, not a constant 10: the value was computed and
+      // thrown away (critic run 15).
       if(BitWise.InstanceOfObject(this.caller, ModuleObjectType.ModuleCreature)){
-        (this.caller as ModuleCreature).getSpellSaveDC();
+        return (this.caller as ModuleCreature).getSpellSaveDC();
       }
 
       return 10;
@@ -3096,11 +3098,11 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject]){
+      // Neutral reputation only. Friends and the party counted as neutral,
+      // so area powers and grenades that spare neutrals never touched the
+      // thrower or the party (critic run 15: no Reflex save inside the blast).
       if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)){
-        if( ( GameState.PartyManager.party.indexOf(args[0] as any) >= 0 ? NW_TRUE : NW_FALSE ) && ( GameState.PartyManager.party.indexOf(args[1] as any) >= 0 ? NW_TRUE : NW_FALSE ) ){
-          return NW_TRUE;
-        }
-        return args[1].isFriendly(args[0]) || args[1].isNeutral(args[0]) ? NW_TRUE : NW_FALSE;
+        return args[1].isNeutral(args[0]) ? NW_TRUE : NW_FALSE;
       }
       return NW_FALSE;
     }

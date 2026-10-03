@@ -8,6 +8,8 @@ export interface CreatureLocomotionTarget {
   speed?: number;
   /** Fraction of full movement speed the stick asks for (1 = run). */
   locomotionScale?: number;
+  /** The engine's collision state, for sliding along walls. Optional for test doubles. */
+  collisionManager?: { recentWallNormals?: { x: number; y: number; at: number }[] };
   canMove(): boolean;
   clearAllActions(includeCombatActions?: boolean): void;
   setFacing(facing: number, instant?: boolean, speed?: number): void;
@@ -47,14 +49,62 @@ export class CreatureLocomotionAdapter<TTarget extends CreatureLocomotionTarget 
       target.force = 1;
       // Speed follows the stick: a light push walks, full deflection runs. It
       // ran at full speed from a 0.2 push (critic run 14).
-      target.locomotionScale = Math.min(1, Math.max(0.35, locomotion.magnitude));
+      // Floor of a tenth (about 0.5 m/s): a 0.35 floor made every light push a
+      // 1.9 m/s walk (critic run 15).
+      target.locomotionScale = Math.min(1, Math.max(0.1, locomotion.magnitude));
       this.wasMoving = true;
       // The native collision and avoidance code advances creatures through
       // forceVector, not merely their visual facing. ActionMoveToPoint writes
       // this vector every frame; omitting it from VR caused locomotion to stall
       // at narrow walkmesh turns despite a valid controller direction.
-      target.forceVector.x = locomotion.worldDirection.x;
-      target.forceVector.y = locomotion.worldDirection.y;
+      let dirX = locomotion.worldDirection.x;
+      let dirY = locomotion.worldDirection.y;
+      // Slide along a wall touched in the last 200 ms instead of pushing into
+      // it (see CollisionManager.lastWallNormal).
+      // Every wall touched in the last 250 ms: in a corner the two walls take
+      // turns, and sliding along one pushed into the other (critic run 15).
+      const now = performance.now();
+      const walls = (target.collisionManager?.recentWallNormals ?? []).filter((n) => now - n.at < 250);
+      if (walls.length) {
+        let blocked = false;
+        for (let pass = 0; pass < 3; pass++) {
+          for (const n of walls) {
+            const into = dirX * n.x + dirY * n.y;
+            if (into < 0) { dirX -= into * n.x; dirY -= into * n.y; }
+          }
+        }
+        const length = Math.hypot(dirX, dirY);
+        // What remains must still go roughly where the stick points.
+        const along = length > 1e-6
+          ? (dirX * locomotion.worldDirection.x + dirY * locomotion.worldDirection.y) / length
+          : 0;
+        if (length < 0.15 || along < 0.2) blocked = true;
+        // A V-shaped corner: no direction slides along one wall without going
+        // into the other, so what is left still points into a wall.
+        if (!blocked) {
+          const ux = dirX / length, uy = dirY / length;
+          for (const n of walls) if (ux * n.x + uy * n.y < -0.05) blocked = true;
+        }
+        if (blocked) {
+          // Into a wall or a corner: stand still rather than shake. Standing
+          // still collides with nothing, so keep these walls remembered while
+          // the stick still points into them, or every 250 ms the player
+          // bumped in again.
+          for (const n of walls) (n as { at: number }).at = now;
+          // Speed too: with no force vector the engine keeps walking along the
+          // facing while any speed is left, straight into the corner.
+          target.speed = 0;
+          target.force = 0;
+          target.forceVector.x = 0;
+          target.forceVector.y = 0;
+          target.controlled = true;
+          return true;
+        }
+        dirX /= length;
+        dirY /= length;
+      }
+      target.forceVector.x = dirX;
+      target.forceVector.y = dirY;
       target.setFacing(
         CreatureLocomotionAdapter.directionToCreatureFacing(locomotion.worldDirection.x, locomotion.worldDirection.y),
         false,

@@ -125,6 +125,17 @@ describe('VRCombatInputController', () => {
     expect(controller.process(withState(frame(240, 0.5), 'tracked'), context('melee-one-handed', 240))).toHaveLength(1);
   });
 
+  test('in game, a one-frame pop is not a swing but a swing over frames is (critic run 15)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    controller.process(frame(0, 0), context('melee-one-handed', 0));
+    // A 0.10 m pop in one 40 ms frame, then still.
+    expect(controller.process(frame(40, 0.1), context('melee-one-handed', 40))).toHaveLength(0);
+    expect(controller.process(frame(400, 0.1), context('melee-one-handed', 400))).toHaveLength(0);
+    // A real swing: fast on two frames running.
+    expect(controller.process(frame(440, 0.2), context('melee-one-handed', 440))).toHaveLength(0);
+    expect(controller.process(frame(480, 0.35), context('melee-one-handed', 480))).toHaveLength(1);
+  });
+
   test('a double-bladed or dual-wield stance is never promoted', () => {
     // Adding a second hand to an already-two-weapon stance means something
     // other than a two-handed grip, and is not modelled.

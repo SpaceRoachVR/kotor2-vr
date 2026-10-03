@@ -2813,6 +2813,9 @@ export class ModuleObject {
     let bonus = CombatRound.GetMod(this.getCON()) + this.getAutoBalanceSaveBonus();
     
     if((roll + this.getFortitudeSave(nSaveType) + bonus) >= nDC){
+      // Tell the VR player their power was saved against (critic run 15: a saved
+      // Stun Droid looked like it did nothing).
+      try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }
       return 1
     }
 
@@ -2839,6 +2842,9 @@ export class ModuleObject {
     let bonus = CombatRound.GetMod(this.getDEX()) + this.getAutoBalanceSaveBonus();
     
     if((roll + this.getReflexSave(nSaveType) + bonus) >= nDC){
+      // Tell the VR player their power was saved against (critic run 15: a saved
+      // Stun Droid looked like it did nothing).
+      try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }
       return 1
     }
 
@@ -2873,6 +2879,9 @@ export class ModuleObject {
     let bonus = CombatRound.GetMod(this.getWIS()) + this.getAutoBalanceSaveBonus();
 
     if((roll + this.getWillSave(nSaveType) + bonus) >= nDC){
+      // Tell the VR player their power was saved against (critic run 15: a saved
+      // Stun Droid looked like it did nothing).
+      try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }
       return 1
     }
 
@@ -2922,20 +2931,27 @@ export class ModuleObject {
       const resistance = this.getForceResistance();
       if(resistance <= 0) return false;
       const roll = Dice.roll(1, DiceType.d20, (oCaster as any).getTotalClassLevel());
-      return roll < resistance;
+      const resisted = roll < resistance;
+      if(resisted) this.lastForceResistedAt = Date.now();
+      return resisted;
     }
     return 0;
   }
 
+  /** When ResistForce last succeeded for this object (ms); the resisted notice reads it. */
+  lastForceResistedAt = 0;
+
   /** Force resistance from effects (items apply theirs as effects). */
   getForceResistance(): number {
     let total = 0;
+    let best = 0;
     for(const effect of this.effects){
       if(!effect) continue;
-      if(effect.type == GameEffectType.EffectForceResistanceIncrease) total += Number(effect.getInt(0)) || 0;
+      // The strongest source, not the sum: FR 10 and 14 made 24 (critic run 15).
+      if(effect.type == GameEffectType.EffectForceResistanceIncrease) best = Math.max(best, Number(effect.getInt(0)) || 0);
       else if(effect.type == GameEffectType.EffectForceResistanceDecrease) total -= Number(effect.getInt(0)) || 0;
     }
-    return Math.max(0, total);
+    return Math.max(0, best + total);
   }
 
   /**

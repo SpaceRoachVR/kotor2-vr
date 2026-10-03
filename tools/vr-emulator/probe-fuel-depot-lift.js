@@ -11,7 +11,7 @@
  * 150 ms through the opening of the conversation, then plays it out and
  * reports where the PC ends up.
  *
- *   node tools/vr-emulator/probe-fuel-depot-lift.js [--no-vr] [--checkpoint name] [--port 8491] [--user <saves folder>]
+ *   node tools/vr-emulator/probe-fuel-depot-lift.js [--no-vr] [--checkpoint name] [--port 8491] [--cdp 9453] [--user <saves folder>]
  *
  * Never saves (the harness guard stops autosaves).
  */
@@ -47,7 +47,8 @@ const SAMPLE = `(() => {
 (async () => {
   const service = await startAssetService({ port: ASSET_PORT, userRoot: USER_ROOT });
   await waitForPort(ASSET_PORT).catch(() => undefined);
-  const harness = new VrHarness({ port: ASSET_PORT + 962, headless: true });
+  const CDP_PORT = args.includes('--cdp') ? Number(args[args.indexOf('--cdp') + 1]) : ASSET_PORT + 962;
+  const harness = new VrHarness({ port: CDP_PORT, headless: true });
   try {
     await steps.boot(harness, service.url);
     await steps.resumeFromCheckpoint(harness, CHECKPOINT);

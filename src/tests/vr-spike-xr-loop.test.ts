@@ -812,6 +812,8 @@ describe('VRSpike XR loop ownership', () => {
       }),
     };
 
+    // A swing is two fast samples within 120 ms (critic run 15).
+    (VRSpike as any).processCombatInput(980);
     (VRSpike as any).processCombatInput(1_000);
 
     expect(combatEvents).toEqual([expect.objectContaining({
@@ -973,6 +975,8 @@ describe('VRSpike XR loop ownership', () => {
     expect(bufferServiced).not.toHaveBeenCalled();
 
     paused = false;
+    // A swing is two fast samples within 120 ms (critic run 15).
+    (VRSpike as any).processCombatInput(1_180);
     (VRSpike as any).processCombatInput(1_200);
     expect(swings).toHaveLength(1);
   });

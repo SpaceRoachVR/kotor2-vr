@@ -113,7 +113,9 @@ export class MenuAbilities extends K1_MenuAbilities {
     const groups = [];
     for (let i = 0; i < knownFeats.length; i++) {
       const feat = knownFeats[i];
-      if (!feat || /^XXXX/i.test(String((feat as any).label ?? ''))) continue;
+      // Internal rows have no icon ("Complex Unarmed Animations" drew a white
+      // square with a blank pane; critic run 15).
+      if (!feat || /^XXXX/i.test(String((feat as any).label ?? '')) || !String((feat as any).icon ?? '').trim() || String((feat as any).icon).trim() === '****') continue;
       const group: TalentFeat[] = [];
       const prereqfeat1 = feats[feat.prereqFeat1];
       const prereqfeat2 = feats[feat.prereqFeat2];
