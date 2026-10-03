@@ -92,7 +92,11 @@ describe('first-person body suppression is wired to the right render', () => {
     const cutsceneAt = spike.indexOf('private static renderCutscene(');
     expect(cutsceneAt).toBeGreaterThan(-1);
     const cutscene = spike.slice(cutsceneAt);
-    expect(cutscene.split('hidePlayerBodyForFirstPerson(').length - 1).toBe(1);
+    // Two passes: the theater shot (hidden only when its camera is inside the
+    // body) and the room around the theater, drawn from the player's own eyes
+    // (always hidden there; critic runs 15-16: the player's hair in view).
+    expect(cutscene.split('hidePlayerBodyForFirstPerson(').length - 1).toBe(2);
+    expect(cutscene).toMatch(/const restoreOwnBody = hidePlayerBodyForFirstPerson\(playerBody\);\s*try \{\s*renderer\.render\(worldScene, VRSpike\.camera\)/);
     expect(cutscene).toMatch(/isCameraInsideBody\(cameraPosition, feet\)\s*\?\s*hidePlayerBodyForFirstPerson\(playerBody\)/);
 
     const movieAt = spike.indexOf('static renderMovie(');

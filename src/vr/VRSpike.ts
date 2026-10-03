@@ -4178,9 +4178,14 @@ export class VRSpike {
       const restoreWorld = VRSpike.theaterHidesWorld
         ? hideWorldForTheater(worldScene, VRSpike.movieHost.object)
         : () => {};
+      // The room around the theater is drawn from the player's own eyes, so
+      // the player's own body goes, as in the world path: its hair drew
+      // across the view in the Peragus holorecord (critic runs 15-16).
+      const restoreOwnBody = hidePlayerBodyForFirstPerson(playerBody);
       try {
         renderer.render(worldScene, VRSpike.camera);
       } finally {
+        restoreOwnBody();
         restoreWorld();
       }
       VRSpike.perf.recordXRRender(frameTimestamp);
