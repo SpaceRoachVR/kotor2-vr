@@ -26,7 +26,7 @@ describe('the controls guide', () => {
     }
   });
   test('every guide says how to use a Force power, with the right hands (round 15)', () => {
-    expect(flat('right')).toContain('Force powers: Cast it = Thrust your open left hand at the ringed target, or pull the right trigger');
+    expect(flat('right')).toContain('Force powers: Cast it = Ring the target with your right hand, then thrust your open left hand at it, or pull the right trigger');
     expect(flat('left')).toContain('Force powers: Force Push, if known = Hold the left grip and flick forward');
   });
 });

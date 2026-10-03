@@ -95,8 +95,10 @@ export class MenuMessages extends K1_MenuMessages {
     // TSL has a Combat list; K1's show() put every line under Feedback and
     // left Combat empty (critic runs 16-17).
     const entries = GameState.FeedbackMessageManager.Entries.slice(0).reverse();
-    this.LB_MESSAGES.setItems(entries.filter((e: any) => !e.combat).map((e: any) => `${e.message}`));
-    this.LB_COMBAT.setItems(entries.filter((e: any) => e.combat).map((e: any) => `${e.message}`));
+    // Lines saved by older builds carry dialog.tlk sort prefixes ("{05}").
+    const clean = (e: any) => String(e.message ?? '').replace(/\{\d+\}/g, '');
+    this.LB_MESSAGES.setItems(entries.filter((e: any) => !e.combat).map(clean));
+    this.LB_COMBAT.setItems(entries.filter((e: any) => e.combat).map(clean));
     this.updateListVisibility();
   }
 

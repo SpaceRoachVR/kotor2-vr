@@ -638,8 +638,9 @@ export class CombatRound {
     // misses, natural 20 hits, and a threat needs a second roll to become a
     // critical. This used to add bonuses before testing the threat range, hit
     // only on beating defense, and make every threat an automatic critical hit.
+    const natural = Dice.roll(1, DiceType.d20);
     const roll = resolveAttackRoll({
-      natural: Dice.roll(1, DiceType.d20),
+      natural,
       attackBonus,
       defense: combatAction.target.getAC(),
       // Critical Strike / Sniper Shot widen the threat range 2x/3x/4x.
@@ -681,7 +682,12 @@ export class CombatRound {
     }
 
     // Log to combat menu - create feedback message for the attack result
-    this.logAttackResult(creature, weapon, combatAction, isCritical, hasAssuredHit);
+    this.logAttackResult(creature, weapon, combatAction, isCritical, hasAssuredHit, {
+      natural, bonus: attackBonus, total: attackRoll,
+      result: attack.attackResult,
+      damage: attack.attackResult === AttackResult.HIT_SUCCESSFUL || attack.attackResult === AttackResult.CRITICAL_HIT
+        ? Number(attack.getTotalDamage?.()) || 0 : 0,
+    });
 
     this.currentAttack++;
   }
@@ -871,8 +877,35 @@ export class CombatRound {
    * @param isCritical - Whether the attack was a critical hit
    * @param hasAssuredHit - Whether the attack had assured hit effect
    */
-  logAttackResult(creature: ModuleCreature, weapon: ModuleItem | undefined, combatAction: CombatRoundAction, isCritical: boolean, hasAssuredHit: boolean) {
+  logAttackResult(creature: ModuleCreature, weapon: ModuleItem | undefined, combatAction: CombatRoundAction, isCritical: boolean, hasAssuredHit: boolean,
+    rollInfo?: { natural: number; bonus: number; total: number; result: AttackResult; damage: number }) {
     const { FeedbackMessageManager } = GameState;
+    // Retail's Combat tab (dialog.tlk 1404 and 1403): "<attacker> attacks
+    // <target> : *<result>* : (<d20> + <bonus> = <total>)", then the damage.
+    // The old line named no target, roll or damage (critic run 19).
+    if(rollInfo && combatAction?.target){
+      const words: Partial<Record<AttackResult, string>> = {
+        [AttackResult.CRITICAL_HIT]: 'critical hit',
+        [AttackResult.HIT_SUCCESSFUL]: 'hit',
+        [AttackResult.AUTOMATIC_HIT]: 'automatic hit',
+        [AttackResult.MISS]: 'miss',
+        [AttackResult.PARRIED]: 'parried',
+        [AttackResult.DEFLECTED]: 'deflected',
+        [AttackResult.ATTACK_RESISTED]: 'resisted',
+      };
+      const attacker = creature.getName();
+      const target = (combatAction.target as any)?.getName?.() || 'target';
+      const word = hasAssuredHit && rollInfo.result !== AttackResult.MISS ? 'assured hit' : (words[rollInfo.result] ?? 'attack');
+      const sign = rollInfo.bonus < 0 ? '-' : '+';
+      FeedbackMessageManager.AddLine(
+        `${attacker} attacks ${target} : *${word}* : (${rollInfo.natural} ${sign} ${Math.abs(rollInfo.bonus)} = ${rollInfo.total})`, true,
+        rollInfo.result === AttackResult.MISS ? FeebackMessageColor.INFO : FeebackMessageColor.ATTACK);
+      if(rollInfo.damage > 0){
+        FeedbackMessageManager.AddLine(`${attacker} damages ${target} for ${rollInfo.damage} damage`, true, FeebackMessageColor.ATTACK);
+      }
+      console.log(`Combat Log: ${attacker} attacks ${target} : *${word}* : (${rollInfo.natural} ${sign} ${Math.abs(rollInfo.bonus)} = ${rollInfo.total})${rollInfo.damage > 0 ? ` for ${rollInfo.damage}` : ''}`);
+      return;
+    }
 
     let message = '';
     let color = FeebackMessageColor.ATTACK;

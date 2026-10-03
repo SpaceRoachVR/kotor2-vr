@@ -319,6 +319,10 @@ export interface VRSpikeHooks {
    * two ranges was targetable by the rules of combat and invisible to aim
    * resolution. Returns null when there is no actor to aim from.
    */
+  /** The id of the creature the player controls (party[0]); changes on a leader switch. */
+  getControlledActorId?: () => number | null;
+  /** True when the id is a dead creature (a corpse the interaction ray found). */
+  isDeadCreature?: (id: number) => boolean;
   getCombatAimCandidates?: () => {
     readonly actorPosition: THREE.Vector3;
     readonly maxRangeMetres: number;
@@ -631,6 +635,7 @@ export class VRSpike {
   private static readonly combatTargetLock = new VRCombatTargetLock({ switchDwellMilliseconds: 400, aimLossGraceMilliseconds: 2500 });
   private static offhandGrenadeTriggerHeld = false;
   private static steadiedFeet: THREE.Vector3 | null = null;
+  private static lastControlledActorId: number | null | undefined = undefined;
   private static steadiedRawFeet: THREE.Vector3 | null = null;
 
   /**
@@ -677,6 +682,8 @@ export class VRSpike {
     return next;
   }
   private static pausedUseNoticeAt = Number.NEGATIVE_INFINITY;
+  /** The off hand was last at the neck (a medpac): no palm cast just after. */
+  private static offhandBusyAt = Number.NEGATIVE_INFINITY;
   /** Follows the off hand for a few seconds after a grenade trigger, as the projectile's launch point. */
   private static readonly throwHandAnchor = new THREE.Object3D();
   private static throwHandAnchorUntil = Number.NEGATIVE_INFINITY;
@@ -2047,6 +2054,9 @@ export class VRSpike {
       if (!VRSpike.comfortSettingsHost) VRSpike.comfortSettingsHost = new VRComfortSettingsHost(scene);
       VRSpike.comfortSettingsHost.setCloseButton(VRSpike.dominantHand === 'left' ? 'Y' : 'B');
       VRSpike.comfortSettingsHost.present(inputFrame.head, context.rows);
+      // The combat update doesn't run while the panel owns input, so the
+      // hilt's queued-power text stayed over a row (critic runs 18-19).
+      VRSpike.weaponStanceHost?.clear();
 
       // 'radial-wheel' adds the either-hand trigger Select: the ray follows
       // whichever hand points, so either trigger clicks. Menu Select alone is
@@ -2505,7 +2515,13 @@ export class VRSpike {
 
   /** Interaction aim first, then combat reach. See `resolveAimedCombatTargetId`. */
   private static resolveAimedTargetIdForCombat(): number | null {
-    return VRSpike.resolveAimedTargetId() ?? VRSpike.resolveAimedCombatTargetId();
+    const aimed = VRSpike.resolveAimedTargetId();
+    // A corpse under the ray (lootable, so the interaction ray takes it) hid
+    // the live droid behind it: 0 of 6 swings registered (critic run 19).
+    let dead = false;
+    try { dead = aimed !== null && VRSpike.hooks?.isDeadCreature?.(aimed) === true; } catch { dead = false; }
+    if (aimed !== null && !dead) return aimed;
+    return VRSpike.resolveAimedCombatTargetId() ?? aimed;
   }
 
   private static parseModuleObjectTargetId(id: string | null): number | null {
@@ -3099,6 +3115,12 @@ export class VRSpike {
         timestamp,
       });
       if (!gesture) return false;
+      // Bringing the hand down from the neck after a medpac read as a palm
+      // thrust at the target and cast the queued power (critic run 19).
+      if (timestamp - VRSpike.offhandBusyAt < 1200) {
+        VRSpike.forceCastGestureController.reset();
+        return false;
+      }
       return context.onForceCastGesture(gesture) === true;
     } catch (error) {
       if (!VRSpike.forceGestureErrorReported) {
@@ -3138,6 +3160,7 @@ export class VRSpike {
         VRSpike.neckZoneChimedAt = timestamp;
         VRSpike.playCombatCue('neck-zone', 0, true);
       }
+      if (VRSpike.consumableUseGestureController.isInZone) VRSpike.offhandBusyAt = timestamp;
       if (!gesture || !armed) return false;
       return context.onConsumableUseGesture!(gesture) === true;
     } catch (error) {
@@ -5094,6 +5117,18 @@ export class VRSpike {
       facing + Math.PI / 2 + VRSpike.yawOffset + VRSpike.turnYaw
     );
 
+    // A leader switch (Y) puts the player in another body: seat the head over
+    // it. The rig stayed where the old leader stood, beside the new one, whose
+    // hood and braids filled the view until the stick moved (critic run 19).
+    let controlledId: number | null = null;
+    try { controlledId = VRSpike.hooks?.getControlledActorId?.() ?? null; } catch { controlledId = null; }
+    if (controlledId !== VRSpike.lastControlledActorId) {
+      if (VRSpike.lastControlledActorId !== undefined) {
+        VRSpike.rigAnchorPending = true;
+        VRSpike.steadiedFeet = null;
+      }
+      VRSpike.lastControlledActorId = controlledId;
+    }
     const feet = VRSpike.hooks?.getPlayerPosition() ?? null;
     const localHead = VRSpike.latestLocalHeadPosition;
     const headOffset = localHead ? localHead.clone().applyQuaternion(rig.quaternion) : null;

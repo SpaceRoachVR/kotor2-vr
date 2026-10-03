@@ -201,6 +201,21 @@ describe('VRCombatInputController', () => {
     expect(swings).toBeGreaterThanOrEqual(5);
   });
 
+  test('in game, a held follow-through then a slow return is one swing; a fast backhand is two (critic run 19)', () => {
+    const held = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    // Slash 0.75 m in ~250 ms, hold 800 ms, return 0.6 m in ~450 ms.
+    [0, 0, 0.15, 0.3, 0.45, 0.6, 0.75].forEach((y, i) => { swings += held.process(frame(i * 50, y), context('melee-one-handed', i * 50)).length; });
+    [0.75, 0.75].forEach((y, i) => { const t = 700 + i * 400; swings += held.process(frame(t, y), context('melee-one-handed', t)).length; });
+    [0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.15].forEach((y, i) => { const t = 1150 + i * 75; swings += held.process(frame(t, y), context('melee-one-handed', t)).length; });
+    expect(swings).toBe(1);
+    const backhand = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let both = 0;
+    [0, 0, 0.15, 0.3, 0.45, 0.6, 0.75].forEach((y, i) => { both += backhand.process(frame(i * 50, y), context('melee-one-handed', i * 50)).length; });
+    [0.75, 0.6, 0.45, 0.3, 0.15, 0, 0].forEach((y, i) => { const t = 700 + i * 50; both += backhand.process(frame(t, y), context('melee-one-handed', t)).length; });
+    expect(both).toBe(2);
+  });
+
   test('in game, one slow 1 s sweep is one swing event (critic run 17)', () => {
     const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
     let swings = 0;

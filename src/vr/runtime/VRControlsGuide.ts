@@ -32,7 +32,9 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
     title: 'Force powers',
     lines: [
       ['Choose a power', 'Action wheel, Force page: queued in a fight; out of one, a power on yourself casts at once'],
-      ['Cast it', `Thrust your open ${otherHand} hand at the ringed target, or pull the ${weaponHand} trigger`],
+      // The ring comes from the weapon hand's aim (critic run 19: a thrust with
+      // the sword pointed at the floor did nothing, and the guide didn't say).
+      ['Cast it', `Ring the target with your ${weaponHand} hand, then thrust your open ${otherHand} hand at it, or pull the ${weaponHand} trigger`],
       // TSL has Force Push but no Pull (critic run 13).
       ['Force Push, if known', `Hold the ${weaponHand} grip and flick forward`],
     ],

@@ -107,7 +107,9 @@ const WINDOWED_MINIMUM_ARC_METRES = 0.12;
 /** After a swing, motion this far against its heading (cos ~107 degrees) ... */
 const WINDOWED_REVERSAL_DOT = -0.3;
 /** ... within this long is the recovery stroke. */
-const WINDOWED_RECOVERY_MS = 1000;
+const WINDOWED_RECOVERY_MS = 1500;
+/** ... unless it is at least this fraction of the stroke's peak speed: a backhand. */
+const WINDOWED_BACKHAND_SPEED_FRACTION = 0.6;
 
 const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
   minimumSwingSpeedMetresPerSecond: 0.8,
@@ -440,6 +442,8 @@ export class VRCombatInputController {
   private windowedStrokeId = 0;
   private windowedStrokeEmitted = -1;
   private lastSwingMotionAt = Number.NEGATIVE_INFINITY;
+  private lastSwingPeakSpeed = 0;
+  private strokePeakSpeed = 0;
   /** The window start each fast pose was measured from, parallel to fastPoseTimes. */
   private readonly fastPoseStarts: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 }[] = [];
   private windowedGripped = false;
@@ -502,8 +506,13 @@ export class VRCombatInputController {
     // The return stroke: for a second after a recognised swing, motion back
     // the way it came is recovery, not a new swing (critic runs 17-18: out
     // 0.77 m in 260 ms, back 0.62 m in 700 ms bought a second attack).
+    // A deliberate backhand is as fast as the stroke it answers; a recovery
+    // is much slower (critic run 19: forehand/backhand once a second lost
+    // every other stroke, while a held follow-through returned at 1.4 m/s
+    // after a 3 m/s slash and still bought a second attack).
     if (this.lastSwingHeading && now - this.lastSwingMotionAt < WINDOWED_RECOVERY_MS &&
-      direction.dot(this.lastSwingHeading) < WINDOWED_REVERSAL_DOT) {
+      direction.dot(this.lastSwingHeading) < WINDOWED_REVERSAL_DOT &&
+      speed < this.lastSwingPeakSpeed * WINDOWED_BACKHAND_SPEED_FRACTION) {
       return false;
     }
     const previous = this.fastPoseDirections[this.fastPoseDirections.length - 1];
@@ -513,7 +522,11 @@ export class VRCombatInputController {
       this.fastPoseStarts.length = 0;
     }
     // A new stroke begins when no fast pose of the last one is left.
-    if (this.fastPoseTimes.length === 0) this.windowedStrokeId += 1;
+    if (this.fastPoseTimes.length === 0) {
+      this.windowedStrokeId += 1;
+      this.strokePeakSpeed = 0;
+    }
+    this.strokePeakSpeed = Math.max(this.strokePeakSpeed, speed);
     this.fastPoseTimes.push(now);
     this.fastPoseDirections.push(direction);
     this.fastPoseStarts.push(reference);
@@ -523,6 +536,7 @@ export class VRCombatInputController {
     if (playSpaceDelta(start.position, start, point, pose).length() < WINDOWED_MINIMUM_ARC_METRES) return false;
     this.lastSwingHeading = direction.clone();
     this.lastSwingMotionAt = now;
+    this.lastSwingPeakSpeed = this.strokePeakSpeed;
     return true;
   }
   private lastFastAt = Number.NEGATIVE_INFINITY;
@@ -554,6 +568,8 @@ export class VRCombatInputController {
     this.fastPoseStarts.length = 0;
     this.lastSwingHeading = null;
     this.lastSwingMotionAt = Number.NEGATIVE_INFINITY;
+    this.lastSwingPeakSpeed = 0;
+    this.strokePeakSpeed = 0;
     this.previousPose = null;
     this.previousSamplePoint = null;
     this.previousTimestamp = null;

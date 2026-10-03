@@ -19,6 +19,8 @@ const DROP_METRES = 0.17;
 const SHOW_MS = 1800;
 const RENDER_ORDER = 1_000_002;
 const MERGE_MS = 400;
+/** A queued notice replaces the one on screen after this long. */
+const PENDING_AFTER_MS = 1300;
 
 export type VRNoticeTone = 'refusal' | 'info';
 
@@ -57,6 +59,7 @@ export class VRRefusalNoticeHost {
   private shownAt = Number.NEGATIVE_INFINITY;
   /** The text of the notice on screen, before merging. */
   private shownParts: string[] = [];
+  private readonly pending: { text: string; holdMs: number; tone: VRNoticeTone }[] = [];
 
   constructor(camera: THREE.Object3D) {
     if (!camera) throw new TypeError('VR refusal notice requires a camera');
@@ -87,7 +90,15 @@ export class VRRefusalNoticeHost {
     // Two notices in the same instant ("Droid saved", "You saved") were drawn
     // over each other, and only the last could be read (critic run 18).
     // Within 400 ms they share the plate.
-    if (this.object.visible && nowMs - this.shownAt < MERGE_MS && !this.shownParts.includes(text) && this.shownParts.length < 2) {
+    const merging = this.object.visible && nowMs - this.shownAt < MERGE_MS;
+    if (merging && this.shownParts.includes(text)) return;
+    if (merging && this.shownParts.length >= 2) {
+      // A third and fourth at once waited for nothing and were lost (critic
+      // run 19: "Atton saved" never showed). They follow in turn.
+      if (!this.pending.some((p) => p.text === text) && this.pending.length < 4) this.pending.push({ text, holdMs, tone });
+      return;
+    }
+    if (merging) {
       this.shownParts = [...this.shownParts, text];
     } else {
       this.shownParts = [text];
@@ -105,6 +116,12 @@ export class VRRefusalNoticeHost {
   }
 
   update(nowMs: number): void {
+    if (this.pending.length && (nowMs >= this.hideAt || nowMs - this.shownAt > PENDING_AFTER_MS)) {
+      const next = this.pending.shift()!;
+      this.object.visible = false;
+      this.show(next.text, nowMs, next.holdMs, next.tone);
+      return;
+    }
     if (this.object.visible && nowMs >= this.hideAt) this.object.visible = false;
   }
 
@@ -130,7 +147,16 @@ export class VRRefusalNoticeHost {
     c.font = 'bold 54px sans-serif';
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    c.fillText(text, w / 2, h / 2 + 2, w - 40);
+    // Two notices that don't fit side by side go on two lines rather than
+    // being squeezed to 60% width (critic run 19).
+    const parts = text.split(' · ');
+    if (parts.length === 2 && c.measureText(text).width > w - 40) {
+      c.font = 'bold 44px sans-serif';
+      c.fillText(parts[0], w / 2, h * 0.3 + 2, w - 40);
+      c.fillText(parts[1], w / 2, h * 0.72 + 2, w - 40);
+    } else {
+      c.fillText(text, w / 2, h / 2 + 2, w - 40);
+    }
     this.texture.needsUpdate = true;
   }
 }

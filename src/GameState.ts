@@ -1940,14 +1940,18 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   };
   // A full queue is feedback-only: never fall through to immediate authored
   // activation, which would violate the player's explicitly selected order.
-  // Picking a queued power again queued it twice (critic run 18).
-  if (vrCombatIntentQueue.getSnapshot().entries.some((queued) => queued.sourceKey === intent.sourceKey)) {
-    try { VRSpike.showNotice(`${label} is already queued`, 1500, 'info'); } catch { /* notice only */ }
-    return true;
-  }
+  // Retail queues repeats (Power Attack twice); only an accidental double
+  // pick inside 600 ms is dropped (critic runs 18-19).
+  const pickedAt = performance.now();
+  if (intent.sourceKey === vrLastQueuedSourceKey && pickedAt - vrLastQueuedAt < 600) return true;
+  vrLastQueuedSourceKey = intent.sourceKey;
+  vrLastQueuedAt = pickedAt;
   vrCombatIntentQueue.enqueue(intent);
   return true;
 }
+
+let vrLastQueuedSourceKey = '';
+let vrLastQueuedAt = Number.NEGATIVE_INFINITY;
 
 /**
  * Whether a queued power can reach `target` from here: the entry's own
@@ -3333,7 +3337,8 @@ export class GameState implements EngineContext {
     if (!player || source !== player) return;
     const party = GameState.PartyManager.party as unknown[];
     if (target === player) {
-      try { VRSpike.showNotice(`You took ${amount}${what ? ` (your ${what})` : ''}`, 2500, 'info'); } catch { /* notice only */ }
+      // Harm, so the warning colour (critic run 19: teal read as neutral).
+      try { VRSpike.showNotice(`You took ${amount}${what ? ` (your ${what})` : ''}`, 2500); } catch { /* notice only */ }
     } else if (party.includes(target)) {
       try { VRSpike.showNotice(`${name} took ${amount} from your ${what || 'attack'}`, 2500, 'info'); } catch { /* notice only */ }
     }
@@ -3342,6 +3347,7 @@ export class GameState implements EngineContext {
   /** Combat log: every save against a power or grenade, with the roll ("Atton: Reflex 17 vs DC 15, saved"). */
   static onSavingThrowRolled: ((saver: unknown, versus: unknown, kind: string, roll: number, total: number, dc: number) => void) | null = (saver, versus, kind, roll, total, dc) => {
     if (!versus) return; // scripted checks with no opponent are not combat
+    if ((saver as any)?.isDead?.() === true) return;
     const name = (saver as any)?.getName?.();
     if (!name) return;
     // Retail's Combat line (dialog.tlk 1406): "<who> <save>. <result>! <total> (roll <d20><bonus>) vs. DC <n>".
@@ -3353,6 +3359,8 @@ export class GameState implements EngineContext {
   /** A creature made its save against the player's power: say so in VR. */
   static onSavingThrowMade: ((saver: unknown, versus: unknown) => void) | null = (saver, versus) => {
     if (!VRSpike.isPresenting) return;
+    // A corpse in the blast "saved" (critic run 19).
+    if ((saver as any)?.isDead?.() === true) return;
     const player = GameState.getCurrentPlayer();
     if (!player) return;
     // Whatever the source, the player's own grenade included (critic run 17).
@@ -4203,6 +4211,14 @@ export class GameState implements EngineContext {
        * `isWithinVRCombatRange` in `getCombatContext` — the wheel must never
        * offer an attack the combat bridge then refuses to nominate.
        */
+      getControlledActorId: () => {
+        const actor: any = GameState.getCurrentPlayer();
+        return actor && Number.isFinite(actor.id) ? actor.id : null;
+      },
+      isDeadCreature: (id: number) => {
+        const object: any = resolveVRAimedObject(id);
+        return !!object && typeof object.isDead === 'function' && object.isDead() === true;
+      },
       getCombatAimCandidates: () => {
         const actor = GameState.getCurrentPlayer();
         if (!actor?.position) return null;

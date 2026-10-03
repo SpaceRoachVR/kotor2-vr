@@ -73,7 +73,7 @@ export class InGameComputer extends K1_InGameComputer {
     for(let i = shown.length - 1; i >= 0; i--){
       let text = '';
       try { text = String(shown[i]?.getCompiledString?.() ?? ''); } catch { /* no text */ }
-      if(/^\s*\[?\s*(return|back|previous)/i.test(text)){
+      if(/^\s*\[?\s*(return|back|previous)\b/i.test(text)){
         GameState.CutsceneManager.selectReplyAtIndex(i);
         return true;
       }
