@@ -23,7 +23,11 @@ const ASSET_SERVER = path.join(__dirname, '..', 'asset-http', 'asset-server.js')
 function startAssetService(options = {}) {
   // --no-mods: the harness is how parity snapshots and the module sweep are
   // taken, and those have to describe retail rather than the player's layers.
-  const extraArgs = ['--no-mods', ...(options.port ? ['--port', String(options.port)] : [])];
+  // options.userRoot: a private saves/settings folder, so parallel runs never
+  // share one game-in-progress folder (critic run 11: one critic's load
+  // emptied another's bag).
+  const extraArgs = ['--no-mods', ...(options.port ? ['--port', String(options.port)] : []),
+    ...(options.userRoot ? ['--user', String(options.userRoot)] : [])];
   return new Promise((rawResolve, rawReject) => {
     const child = spawn(process.execPath, [ASSET_SERVER, ...extraArgs], { stdio: ['ignore', 'pipe', 'pipe'] });
     // Settling clears the no-URL timer. An uncleared timer stays a ref'd handle
