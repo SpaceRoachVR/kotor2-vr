@@ -5,7 +5,7 @@
  * changes the player, reloads it, then loads a different save, and asserts
  * each load matches a fresh load of that save. Prints the inventory too.
  *
- *   node tools/vr-emulator/check-save-reload.js [--port 8511]
+ *   node tools/vr-emulator/check-save-reload.js [--port 8511] [--user <private saves folder>]
  *
  * Never saves. Exits 1 on a failed assertion.
  */
@@ -14,6 +14,7 @@ const { startAssetService, waitForPort } = require('./asset-service');
 const steps = require('./playthrough-steps');
 
 const args = process.argv.slice(2);
+const USER = args.includes('--user') ? args[args.indexOf('--user') + 1] : undefined;
 const PORT = args.includes('--port') ? Number(args[args.indexOf('--port') + 1]) : 8511;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
@@ -44,7 +45,7 @@ async function loadSave(harness, name) {
 }
 
 (async () => {
-  const service = await startAssetService({ port: PORT });
+  const service = await startAssetService({ port: PORT, userRoot: USER });
   await waitForPort(PORT).catch(() => undefined);
   const harness = new VrHarness({ port: PORT + 950, headless: true });
   try {
@@ -57,13 +58,22 @@ async function loadSave(harness, name) {
       return i >= 0 ? names[i] : null; })()`);
     if (!(await loadSave(harness, 'R15 PREPARED FIGHT'))) { console.log('SKIP  no "R15 PREPARED FIGHT" save'); process.exitCode = 2; return; }
     const fresh = await harness.evaluate(SNAPSHOT);
+    // Critic run 12: from the save's start spot the Central Controller (a
+    // wall console 1.8 m away) could not be selected after the sight-line change.
+    const console102 = await harness.evaluate(`(() => { const gs = window.KotOR.GameState; const p = gs.getCurrentPlayer();
+      const c = gs.module.area.placeables.find((o) => /central controller/i.test(String(o.getName && o.getName())));
+      if (!c) return null; return { dist: +c.position.distanceTo(p.position).toFixed(2), selectable: gs.ModuleObjectManager.playerSelectableObjects.includes(c) }; })()`);
+    if (console102) check(console102.selectable, "the Central Controller is selectable from the save's start", `${console102.dist} m`);
     console.log('fresh  ', JSON.stringify(fresh));
+    const journal = await harness.evaluate(`window.KotOR.GameState.JournalManager.Entries.length`);
     // Change the live game: hurt the player, move them, add an item stack.
     await harness.evaluate(`(() => { const gs = window.KotOR.GameState, p = gs.getCurrentPlayer(); p.subtractHP(10); p.position.x += 3;
       const m = gs.InventoryManager.inventory.find((i) => i.baseItemId === 55); if (m) m.setStackSize(m.getStackSize() + 5); })()`);
     await loadSave(harness, 'R15 PREPARED FIGHT');
     const again = await harness.evaluate(SNAPSHOT);
     console.log('reload ', JSON.stringify(again));
+    const journalAgain = await harness.evaluate(`window.KotOR.GameState.JournalManager.Entries.length`);
+    check(journalAgain === journal, 'reloading keeps the journal the save had (no duplicates)', `${journal} -> ${journalAgain}`);
     check(JSON.stringify(again.inv) === JSON.stringify(fresh.inv), 'reloading the same save gives the same inventory');
     check(again.hp === fresh.hp && again.x === fresh.x && again.y === fresh.y, 'reloading restores the saved HP and position', `hp ${again.hp}/${fresh.hp} at ${again.x},${again.y}`);
     check(again.gold === fresh.gold, 'reloading restores the saved credits', `${again.gold}/${fresh.gold}`);

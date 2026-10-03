@@ -145,7 +145,7 @@ export class MenuAbilities extends K1_MenuAbilities {
     const allowedTypes = [1, 6];
     const knownSpells: any[] = [];
 
-    const unknownSpells: number[] = [176, 177, 178, 179, 180, 181, 182];
+
 
     const allowedSpells: any[] = [];
     for (let i = 0; i < spellCount; i++) {
@@ -156,7 +156,10 @@ export class MenuAbilities extends K1_MenuAbilities {
       //skip unsupported spells
       if(allowedTypes.indexOf(usertype) == -1){ continue; }
 
-      if(!GameState.PartyManager.party[0].getHasSpell(id) && unknownSpells.indexOf(id) == -1){ continue; }
+      // Only powers the character knows. Spells 176-182 (unused rows, one
+      // named "Super duper advanced lightning") were always added and showed
+      // as nine "?" icons and the screen's title (critic run 12).
+      if(!GameState.PartyManager.party[0].getHasSpell(id)){ continue; }
 
       allowedSpells.push(spell);
     }

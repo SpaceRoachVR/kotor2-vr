@@ -706,6 +706,26 @@ function resolveVRAimedObject(aimedTargetId: number | null): ModuleObject | null
   ) ?? null;
 }
 
+/**
+ * A Force power on the wheel shows its cost for this character: powers that
+ * cost 25 FP against a 15 FP maximum were offered like any other, with no
+ * cost shown (critic run 12). A cast the pool can't pay is refused, with a cue.
+ */
+function withVRForcePowerCost(label: string, entry: VRActionMenuEntry): string {
+  const talent: any = entry?.talent;
+  const actor: any = GameState.getCurrentPlayer();
+  if (!talent || typeof talent.getForcePointCostFor !== 'function' || !actor || typeof actor.getFP !== 'function') return label;
+  try {
+    const cost = Number(talent.getForcePointCostFor(actor));
+    if (!(cost > 0)) return label;
+    // The cost only, never the pool: the label is part of the wheel item's
+    // identity, and must not change as Force points regenerate.
+    return `${label} · ${cost} FP`;
+  } catch {
+    return label;
+  }
+}
+
 function getVRActionLabel(entry: VRActionMenuEntry, target: ModuleObject | null): string {
   // Planting a mine is identified by its action type, not by its icon. The
   // entry ActionMenuManager builds for it carries neither a talent nor an
@@ -1623,7 +1643,11 @@ function dispatchVRForceCastGesture(actor: ModuleCreature, targetId: string | nu
   const intent = vrCombatIntentQueue.getHead();
   if (!intent) return false;
   if (intent.kind !== 'force-power' || intent.requiredInput !== 'dominant-trigger') {
-    reportVRForceCastOutcome('ignored: head is not a trigger-cast power', `head=${intent.label}`);
+    // A power queued behind an attack: say why the thrust did nothing. It
+    // was silent (critic runs 11-12). Queue order is the player's own.
+    const powerBehind = vrCombatIntentQueue.getSnapshot().entries.some((entry: any) =>
+      entry?.kind === 'force-power' && entry?.requiredInput === 'dominant-trigger');
+    reportVRForceCastOutcome(powerBehind ? 'refused: an attack is queued before the power' : 'ignored: head is not a trigger-cast power', `head=${intent.label}`);
     return false;
   }
   const target = resolveVRLockedHostile(actor, targetId);
@@ -1902,7 +1926,7 @@ const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreat
     GameState.ActionMenuManager.UpdateMenuActions();
     return GameState.ActionMenuManager.ActionPanels as VRActionMenuPanelLists;
   },
-  getPlayerFacingLabel: (entry, target) => getVRActionLabel(entry, target),
+  getPlayerFacingLabel: (entry, target) => withVRForcePowerCost(getVRActionLabel(entry, target), entry),
   getIcon: (entry) => getVRActionIcon(entry),
   logger: console,
   onTargetMenuAction: (panelIndex) => {
@@ -4388,98 +4412,81 @@ export class GameState implements EngineContext {
           GameState.State = EngineState.PAUSED;
           vrComfortSettingsPausedByVR = true;
         }
-        const rows: VRComfortSettingsRow[] = [
+        // Each row carries its own action, so the order can change without
+        // re-numbering a switch. Controls Guide is first (critic run 12: a
+        // first-time player could not find it); Dominant Hand is last, away
+        // from the rows tapped often, since one click swaps every control.
+        const settingsRows: (VRComfortSettingsRow & { readonly activate: () => void })[] = [
+          {
+            label: 'Controls Guide',
+            value: vrControlsGuideOpen ? 'Shown' : 'Hidden',
+            activate: () => { vrControlsGuideOpen = !vrControlsGuideOpen; },
+          },
           {
             label: 'Movement',
             value: vrComfortSettings.locomotionMode === 'smooth' ? 'Smooth' : 'Teleport',
+            activate: () => { vrComfortSettings.locomotionMode = vrComfortSettings.locomotionMode === 'smooth' ? 'blink' : 'smooth'; },
           },
           {
             label: 'Turning',
             value: vrComfortSettings.turnMode === 'smooth' ? 'Smooth' : 'Snap',
+            activate: () => { vrComfortSettings.turnMode = vrComfortSettings.turnMode === 'smooth' ? 'snap' : 'smooth'; },
           },
           {
             label: 'Snap Turn Angle',
             value: `${vrComfortSettings.snapTurnDegrees}°`,
+            activate: () => {
+              const options = [30, 45, 60, 90] as const;
+              const currentIndex = options.indexOf(vrComfortSettings.snapTurnDegrees as typeof options[number]);
+              vrComfortSettings.snapTurnDegrees = options[(Math.max(0, currentIndex) + 1) % options.length];
+            },
           },
           {
             label: 'Comfort Vignette',
             value: vrComfortSettings.vignetteEnabled ? 'On' : 'Off',
+            activate: () => { vrComfortSettings.vignetteEnabled = !vrComfortSettings.vignetteEnabled; },
           },
           {
             label: 'Damage Flash',
             value: vrComfortSettings.damageFlashEnabled !== false ? 'On' : 'Off',
+            activate: () => { vrComfortSettings.damageFlashEnabled = vrComfortSettings.damageFlashEnabled === false; },
           },
           {
             label: 'Unpause on Wheel Close',
             value: vrComfortSettings.unpauseOnWheelClose === true ? 'On' : 'Off',
+            activate: () => { vrComfortSettings.unpauseOnWheelClose = vrComfortSettings.unpauseOnWheelClose !== true; },
           },
           {
             label: 'Combat Sounds',
             value: vrComfortSettings.combatSoundsEnabled !== false ? 'On' : 'Off',
+            activate: () => { vrComfortSettings.combatSoundsEnabled = vrComfortSettings.combatSoundsEnabled === false; },
           },
           {
             label: 'Wrist Health',
             value: vrComfortSettings.healthPlateEnabled !== false ? 'On' : 'Off',
-          },
-          {
-            label: 'Dominant Hand',
-            value: VRSpike.currentDominantHand === 'left' ? 'Left' : 'Right',
-          },
-          {
-            label: 'Controls Guide',
-            value: vrControlsGuideOpen ? 'Shown' : 'Hidden',
+            activate: () => { vrComfortSettings.healthPlateEnabled = vrComfortSettings.healthPlateEnabled === false; },
           },
           {
             label: 'Dialogue Text',
             value: VR_DIALOGUE_TEXT_LABELS[Math.max(0, VR_DIALOGUE_TEXT_SCALES.indexOf((vrComfortSettings.dialogueTextScale ?? 1) as any))],
+            activate: () => {
+              const current = Math.max(0, VR_DIALOGUE_TEXT_SCALES.indexOf((vrComfortSettings.dialogueTextScale ?? 1) as any));
+              vrComfortSettings.dialogueTextScale = VR_DIALOGUE_TEXT_SCALES[(current + 1) % VR_DIALOGUE_TEXT_SCALES.length];
+            },
+          },
+          {
+            // ROADMAP 3.15: the setting existed in VRSpike but no row reached it.
+            label: 'Dominant Hand',
+            value: VRSpike.currentDominantHand === 'left' ? 'Left' : 'Right',
+            activate: () => { VRSpike.setDominantHand(VRSpike.currentDominantHand === 'left' ? 'right' : 'left'); },
           },
         ];
+        const rows: VRComfortSettingsRow[] = settingsRows.map(({ label, value }) => ({ label, value }));
         return {
           rows,
           controlsGuide: vrControlsGuideOpen,
           activateRow: (index: number) => {
-            switch (index) {
-              case 0:
-                vrComfortSettings.locomotionMode = vrComfortSettings.locomotionMode === 'smooth' ? 'blink' : 'smooth';
-                break;
-              case 1:
-                vrComfortSettings.turnMode = vrComfortSettings.turnMode === 'smooth' ? 'snap' : 'smooth';
-                break;
-              case 2: {
-                const options = [30, 45, 60, 90] as const;
-                const currentIndex = options.indexOf(vrComfortSettings.snapTurnDegrees as typeof options[number]);
-                vrComfortSettings.snapTurnDegrees = options[(Math.max(0, currentIndex) + 1) % options.length];
-                break;
-              }
-              case 3:
-                vrComfortSettings.vignetteEnabled = !vrComfortSettings.vignetteEnabled;
-                break;
-              case 4:
-                vrComfortSettings.damageFlashEnabled = vrComfortSettings.damageFlashEnabled === false;
-                break;
-              case 5:
-                vrComfortSettings.unpauseOnWheelClose = vrComfortSettings.unpauseOnWheelClose !== true;
-                break;
-              case 6:
-                vrComfortSettings.combatSoundsEnabled = vrComfortSettings.combatSoundsEnabled === false;
-                break;
-              case 7:
-                vrComfortSettings.healthPlateEnabled = vrComfortSettings.healthPlateEnabled === false;
-                break;
-              case 8:
-                // ROADMAP 3.15: the setting existed in VRSpike but no row
-                // reached it, so round 14's C3 had nothing to press.
-                VRSpike.setDominantHand(VRSpike.currentDominantHand === 'left' ? 'right' : 'left');
-                break;
-              case 9:
-                vrControlsGuideOpen = !vrControlsGuideOpen;
-                break;
-              case 10: {
-                const current = Math.max(0, VR_DIALOGUE_TEXT_SCALES.indexOf((vrComfortSettings.dialogueTextScale ?? 1) as any));
-                vrComfortSettings.dialogueTextScale = VR_DIALOGUE_TEXT_SCALES[(current + 1) % VR_DIALOGUE_TEXT_SCALES.length];
-                break;
-              }
-            }
+            settingsRows[index]?.activate();
             saveVRComfortSettings();
           },
           close: () => { vrComfortSettingsPanelOpen = false; vrControlsGuideOpen = false; },
@@ -4539,7 +4546,7 @@ export class GameState implements EngineContext {
               verticalOffsetMetres: VR_WORLD_DIALOGUE_VERTICAL_OFFSET_METRES,
               scale: vrComfortSettings.dialogueTextScale ?? 1,
               scaleAnchor: 'top',
-              backingOpacity: 0.72,
+              backingOpacity: 0.9,
             }
             : menu && !VR_UNTRIMMED_MENU_RESREFS.has(String((menu as any).gui_resref || '').toLowerCase())
               ? {
@@ -4685,6 +4692,9 @@ export class GameState implements EngineContext {
             ? GameState.CursorManager.reticle2
             : null;
         if (!object || !reticle) return null;
+        // A corpse is not a target: its name plate and brackets stayed up
+        // after the kill (critic runs 11-12).
+        if (typeof (object as any).isDead === 'function' && (object as any).isDead()) return null;
         const position = reticle.getWorldPosition(new THREE.Vector3());
         return {
           id: String(object.id),

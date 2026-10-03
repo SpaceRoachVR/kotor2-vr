@@ -90,3 +90,18 @@ describe('VRPointerHandResolver', () => {
     expect((result?.pose.position as { x: number }).x).toBe(1);
   });
 });
+
+describe('VRPointerHandResolver with a trigger down (critic run 12)', () => {
+  test('only the triggering hand picks, even when the other hand is sticky on the panel', () => {
+    const resolver = new VRPointerHandResolver();
+    const frame = (hands: any) => ({ timestamp: 0, head: {} as any, hands, activeInteractionProfiles: [] }) as any;
+    const pose = (x: number) => ({ targetRayPose: { position: { x, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 }, trackingState: 'tracked' } }) as any;
+    const hitTest = (p: any) => (p.position.x === 1 ? 'VR Menu' : 'Items');
+    // The left hand points first and becomes sticky.
+    expect(resolver.resolve(frame({ left: pose(1) }), hitTest)?.hit).toBe('VR Menu');
+    // The right trigger fires with the right ray on Items.
+    expect(resolver.resolve(frame({ left: pose(1), right: pose(2) }), hitTest, 'right')?.hit).toBe('Items');
+    // A right trigger with the right ray off the panel picks nothing.
+    expect(resolver.resolve(frame({ left: pose(1) }), hitTest, 'right')).toBeNull();
+  });
+});

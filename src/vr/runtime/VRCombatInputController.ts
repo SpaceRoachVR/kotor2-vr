@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { playSpaceDelta } from './XRPoseMotion';
+import { handVelocity } from './XRPoseMotion';
 import { CombatWeaponMode, XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 export interface VRCombatInputConfiguration {
@@ -311,7 +311,7 @@ export class VRCombatInputController {
     if (!this.previousSamplePoint || this.previousTimestamp === null) return 0;
     const elapsedSeconds = (timestamp - this.previousTimestamp) / 1_000;
     if (!(elapsedSeconds > 0)) return 0;
-    return playSpaceDelta(this.previousSamplePoint, this.previousPose, samplePoint, currentPose).length() / elapsedSeconds;
+    return handVelocity(this.previousSamplePoint, this.previousPose, samplePoint, currentPose, elapsedSeconds).length();
   }
 
   /**
@@ -365,7 +365,7 @@ export class VRCombatInputController {
     if (!this.previousPose || this.previousTimestamp === null) return 0;
     const elapsedSeconds = (timestamp - this.previousTimestamp) / 1_000;
     if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return 0;
-    return playSpaceDelta(this.previousPose.position, this.previousPose, pose.position, pose).length() / elapsedSeconds;
+    return handVelocity(this.previousPose.position, this.previousPose, pose.position, pose, elapsedSeconds).length();
   }
 
   private resetMeleeSample(): void {

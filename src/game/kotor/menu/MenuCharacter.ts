@@ -255,6 +255,14 @@ export class MenuCharacter extends GameMenu {
     this.LBL_VITALITY_STAT?.setText(character.getHP() + '/' + character.getMaxHP());
     this.LBL_FORCE_STAT?.setText(character.getFP() + '/' + character.getMaxFP());
     this.LBL_DEFENSE_STAT?.setText(character.getAC());
+    // The sheet's saves are totals: class base + template + effects, plus
+    // the ability modifier and autobalance. Nothing filled them, so the
+    // GUI's placeholder 18/18/18 showed (critic run 12).
+    const saveTotal = (base: number, ability: number) =>
+      base + Math.floor((ability - 10) / 2) + (Number((character as any).getAutoBalanceSaveBonus?.()) || 0);
+    (this as any).LBL_FORTITUDE_STAT?.setText(saveTotal(character.getFortitudeSave(), character.getCON()));
+    (this as any).LBL_REFLEX_STAT?.setText(saveTotal(character.getReflexSave(), character.getDEX()));
+    (this as any).LBL_WILL_STAT?.setText(saveTotal(character.getWillSave(), character.getWIS()));
     this.LBL_STR?.setText(character.getSTR());
     this.LBL_DEX?.setText(character.getDEX());
     this.LBL_CON?.setText(character.getCON());

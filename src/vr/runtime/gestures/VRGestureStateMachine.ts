@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { playSpaceDelta } from '../XRPoseMotion';
+import { handVelocity } from '../XRPoseMotion';
 import { XRHandRole, XRInputFrame, XRWorldPose } from '../XRTypes';
 import {
   GestureDefinition,
@@ -100,7 +100,7 @@ export class VRGestureStateMachine {
         const dt = (timestamp - prevTime) / 1000;
         if (prevPos && dt > 0.001 && dt < 0.2) {
           // In play space: the rig's own motion is not a throw (critic run 11).
-          vel = playSpaceDelta(prevPos, { trackingToWorld: this.previousMatrices[role] ?? undefined }, hand.pose.position, hand.pose).divideScalar(dt);
+          vel = handVelocity(prevPos, { trackingToWorld: this.previousMatrices[role] ?? undefined }, hand.pose.position, hand.pose, dt);
         } else {
           vel = new THREE.Vector3(0, 0, 0);
         }

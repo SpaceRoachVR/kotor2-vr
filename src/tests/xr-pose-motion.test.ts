@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, test } from '@jest/globals';
-import { playSpaceDelta } from '@/vr/runtime/XRPoseMotion';
+import { handVelocity, playSpaceDelta } from '@/vr/runtime/XRPoseMotion';
 import { VRForceCastGestureController } from '@/vr/runtime/VRForceCastGestureController';
 import { XRInputFrame, XRWorldPose } from '@/vr/runtime/XRTypes';
 
@@ -52,5 +52,16 @@ describe('playSpaceDelta', () => {
     // Running at 5 m/s toward the target, the hand still in play space.
     expect(controller.process(frameAt(0, 1_000), { ...input, timestamp: 1_000 })).toBeNull();
     expect(controller.process(frameAt(0.1, 1_020), { ...input, timestamp: 1_020 })).toBeNull();
+  });
+});
+
+describe('handVelocity (critic run 12: a tracking jump swung and killed a droid)', () => {
+  test('a 0.25 m jump in one frame is a tracking jump, not motion', () => {
+    const v = handVelocity(new THREE.Vector3(0, 0, 0), null, new THREE.Vector3(0.25, 0, 0), null, 0.016);
+    expect(v.length()).toBe(0);
+  });
+  test('a hard real swing (6 m/s) is kept', () => {
+    const v = handVelocity(new THREE.Vector3(0, 0, 0), null, new THREE.Vector3(0.1, 0, 0), null, 1 / 60);
+    expect(v.length()).toBeCloseTo(6);
   });
 });

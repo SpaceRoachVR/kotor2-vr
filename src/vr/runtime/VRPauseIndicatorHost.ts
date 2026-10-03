@@ -13,8 +13,11 @@ const DIM_OPACITY = 0.35;
 const LABEL_DISTANCE_METRES = 0.9;
 const LABEL_WIDTH_METRES = 0.22;
 const LABEL_HEIGHT_METRES = 0.055;
-/** Below the horizon so it never covers what the player is aiming at. */
-const LABEL_DROP_METRES = 0.3;
+/**
+ * Above the horizon. Below it, it covered the name plate of the target being
+ * aimed at, which sits low in the view at combat range (critic runs 11-12).
+ */
+const LABEL_DROP_METRES = -0.3;
 /** Under every VR surface (999_999 and up), above the world. */
 const DIM_RENDER_ORDER = 999_998;
 

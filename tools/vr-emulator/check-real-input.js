@@ -12,7 +12,7 @@
  *     Force power (pose velocity is withheld, as on Virtual Desktop);
  *  5. a cast Force power spends Force points.
  *
- *   node tools/vr-emulator/check-real-input.js [--port 8512]
+ *   node tools/vr-emulator/check-real-input.js [--port 8512] [--user <private saves folder>]
  *
  * Never saves. Exits 1 on a failed assertion. Logic only, not feel.
  */
@@ -22,6 +22,7 @@ const steps = require('./playthrough-steps');
 const { WebXRActionDriver } = require('./dsl/WebXRActionDriver');
 
 const args = process.argv.slice(2);
+const USER = args.includes('--user') ? args[args.indexOf('--user') + 1] : undefined;
 const PORT = args.includes('--port') ? Number(args[args.indexOf('--port') + 1]) : 8512;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
@@ -34,7 +35,7 @@ const PAUSED = `!!window.KotOR.VRSpike.isPlayerPaused()`;
 const log = (harness, re) => harness.evaluate(`(window.__xrHarness && window.__xrHarness.log || []).filter((e) => ${re}.test(e.text)).length`);
 
 (async () => {
-  const service = await startAssetService({ port: PORT });
+  const service = await startAssetService({ port: PORT, userRoot: USER });
   await waitForPort(PORT).catch(() => undefined);
   const harness = new VrHarness({ port: PORT + 950, headless: true });
   try {
@@ -143,6 +144,14 @@ const log = (harness, re) => harness.evaluate(`(window.__xrHarness && window.__x
       const fp = await harness.evaluate(`window.KotOR.GameState.getCurrentPlayer().getFP()`);
       check(out === true, 'the queued power casts on the gesture', String(out));
       check(fp < queued.fp, 'casting it spends Force points', `${queued.fp} -> ${fp} of ${queued.max}`);
+      // 6. Force regenerates out of combat (TSL regeneration.2da: the pool in
+      // 90 s; critic run 12: it never came back). Leave the fight first.
+      await harness.evaluate(`(() => { const p = window.KotOR.GameState.getCurrentPlayer(); const t = window.__t;
+        try { t.setHP && t.setHP(-50); } catch (e) {} p.clearAllActions && p.clearAllActions(); p.combatData.combatState = false; return true; })()`);
+      const fp0 = await harness.evaluate(`window.KotOR.GameState.getCurrentPlayer().getFP()`);
+      await sleep(12000);
+      const fp1 = await harness.evaluate(`(() => { const p = window.KotOR.GameState.getCurrentPlayer(); return { fp: p.getFP(), inCombat: !!p.combatData.combatState }; })()`);
+      check(fp1.fp > fp0, 'Force points regenerate out of combat', `${fp0} -> ${fp1.fp} in 12 s (inCombat=${fp1.inCombat})`);
     }
   } finally {
     await harness.close().catch(() => undefined);

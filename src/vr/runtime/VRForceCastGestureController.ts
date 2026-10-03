@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { playSpaceDelta } from './XRPoseMotion';
+import { handVelocity } from './XRPoseMotion';
 import { XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 /**
@@ -100,7 +100,7 @@ export class VRForceCastGestureController {
     if (!velocity || !Number.isFinite(velocity.lengthSq())) {
       const dt = before ? (input.timestamp - before.timestamp) / 1000 : 0;
       if (!before || !(dt > 0.001 && dt < 0.2)) return null;
-      velocity = playSpaceDelta(before.position, before, controller.pose.position, controller.pose).divideScalar(dt);
+      velocity = handVelocity(before.position, before, controller.pose.position, controller.pose, dt);
     }
     if (!input.palmOpen || input.timestamp < this.nextGestureAt) return null;
     const speed = velocity.length();

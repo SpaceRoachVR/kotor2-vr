@@ -154,7 +154,9 @@ export class VRComfortSettingsHost {
     forward.z = 0;
     if (forward.lengthSq() < 1e-8) forward.set(0, 1, 0);
     forward.normalize();
-    this.object.position.copy(head.position).addScaledVector(forward, 1.1);
+    // 1.4 m: at 1.1 m the panel filled 52 degrees of view, and with the guide
+    // beside it about 85 (critic run 12).
+    this.object.position.copy(head.position).addScaledVector(forward, 1.4);
     const normal = forward.clone().negate();
     const right = new THREE.Vector3(0, 0, 1).cross(normal).normalize();
     this.object.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, new THREE.Vector3(0, 0, 1), normal));

@@ -617,7 +617,9 @@ export class VRSpike {
   // ray crosses several in the course of an ordinary swing, and 180 ms let the
   // lock hop between them — reported as "aim still quickly flickers between
   // opponents when they're grouped".
-  private static readonly combatTargetLock = new VRCombatTargetLock({ switchDwellMilliseconds: 400 });
+  // The lock outlives a glance away for 2.5 s: at 0.5 s turning the head
+  // dropped it, and the next cast thrust failed silently (critic run 12).
+  private static readonly combatTargetLock = new VRCombatTargetLock({ switchDwellMilliseconds: 400, aimLossGraceMilliseconds: 2500 });
   private static offhandGrenadeTriggerHeld = false;
   private static dominantShotTriggerHeld = false;
   private static combatTargetHighlightHost: VRCombatTargetHighlightHost | null = null;
@@ -1963,9 +1965,13 @@ export class VRSpike {
       VRSpike.comfortSettingsHost.setCloseButton(VRSpike.dominantHand === 'left' ? 'Y' : 'B');
       VRSpike.comfortSettingsHost.present(inputFrame.head, context.rows);
 
+      // 'radial-wheel' adds the either-hand trigger Select: the ray follows
+      // whichever hand points, so either trigger clicks. Menu Select alone is
+      // the dominant trigger, and a left-hander's ray drew from the right hand
+      // that could not click (critic run 12).
       const actions = VRSpike.inputRouter.route(
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
-        new Set(['ui', 'interaction'])
+        new Set(['ui', 'interaction', 'radial-wheel'])
       );
       const selectPressed = actions.some((action) =>
         (action.action === SemanticXRAction.Select || action.action === SemanticXRAction.Use) && action.pressed
@@ -1977,9 +1983,13 @@ export class VRSpike {
       // left hand did nothing at all — the panel read as inert. Resolve the
       // row from whichever hand is actually on it, and draw that hand's ray.
       const panel = VRSpike.comfortSettingsHost.object;
+      const selectingHand = actions.find((action) =>
+        (action.action === SemanticXRAction.Select || action.action === SemanticXRAction.Use) && action.pressed
+      )?.hand ?? null;
       const resolution = VRSpike.comfortSettingsPointerHand.resolve(
         inputFrame,
         (pose) => VRSpike.comfortSettingsHost?.rowAtRay(pose) ?? null,
+        selectingHand === 'left' || selectingHand === 'right' ? selectingHand : null,
       );
       VRSpike.drawComfortSettingsPointer(scene, panel, resolution?.pose ?? VRSpike.anyTrackedRay(inputFrame));
       VRSpike.comfortSettingsHost.setHighlightedRow(resolution?.hit ?? null);
@@ -3059,8 +3069,12 @@ export class VRSpike {
       const host = VRSpike.radialMenuHost;
       // Either hand may aim at the wheel. Binding the ray to one controller is
       // invisible to the player, so the other hand reads as a dead pointer.
+      const wheelSelectHand = actions.find((action) =>
+        action.action === SemanticXRAction.Select && action.pressed
+      )?.hand ?? null;
       const rayResolution = wasOpen && host
-        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose))
+        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose),
+          wheelSelectHand === 'left' || wheelSelectHand === 'right' ? wheelSelectHand : null)
         : null;
       if (!rayResolution) VRSpike.radialRayHand.reset();
       const rayHit = rayResolution?.hit ?? null;
@@ -3475,15 +3489,19 @@ export class VRSpike {
 
       if (comfortSettings.locomotionMode === 'blink') {
         VRSpike.processTeleportLocomotion(rawMoveAxes, headWorldOrientation);
-        VRSpike.updateComfortVignette(0);
+        VRSpike.updateComfortVignette(0, deltaSeconds);
       } else {
         VRSpike.teleportController.reset();
     VRSpike.clearTeleportMarker();
         applyLocomotion(resolvedLocomotion);
         // Discrete comfort modes (snap turn) don't need the vignette — it's
         // a mitigation for continuous vection, not instant reorientation.
+        // Smooth turning is vection too (critic run 12: the vignette stayed
+        // off for a whole smooth turn); a snap turn is not.
+        const smoothTurning = useSnapTurn ? 0 : Math.min(1, Math.abs(turnAxisValue));
         VRSpike.updateComfortVignette(
-          comfortSettings.vignetteEnabled ? resolvedLocomotion.magnitude : 0
+          comfortSettings.vignetteEnabled ? Math.max(resolvedLocomotion.magnitude, smoothTurning) : 0,
+          deltaSeconds,
         );
       }
     } catch (error) {
@@ -3494,13 +3512,19 @@ export class VRSpike {
     }
   }
 
-  private static updateComfortVignette(intensity: number): void {
+  /** The vignette eases in and out over ~150 ms; it snapped in one frame (critic run 12). */
+  private static comfortVignetteLevel = 0;
+  private static updateComfortVignette(intensity: number, deltaSeconds = 1 / 72): void {
     if (!VRSpike.camera) return;
-    if (intensity <= 0 && !VRSpike.comfortVignetteHost) return;
+    const target = Number.isFinite(intensity) ? Math.min(1, Math.max(0, intensity)) : 0;
+    const step = Math.min(1, Math.max(0, deltaSeconds) / 0.15);
+    VRSpike.comfortVignetteLevel += (target - VRSpike.comfortVignetteLevel) * step;
+    if (VRSpike.comfortVignetteLevel < 0.01 && target === 0) VRSpike.comfortVignetteLevel = 0;
+    if (VRSpike.comfortVignetteLevel <= 0 && !VRSpike.comfortVignetteHost) return;
     if (!VRSpike.comfortVignetteHost) {
       VRSpike.comfortVignetteHost = new VRComfortVignetteHost(VRSpike.camera);
     }
-    VRSpike.comfortVignetteHost.setIntensity(intensity);
+    VRSpike.comfortVignetteHost.setIntensity(VRSpike.comfortVignetteLevel);
   }
 
   /**

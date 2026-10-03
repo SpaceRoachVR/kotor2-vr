@@ -100,7 +100,8 @@ export class MenuGameOver extends GameMenu {
     }catch(e){
       console.error('MenuGameOver: listing saves failed', e);
     }
-    const last = MenuGameOver.findLastSave(SaveGame.saves);
+    const session = SaveGame.sessionLastSave;
+    const last = (session && SaveGame.saves.find((s) => s.directory === session.directory)) ?? MenuGameOver.findLastSave(SaveGame.saves);
     if(!last){
       // Nothing to load: the Load Game list says so better than silence.
       this.manager.MenuSaveLoad.mode = MenuSaveLoadMode.LOADGAME;

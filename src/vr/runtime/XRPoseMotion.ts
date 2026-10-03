@@ -25,3 +25,24 @@ export function playSpaceDelta(
     .applyMatrix4(now);
   return currentPoint.clone().sub(carried);
 }
+
+/**
+ * Faster than any arm moves. A controller reacquired after occlusion (behind
+ * the head, at the neck) jumps tens of centimetres in one frame, and that jump
+ * dispatched a swing that killed a droid (critic run 12). A sample above this
+ * is a tracking jump, not motion.
+ */
+export const MAX_HAND_SPEED_METRES_PER_SECOND = 10;
+
+/** Hand velocity from two samples in play space; zero for a tracking jump. */
+export function handVelocity(
+  previousPoint: THREE.Vector3,
+  previousPose: Pick<XRWorldPose, 'trackingToWorld'> | null | undefined,
+  currentPoint: THREE.Vector3,
+  currentPose: Pick<XRWorldPose, 'trackingToWorld'> | null | undefined,
+  elapsedSeconds: number,
+): THREE.Vector3 {
+  if (!(elapsedSeconds > 0)) return new THREE.Vector3();
+  const velocity = playSpaceDelta(previousPoint, previousPose, currentPoint, currentPose).divideScalar(elapsedSeconds);
+  return velocity.length() > MAX_HAND_SPEED_METRES_PER_SECOND ? new THREE.Vector3() : velocity;
+}

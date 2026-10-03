@@ -451,6 +451,12 @@ export class CursorManager {
 			CursorManager.reticle.visible = false;
 		}
 
+		// A dead creature is not a selection: its brackets stayed on the corpse
+		// after the kill (critic runs 11-12).
+		if(BitWise.InstanceOfObject(CursorManager.selectedObject, ModuleObjectType.ModuleCreature) && (CursorManager.selectedObject as any).isDead?.()){
+			CursorManager.selectedObject = undefined;
+			CursorManager.selected = undefined;
+		}
 		if(GameState.Mode == EngineMode.INGAME && CursorManager.selected instanceof OdysseyObject3D && !CursorManager.MenuManager.MenuContainer.bVisible){
 			CursorManager.selected.getWorldPosition(CursorManager.reticle2.position);
 			CursorManager.reticle2.visible = true;

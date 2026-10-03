@@ -811,7 +811,12 @@ export class ModuleObjectManager {
       //line, not the object's perception: a mining droid in plain view 6 m
       //away could not be targeted because its own perception range is short
       //(critic run 11).
-      const hasLineOfSight = player.hasLineOfSight(obj, GameState.maxSelectableDistance, true);
+      // Either way round: from the player's side a wall-mounted console's
+      // centre can sit just behind the room's own walls (critic run 12: the
+      // Central Controller stopped being usable), while the object's own
+      // perception range is too short for a droid in plain view.
+      const hasLineOfSight = player.hasLineOfSight(obj, GameState.maxSelectableDistance, true) ||
+        obj.hasLineOfSight(player, GameState.maxSelectableDistance, true);
       if(!hasLineOfSight){
         continue;
       }

@@ -1,3 +1,5 @@
+import { SkillType } from "@/enums/nwscript/SkillType";
+import { readTSLRegenerationTable, tslForcePointsPerSecond, tslHitPointsPerTick, type TSLRegenerationTable } from "@/combat/TSLRegeneration";
 import { canonicalAnimationEvent, shouldPlayEngineCombatSound, type EngineCombatSoundEvent } from "@/engine/rules/EngineCombatSoundGate";
 import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
 import { GFFObject } from "@/resource/GFFObject";
@@ -963,16 +965,58 @@ export class ModuleCreature extends ModuleObject {
     this.addHP(1 - this.getHP(), true);
   }
 
+  /** Fractional Force points carried between frames (TSL regeneration). */
+  private forceRegenCarry = 0;
+  private healthRegenCarry = 0;
+
+  /** TSL's key/value regeneration rules; see combat/TSLRegeneration. */
+  private updateTSLRegen(delta: number, table: TSLRegenerationTable){
+    const input = {
+      inCombat: !!this.combatData.combatState,
+      constitutionModifier: abilityModifier(this.getCON()),
+      wisdomModifier: abilityModifier(this.getWIS()),
+      treatInjuryRank: Number(this.getSkillLevel?.(SkillType.TREAT_INJURY)) || 0,
+      maxForcePoints: Number(this.getMaxFP()) || 0,
+    };
+    if(this.getFP() < this.getMaxFP()){
+      this.forceRegenCarry += tslForcePointsPerSecond(table, input) * delta;
+      const whole = Math.floor(this.forceRegenCarry);
+      if(whole >= 1){
+        this.forceRegenCarry -= whole;
+        this.addFP(whole);
+      }
+    }else{
+      this.forceRegenCarry = 0;
+    }
+    this.regenTimer -= delta;
+    if(this.regenTimer <= 0){
+      this.regenTimer = table.timeperhp > 0 ? table.timeperhp : this.regenTimerMax;
+      // Fractions carry (1.3 a tick is 4 every 3 ticks), as the FP pool does.
+      this.healthRegenCarry += tslHitPointsPerTick(table, input);
+      const hp = Math.floor(this.healthRegenCarry);
+      this.healthRegenCarry -= hp;
+      if(hp > 0 && !GameState.healthRegenDisabled && this.getHP() < this.getMaxHP()){
+        this.addHP(hp);
+      }
+    }
+  }
+
   updateRegen(delta = 0){
     // The dead do not regenerate. See updateDownedPartyMember.
     if(this.isDead()) return;
     // DisableHealthRegen(TRUE) stops vitality regeneration module-wide; force
     // regeneration is unaffected, so this gate sits on the vitality half below.
+    const regenTable = GameState.TwoDAManager.datatables.get('regeneration');
+    const tsl = readTSLRegenerationTable(regenTable?.rows);
+    if(tsl){
+      this.updateTSLRegen(delta, tsl);
+      return;
+    }
     this.regenTimer -= delta;
     if(this.regenTimer <= 0){
       this.regenTimer = this.regenTimerMax;
 
-      const regen2DA = GameState.TwoDAManager.datatables.get('regeneration').rows[this.combatData.combatState ? 0 : 1];
+      const regen2DA = regenTable.rows[this.combatData.combatState ? 0 : 1];
       if(regen2DA){
         const regen_force = parseFloat(regen2DA.forceregen);
         if(!isNaN(regen_force)){

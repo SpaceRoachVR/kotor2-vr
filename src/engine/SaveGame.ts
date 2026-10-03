@@ -328,6 +328,7 @@ export class SaveGame {
     localStorage.setItem(`${GameState.GameKey}_last_save_id`, SaveGame.saves.indexOf(this).toString());
     GameState.isLoadingSave = true;
     GameState.TutorialWindowTracker = [];
+    SaveGame.sessionLastSave = this;
 
     // A save replaces the game in progress. Loading one during play used to
     // add the save's items to the bag already carried (Medpac 4 -> 7 on each
@@ -975,6 +976,7 @@ export class SaveGame {
       SaveGame.AddSaveGame(newEntry);            // new save case
             }
     await newEntry.loadNFO();
+    SaveGame.sessionLastSave = newEntry;
     
     //Save Complete
     GameState.MenuManager.LoadScreen.setProgress(100);
@@ -1217,6 +1219,13 @@ export class SaveGame {
    * SaveGame.AddSaveGame(saveGame);
    * // saveGame is now in SaveGame.saves array
    */
+  /**
+   * The save this session last loaded or wrote: "Load Last Saved Game" is where
+   * the player came from. Picking the newest timestamp loaded an older
+   * quicksave over an untimestamped save just loaded (critic run 12).
+   */
+  static sessionLastSave: SaveGame | null = null;
+
   static AddSaveGame( savegame: SaveGame ){
     if(!(savegame instanceof SaveGame)){ return; }
     // GetSaveGames runs on every list open: listing a folder already listed

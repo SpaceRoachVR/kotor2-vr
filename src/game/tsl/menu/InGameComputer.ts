@@ -42,6 +42,10 @@ export class InGameComputer extends K1_InGameComputer {
     await super.menuControlInitializer(true);
     if(skipInit) return;
     return new Promise<void>((resolve, reject) => {
+      // The lists have no padding, so each line's first letter sat under the
+      // frame ("ERAGUS CENTRAL", critic runs 11-12). Rows are inset by it.
+      this.LB_MESSAGE.padding = Math.max(this.LB_MESSAGE.padding || 0, 8);
+      this.LB_REPLIES.padding = Math.max(this.LB_REPLIES.padding || 0, 8);
       this.LB_MESSAGE.setItem(null);
       this.LB_MESSAGE.setTextColor(this.LB_MESSAGE.defaultColor.r, this.LB_MESSAGE.defaultColor.g, this.LB_MESSAGE.defaultColor.b);
       this.LB_REPLIES.onSelected = (entry: any, control: any, index: number) => {

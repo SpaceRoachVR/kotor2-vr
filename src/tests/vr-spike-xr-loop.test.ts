@@ -2482,7 +2482,9 @@ describe('VRSpike XR loop ownership', () => {
 
       input.leftButtons[4] = pressedButton();
       (VRSpike as any).processRadialMenuInput();
-      input.leftButtons[0] = pressedButton();
+      // The aiming hand pulls its own trigger: the triggering hand's ray
+      // picks (critic run 12: the other hand's ray answered for it).
+      (aiming === 'left' ? input.leftButtons : input.rightButtons)[0] = pressedButton();
       (VRSpike as any).processRadialMenuInput();
 
       expect(activate).toHaveBeenCalledTimes(1);

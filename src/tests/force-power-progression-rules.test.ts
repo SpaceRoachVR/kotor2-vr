@@ -24,14 +24,14 @@ describe('forcePowerCostRules', () => {
       expect(getAlignmentCostAdjustment('-', 100)).toEqual({ penaltyPercent: 0, discountPercent: 0 });
     });
 
-    test('light side power scaling matches retail KotOR 1 & 2 table', () => {
+    test('light side power scaling matches the retail TSL chart (41-60 neutral; critic run 12)', () => {
       // Full Light
       expect(getAlignmentCostAdjustment('G', 100)).toEqual({ penaltyPercent: 0, discountPercent: 50 });
       // Light shifts
-      expect(getAlignmentCostAdjustment('G', 90)).toEqual({ penaltyPercent: 0, discountPercent: 30 });
-      expect(getAlignmentCostAdjustment('G', 80)).toEqual({ penaltyPercent: 0, discountPercent: 20 });
-      expect(getAlignmentCostAdjustment('G', 70)).toEqual({ penaltyPercent: 0, discountPercent: 15 });
-      expect(getAlignmentCostAdjustment('G', 60)).toEqual({ penaltyPercent: 0, discountPercent: 10 });
+      expect(getAlignmentCostAdjustment('G', 90)).toEqual({ penaltyPercent: 0, discountPercent: 20 });
+      expect(getAlignmentCostAdjustment('G', 80)).toEqual({ penaltyPercent: 0, discountPercent: 15 });
+      expect(getAlignmentCostAdjustment('G', 70)).toEqual({ penaltyPercent: 0, discountPercent: 10 });
+      expect(getAlignmentCostAdjustment('G', 60)).toEqual({ penaltyPercent: 0, discountPercent: 0 });
       // Neutral
       expect(getAlignmentCostAdjustment('G', 50)).toEqual({ penaltyPercent: 0, discountPercent: 0 });
       // Dark shifts (penalties)
@@ -41,14 +41,14 @@ describe('forcePowerCostRules', () => {
       expect(getAlignmentCostAdjustment('G', 0)).toEqual({ penaltyPercent: 75, discountPercent: 0 });
     });
 
-    test('dark side power scaling matches retail KotOR 1 & 2 table', () => {
+    test('dark side power scaling matches the retail TSL chart (41-60 neutral; critic run 12)', () => {
       // Full Dark
       expect(getAlignmentCostAdjustment('E', 0)).toEqual({ penaltyPercent: 0, discountPercent: 50 });
       // Dark shifts
-      expect(getAlignmentCostAdjustment('E', 15)).toEqual({ penaltyPercent: 0, discountPercent: 30 });
-      expect(getAlignmentCostAdjustment('E', 25)).toEqual({ penaltyPercent: 0, discountPercent: 20 });
-      expect(getAlignmentCostAdjustment('E', 35)).toEqual({ penaltyPercent: 0, discountPercent: 15 });
-      expect(getAlignmentCostAdjustment('E', 45)).toEqual({ penaltyPercent: 0, discountPercent: 10 });
+      expect(getAlignmentCostAdjustment('E', 15)).toEqual({ penaltyPercent: 0, discountPercent: 20 });
+      expect(getAlignmentCostAdjustment('E', 25)).toEqual({ penaltyPercent: 0, discountPercent: 15 });
+      expect(getAlignmentCostAdjustment('E', 35)).toEqual({ penaltyPercent: 0, discountPercent: 10 });
+      expect(getAlignmentCostAdjustment('E', 45)).toEqual({ penaltyPercent: 0, discountPercent: 0 });
       // Neutral
       expect(getAlignmentCostAdjustment('E', 50)).toEqual({ penaltyPercent: 0, discountPercent: 0 });
       // Light shifts (penalties)

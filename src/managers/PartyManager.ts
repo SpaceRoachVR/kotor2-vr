@@ -302,6 +302,9 @@ export class PartyManager {
       }
     }
 
+    // The save's journal replaces the one in play: loading added it to the
+    // live journal, so entries doubled on every load (critic run 12).
+    GameState.JournalManager.ClearEntries();
     if(gff.RootNode.hasField('JNL_Entries')){
       const entries = gff.RootNode.getFieldByLabel('JNL_Entries').getChildStructs();
       for(let i = 0; i < entries.length; i++){
