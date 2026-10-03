@@ -537,6 +537,8 @@ function saveVRComfortSettings(): void {
 const VR_DIALOGUE_TEXT_SCALES = [1, 1.125, 1.225] as const;
 const VR_DIALOGUE_TEXT_LABELS = ['Normal', 'Large', 'Largest'] as const;
 let vrComfortSettingsPanelOpen = false;
+/** The VR Menu paused a running game, so closing it resumes (critic runs 16-17: fights went on behind it). */
+let vrComfortSettingsPausedGame = false;
 let vrControlsGuideOpen = false;
 let vrComfortSettingsPausedByVR = false;
 
@@ -981,6 +983,13 @@ function getVRGrenadeIcon(item: ModuleItem): string {
   return 'i_grenade';
 }
 
+/** "Medpac ×3": the wheel showed no counts (critic runs 15-17). Display only; the id carries no count. */
+function withVRStackCount(label: string, item: any): string {
+  let count = 1;
+  try { count = Number(item?.getStackSize?.()) || 1; } catch { /* one */ }
+  return count > 1 ? `${label} ×${count}` : label;
+}
+
 function describeVRGrenadeInventory(actor: ModuleCreature): readonly VRGrenadeInventoryEntry[] {
   const descriptions: VRGrenadeInventoryEntry[] = [];
   for (const item of getVRCombatInventory(actor)) {
@@ -1356,7 +1365,9 @@ function dispatchVREmbodiedCombatInput(
   // then rolled a second attack with no input (critic runs 15-16). Swing
   // events within 600 ms of one that was taken belong to the same swing.
   const nowMs = performance.now();
-  if (input === 'dominant-swing' && nowMs - vrSwingTakenAt < 600) return false;
+  // Measured from the latest event of the swing, so a slow 1 s sweep that
+  // keeps producing events stays one swing (critic run 17: it rolled twice).
+  if (input === 'dominant-swing' && nowMs - vrSwingTakenAt < 600) { vrSwingTakenAt = nowMs; return false; }
   const tempo = getVREmbodiedTempoResult(actor, initialTarget);
   if (!tempo.eligible) {
     // ROADMAP 3.12: a swing made while the round is busy waits for it to open
@@ -1718,6 +1729,11 @@ function reportVRGrenadeOutcomeOnce(shape: string, detail = ''): void {
   console.info(`[VR grenade] TEMPORARY ${shape}${detail ? ' || ' + detail : ''}`);
 }
 
+/** Retail grenade scripts' blast reach as measured in play (hit at 3.8 m, not at 4.4 m; critic run 17). */
+const VR_GRENADE_SELF_BLAST_METRES = 4;
+const VR_GRENADE_CONFIRM_MS = 3000;
+let vrGrenadeTooCloseWarnedAt = -Infinity;
+
 function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): boolean {
   const request = vrArmedGrenadeState.requestCommit();
   if (request.state !== 'armed') {
@@ -1769,6 +1785,21 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
       reportVRGrenadeOutcomeOnce('refused: range check threw', String(error));
       return false;
     }
+  }
+  // Retail grenades hit everyone in the blast, the thrower included; at the
+  // range droids fight from, a frag took 20 of 29 HP without a word (critic
+  // run 17, all three critics). The first pull inside the blast warns and keeps
+  // the grenade armed; a second pull within 3 s throws anyway.
+  if (source !== undefined && target !== null) {
+    const distance = distanceVRCombat2D(actor, target);
+    const now = performance.now();
+    if (distance < VR_GRENADE_SELF_BLAST_METRES && now - vrGrenadeTooCloseWarnedAt > VR_GRENADE_CONFIRM_MS) {
+      vrGrenadeTooCloseWarnedAt = now;
+      try { VRSpike.showNotice('Too close: you’re in the blast. Pull again to throw', 3000); } catch { /* notice only */ }
+      reportVRGrenadeOutcomeOnce('warned: thrower inside blast', `distance=${distance.toFixed(1)}`);
+      return false;
+    }
+    vrGrenadeTooCloseWarnedAt = -Infinity;
   }
   const eligibility = resolveVRArmedGrenadeCommitEligibility({
     sourceAvailable: source !== undefined,
@@ -1989,6 +2020,12 @@ const vrActionMenuBridgeDependencies: VRActionMenuBridgeDependencies<ModuleCreat
   },
   getPlayerFacingLabel: (entry, target) => withVRForcePowerCost(getVRActionLabel(entry, target), entry),
   getIcon: (entry) => getVRActionIcon(entry),
+  // Critic runs 15-17: a 25 FP power at 15 FP was drawn like any other.
+  isEntryUnavailable: (actor, entry) => {
+    const talent: any = entry?.talent;
+    if (!talent || typeof talent.getForcePointCostFor !== 'function' || typeof (actor as any)?.getFP !== 'function') return false;
+    try { return Number(talent.getForcePointCostFor(actor)) > Number((actor as any).getFP()); } catch { return false; }
+  },
   logger: console,
   onTargetMenuAction: (panelIndex) => {
     if (!vrCombatIntentDispatchInProgress && VRSpike.isPresenting && consumeVRCombatIntentSelection(panelIndex, 'target')) return;
@@ -3230,12 +3267,44 @@ export class GameState implements EngineContext {
   };
 
   /** A scheduled item cast was rejected at release; the player hears the refusal in VR (critic run 4). */
+  /** The VR throwing hand, for a projectile the player just threw (see SpellCastInstance). */
+  static resolveVRProjectileHook: ((owner: unknown) => THREE.Object3D | null) | null = (owner) =>
+    owner && owner === GameState.getCurrentPlayer() ? VRSpike.resolveThrowHandAnchor() : null;
+
+  /** Spell or item name for a log line, "" when unknown. */
+  static describeSpellForLog(spellId: number): string {
+    try {
+      const strref = Number((GameState.SWRuleSet as any)?.spells?.[spellId]?.name);
+      if (!(strref >= 0)) return '';
+      return stripTLKSortPrefix(String(GameState.TLKManager.GetStringById(strref)?.Value ?? ''));
+    } catch { return ''; }
+  }
+
+  /** Combat log: a scripted hit ("Atton damaged for 20 (Frag Grenade)"). */
+  static onScriptedDamage: ((target: unknown, source: unknown, amount: number, spellId: number) => void) | null = (target, source, amount, spellId) => {
+    if (!(amount > 0)) return;
+    const name = (target as any)?.getName?.();
+    if (!name) return;
+    const what = GameState.describeSpellForLog(spellId);
+    const by = source && source !== target ? (source as any)?.getName?.() : '';
+    GameState.FeedbackMessageManager.AddLine(`${name} damaged for ${amount}${what ? ` (${what}${by ? `, ${by}` : ''})` : by ? ` by ${by}` : ''}`);
+  };
+
+  /** Combat log: every save against a power or grenade, with the roll ("Atton: Reflex 17 vs DC 15, saved"). */
+  static onSavingThrowRolled: ((saver: unknown, versus: unknown, kind: string, roll: number, total: number, dc: number) => void) | null = (saver, versus, kind, roll, total, dc) => {
+    if (!versus) return; // scripted checks with no opponent are not combat
+    const name = (saver as any)?.getName?.();
+    if (!name) return;
+    GameState.FeedbackMessageManager.AddLine(`${name}: ${kind} save ${total} (roll ${roll}) vs DC ${dc}, ${total >= dc ? 'saved' : 'failed'}`);
+  };
+
   /** A creature made its save against the player's power: say so in VR. */
   static onSavingThrowMade: ((saver: unknown, versus: unknown) => void) | null = (saver, versus) => {
     if (!VRSpike.isPresenting) return;
     const player = GameState.getCurrentPlayer();
     if (!player) return;
-    if (saver === player && versus && versus !== player) { VRSpike.showNotice('You saved', 2000); return; }
+    // Whatever the source, the player's own grenade included (critic run 17).
+    if (saver === player && versus) { VRSpike.showNotice('You saved', 2000); return; }
     if (saver === player || versus !== player) return;
     VRSpike.showNotice(`${resolveVRWorldPromptName(saver as ModuleObject) || 'The target'} saved`, 2000);
   };
@@ -4404,7 +4473,7 @@ export class GameState implements EngineContext {
           }, vrActionMenuBridgeDependencies),
           grenadeActions: describeVRGrenadeInventory(actor).map((entry) => ({
             id: entry.descriptor.sourceKey,
-            label: entry.descriptor.label,
+            label: withVRStackCount(entry.descriptor.label, entry.item),
             icon: entry.descriptor.icon,
             revalidate: () => findVRArmedGrenade(actor, entry.descriptor.sourceKey) !== undefined,
             activate: () => {
@@ -4420,7 +4489,7 @@ export class GameState implements EngineContext {
           })),
           consumableActions: describeVRConsumableInventory(actor).map((entry) => ({
             id: entry.descriptor.sourceKey,
-            label: entry.descriptor.label,
+            label: withVRStackCount(entry.descriptor.label, entry.item),
             icon: entry.descriptor.icon,
             revalidate: () => findVRArmedConsumable(actor, entry.descriptor.sourceKey) !== undefined,
             activate: () => {
@@ -4435,7 +4504,13 @@ export class GameState implements EngineContext {
           targetIsHostileCreature: target !== null,
           partyMembers: snapshotVRPartyMembers(),
           partyAttackOrder: target ? buildVRPartyAttackOrder(actor, target) : null,
-          openComfortSettings: () => { vrComfortSettingsPanelOpen = true; },
+          openComfortSettings: () => {
+            vrComfortSettingsPanelOpen = true;
+            if (GameState.State === EngineState.RUNNING) {
+              GameState.State = EngineState.PAUSED;
+              vrComfortSettingsPausedGame = true;
+            }
+          },
           /**
            * ROADMAP 4.8 — one wedge for all eight in-game screens.
            *
@@ -4579,7 +4654,12 @@ export class GameState implements EngineContext {
             settingsRows[index]?.activate();
             saveVRComfortSettings();
           },
-          close: () => { vrComfortSettingsPanelOpen = false; vrControlsGuideOpen = false; },
+          close: () => {
+            vrComfortSettingsPanelOpen = false;
+            vrControlsGuideOpen = false;
+            if (vrComfortSettingsPausedGame && GameState.State === EngineState.PAUSED) GameState.State = EngineState.RUNNING;
+            vrComfortSettingsPausedGame = false;
+          },
         };
       },
       /**

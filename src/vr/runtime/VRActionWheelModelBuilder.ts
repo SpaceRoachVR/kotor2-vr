@@ -31,6 +31,8 @@ export interface VRActionWheelEngineAction {
    * and then paginating.
    */
   readonly panelIndex: number;
+  /** See VRRadialActionItem.isUnavailable. */
+  isUnavailable?(): boolean;
   revalidate(): boolean;
   activate(): void;
 }
@@ -478,6 +480,9 @@ function appendEngineActions(
       id: `engine:${stableId}`,
       label: action.label.trim(),
       ...(action.icon === undefined ? {} : { icon: action.icon.trim() }),
+      ...(typeof action.isUnavailable === 'function' ? { isUnavailable: () => {
+        try { return action.isUnavailable!() === true; } catch { return false; }
+      } } : {}),
       revalidate: () => safelyRevalidateEngineAction(action),
       activate: () => action.activate(),
     });

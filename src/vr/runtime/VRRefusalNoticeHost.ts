@@ -14,7 +14,8 @@ import * as THREE from 'three';
 const DISTANCE_METRES = 0.5;
 const WIDTH_METRES = 0.19;
 const HEIGHT_METRES = 0.031;
-const DROP_METRES = 0.12;
+// 0.12 sat on the target's nameplate when looking at a fighter (critic run 17).
+const DROP_METRES = 0.17;
 const SHOW_MS = 1800;
 const RENDER_ORDER = 1_000_002;
 

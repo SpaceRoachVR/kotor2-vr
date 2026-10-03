@@ -16,6 +16,8 @@ export class FeedbackMessageEntry {
   color: FeebackMessageColor = FeebackMessageColor.INFO;
   message: string = '';
   type: number = 0;
+  /** Shown under Messages > Combat rather than Feedback. Not saved. */
+  combat: boolean = false;
 
   constructor(){
     

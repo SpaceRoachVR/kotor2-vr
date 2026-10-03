@@ -153,6 +153,25 @@ describe('VRCombatInputController', () => {
     expect(swings).toBe(0);
   });
 
+  test('in game at 60 ms frames, a pop or flick out and back is not a swing (critic run 17)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    // 8 cm out in one frame, back the next, several times.
+    [0, 0, 0.08, 0, 0, 0.08, 0, 0.08, 0, 0].forEach((y, i) => { swings += controller.process(frame(i * 60, y), context('melee-one-handed', i * 60)).length; });
+    expect(swings).toBe(0);
+  });
+
+  test('in game, an 8 cm jab is not a swing; a 30 cm stroke at 60 ms frames is (critic run 17)', () => {
+    const jab = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    [0, 0, 0.04, 0.08, 0.08, 0.08].forEach((y, i) => { swings += jab.process(frame(i * 40, y), context('melee-one-handed', i * 40)).length; });
+    expect(swings).toBe(0);
+    const stroke = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let strokes = 0;
+    [0, 0, 0.1, 0.2, 0.3, 0.3].forEach((y, i) => { strokes += stroke.process(frame(i * 60, y), context('melee-one-handed', i * 60)).length; });
+    expect(strokes).toBeGreaterThan(0);
+  });
+
   test('in game, a pop that stays put is not a swing', () => {
     const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
     let swings = 0;

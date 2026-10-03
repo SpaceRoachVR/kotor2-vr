@@ -70,9 +70,9 @@ describe('engine wiring', () => {
 
   test('save rolls pass the save type through to the base save', () => {
     const source = read('module/ModuleObject.ts');
-    expect(source).toContain('(roll + this.getFortitudeSave(nSaveType) + bonus) >= nDC');
-    expect(source).toContain('(roll + this.getReflexSave(nSaveType) + bonus) >= nDC');
-    expect(source).toContain('(roll + this.getWillSave(nSaveType) + bonus) >= nDC');
+    expect(source).toContain('const total = roll + this.getFortitudeSave(nSaveType) + bonus;');
+    expect(source).toContain('const total = roll + this.getReflexSave(nSaveType) + bonus;');
+    expect(source).toContain('const total = roll + this.getWillSave(nSaveType) + bonus;');
   });
 
   test.each(['GetFortitudeSavingThrow', 'GetWillSavingThrow', 'GetReflexSavingThrow'])('%s is implemented', (name) => {

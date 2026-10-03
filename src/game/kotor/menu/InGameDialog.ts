@@ -13,6 +13,8 @@ const LETTERBOX_HEIGHT = 100;
 const VR_WORLD_MESSAGE_GAP = 12;
 /** Horizontal breathing room either side of the dialogue in the VR world crop. */
 const VR_WORLD_REGION_MARGIN = 48;
+/** Breathing room above the spoken line and below the last reply. */
+const VR_WORLD_REGION_VERTICAL_MARGIN = 24;
 
 /**
  * InGameDialog class.
@@ -129,12 +131,51 @@ export class InGameDialog extends GameMenu {
     const contentWidth = Math.max(this.LB_REPLIES?.extent?.width ?? 0, this.LBL_MESSAGE?.extent?.width ?? 0) +
       VR_WORLD_REGION_MARGIN * 2;
     const widthFraction = Math.min(1, Math.max(0.2, contentWidth / Math.max(1, viewportWidth)));
+    const { vMin, vMax } = this.getVRWorldDialogueVerticalExtent();
     return {
       uMin: 0.5 - widthFraction / 2,
       uMax: 0.5 + widthFraction / 2,
-      vMin: 0,
-      vMax: 0.5,
+      vMin,
+      vMax,
     };
+  }
+
+  /**
+   * The rows the dialogue actually uses, top of the spoken line to the last
+   * reply, in panel UVs (0 = bottom). The whole bottom half was shown, so the
+   * plate was half empty and twice the size it needed to be over the speaker
+   * (critic runs 12-17).
+   */
+  private getVRWorldDialogueVerticalExtent(): { vMin: number, vMax: number } {
+    const fallback = { vMin: 0, vMax: 0.5 };
+    try{
+      const viewportHeight = GameState.ResolutionManager.getViewportHeight();
+      if(!(viewportHeight > 0)) return fallback;
+      let top = -Infinity;
+      let bottom = Infinity;
+      const box = this.LBL_MESSAGE?.box;
+      if(this.LBL_MESSAGE?.text?.text && box && Number.isFinite(box.max.y) && Number.isFinite(box.min.y)){
+        top = Math.max(top, box.max.y);
+        bottom = Math.min(bottom, box.min.y);
+      }
+      if(this.LB_REPLIES?.isVisible?.() && this.LB_REPLIES.children.length){
+        const listTop = this.LB_REPLIES.widget.position.y + this.LB_REPLIES.extent.height / 2;
+        const used = Math.min(this.LB_REPLIES.getContentHeight(), this.LB_REPLIES.extent.height);
+        top = Math.max(top, listTop);
+        bottom = Math.min(bottom, listTop - used);
+      }
+      if(!Number.isFinite(top) || !Number.isFinite(bottom) || top <= bottom) return fallback;
+      const toV = (y: number) => Math.min(1, Math.max(0, (y + viewportHeight / 2) / viewportHeight));
+      const vMin = toV(bottom - VR_WORLD_REGION_VERTICAL_MARGIN);
+      const vMax = toV(top + VR_WORLD_REGION_VERTICAL_MARGIN);
+      // Quantised so the plate doesn't resize for every pixel of text change.
+      const q = (v: number) => Math.round(v * 40) / 40;
+      const min = Math.max(0, q(vMin) - (q(vMin) > vMin ? 0.025 : 0));
+      const max = Math.min(1, q(vMax) + (q(vMax) < vMax ? 0.025 : 0));
+      return max - min >= 0.075 ? { vMin: min, vMax: max } : fallback;
+    }catch(e){
+      return fallback;
+    }
   }
 
   private positionReplies(){

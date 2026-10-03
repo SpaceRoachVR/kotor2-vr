@@ -58,6 +58,22 @@ export class InGameComputer extends K1_InGameComputer {
   show(){
     super.show();
     this.fillCounters();
+    // B logs out (critic run 17: B did nothing in a terminal). It picks the
+    // terminal's own reply that ends the session, never cuts the script short.
+    this._button_b = { click: () => this.logOutWithB() } as any;
+  }
+
+  /** The last shown reply that leads nowhere ("Log out", "[End]"), if any. */
+  logOutWithB(): boolean {
+    const shown = (GameState.CutsceneManager.currentReplies || []).filter((reply: any) => !reply?.isContinueDialog?.());
+    for(let i = shown.length - 1; i >= 0; i--){
+      const reply: any = shown[i];
+      if(Array.isArray(reply?.entries) && reply.entries.length === 0){
+        GameState.CutsceneManager.selectReplyAtIndex(i);
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

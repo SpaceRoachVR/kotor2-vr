@@ -100,6 +100,11 @@ export interface VRCombatSwingMiss {
   readonly weaponMode: CombatWeaponMode;
 }
 
+/** Fast poses confirming one swing point within ~70 degrees of each other. */
+const WINDOWED_SAME_HEADING_DOT = 0.35;
+/** A windowed swing covers at least this much ground (hand or blade tip). */
+const WINDOWED_MINIMUM_ARC_METRES = 0.12;
+
 const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
   minimumSwingSpeedMetresPerSecond: 0.8,
   minimumFastSamples: 1,
@@ -417,6 +422,10 @@ export class VRCombatInputController {
   private readonly poseHistory: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 }[] = [];
   /** Times of distinct poses that were fast over their window. */
   private readonly fastPoseTimes: number[] = [];
+  /** Unit play-space heading of each fast pose, parallel to fastPoseTimes. */
+  private readonly fastPoseDirections: THREE.Vector3[] = [];
+  /** The window start each fast pose was measured from, parallel to fastPoseTimes. */
+  private readonly fastPoseStarts: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 }[] = [];
   private windowedGripped = false;
 
   /**
@@ -439,6 +448,8 @@ export class VRCombatInputController {
       this.windowedGripped = gripped;
       this.poseHistory.length = 0;
       this.fastPoseTimes.length = 0;
+      this.fastPoseDirections.length = 0;
+      this.fastPoseStarts.length = 0;
     }
     const history = this.poseHistory;
     const last = history[history.length - 1];
@@ -459,11 +470,32 @@ export class VRCombatInputController {
     history.push({ t: now, position: point.clone(), trackingToWorld: pose.trackingToWorld?.clone() });
     if (!reference) return false;
     const seconds = (now - reference.t) / 1000;
-    const speed = playSpaceDelta(reference.position, reference, point, pose).length() / seconds;
+    const displacement = playSpaceDelta(reference.position, reference, point, pose);
+    const speed = displacement.length() / seconds;
     if (speed > MAX_HAND_SPEED_METRES_PER_SECOND || speed < this.configuration.minimumSwingSpeedMetresPerSecond) return false;
-    while (this.fastPoseTimes.length && now - this.fastPoseTimes[0] > 250) this.fastPoseTimes.shift();
+    while (this.fastPoseTimes.length && now - this.fastPoseTimes[0] > 250) {
+      this.fastPoseTimes.shift();
+      this.fastPoseDirections.shift();
+      this.fastPoseStarts.shift();
+    }
+    // Critic run 17: at 55 ms+ frames a 6-10 cm pop or a wrist flick out and
+    // back gave two fast poses, out then back, and swung. A swing keeps its
+    // heading: the fast poses that confirm it must point within ~70 degrees
+    // of each other, and it must cover a real arc (an 8 cm jab swung).
+    const direction = displacement.clone().normalize();
+    const previous = this.fastPoseDirections[this.fastPoseDirections.length - 1];
+    if (previous && previous.dot(direction) < WINDOWED_SAME_HEADING_DOT) {
+      this.fastPoseTimes.length = 0;
+      this.fastPoseDirections.length = 0;
+      this.fastPoseStarts.length = 0;
+    }
     this.fastPoseTimes.push(now);
-    return this.fastPoseTimes.length >= 2;
+    this.fastPoseDirections.push(direction);
+    this.fastPoseStarts.push(reference);
+    if (this.fastPoseTimes.length < 2) return false;
+    // The arc from where this run of fast poses began.
+    const start = this.fastPoseStarts[0];
+    return playSpaceDelta(start.position, start, point, pose).length() >= WINDOWED_MINIMUM_ARC_METRES;
   }
   private lastFastAt = Number.NEGATIVE_INFINITY;
   private previousTrackingState: XRWorldPose['trackingState'] = 'tracked';
@@ -490,6 +522,8 @@ export class VRCombatInputController {
   private resetMeleeSample(): void {
     this.poseHistory.length = 0;
     this.fastPoseTimes.length = 0;
+    this.fastPoseDirections.length = 0;
+    this.fastPoseStarts.length = 0;
     this.previousPose = null;
     this.previousSamplePoint = null;
     this.previousTimestamp = null;

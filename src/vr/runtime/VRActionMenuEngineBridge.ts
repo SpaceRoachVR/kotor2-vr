@@ -25,6 +25,8 @@ export interface VRActionMenuBridgeDependencies<TActor extends object, TTarget e
   refreshPanels(actor: TActor, target: TTarget | null): VRActionMenuPanelLists | null;
   getPlayerFacingLabel(entry: VRActionMenuEntry, target: TTarget | null): string;
   getIcon(entry: VRActionMenuEntry): string | undefined;
+  /** Optional: an entry the actor can't use right now (drawn greyed). */
+  isEntryUnavailable?(actor: TActor, entry: VRActionMenuEntry): boolean;
   readonly logger: Pick<Console, 'warn'>;
   onTargetMenuAction(panelIndex: number): void;
   onSelfMenuAction(panelIndex: number): void;
@@ -87,6 +89,9 @@ export function snapshotVRActionMenuPanelEntries<TActor extends object, TTarget 
         // powers, so each entry also says whether it is one by the Abilities
         // screen's rule. See VRActionWheelEngineAction.isForcePower.
         isForcePower: classifyVRForcePower(entry.talent, dependencies.logger),
+        ...(typeof dependencies.isEntryUnavailable === 'function'
+          ? { isUnavailable: () => dependencies.isEntryUnavailable!(snapshot.actor, entry) }
+          : {}),
         revalidate: () => refreshActionSource(
           snapshot.actor,
           target,

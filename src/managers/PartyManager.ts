@@ -1054,6 +1054,7 @@ export class PartyManager {
     }
     PartyManager.NPCS[npcId].available = true;
     PartyManager.NPCS[npcId].canSelect = true;
+    object.ensureForcePointsFromClasses?.();
     PartyManager.NPCS[npcId].template = object.save();
     return true;
   }
@@ -1070,6 +1071,7 @@ export class PartyManager {
     }
 
     creature = creature as ModuleCreature;
+    creature.ensureForcePointsFromClasses?.();
     // Already in the party (this creature, or this NPC slot's member): retail
     // reports success and adds nothing. A second add pushed a duplicate.
     // Every member counts, the leader too: when the player controls an NPC

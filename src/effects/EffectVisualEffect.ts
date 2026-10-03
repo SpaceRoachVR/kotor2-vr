@@ -128,6 +128,8 @@ export class EffectVisualEffect extends GameEffect {
       if(this.object.model && this.model){
         for(let node of this.object.model.nodes){
           let c_node = this.model.nodes.get(node[0]);
+          // The effect model need not have every node the creature has.
+          if(!c_node) continue;
           c_node.position.copy(node[1].position);
           c_node.quaternion.copy(node[1].quaternion);
           c_node.scale.copy(node[1].scale);
@@ -135,7 +137,7 @@ export class EffectVisualEffect extends GameEffect {
       }
 
       this.model.position.copy(this.object.position);
-      this.model.rotation.copy(this.object.model.rotation);
+      if(this.object.model) this.model.rotation.copy(this.object.model.rotation);
 
       this.model.update(delta);
 

@@ -4,6 +4,8 @@ export interface VRRadialActionItem {
   readonly id: string;
   readonly label: string;
   readonly icon?: string;
+  /** Drawn greyed when true (a Force power the pool can't pay); still selectable, so the refusal can say why. */
+  isUnavailable?(): boolean;
   revalidate(): boolean;
   activate(): void;
 }

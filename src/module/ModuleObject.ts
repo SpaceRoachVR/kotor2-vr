@@ -519,7 +519,18 @@ export class ModuleObject {
       //Length is re-read each pass: a TEMPORARY effect removes itself when it
       //expires, and a cached length then reads past the end and throws.
       for(let i = 0; i < this.effects.length; i++){
-        this.effects[i]?.update(delta);
+        // One broken effect must not stop this object's update: a Death Field
+        // whose model is missing from TSL threw every frame and froze every
+        // creature it touched for ~45 s (critic run 17).
+        try {
+          this.effects[i]?.update(delta);
+        } catch (error) {
+          const effect: any = this.effects[i];
+          if (effect && !effect.updateErrorReported) {
+            effect.updateErrorReported = true;
+            console.error('ModuleObject: effect update failed', effect?.type, error);
+          }
+        }
       }
     }
 
@@ -2812,7 +2823,9 @@ export class ModuleObject {
     let roll = Dice.roll(1, DiceType.d20);
     let bonus = CombatRound.GetMod(this.getCON()) + this.getAutoBalanceSaveBonus();
     
-    if((roll + this.getFortitudeSave(nSaveType) + bonus) >= nDC){
+    const total = roll + this.getFortitudeSave(nSaveType) + bonus;
+    try { GameState.onSavingThrowRolled?.(this, oVersus, 'Fortitude', roll, total, nDC); } catch { /* log only */ }
+    if(total >= nDC){
       // Tell the VR player their power was saved against (critic run 15: a saved
       // Stun Droid looked like it did nothing).
       try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }
@@ -2841,7 +2854,9 @@ export class ModuleObject {
     let roll = Dice.roll(1, DiceType.d20);
     let bonus = CombatRound.GetMod(this.getDEX()) + this.getAutoBalanceSaveBonus();
     
-    if((roll + this.getReflexSave(nSaveType) + bonus) >= nDC){
+    const total = roll + this.getReflexSave(nSaveType) + bonus;
+    try { GameState.onSavingThrowRolled?.(this, oVersus, 'Reflex', roll, total, nDC); } catch { /* log only */ }
+    if(total >= nDC){
       // Tell the VR player their power was saved against (critic run 15: a saved
       // Stun Droid looked like it did nothing).
       try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }
@@ -2878,7 +2893,9 @@ export class ModuleObject {
     let roll = Dice.roll(1, DiceType.d20);
     let bonus = CombatRound.GetMod(this.getWIS()) + this.getAutoBalanceSaveBonus();
 
-    if((roll + this.getWillSave(nSaveType) + bonus) >= nDC){
+    const total = roll + this.getWillSave(nSaveType) + bonus;
+    try { GameState.onSavingThrowRolled?.(this, oVersus, 'Will', roll, total, nDC); } catch { /* log only */ }
+    if(total >= nDC){
       // Tell the VR player their power was saved against (critic run 15: a saved
       // Stun Droid looked like it did nothing).
       try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }

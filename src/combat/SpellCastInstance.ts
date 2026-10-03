@@ -97,7 +97,14 @@ export class SpellCastInstance {
         }).then((model: OdysseyModel3D) => {
           this.projectile = model;
           console.log('projectile loaded', this.spell.projmodel);
-          if(this.owner.model){
+          // In VR the player's body is hidden and its hand bone sits at the
+          // hip: the grenade appeared there (critic runs 14-17). VR supplies
+          // the throwing controller instead.
+          const vrHook = GameState.resolveVRProjectileHook?.(this.owner) ?? null;
+          if(vrHook){
+            this.owner.context.group.effects.add(model);
+            this.projectileHook = vrHook;
+          }else if(this.owner.model){
             if(this.owner.model.rhand){
               this.owner.context.group.effects.add(model);
               this.projectileHook = this.owner.model.rhand;

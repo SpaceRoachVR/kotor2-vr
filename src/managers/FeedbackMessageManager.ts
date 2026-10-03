@@ -1,6 +1,7 @@
 import type { INIConfig } from "@/engine/INIConfig";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
 import { FeedbackOption } from "@/enums/engine/FeedbackOption";
+import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
 
 /**
  * FeedbackMessageManager class.
@@ -42,6 +43,21 @@ export class FeedbackMessageManager {
 
   static AddEntry(entry: FeedbackMessageEntry){
     FeedbackMessageManager.Entries.push(entry);
+  }
+
+  /**
+   * A line for Messages: Combat when `combat`, otherwise Feedback. Grenades,
+   * powers and saves wrote nothing anywhere (critic runs 16-17: "LB_COMBAT 0").
+   */
+  static AddLine(message: string, combat = true, color: FeebackMessageColor = FeebackMessageColor.INFO){
+    if(typeof message !== 'string' || !message.trim()) return;
+    const entry = new FeedbackMessageEntry();
+    entry.message = message;
+    entry.color = color;
+    entry.combat = combat;
+    FeedbackMessageManager.AddEntry(entry);
+    // Bounded: a long fight must not grow the save without limit.
+    if(FeedbackMessageManager.Entries.length > 400) FeedbackMessageManager.Entries.splice(0, FeedbackMessageManager.Entries.length - 400);
   }
 
   static ClearEntries(){

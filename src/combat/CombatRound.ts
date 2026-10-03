@@ -938,6 +938,7 @@ export class CombatRound {
     entry.message = message;
     entry.color = color;
     entry.type = 0; // Standard combat feedback type
+    entry.combat = true;
 
     FeedbackMessageManager.AddEntry(entry);
 

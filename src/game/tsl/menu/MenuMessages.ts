@@ -1,5 +1,6 @@
 import type { GUILabel, GUIListBox, GUIButton } from "@/gui";
 import { MenuMessages as K1_MenuMessages } from "@/game/kotor/KOTOR";
+import { GameState } from "@/GameState";
 
 enum MessageType {
   DIALOG = 1,
@@ -87,6 +88,16 @@ export class MenuMessages extends K1_MenuMessages {
 
       resolve();
     });
+  }
+
+  show(){
+    super.show();
+    // TSL has a Combat list; K1's show() put every line under Feedback and
+    // left Combat empty (critic runs 16-17).
+    const entries = GameState.FeedbackMessageManager.Entries.slice(0).reverse();
+    this.LB_MESSAGES.setItems(entries.filter((e: any) => !e.combat).map((e: any) => `${e.message}`));
+    this.LB_COMBAT.setItems(entries.filter((e: any) => e.combat).map((e: any) => `${e.message}`));
+    this.updateListVisibility();
   }
 
   updateListVisibility(){

@@ -3,6 +3,7 @@ import { GameEffectType } from "@/enums/effects/GameEffectType";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
 import { calculateDamageAmount } from "@/effects/calculateDamageAmount";
+import { GameState } from "@/GameState";
 
 /**
  * EffectDamage class.
@@ -39,6 +40,9 @@ export class EffectDamage extends GameEffect {
     
     if(BitWise.InstanceOf(this.object?.objectType, ModuleObjectType.ModuleObject)){
       this.object.subtractHP(this.getDamageAmount());
+      if((this as any).fromScript){
+        try { GameState.onScriptedDamage?.(this.object, this.creator, this.getDamageAmount(), this.spellId); } catch { /* log only */ }
+      }
       this.object.combatData.lastDamager = this.creator;
       this.object.combatData.lastAttacker = this.creator;
       // Damage must run the target's OnDamaged script.

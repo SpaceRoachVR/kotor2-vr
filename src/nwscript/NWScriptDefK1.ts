@@ -1194,6 +1194,8 @@ NWScriptDefK1.Actions = {
       let effect = new GameState.GameEffectFactory.EffectDamage();
       effect.setCreator(this.caller);
       effect.setSpellId(this.getSpellId());
+      // Script damage (grenades, powers, traps) gets a Combat log line.
+      (effect as any).fromScript = true;
 
       // One slot, not two: writing the amount into both the typed slot and
       // slot 14 doubled every scripted hit (see scriptedDamageComponents).

@@ -3071,6 +3071,32 @@ export class ModuleCreature extends ModuleObject {
     return (this.maxForcePoints + this.currentForce) - this.forcePoints;
   }
 
+  /**
+   * Some retail companion UTCs store no Force points (p_kreia: Jedi Consular
+   * 3, 0/0; critic run 17), so Kreia joined unable to cast. A party member
+   * with Jedi levels and no Force pool at all gets the retail per-level pool.
+   * A Jedi level always grants at least one point, so a real 0 can't be lost.
+   */
+  ensureForcePointsFromClasses(): void {
+    if((Number(this.maxForcePoints) || 0) > 0 || (Number(this.forcePoints) || 0) > 0) return;
+    const fromClasses = this.getForcePointsFromClasses();
+    if(fromClasses > 0){
+      this.forcePoints = this.maxForcePoints = this.currentForce = fromClasses;
+    }
+  }
+
+  /** Force points by the retail per-level rule: Force die + WIS modifier per Jedi level. */
+  getForcePointsFromClasses(): number {
+    const wis = abilityModifier(this.getWIS(false));
+    let total = 0;
+    for(const creatureClass of this.classes){
+      const die = Number(creatureClass?.forcedie) || 0;
+      if(die <= 0) continue;
+      total += (Number(creatureClass.level) || 0) * Math.max(1, die + wis);
+    }
+    return total;
+  }
+
   getMaxFP(){
     return this.maxForcePoints;
   }
@@ -4558,6 +4584,8 @@ export class ModuleCreature extends ModuleObject {
         // arithmetic on undefined. Base is the maximum until bonuses apply.
         this.maxForcePoints = this.forcePoints || 0;
       }
+
+      if(this.isPM) this.ensureForcePointsFromClasses();
 
       // Template saving-throw bonuses (UTC fortbonus/refbonus/willbonus) were
       // written by save() but never read back, so every creature lost them.

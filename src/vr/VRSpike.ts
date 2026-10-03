@@ -628,6 +628,24 @@ export class VRSpike {
   // dropped it, and the next cast thrust failed silently (critic run 12).
   private static readonly combatTargetLock = new VRCombatTargetLock({ switchDwellMilliseconds: 400, aimLossGraceMilliseconds: 2500 });
   private static offhandGrenadeTriggerHeld = false;
+  /** Follows the off hand for a few seconds after a grenade trigger, as the projectile's launch point. */
+  private static readonly throwHandAnchor = new THREE.Object3D();
+  private static throwHandAnchorUntil = Number.NEGATIVE_INFINITY;
+  private static throwHandRole: XRHandRole | null = null;
+
+  /** The off-hand anchor while a throw is in flight, else null. */
+  static resolveThrowHandAnchor(): THREE.Object3D | null {
+    if (!VRSpike.isPresenting || performance.now() > VRSpike.throwHandAnchorUntil) return null;
+    return VRSpike.throwHandAnchor;
+  }
+
+  private static updateThrowHandAnchor(inputFrame: XRInputFrame | null): void {
+    if (!VRSpike.throwHandRole || performance.now() > VRSpike.throwHandAnchorUntil) return;
+    const pose = inputFrame?.hands?.[VRSpike.throwHandRole]?.pose;
+    if (!pose?.position) return;
+    VRSpike.throwHandAnchor.position.copy(pose.position);
+    VRSpike.throwHandAnchor.updateMatrixWorld(true);
+  }
   private static dominantShotTriggerHeld = false;
   private static combatTargetHighlightHost: VRCombatTargetHighlightHost | null = null;
   private static combatTargetHighlightErrorReported = false;
@@ -1448,6 +1466,7 @@ export class VRSpike {
         );
       }
       VRSpike.latestInputFrame = inputFrame;
+      VRSpike.updateThrowHandAnchor(inputFrame);
       const viewerPosition = frame.getViewerPose(referenceSpace)?.transform.position;
       if (viewerPosition && Number.isFinite(viewerPosition.x) && Number.isFinite(viewerPosition.y) &&
         Number.isFinite(viewerPosition.z)) {
@@ -1998,9 +2017,14 @@ export class VRSpike {
       // left hand did nothing at all — the panel read as inert. Resolve the
       // row from whichever hand is actually on it, and draw that hand's ray.
       const panel = VRSpike.comfortSettingsHost.object;
-      const selectingHand = actions.find((action) =>
+      const pressedHand = actions.find((action) =>
         (action.action === SemanticXRAction.Select || action.action === SemanticXRAction.Use) && action.pressed
       )?.hand ?? null;
+      // Only the hand that owns the highlight clicks: with both rays on the
+      // panel, the off hand's trigger changed its own, unhighlighted row
+      // (critic run 17). A hand pointing alone owns the highlight anyway.
+      const highlightHand = VRSpike.comfortSettingsPointerHand.pointingHand;
+      const selectingHand = pressedHand && highlightHand && pressedHand !== highlightHand ? null : pressedHand;
       const resolution = VRSpike.comfortSettingsPointerHand.resolve(
         inputFrame,
         (pose) => VRSpike.comfortSettingsHost?.rowAtRay(pose) ?? null,
@@ -2637,6 +2661,11 @@ export class VRSpike {
       const offhandShotPressed = offhandTriggerPressed && context.offhandShotAvailable === true;
       if (offhandTriggerPressed && !VRSpike.offhandGrenadeTriggerHeld) {
         if (!offhandShotPressed) {
+          // The throw leaves from this hand: the cast plays its conjure
+          // (about a second) before the projectile flies.
+          VRSpike.throwHandRole = offhandHand;
+          VRSpike.throwHandAnchorUntil = performance.now() + 4000;
+          VRSpike.updateThrowHandAnchor(inputFrame);
           context.onGrenadeTrigger?.();
         } else if (VRSpike.isPresentationShotAllowed(context)) {
           VRSpike.firePresentationShot(context, timestamp, offhandHand, () => context.playOffhandShotSound?.());

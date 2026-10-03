@@ -46,7 +46,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
         lines: [
           ['Stick', 'Move'],
           ['Stick click', 'Walk / run'],
-          ['X, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, quick save, VR Menu)'],
+          ['X, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, VR Menu; Quick Save out of combat, Clear Actions in it)'],
           ['Y', 'Switch party member'],
           ['Trigger', 'Throw an armed grenade'],
         ],
@@ -81,7 +81,7 @@ export function describeVRControls(dominant: XRHandRole): readonly VRControlsGui
       lines: [
         ['Stick', 'Move'],
         ['Stick click', 'Walk / run'],
-        ['A, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, quick save, VR Menu)'],
+        ['A, hold', 'Action wheel: point at a choice with either hand and pull its trigger; let go to close (attacks, Force powers, items, menu, VR Menu; Quick Save out of combat, Clear Actions in it)'],
         ['B', 'Switch party member'],
         ['Trigger', 'Throw an armed grenade'],
       ],
