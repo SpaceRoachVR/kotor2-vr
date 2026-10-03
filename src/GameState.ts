@@ -1349,6 +1349,7 @@ function dispatchVREmbodiedCombatInput(
   actor: ModuleCreature,
   targetId: string | null,
   input: VRCombatRequiredInput,
+  fromSwingBuffer = false,
 ): boolean {
   const head = vrCombatIntentQueue.getHead();
   // A trigger pull with a trigger-cast Force power at the head casts it,
@@ -1369,7 +1370,10 @@ function dispatchVREmbodiedCombatInput(
   // 17's fix for a slow sweep rolling twice) let continuous swinging hold it
   // shut: swinging harder gave fewer attacks (critic run 18). The controller
   // now emits one event per stroke, which is what fixes the slow sweep.
-  if (input === 'dominant-swing' && nowMs - vrSwingTakenAt < 600) return false;
+  // A held swing released when the round opens IS the swing that started the
+  // window: refusing it lost every stroke made in the last ~0.6 s before the
+  // round opened, silently (critic run 20, FL3).
+  if (input === 'dominant-swing' && !fromSwingBuffer && nowMs - vrSwingTakenAt < 600) return false;
   const tempo = getVREmbodiedTempoResult(actor, initialTarget);
   if (!tempo.eligible) {
     // ROADMAP 3.12: a swing made while the round is busy waits for it to open
@@ -1432,7 +1436,7 @@ function dispatchVREmbodiedCombatInput(
     result.state === 'intent-skipped-invalid' || result.state === 'deferred-input-mismatch' ||
     result.state === 'deferred-weapon-mismatch') {
     vrCombatIssuedTargetId = initialTarget.id;
-    if (input === 'dominant-swing') vrSwingTakenAt = nowMs;
+    if (input === 'dominant-swing' && !fromSwingBuffer) vrSwingTakenAt = nowMs; // the buffered stroke already started it
     return true;
   }
   return false;
@@ -1626,7 +1630,7 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
   }
   const release = vrCombatSwingBuffer.release(context);
   if (release.state !== 'released') return { released: false, armed: false };
-  const released = dispatchVREmbodiedCombatInput(actor, release.swing.targetId, release.swing.input);
+  const released = dispatchVREmbodiedCombatInput(actor, release.swing.targetId, release.swing.input, true);
   return { released, armed: vrCombatSwingBuffer.hasPending };
 }
 
@@ -1812,17 +1816,21 @@ function commitVRArmedGrenade(actor: ModuleCreature, targetId: string | null): b
     const now = performance.now();
     // Companions too (critic run 18: a frag from 6 m at a droid 1.5 m from
     // Atton took him from 24 to 5 without a word).
-    let caught: ModuleCreature | null = null;
+    const caughtNames: string[] = [];
     try {
       for (const member of GameState.PartyManager.party) {
         if (!member || member === actor || (member.isDead && member.isDead())) continue;
-        if (distanceVRCombat2D(member, target) < VR_GRENADE_SELF_BLAST_METRES) { caught = member; break; }
+        if (distanceVRCombat2D(member, target) < VR_GRENADE_SELF_BLAST_METRES) {
+          caughtNames.push(resolveVRWorldPromptName(member as ModuleObject) || 'a companion');
+        }
       }
     } catch { /* party unreadable: warn for the thrower only */ }
+    // Every companion in it, not the first (critic run 20: Kreia went unnamed).
+    const caught = caughtNames.length ? caughtNames.join(' and ') : null;
     const self = distance < VR_GRENADE_SELF_BLAST_METRES;
     if ((self || caught) && now - vrGrenadeTooCloseWarnedAt > VR_GRENADE_CONFIRM_MS) {
       vrGrenadeTooCloseWarnedAt = now;
-      const who = self ? 'you’re' : `${resolveVRWorldPromptName(caught as ModuleObject) || 'a companion'} is`;
+      const who = self ? 'you’re' : `${caught} ${caughtNames.length > 1 ? 'are' : 'is'}`;
       try { VRSpike.showNotice(`Too close: ${who} in the blast. Pull again to throw`, 3000); } catch { /* notice only */ }
       reportVRGrenadeOutcomeOnce('warned: party inside blast', `distance=${distance.toFixed(1)} self=${self}`);
       return false;
@@ -1940,18 +1948,13 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   };
   // A full queue is feedback-only: never fall through to immediate authored
   // activation, which would violate the player's explicitly selected order.
-  // Retail queues repeats (Power Attack twice); only an accidental double
-  // pick inside 600 ms is dropped (critic runs 18-19).
-  const pickedAt = performance.now();
-  if (intent.sourceKey === vrLastQueuedSourceKey && pickedAt - vrLastQueuedAt < 600) return true;
-  vrLastQueuedSourceKey = intent.sourceKey;
-  vrLastQueuedAt = pickedAt;
+  // Every pick queues, the same Force power or feat several times in a row
+  // included, as in retail (Allen, 2026-10-03). The run-18 stale-entry
+  // complaint is answered by dropping a head the pool can't pay, not by
+  // refusing repeats.
   vrCombatIntentQueue.enqueue(intent);
   return true;
 }
-
-let vrLastQueuedSourceKey = '';
-let vrLastQueuedAt = Number.NEGATIVE_INFINITY;
 
 /**
  * Whether a queued power can reach `target` from here: the entry's own
@@ -4268,6 +4271,7 @@ export class GameState implements EngineContext {
             attackTargetAimPoint: targetIsCreature ? null : resolveVRStructureAimPoint(target),
             attackTargetId: target && Number.isInteger(target.id) ? target.id : null,
             hitPoints: typeof creature.getHP === 'function' ? creature.getHP() : null,
+          maxHitPoints: typeof creature.getMaxHP === 'function' ? creature.getMaxHP() : null,
           });
         };
         for (const creature of (area.creatures ?? [])) add(creature as ModuleCreature);

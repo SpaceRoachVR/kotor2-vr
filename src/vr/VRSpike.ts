@@ -2580,6 +2580,8 @@ export class VRSpike {
         // re-queued the round anyway" — which need different fixes.
         const before = VRSpike.hooks?.describeCombatQueue?.() ?? 'n/a';
         context?.cancel?.();
+        // Holding B stopped combat with nothing to say so (critic run 20).
+        if (context?.cancel) VRSpike.showNotice('Combat stopped', 1500, 'info');
         const after = VRSpike.hooks?.describeCombatQueue?.() ?? 'n/a';
         // cancel() demonstrably runs, yet rounds keep starting — so something
         // re-queues the attack. Compare the queue immediately either side of
@@ -4720,6 +4722,22 @@ export class VRSpike {
     // the defeat screen (critic run 14: two hurt cues after death).
     const hp = typeof local?.hitPoints === 'number' ? local.hitPoints : null;
     const wasDown = VRSpike.lastLocalHitPoints !== null && VRSpike.lastLocalHitPoints <= 0;
+    // Below a quarter of the pool, once per drop: only the wrist number said
+    // so (critic run 20). A notice and a pulse in both hands.
+    const maxHp = typeof (local as any)?.maxHitPoints === 'number' ? (local as any).maxHitPoints : null;
+    if (hp !== null && maxHp && hp > 0) {
+      const low = hp <= maxHp * 0.25;
+      if (low && !VRSpike.lowHealthWarned) {
+        VRSpike.lowHealthWarned = true;
+        VRSpike.showNotice(`Low health: ${hp} / ${maxHp}`, 2500);
+        try {
+          VRSpike.pulseHand('left', { durationMs: 160, amplitude: 0.8 });
+          VRSpike.pulseHand('right', { durationMs: 160, amplitude: 0.8 });
+        } catch { /* haptics optional */ }
+      } else if (!low && hp > maxHp * 0.35) {
+        VRSpike.lowHealthWarned = false;
+      }
+    }
     VRSpike.lastLocalHitPoints = hp;
     if (damage && !wasDown) VRSpike.presentDamage(session, damage, nowMs);
   }
@@ -4729,6 +4747,7 @@ export class VRSpike {
    * that side's hand. Front, behind and unattributed hits use both.
    */
   private static lastLocalHitPoints: number | null = null;
+  private static lowHealthWarned = false;
   private static neckZoneChimedAt = Number.NEGATIVE_INFINITY;
 
   private static presentDamage(session: XRSession, damage: VRDamageEvent, nowMs: number): void {

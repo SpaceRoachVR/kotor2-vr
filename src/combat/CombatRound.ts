@@ -895,14 +895,17 @@ export class CombatRound {
       };
       const attacker = creature.getName();
       const target = (combatAction.target as any)?.getName?.() || 'target';
-      const word = hasAssuredHit && rollInfo.result !== AttackResult.MISS ? 'assured hit' : (words[rollInfo.result] ?? 'attack');
+      // dialog.tlk words it "automatic hit" (critic run 20).
+      const word = hasAssuredHit && rollInfo.result !== AttackResult.MISS ? 'automatic hit' : (words[rollInfo.result] ?? 'attack');
       const sign = rollInfo.bonus < 0 ? '-' : '+';
-      FeedbackMessageManager.AddLine(
-        `${attacker} attacks ${target} : *${word}* : (${rollInfo.natural} ${sign} ${Math.abs(rollInfo.bonus)} = ${rollInfo.total})`, true,
-        rollInfo.result === AttackResult.MISS ? FeebackMessageColor.INFO : FeebackMessageColor.ATTACK);
+      // The tab lists newest first: the damage line goes in first so it reads
+      // below its attack (critic run 20).
       if(rollInfo.damage > 0){
         FeedbackMessageManager.AddLine(`${attacker} damages ${target} for ${rollInfo.damage} damage`, true, FeebackMessageColor.ATTACK);
       }
+      FeedbackMessageManager.AddLine(
+        `${attacker} attacks ${target} : *${word}* : (${rollInfo.natural} ${sign} ${Math.abs(rollInfo.bonus)} = ${rollInfo.total})`, true,
+        rollInfo.result === AttackResult.MISS ? FeebackMessageColor.INFO : FeebackMessageColor.ATTACK);
       console.log(`Combat Log: ${attacker} attacks ${target} : *${word}* : (${rollInfo.natural} ${sign} ${Math.abs(rollInfo.bonus)} = ${rollInfo.total})${rollInfo.damage > 0 ? ` for ${rollInfo.damage}` : ''}`);
       return;
     }

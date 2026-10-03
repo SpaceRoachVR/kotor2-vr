@@ -85,6 +85,34 @@ export class InGameDialog extends GameMenu {
       .filter(r => !r.isContinueDialog())
       .map((r, i) => (i + 1) + '. ' + r.getCompiledString());
     this.LB_REPLIES.setItems(texts);
+    this.fitVRWorldReplies();
+  }
+
+  /** The list's authored height, restored outside the VR world layout. */
+  private authoredRepliesHeight: number | null = null;
+
+  /**
+   * In the VR world layout the reply list grows to show every reply: the
+   * authored box held 4 of HK-50's 6, with a scrollbar that didn't scroll
+   * (critic runs 15-20). Capped at 45% of the canvas, after which it scrolls.
+   */
+  fitVRWorldReplies(){
+    try{
+      const list = this.LB_REPLIES;
+      if(!list?.extent) return;
+      if(this.authoredRepliesHeight === null) this.authoredRepliesHeight = list.extent.height;
+      const authored = this.authoredRepliesHeight;
+      const wanted = this.vrWorldLayout
+        ? Math.min(Math.max(authored, Math.ceil(list.getContentHeight())), Math.floor(GameState.ResolutionManager.getViewportHeight() * 0.45))
+        : authored;
+      if(Math.abs(wanted - list.extent.height) < 1) return;
+      list.extent.height = wanted;
+      list.resizeControl();
+      this.positionReplies();
+      this.updateTextPosition(this.lastTextListening);
+    }catch(e){
+      console.warn('InGameDialog: fitting the VR reply list failed', e);
+    }
   }
 
   setDialogMode(state: ConversationState) {
@@ -119,6 +147,7 @@ export class InGameDialog extends GameMenu {
     if(active === this.vrWorldLayout) return;
     this.vrWorldLayout = active;
     this.positionReplies();
+    this.fitVRWorldReplies();
     this.updateTextPosition(this.lastTextListening);
   }
 

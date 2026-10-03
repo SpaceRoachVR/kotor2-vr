@@ -1141,10 +1141,20 @@ export class PartyManager {
     // possessed instance and the roster's member was gone until the next
     // module load. Fold the companion instance into the switch, and restore
     // the outgoing possessed member as a companion afterwards.
+    // Where the companion taking control stands. A leader switch hands you
+    // that body where it is, as retail does; it used to be rebuilt on the
+    // outgoing leader's spot, stacking the party with the camera inside the
+    // old leader (critic runs 19-20). Scripted swaps keep the old behaviour.
+    let companionSpawn: THREE.Vector3 | null = null;
+    let companionQuaternion: THREE.Quaternion | null = null;
     if(npcId >= 0){
       const companionIndex = PartyManager.party.findIndex((pm, index) => index > 0 && pm && pm.npcId == npcId);
       if(companionIndex > 0){
         const companion = PartyManager.party[companionIndex];
+        if(keepOutgoingPlayer && companion.position){
+          companionSpawn = companion.position.clone();
+          companionQuaternion = companion.quaternion.clone();
+        }
         try{ PartyManager.NPCS[npcId].template = companion.save(); }catch(e){ console.error(e); }
         PartyManager.party.splice(companionIndex, 1);
         try{ companion.destroy(); }catch(e){ console.error(e); }
@@ -1182,14 +1192,15 @@ export class PartyManager {
 
     try{
       const spawn = oldPC.position.clone();
-      const quaternion = oldPC.quaternion.clone();
+      const leaderSpawn = companionSpawn ?? spawn;
+      const quaternion = companionQuaternion ?? oldPC.quaternion.clone();
 
       partyMember.isPM = true;
       partyMember.isPC = 1;
       partyMember.npcId = npcId;
       partyMember.load();
       partyMember.clearAllActions();
-      partyMember.position.copy(spawn);
+      partyMember.position.copy(leaderSpawn);
       partyMember.quaternion.copy(quaternion);
       partyMember.loadScripts();
 
@@ -1213,7 +1224,7 @@ export class PartyManager {
 
       partyMember.loadModel().then( (model: OdysseyModel3D) => {
         model.userData.moduleObject = partyMember;
-        partyMember.position.copy(spawn);
+        partyMember.position.copy(leaderSpawn);
         partyMember.quaternion.copy(quaternion);
         model.hasCollision = true;
         
