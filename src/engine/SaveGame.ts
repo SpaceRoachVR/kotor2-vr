@@ -1,5 +1,6 @@
 import * as path from "path";
 import { prepareSavedGameLoad, restoreSavedPlayerTemplates } from "@/engine/SaveGameSession";
+import { globalBooleanByteLength, packGlobalBoolean, unpackGlobalBoolean } from "@/engine/GlobalBooleanPacking";
 import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 import { GFFObject } from "@/resource/GFFObject";
 import { TextureLoader } from "@/loaders";
@@ -512,12 +513,10 @@ export class SaveGame {
     for(let i = 0; i < maxBits; i++){
       for(let j = 0; j < 8; j++){
         let index = (i * 8) + j;
-        let bit = (boolBytes[i] >> 7-j) & 1; //reverse the bit index because of ENDIANS -_-
-
         let boolCat = catBooleans[index];
         if(boolCat){
           let boolLabel = boolCat.getFieldByLabel('Name').getValue();
-          let value = !!bit;
+          let value = unpackGlobalBoolean(boolBytes, index);
           if(GameState.GlobalVariableManager.Globals.Boolean.has(boolLabel.toLowerCase())){
             GameState.GlobalVariableManager.Globals.Boolean.get(boolLabel.toLowerCase()).value = value;
           }else{
@@ -1070,16 +1069,11 @@ export class SaveGame {
 
     //Global Booleans
     const catBooleanList  = gvt.RootNode.addField(new GFFField(GFFDataType.LIST, 'CatBoolean'));
-    const boolBuffer =  new Uint8Array( ( GameState.GlobalVariableManager.Globals.Boolean.size / 8 ) );
+    const boolBuffer =  new Uint8Array( globalBooleanByteLength(GameState.GlobalVariableManager.Globals.Boolean.size) );
     let i = 0;
     GameState.GlobalVariableManager.Globals.Boolean.forEach( (globBool, key: string) => {
       let boolean = globBool;
-      let byte_offset = Math.floor( i / 8 );
-      let bit_index = (i % 8);
-
-      if(boolean.value){
-        boolBuffer[byte_offset] |= 1 << bit_index;
-      }
+      packGlobalBoolean(boolBuffer, i, !!boolean.value);
 
       let boolStruct = new GFFStruct();
       boolStruct.addField( new GFFField(GFFDataType.CEXOSTRING, 'Name') ).setValue(boolean.name);
