@@ -215,6 +215,43 @@ describe('ResourceLoader model pair resolution', () => {
     });
   });
 
+  test('a zero-length MDX is a valid half, not a missing one', async () => {
+    // Lightsaber Hilt Variety ships its w_*sbr_* hilts as an MDL with a
+    // 0-byte MDX. Reading that as missing dropped the layer: the stock hilt
+    // loaded instead, and hilts the game does not ship failed outright.
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockLayerFiles({
+      'Override/mod1/w_lghtsbr_011.mdl': new Uint8Array([5]),
+      'Override/mod1/w_lghtsbr_011.mdx': new Uint8Array(0),
+    });
+    ResourceLoader.setOverrideResource(resMDL, 'w_lghtsbr_011', 'Override/mod1/w_lghtsbr_011.mdl', 'mod-1', 1);
+    ResourceLoader.setOverrideResource(resMDX, 'w_lghtsbr_011', 'Override/mod1/w_lghtsbr_011.mdx', 'mod-1', 1);
+    const archived = jest.spyOn(ResourceLoader, 'loadArchivedResource').mockResolvedValue(undefined);
+
+    const pair = await ResourceLoader.loadModelPair('w_lghtsbr_011');
+    expect(pair.mdl).toEqual(new Uint8Array([5]));
+    expect(pair.mdx).toEqual(new Uint8Array(0));
+    expect(archived).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('a zero-length MDL still falls through', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockLayerFiles({
+      'Override/mod1/body.mdl': new Uint8Array(0),
+      'Override/mod1/body.mdx': new Uint8Array(0),
+    });
+    ResourceLoader.setOverrideResource(resMDL, 'body', 'Override/mod1/body.mdl', 'mod-1', 1);
+    ResourceLoader.setOverrideResource(resMDX, 'body', 'Override/mod1/body.mdx', 'mod-1', 1);
+    jest.spyOn(ResourceLoader, 'loadArchivedResource')
+      .mockImplementation(async (resId: number) => new Uint8Array([resId === resMDL ? 90 : 91]));
+
+    await expect(ResourceLoader.loadModelPair('body')).resolves.toEqual({
+      mdl: new Uint8Array([90]),
+      mdx: new Uint8Array([91]),
+    });
+  });
+
   test('throws when neither Override nor the archives can supply the pair', async () => {
     jest.spyOn(ResourceLoader, 'loadArchivedResource').mockResolvedValue(undefined);
     await expect(ResourceLoader.loadModelPair('missing')).rejects.toThrow('Resource not found');

@@ -313,7 +313,7 @@ export class ResourceLoader {
     if (selection) {
       const [mdl, mdx] = await Promise.all([
         ResourceLoader.searchOverrideEntry(selection.primary),
-        ResourceLoader.searchOverrideEntry(selection.companions.get(resMDX)),
+        ResourceLoader.searchOverrideEntry(selection.companions.get(resMDX), true),
       ]);
       if (mdl && mdx) {
         ResourceLoader.setCache(CacheScope.OVERRIDE, resMDL, normalizedRef, mdl);
@@ -572,13 +572,21 @@ export class ResourceLoader {
     return ResourceLoader.searchOverrideEntry(entry);
   }
 
-  static async searchOverrideEntry(entry: OverrideResourceEntry | undefined): Promise<Uint8Array | undefined> {
+  /**
+   * Reads one indexed Override file. An empty file reads as missing, except
+   * where `allowEmpty` says a zero-length file is a valid resource: a model
+   * whose vertex data all lives in the .mdl ships a 0-byte .mdx (the 31
+   * w_*sbr_* hilts in Lightsaber Hilt Variety), and treating that as missing
+   * dropped the whole layer and fell back to the stock hilt — or, for a hilt
+   * the game does not ship, to nothing at all.
+   */
+  static async searchOverrideEntry(entry: OverrideResourceEntry | undefined, allowEmpty: boolean = false): Promise<Uint8Array | undefined> {
     if (!entry) {
       return undefined;
     }
     try {
       const buffer = await GameFileSystem.readFile(entry.filepath);
-      if (!buffer || !buffer.length) {
+      if (!buffer || (!buffer.length && !allowEmpty)) {
         return undefined;
       }
       return buffer;
