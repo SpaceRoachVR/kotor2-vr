@@ -13,6 +13,13 @@ export class ReverbEngine {
   private context: AudioContext;
 
   private currentPreset: number = 0;
+  /**
+   * One impulse per preset. Generating one is several seconds of 48 kHz stereo
+   * through four filter passes on the main thread, and walking between rooms
+   * with different presets regenerated it every few seconds (headset round 17:
+   * up to 30 per two minutes, each a hitch and a multi-megabyte allocation).
+   */
+  private impulseCache: Map<number, AudioBuffer> = new Map();
 
   // Core nodes
   private convolver: ConvolverNode;
@@ -166,7 +173,12 @@ export class ReverbEngine {
     this.echoDelay.delayTime.value = this.echoTime;
     this.echoGain.gain.value = this.echoDepth;
 
-    this.convolver.buffer = this.generateEAXImpulse(preset);
+    let impulse = this.impulseCache.get(index);
+    if (!impulse) {
+      impulse = this.generateEAXImpulse(preset);
+      this.impulseCache.set(index, impulse);
+    }
+    this.convolver.buffer = impulse;
 
     const reverbLevel = preset.gain * preset.lateReverbGain;
     this.wetGain.gain.value = reverbLevel;
