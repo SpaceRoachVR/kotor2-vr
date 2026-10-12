@@ -8,6 +8,7 @@ export interface VRPanelMenuController {
   triggerControllerBPress(): void;
   triggerControllerXPress(): void;
   triggerControllerYPress(): void;
+  scrollVRList?(direction: 'up' | 'down'): void;
   getLegacyPanelRenderPass?(): LegacyPanelRenderPass | null;
 }
 
@@ -32,12 +33,16 @@ export class VRPanelInputController {
   private owner: VRPanelMenuController | null = null;
   private awaitingRelease = false;
   private readonly previousPressed = new Map<PanelButton, boolean>();
+  private scrollAwaitingNeutral = false;
+  private scrollDirection: 'up' | 'down' | null = null;
+  private nextScrollMilliseconds = 0;
 
   process(
     owner: VRPanelMenuController | null,
     actions: readonly RoutedXRAction[],
     pointerPosition: THREE.Vector2 | null = null,
-    pointerSink: VRPanelPointerSink | null = null
+    pointerSink: VRPanelPointerSink | null = null,
+    timestampMilliseconds: number = performance.now()
   ): boolean {
     pointerSink?.setPointerPosition(pointerPosition);
     const pressed = VRPanelInputController.readPressed(actions);
@@ -51,11 +56,14 @@ export class VRPanelInputController {
       // leave the old panel's ray/cursor live over the new owner.
       pointerSink?.setPointerPosition(null);
       this.owner = owner;
+      this.resetScroll();
+      this.scrollAwaitingNeutral = VRPanelInputController.readScrollDirection(actions) !== null;
       this.awaitingRelease = VRPanelInputController.anyPressed(pressed);
       this.copyPressed(pressed);
       return true;
     }
 
+    this.processScroll(owner, actions, timestampMilliseconds);
     if (this.awaitingRelease) {
       if (!VRPanelInputController.anyPressed(pressed)) {
         this.awaitingRelease = false;
@@ -83,6 +91,43 @@ export class VRPanelInputController {
     this.owner = null;
     this.awaitingRelease = false;
     this.previousPressed.clear();
+    this.resetScroll();
+  }
+
+  private resetScroll(): void {
+    this.scrollAwaitingNeutral = false;
+    this.scrollDirection = null;
+    this.nextScrollMilliseconds = 0;
+  }
+
+  private processScroll(
+    owner: VRPanelMenuController,
+    actions: readonly RoutedXRAction[],
+    timestampMilliseconds: number,
+  ): void {
+    const direction = VRPanelInputController.readScrollDirection(actions);
+    if (!direction || !owner.scrollVRList || !Number.isFinite(timestampMilliseconds) || timestampMilliseconds < 0) {
+      this.scrollDirection = null;
+      this.nextScrollMilliseconds = 0;
+      if (!direction) this.scrollAwaitingNeutral = false;
+      return;
+    }
+    if (this.scrollAwaitingNeutral) return;
+    if (direction !== this.scrollDirection) {
+      owner.scrollVRList(direction);
+      this.scrollDirection = direction;
+      this.nextScrollMilliseconds = timestampMilliseconds + 350;
+    } else if (timestampMilliseconds >= this.nextScrollMilliseconds) {
+      // One step per frame: a stalled frame must never produce a catch-up burst.
+      owner.scrollVRList(direction);
+      this.nextScrollMilliseconds = timestampMilliseconds + 100;
+    }
+  }
+
+  private static readScrollDirection(actions: readonly RoutedXRAction[]): 'up' | 'down' | null {
+    const axes = actions.find(action => action.action === SemanticXRAction.Scroll && action.hand === 'right')?.axes;
+    if (!axes || !Number.isFinite(axes[0]) || !Number.isFinite(axes[1]) || Math.abs(axes[1]) <= 0.5) return null;
+    return axes[1] > 0 ? 'down' : 'up';
   }
 
   private copyPressed(pressed: ReadonlyMap<PanelButton, boolean>): void {

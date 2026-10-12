@@ -19,11 +19,28 @@ const ASSET_SERVER = path.join(__dirname, '..', 'asset-http', 'asset-server.js')
  *   port was previously fixed, so two harness runs could not coexist and the
  *   second died with EADDRINUSE. That single constraint serialised every
  *   emulator-driven session.
+ * @param {string} [options.userRoot] Absolute writable user-data directory.
+ *   Concurrent games also need separate roots: New Game clears temporary
+ *   game data, which otherwise races another browser's saved-state load.
  */
+function buildAssetServiceArgs(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypeError('asset service options must be an object');
+  const args = ['--no-mods'];
+  if (options.port !== undefined) {
+    if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new RangeError('asset service port must be an integer from 1 to 65535');
+    args.push('--port', String(options.port));
+  }
+  if (options.userRoot !== undefined) {
+    if (typeof options.userRoot !== 'string' || !path.isAbsolute(options.userRoot)) throw new TypeError('asset service userRoot must be an absolute path');
+    args.push('--user', options.userRoot);
+  }
+  return args;
+}
+
 function startAssetService(options = {}) {
   // --no-mods: the harness is how parity snapshots and the module sweep are
   // taken, and those have to describe retail rather than the player's layers.
-  const extraArgs = ['--no-mods', ...(options.port ? ['--port', String(options.port)] : [])];
+  const extraArgs = buildAssetServiceArgs(options);
   return new Promise((rawResolve, rawReject) => {
     const child = spawn(process.execPath, [ASSET_SERVER, ...extraArgs], { stdio: ['ignore', 'pipe', 'pipe'] });
     // Settling clears the no-URL timer. An uncleared timer stays a ref'd handle
@@ -74,4 +91,4 @@ function waitForPort(port, timeoutMs = 20_000) {
   });
 }
 
-module.exports = { startAssetService, waitForPort, ASSET_SERVER };
+module.exports = { startAssetService, waitForPort, ASSET_SERVER, buildAssetServiceArgs };

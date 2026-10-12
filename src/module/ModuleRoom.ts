@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { GameState } from "@/GameState";
 import { OdysseyFace3, OdysseyModel3D } from "@/three/odyssey";
 import { Utility } from "@/utility/Utility";
+import { applyGrassTextureFiltering } from "@/utility/GrassTextureFiltering";
 import { OdysseyModelNodeAABB, OdysseyWalkMesh } from "@/odyssey";
 import { BinaryReader } from "@/utility/binary/BinaryReader";
 import { ResourceTypes } from "@/resource/ResourceTypes";
@@ -877,8 +878,7 @@ export class ModuleRoom extends ModuleObject {
     TextureLoader.Load(this.area.grass.textureName).then((diffuseMap: OdysseyTexture) => {
       if(!diffuseMap) return;
       
-      diffuseMap.minFilter = THREE.LinearFilter;
-      diffuseMap.magFilter = THREE.LinearFilter;
+      applyGrassTextureFiltering(diffuseMap);
       grass_material.uniforms.map.value = diffuseMap;
       grass_material.uniformsNeedUpdate = true;
       grass_material.defines.USE_MAP = '';

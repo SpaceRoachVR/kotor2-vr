@@ -106,10 +106,15 @@ export class InventoryManager {
   static addItem(template: GFFObject|ModuleItem = new GFFObject(), limitOne = false): ModuleItem {
 
     let item: ModuleItem;
+    let transferredStackSize: number | undefined;
     if(template instanceof GFFObject){
       item = new GameState.Module.ModuleArea.ModuleItem(template);
     }else if(template instanceof GameState.Module.ModuleArea.ModuleItem){
       item = template;
+      transferredStackSize = item.getStackSize();
+      if (!Number.isInteger(transferredStackSize) || transferredStackSize < 1) {
+        throw new RangeError('Transferred inventory item must have a positive integer stack size');
+      }
     }
 
     if(!(item instanceof GameState.Module.ModuleArea.ModuleItem)){
@@ -117,6 +122,9 @@ export class InventoryManager {
     }
 
     item.initProperties();
+    // Existing items carry their live quantity, including merged container
+    // stacks. Template initialization must not reset that quantity on transfer.
+    if (transferredStackSize !== undefined) item.setStackSize(transferredStackSize);
     if(item.getBaseItemId() == BaseItemType.CREDITS){
       GameState.PartyManager.AddGold(item.getStackSize());
       GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.CREDITS_RECEIVED);
@@ -126,6 +134,7 @@ export class InventoryManager {
     }else{
       GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.ITEM_RECEIVED);
       item.load();
+      if (transferredStackSize !== undefined) item.setStackSize(transferredStackSize);
       let hasItem = InventoryManager.getItemByTag(item.getTag());
       if(hasItem){
 

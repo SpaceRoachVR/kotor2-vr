@@ -122,12 +122,15 @@ export class ActionParameter {
           scriptParamStructs.getFieldByLabel('CodeSize').getValue()
         );
     
-        let scriptInstance = script.newInstance();
+        // newInstance registers in the global VM map. Restore all fallible
+        // saved state first, so a rejected stack cannot retain an abandoned VM.
+        const instructionPointer = scriptParamStructs.getFieldByLabel('InstructionPtr').getValue();
+        const stackStruct = scriptParamStructs.getFieldByLabel('Stack').getChildStructs()[0];
+        const restoredStack = GameState.NWScript.NWScriptStack.FromActionStruct(stackStruct);
+        const scriptInstance = script.newInstance();
         scriptInstance.isStoreState = true;
-        scriptInstance.offset = scriptInstance.address = scriptParamStructs.getFieldByLabel('InstructionPtr').getValue();
-    
-        let stackStruct = scriptParamStructs.getFieldByLabel('Stack').getChildStructs()[0];
-        scriptInstance.stack = GameState.NWScript.NWScriptStack.FromActionStruct(stackStruct);
+        scriptInstance.offset = scriptInstance.address = instructionPointer;
+        scriptInstance.stack = restoredStack;
 
         value = scriptInstance;
       break;

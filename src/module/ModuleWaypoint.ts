@@ -24,6 +24,15 @@ import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 * @memberof KotOR
 */
 export class ModuleWaypoint extends ModuleObject {
+  private sceneHelper?: THREE.Object3D;
+
+  /** Own the debug helper so its room reference is released with the waypoint. */
+  setSceneHelper(helper: THREE.Object3D): void {
+    if(!(helper instanceof THREE.Object3D)) throw new TypeError('Waypoint helper must be an Object3D');
+    if(this.sceneHelper === helper) return;
+    this.sceneHelper?.removeFromParent();
+    this.sceneHelper = helper;
+  }
 
   constructor ( gff = new GFFObject() ) {
     super(gff);
@@ -140,6 +149,8 @@ export class ModuleWaypoint extends ModuleObject {
   }
 
   destroy(): void {
+    this.sceneHelper?.removeFromParent();
+    this.sceneHelper = undefined;
     super.destroy();
     if(this.area) this.area.detachObject(this);
 

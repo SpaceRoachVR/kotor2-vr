@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const vm = require('node:vm');
 const { parseArgs, PROLOGUE_ROUTES } = require('./playthrough');
 const {
   CHECKPOINT_ORDER,
@@ -9,7 +10,18 @@ const {
   MEDICAL_COMPUTER_MAX_VISITS,
   GAMEPLAY_RETURN_MENU_NAMES,
   INTERMEDIATE_WAYPOINT_RANGE,
+  EXTERIOR_RETURN_LIFT_ROUTE,
+  EBON_GALAXY_MAP_APPROACH,
+  EBON_COMMUNICATIONS_APPROACH,
   computeHeadRelativeMoveAxes,
+  isWithinNavigationRange,
+  navigationInputDurationMs,
+  canRetryPlannedApproach,
+  clearHostiles,
+  chooseDroidCombatAbility,
+  swingAt,
+  handleNavigationAttacker,
+  clearProgressBlockingDialogue,
   computeReferenceFacingFromQuaternion,
   isProgressBlockingForeground,
   dialogueTranscriptKey,
@@ -28,6 +40,71 @@ const {
   describeWalkmeshRoute,
   isModuleExitDoor,
 } = require('./playthrough-steps');
+
+test('droid combat prefers authored ion equipment and falls back to its unlimited shock arm', () => {
+  const shock = { label: 'Droid Shock Arm' };
+  const ion = { label: 'Droid Ion Blast Mark I' };
+  assert.equal(chooseDroidCombatAbility([{ label: 'Attack' }, shock, ion]), ion);
+  assert.equal(chooseDroidCombatAbility([shock]), shock);
+  const charge = { label: 'Droid Charge Arm' };
+  assert.equal(chooseDroidCombatAbility([charge]), charge);
+  assert.equal(chooseDroidCombatAbility([{ label: 'Attack' }]), null);
+  assert.throws(() => chooseDroidCombatAbility(null), /labelled actions/);
+  assert.throws(() => chooseDroidCombatAbility([{}]), /labelled actions/);
+});
+
+test('combat bridge rejects an unsupported input before calling the engine', async () => {
+  await assert.rejects(swingAt({ evaluate: () => { throw new Error('engine must not be called'); } }, 1, 'unknown'), /dominant swing or trigger/);
+});
+
+test('the combat bridge commits a queued droid ability with the trigger input', async () => {
+  const inputs = [];
+  const context = {actorId:'1',nominatedTargetId:'2',tempoReadiness:1,weaponMode:'blaster',
+    onCombatSwing: event => inputs.push(event.input)};
+  const sandbox = {performance:{now:()=>100}, window:{KotOR:{
+    PartyManager:{party:[{actionQueue:[]}]},
+    VRSpike:{hooks:{getCombatContext:()=>context}},
+  }}};
+  const harness = {evaluate: async source => vm.runInNewContext(source, sandbox)};
+  assert.equal((await swingAt(harness, 2, 'dominant-trigger')).ok, true);
+  assert.equal((await swingAt(harness, 2)).ok, true);
+  assert.deepEqual(inputs, ['dominant-trigger','dominant-swing']);
+  context.tempoReadiness = 0;
+  assert.equal((await swingAt(harness, 2, 'dominant-trigger')).ok, false);
+  assert.equal(inputs.length, 2, 'an unavailable tempo window must not commit an input');
+});
+
+test('navigation engages the live attacker and rejects an unresolved fight', async () => {
+  const attacker={found:true,id:4,tag:'droid',name:'Mining Droid',distance:9};
+  let fights=0;
+  const harness={evaluate:async()=>attacker};
+  const fight=async (_h,target)=>{assert.equal(target,attacker);fights+=1;return {killed:true};};
+  assert.equal(await handleNavigationAttacker(harness,{hp:20,maxHp:30,dead:false},{fight}),true);
+  assert.equal(fights,1);
+  await assert.rejects(handleNavigationAttacker(harness,{hp:20,maxHp:30,dead:false},
+    {fight:async()=>({killed:false,reason:'unreachable'})}), /not defeated: unreachable/);
+  harness.navigationCombatActive=true;
+  assert.equal(await handleNavigationAttacker(harness,{hp:20,maxHp:30,dead:false},{fight}),false);
+  assert.equal(fights,1,'an ongoing fight must not recursively interrupt its own approach');
+  harness.navigationCombatActive=false;
+  assert.equal(await handleNavigationAttacker(harness,{hp:30,maxHp:30,dead:false},{fight}),false);
+  harness.evaluate=async()=>({found:false});
+  assert.equal(await handleNavigationAttacker(harness,{hp:20,maxHp:30,dead:false},{fight}),false);
+});
+
+test('the exterior return lift route enters the west ramp and avoids its north gap', () => {
+  const route=EXTERIOR_RETURN_LIFT_ROUTE;
+  assert.ok(route[0].x < -7.76, 'the low-floor approach must enter west of the ramp');
+  assert.ok(route.at(-1).z > 10.8, 'the route must finish on the lift platform');
+  for (let index=1;index<route.length;index+=1) {
+    const from=route[index-1],to=route[index];
+    for (let sample=0;sample<=20;sample+=1) {
+      const x=from.x+(to.x-from.x)*sample/20;
+      const y=from.y+(to.y-from.y)*sample/20;
+      assert.equal(x > -3 && x < -1.5 && y > -4.8, false, 'route must not cross the north gap');
+    }
+  }
+});
 
 test('defaults new campaign runs to the authored Ebon Hawk prologue', () => {
   assert.deepEqual(PROLOGUE_ROUTES, ['continue', 'skip']);
@@ -270,6 +347,26 @@ test('uses the returned Ebon Hawk state to take the authored Galaxy Map completi
   assert.match(source, /checkpoint\(harness, 'peragus-arrival'\)/);
 });
 
+test('the Galaxy Map approach enters the cockpit before turning towards its port wall', () => {
+  const [entrance, approach] = EBON_GALAXY_MAP_APPROACH;
+  // 001EBO14's port boundary ends at (51.6,73.13); 001EBO15's
+  // connected entrance extends east to x=53.8. Stay north of that wall.
+  assert.ok(entrance.x > 51.6 && entrance.x < 53.8 && entrance.y > 73.3);
+  assert.equal(entrance.usePath, true);
+  assert.ok(approach.y > 73.3 && approach.x > 50.67);
+  assert.equal(approach.usePath, false);
+  assert.ok(Math.hypot(approach.x - 50.6733, approach.y - 73.9424) < 1.6);
+});
+
+test('the Communications Console approach walks west of the angled room wall', () => {
+  const [corner, approach] = EBON_COMMUNICATIONS_APPROACH;
+  assert.ok(corner.x + corner.range < 55.96 && corner.y > 63.62);
+  assert.ok(approach.x + approach.range < 55.96 && approach.y + approach.range < 63.62);
+  assert.equal(corner.usePath, false);
+  assert.equal(approach.usePath, false);
+  assert.ok(Math.hypot(approach.x - 56, approach.y - 62.5342) + approach.range < 1.6);
+});
+
 test('validates world-prompt readiness inputs before polling the emulator', async () => {
   await assert.rejects(() => waitForWorldPrompt({}, ''), /non-empty string/i);
   await assert.rejects(() => waitForWorldPrompt({}, 'module-object:36', 0), /positive integer/i);
@@ -362,9 +459,14 @@ test('returns a released stick at the destination and rejects invalid inputs', (
 });
 
 test('uses finer thumbstick samples for tight walkmesh corners', () => {
-  const source = require('node:fs').readFileSync(require.resolve('./playthrough-steps'), 'utf8');
-  assert.match(source, /const inputSampleMs = navigation\.remaining <= 3 \? 180 : navigation\.remaining <= 8 \? 350 : 900/);
-  assert.match(source, /await sleep\(inputSampleMs\)/);
+  assert.equal(navigationInputDurationMs(10, .3), 900);
+  assert.equal(navigationInputDurationMs(5, .3), 350);
+  assert.equal(navigationInputDurationMs(3, .3), 180);
+  assert.equal(navigationInputDurationMs(.9, .3), 60);
+  assert.equal(navigationInputDurationMs(.4, .3), 20);
+  assert.equal(navigationInputDurationMs(.3, .3), 0);
+  assert.throws(() => navigationInputDurationMs(NaN, .3), /finite/);
+  assert.throws(() => navigationInputDurationMs(1, 0), /positive/);
 });
 
 test('derives a normalized horizontal locomotion yaw from the world quaternion', () => {
@@ -387,4 +489,38 @@ test('identifies module exit doors by tag, destination module, or raw/compiled n
   assert.equal(isModuleExitDoor({ tag: 'MorgueDoor', name: 'Morgue Door' }), false);
   assert.equal(isModuleExitDoor(null), false);
   assert.equal(isModuleExitDoor(undefined), false);
+});
+
+test('navigation arrival stays inside the actual interaction range', () => {
+  assert.equal(isWithinNavigationRange(1.91, 1.6), false);
+  assert.equal(isWithinNavigationRange(1.6, 1.6), true);
+  assert.equal(isWithinNavigationRange(0, 1.6), true);
+  assert.throws(() => isWithinNavigationRange(NaN, 1.6), /finite/);
+  assert.throws(() => isWithinNavigationRange(1, 0), /positive/);
+});
+
+test('a short wall collision gets a planned route attempt before failing', () => {
+  assert.equal(canRetryPlannedApproach({ usePath: true, attemptUsesPath: false, attempt: 1, maxAttempts: 4 }), true);
+  assert.equal(canRetryPlannedApproach({ usePath: true, attemptUsesPath: true, attempt: 2, maxAttempts: 4 }), false);
+  assert.equal(canRetryPlannedApproach({ usePath: false, attemptUsesPath: false, attempt: 1, maxAttempts: 4 }), false);
+  assert.equal(canRetryPlannedApproach({ usePath: true, attemptUsesPath: false, attempt: 4, maxAttempts: 4 }), false);
+  assert.throws(() => canRetryPlannedApproach({ usePath: true, attemptUsesPath: false, attempt: 0, maxAttempts: 4 }), /bounds/);
+});
+
+test('invalid automatic levelling options fail before touching the engine', async () => {
+  const harness = { evaluate: () => { throw new Error('engine must not be accessed'); } };
+  await assert.rejects(clearHostiles(harness, { autoLevel: 'false' }), /autoLevel must be boolean/);
+});
+
+test('navigation uses the authored conversation handler even before a dialog menu appears', async () => {
+  const played = { finished: true, turns: 4, transcript: ['Atton grants the code'] };
+  let reads = 0;
+  const harness = { campaignAcceptance: true,
+    evaluate: async () => (++reads === 1 ? { engineMode: 3, menuStack: ['InGameOverlay'] } : { engineMode: 1 }),
+    navigationDialogueHandler: async (label) => { assert.equal(label, 'prison approach'); return played; } };
+  assert.equal(await clearProgressBlockingDialogue(harness, 'prison approach'), played);
+  assert.equal(reads, 2);
+  harness.evaluate = async () => ({ engineMode: 3, menuStack: ['InGameOverlay'] });
+  harness.navigationDialogueHandler = async () => ({ finished: false });
+  await assert.rejects(clearProgressBlockingDialogue(harness, 'prison approach'), /did not finish/);
 });

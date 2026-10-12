@@ -414,7 +414,53 @@ per-frame, stereo submits the whole level twice and 0.1's numbers are meaningles
 - **Done when:** verified culling is active in stereo, with before/after draw counts.
 - **Files:** `src/module/ModuleArea.ts`.
 
-### 0.3 — Characterise the memory growth ◑ characterised and reproducible; the retaining edge is still open (2026-09-09)
+### 0.3 — Fix module-transition memory growth ◑ extended party/save soak passed; full-campaign and headset acceptance open (2026-10-07)
+
+**2026-10-07 extended verification:** a fresh emulated Quest 3 session completed
+30 transitions across `101PER`, `102PER`, and `106PER`, plus ten save/reloads,
+alternating solo Exile and Exile/Atton/T3 parties. This exposed an additional
+leak: area teardown omitted encounters, leaving hidden encounter meshes in the
+scene and retaining old areas. Teardown now destroys those encounters, with a
+regression test and a live assertion rejecting stale encounter meshes.
+
+Final retained JS heap fell from **1,202.538 to 860.101 MiB** for the matching
+three-member `106PER` reload. Across the last three matching visits, heap change
+fell from **+161–164 MiB** to **-1.529 through +1.405 MiB**. All 40 samples had
+advancing XR frames and zero stale encounter meshes; no page exceptions or
+XR-loop failures occurred. A roughly 23 MiB earlier warm-up step in two solo
+series remains unexplained, so this is an observed late plateau, not proof of
+zero growth or campaign-wide acceptance. The scenario uses direct transitions
+and synthetic party setup, rather than authored campaign progression.
+
+Validation: 266 Jest suites / 2,527 tests, 142 harness tests, TypeScript, fresh
+webpack, and 28/28 VR checks. Full methods, conservative and late-window
+comparisons, known console diagnostics, and remaining gates are in the
+[extended memory-soak report](tools/vr-emulator/memory-soak-report-2026-10-07.md).
+
+**Earlier two-module evidence (2026-10-06):**
+
+**Recorded evidence:** a fresh-new-game emulated Quest 3 session completed ten
+alternating `101PER`/`102PER` transitions with advancing XR frames, forced GC,
+zero page exceptions, and zero reported VR-loop failures. Warm same-module
+revisits add **0 geometries and 0 textures**. Final JS heap deltas are
+**+1.1/+3.2 MB per two-transition cycle**, down from +66.9/+72 MB in the earlier
+pre-fix sweep. The remaining small JS growth has not been explained; this is
+not a zero-growth heap acceptance or a full-campaign/headset sign-off.
+
+Fixed ownership includes nested-model subscriptions, chunk emitters, Points,
+bone textures, retained-player effect/inventory rehydration, parentless equipment
+and head models, console object handles, waypoint/path helpers, area fog textures,
+and failed saved-script restoration allocations. The player's effects stay
+constant; waypoint helpers match the active module with no stale room references.
+
+Validation: **263 Jest suites / 2,508 tests**, **109 emulator tool tests**,
+TypeScript, fresh webpack build, and **28/28 VR checks**. Broader campaign loops,
+party variations, residual JS growth, and sustained physical-headset memory are
+still required before treating 0.3 as closed. Methods, exact counters, known
+saved-action errors, and reproduction commands are in
+[the transition-memory report](tools/vr-emulator/memory-transition-report-2026-10-05.md).
+
+**Historical investigation below (2026-09-09; predates these fixes):**
 
 Measured with `tools/vr-emulator/probe-memory-growth.js`, which loads the same
 two modules in a cycle and reads every candidate retainer after a forced
@@ -834,10 +880,26 @@ galaxy map didn't display correctly" without needing the symptom described
 first. Retest before chasing anything else here.
 - **Blocked on:** what "didn't display correctly" actually looked like.
 
-### 1.10 — Full Peragus playthrough ◑ medical-bay slice complete in VR (2026-08-24)
+### 1.10 — Full Peragus playthrough ◑ fresh-game VR route through mining-tunnel entry
 
 - **Done when:** a fresh save reaches the end of the Peragus arc with no progression
   blockers, and remaining issues are cosmetic and logged.
+
+**Latest acceptance:** one uninterrupted fresh-game emulated Quest 3 run passed
+**98/98 steps** through Kreia's awakening, Atton's administration code, T3
+possession, the hangar/sub-level errands, T3's fuel-depot ambush, the authored
+handback to the solo Exile, and first arrival in `102PER` at `mining-tunnels`.
+No saved-state resume, death reload, or injected health recovery was used.
+The 45m 58s run verified both completed plot flags, the solo protagonist, and
+ten advancing XR frames at arrival. Saving temporary T3 possession no longer
+adds him to the recruited roster before his later rescue. Jest passed
+267 suites / 2,531 tests, harness tests passed 147, and `vr:check` passed 28/28.
+See the [mining-tunnels acceptance report](tools/vr-emulator/peragus-mining-tunnels-report.md).
+The previous [94-step fuel-depot result](tools/vr-emulator/peragus-103-acceptance-report.md)
+remains historical evidence for the earlier boundary.
+Navigation still required bounded retries; full-arc, physical-headset, gesture,
+and sustained-memory acceptance remain open. The earlier results below are
+historical and are superseded by this run for the covered campaign segment.
 
 `node tools/vr-emulator/playthrough.js` now runs from a new game to the end of the
 Peragus medical bay under the emulated headset, in a live immersive session, with

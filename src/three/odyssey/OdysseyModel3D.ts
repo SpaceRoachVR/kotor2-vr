@@ -260,6 +260,14 @@ export class OdysseyModel3D extends OdysseyObject3D {
     if(node == null)
       node = this;
 
+    // A nested model owns its source subscription, emitters and animation
+    // state. Recursing with the parent's `this` cleared the parent twice and
+    // left the child subscribed (and ticking detached emitters) after unload.
+    if (node instanceof OdysseyModel3D && node !== this) {
+      node.dispose();
+      return;
+    }
+
     while(this.childModels.length){
       const childModel3D = this.childModels.shift();
       if(childModel3D){
@@ -276,8 +284,12 @@ export class OdysseyModel3D extends OdysseyObject3D {
     for (let i = node.children.length; i > 0; i--) {
       const object = node.children[i-1];
       node.remove(object);
-      if (object.type === 'Mesh' || object.type === 'SkinnedMesh' || object.type === 'Points') {
-        if(object instanceof THREE.Mesh){
+      if (object instanceof OdysseyEmitter3D) {
+        // Emitter cleanup also releases its chunk instances and source model.
+        // It removes its render children, so traversal cannot dispose them twice.
+        object.dispose();
+      }else if (object.type === 'Mesh' || object.type === 'SkinnedMesh' || object.type === 'Points') {
+        if(object instanceof THREE.Mesh || object instanceof THREE.Points){
           if(Array.isArray(object.material)){
             while(object.material.length){
               let material = object.material.splice(0, 1)[0];
@@ -289,6 +301,9 @@ export class OdysseyModel3D extends OdysseyObject3D {
             object.material.dispose();
           }
           object.geometry.dispose();
+          if(object instanceof THREE.SkinnedMesh){
+            object.skeleton?.dispose();
+          }
         }
       }else if(object.type === 'OdysseyLight'){
         if(!!this.context && !!this.context.lightManager){
@@ -744,7 +759,16 @@ export class OdysseyModel3D extends OdysseyObject3D {
           }
         }
         // (skinNode.geometry as any).bones = bones;
+        const previousSkeleton = skinNode.skeleton;
         skinNode.bind(new THREE.Skeleton( bones as any[], inverses ));
+        // Shield meshes borrow the skin's skeleton rather than owning one.
+        // Keep those borrowers on the replacement before freeing its old GPU data.
+        for(const shield of this.forceShieldGeometry){
+          if(shield instanceof THREE.SkinnedMesh && shield.skeleton === previousSkeleton){
+            shield.skeleton = skinNode.skeleton;
+          }
+        }
+        previousSkeleton?.dispose();
         skinNode.skeleton.update();
         skinNode.updateMatrixWorld();
       }

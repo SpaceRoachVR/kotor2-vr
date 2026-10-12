@@ -5,10 +5,19 @@ import { TextureLoader } from "@/loaders/TextureLoader";
 import { OdysseyModelNode, OdysseyModelNodeEmitter } from "@/odyssey";
 import type { OdysseyController } from "@/odyssey/controllers";
 import { OdysseyObject3D } from "@/three/odyssey/OdysseyObject3D";
+import type { OdysseyModel3D } from "@/three/odyssey/OdysseyModel3D";
 import {
   ODYSSEY_AREA_WIND_DIRECTION,
   resolveDanglyWindPower,
 } from "@/three/odyssey/windPowerContext";
+
+function disposeChunkMaterials(materials: THREE.Material | THREE.Material[] | null, sourceModel: OdysseyModel3D | null): void {
+  if (!materials) return;
+  for (const material of Array.isArray(materials) ? materials : [materials]) {
+    sourceModel?.disposeMaterial(material);
+    material.dispose();
+  }
+}
 
 /**
  * OdysseyEmitter3D class.
@@ -157,7 +166,11 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
 
   // Chunk emitter state
   private _chunkGeometry: THREE.BufferGeometry = null;
-  private _chunkMaterial: THREE.Material = null;
+  private _chunkMaterial: THREE.Material | THREE.Material[] = null;
+  // FromMDL subscribes its runtime instance to the cached source model. Keep
+  // that temporary instance owned until the emitter releases its cloned data.
+  private _chunkSourceModel: OdysseyModel3D = null;
+  private disposed: boolean = false;
   private _chunkLoaded: boolean = false;
   private _isChunkEmitter: boolean = false;
   private _chunkMesh: THREE.InstancedMesh = null;
@@ -1798,6 +1811,8 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
   }
 
   dispose(){
+    if (this.disposed) return;
+    this.disposed = true;
     this.geometry?.dispose();
     this.material?.dispose();
     if(this.mesh){
@@ -1811,8 +1826,15 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
       this._chunkGeometry.dispose();
     }
     if(this._chunkMaterial){
-      this._chunkMaterial.dispose();
+      disposeChunkMaterials(this._chunkMaterial, this._chunkSourceModel);
     }
+    this._chunkSourceModel?.dispose();
+    this._chunkSourceModel = null;
+    this._chunkMesh = null;
+    this._chunkGeometry = null;
+    this._chunkMaterial = null;
+    this._chunkLoaded = false;
+    this.removeFromParent();
   }
 
   attributeChanged(attr: string){
@@ -1833,19 +1855,24 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
    * Once loaded, creates an InstancedMesh for rendering chunk particles.
    */
   private async loadChunkModel(): Promise<void> {
+    if (this.disposed || this._chunkLoaded) return;
+    let sourceModel: OdysseyModel3D = null;
+    let foundGeom: THREE.BufferGeometry = null;
+    let foundMat: THREE.Material | THREE.Material[] = null;
+    let adopted = false;
     try {
       const { MDLLoader } = await import("@/loaders/MDLLoader");
       const { OdysseyModel3D } = await import("@/three/odyssey/OdysseyModel3D");
 
       const mdl = await MDLLoader.loader.load(this.node.chunkResRef);
-      if(!mdl) return;
+      if(!mdl || this.disposed) return;
 
       const model = await OdysseyModel3D.FromMDL(mdl, { context: this.context });
+      sourceModel = model;
       if(!model) return;
+      if(this.disposed) return;
 
       // Find the first renderable mesh geometry in the loaded model
-      let foundGeom: THREE.BufferGeometry = null;
-      let foundMat: THREE.Material = null;
       model.traverse((child: THREE.Object3D) => {
         if(foundGeom) return;
         if(child instanceof THREE.Mesh && child.geometry){
@@ -1856,21 +1883,28 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
           // emitter — junk bins, chunky bits, kolto bubbles — failed with
           // "Converting circular structure to JSON" and drew nothing, logging a
           // 16-line trace each time. The clone does not need that reference.
-          const source = child.material as THREE.Material;
-          const userData = source.userData;
-          source.userData = {};
-          try{
-            foundMat = source.clone();
-          }finally{
-            source.userData = userData;
+          const sources = Array.isArray(child.material) ? child.material : [child.material];
+          if (!sources.length) throw new Error('Chunk source mesh has no material');
+          const clones: THREE.Material[] = [];
+          // Assign before cloning so partial arrays are owned if a clone fails.
+          foundMat = clones;
+          for (const source of sources) {
+            const userData = source.userData;
+            source.userData = {};
+            try {
+              clones.push(source.clone());
+            } finally {
+              source.userData = userData;
+            }
           }
+          if (!Array.isArray(child.material)) foundMat = clones[0];
         }
       });
 
-      if(!foundGeom) return;
+      if(!foundGeom) throw new Error('Chunk source model has no renderable mesh');
 
       this._chunkGeometry = foundGeom;
-      this._chunkMaterial = foundMat || new THREE.MeshBasicMaterial({ color: 0xffffff });
+      this._chunkMaterial = foundMat;
       this._chunkMesh = new THREE.InstancedMesh(
         this._chunkGeometry,
         this._chunkMaterial,
@@ -1880,6 +1914,8 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
       this._chunkMesh.renderOrder = this.node.renderOrder || 0;
       this._chunkMesh.frustumCulled = false;
       this._chunkLoaded = true;
+      this._chunkSourceModel = sourceModel;
+      adopted = true;
 
       // Hide the sprite mesh for chunk emitters
       if(this.mesh){
@@ -1889,6 +1925,14 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
 
     } catch(e) {
       console.warn('OdysseyEmitter3D: Failed to load chunk model:', this.node.chunkResRef, e);
+    } finally {
+      // A late completion or failed clone must not leave a source subscription
+      // or an unattached GPU resource behind.
+      if (!adopted) {
+        foundGeom?.dispose();
+        disposeChunkMaterials(foundMat, sourceModel);
+        sourceModel?.dispose();
+      }
     }
   }
 

@@ -230,6 +230,15 @@ export class MenuSaveLoad extends GameMenu {
     this.LB_GAMES.directionalNavigate("up");
   }
 
+  /** VR scrolls the viewport without selecting or loading a save. */
+  scrollVRList(direction: 'up' | 'down'): void {
+    if (!this.bVisible || this.mode !== MenuSaveLoadMode.LOADGAME || GameState.loadingModule) return;
+    const list = this.LB_GAMES;
+    if (!list?.isVisible() || !Number.isFinite(list.maxScroll) || list.maxScroll <= 0) return;
+    if (direction === 'up') list.scrollUp();
+    else if (direction === 'down') list.scrollDown();
+  }
+
   triggerControllerDDownPress() {
     this.LB_GAMES.directionalNavigate("down");
   }

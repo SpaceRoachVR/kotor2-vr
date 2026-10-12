@@ -10,6 +10,8 @@
  * collection can back both the check runner and ad-hoc investigation.
  */
 const { VrHarness } = require('./harness');
+const { selectCheckSave } = require('./select-check-save');
+const { probeWeaponBash } = require('./probe-weapon-bash');
 
 const PHASE_TIMEOUTS = {
   eula: 90_000,
@@ -43,7 +45,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** The emulated head yaw used for the recenter check, in radians. */
 const RECENTER_HEAD_YAW = 0.9;
 
-async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}) {
+async function collectVrMetrics({ url, port = 9430, saveDirectory, onProgress = () => {} } = {}) {
   if (!url) throw new Error('collectVrMetrics requires a launch url');
   const harness = new VrHarness({ port });
   const metrics = { steps: {} };
@@ -74,8 +76,13 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     // --- load a save --------------------------------------------------------
     metrics.saveCount = await harness.evaluate(`(async () => {
       await window.KotOR.SaveGame.GetSaveGames();
+      window.__vrCheckSaveIndex = (${selectCheckSave.toString()})(window.KotOR.SaveGame.saves, ${JSON.stringify(saveDirectory) || 'undefined'});
       return window.KotOR.SaveGame.saves.length;
     })()`, { timeoutMs: PHASE_TIMEOUTS.saves });
+    metrics.save = await harness.evaluate(`(() => {
+      const save = window.KotOR.SaveGame.saves[window.__vrCheckSaveIndex];
+      return { directory: save.directory, module: save.LASTMODULE, name: save.SAVEGAMENAME };
+    })()`);
 
     // Mirror MenuSaveLoad's LOADGAME path: clear menus and dispose the live
     // module before loading, or the engine stays in GUI mode and never lands.
@@ -83,11 +90,14 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       const gs = window.KotOR.GameState;
       gs.MenuManager.ClearMenus();
       if (gs.module) { try { gs.module.dispose(); } catch (e) {} gs.module = undefined; }
-      Promise.resolve(window.KotOR.SaveGame.saves[0].load()).catch(() => undefined);
+      window.__vrCheckLoadError = null;
+      Promise.resolve(window.KotOR.SaveGame.saves[window.__vrCheckSaveIndex].load())
+        .catch(error => { window.__vrCheckLoadError = String(error); });
       return true;
     })()`);
     await harness.waitFor(
       `(() => {
+        if (window.__vrCheckLoadError) throw new Error(window.__vrCheckLoadError);
         const gs = window.KotOR.GameState;
         const p = window.KotOR.PartyManager && window.KotOR.PartyManager.Player;
         return !!(gs && gs.module && p && p.position && Number.isFinite(p.position.x));
@@ -527,6 +537,44 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     })()`, { timeoutMs: 60000 });
     onProgress('menu routes');
 
+    // Exercise the real XR input path; calling scrollDown directly would miss
+    // the absent semantic binding that made the headset's save list unreachable.
+    metrics.saveListScroll = await harness.evaluate(`(async () => {
+      const gs = window.KotOR.GameState, menu = gs.MenuManager.MenuSaveLoad;
+      const stick = window.__xrDevice?.controllers?.right;
+      if (!menu || !stick) return { found: false, reason: 'menu or right controller missing' };
+      const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+      try {
+        stick.updateAxes('thumbstick', 0, 0);
+        menu.mode = 0;
+        menu.open();
+        await pause(500);
+        const list = menu.LB_GAMES;
+        if (!list || list.maxScroll <= 0) return { found: !!list, reason: 'list has no overflow' };
+        list.scroll = 0; list.updateList();
+        const selected = menu.selected, module = gs.module;
+        const before = list.scroll, maxScroll = list.maxScroll;
+        stick.updateAxes('thumbstick', 0, 1); await pause(750);
+        const down = list.scroll;
+        stick.updateAxes('thumbstick', 0, 0); await pause(200);
+        const neutral = list.scroll;
+        await pause(250); const neutralAfter = list.scroll;
+        stick.updateAxes('thumbstick', 0, -1); await pause(750);
+        const up = list.scroll;
+        stick.updateAxes('thumbstick', 0, 0); await pause(150);
+        list.scroll = maxScroll; list.updateList();
+        stick.updateAxes('thumbstick', 0, 1); await pause(450);
+        const bottom = list.scroll;
+        return { found: true, presenting: gs.renderer.xr.isPresenting, before, down, neutral,
+          neutralAfter, up, bottom, maxScroll, selectedUnchanged: menu.selected === selected,
+          moduleUnchanged: gs.module === module, rows: list.children.length };
+      } finally {
+        stick.updateAxes('thumbstick', 0, 0);
+        menu.close();
+      }
+    })()`, { timeoutMs: 30000 });
+    onProgress('save-list thumbstick scrolling');
+
     // --- the tab bar comes up with a screen, and its tabs are live ----------
     // ROADMAP 4.8's Menu wedge rests entirely on this: eight wheel wedges were
     // collapsed into one on the strength of MenuManager setting
@@ -583,7 +631,7 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
       // not retained after loading, so re-read it from the save the same way
       // SaveGame.loadPartyTable does and count the source structs.
       try {
-        const save = window.KotOR.SaveGame.saves[0];
+        const save = window.KotOR.SaveGame.saves[window.__vrCheckSaveIndex];
         const data = await window.KotOR.GameFileSystem.readFile(
           save.directory + '/PARTYTABLE.res'
         );
@@ -778,30 +826,7 @@ async function collectVrMetrics({ url, port = 9430, onProgress = () => {} } = {}
     // can show is that a real locked door or container resolves to the
     // authored Bash entry and that activating it starts the Bash. Last, because
     // it puts the player into a Bash round.
-    metrics.weaponBash = await harness.evaluate(`(() => {
-      const K = window.KotOR;
-      const hooks = K.VRSpike && K.VRSpike.hooks;
-      if (!hooks || typeof hooks.getWeaponBashContext !== 'function') return { hook: false };
-      const objects = K.ModuleObjectManager.playerSelectableObjects || [];
-      const locked = objects.filter((o) => typeof o.isLocked === 'function' && o.isLocked());
-      for (const target of locked) {
-        const context = hooks.getWeaponBashContext(target.id);
-        if (!context) continue;
-        const started = context.bash() === true;
-        const player = K.PartyManager.Player;
-        return {
-          hook: true,
-          lockedCount: locked.length,
-          targetTag: target.getTag ? target.getTag() : String(target.id),
-          started,
-          inCombat: !!(player && player.combatData && player.combatData.combatState),
-          // A second swing while already bashing must not restart the action.
-          secondStarted: context.bash() === true,
-          refusal: (window.__xrHarness.log.find((e) => /weapon Bash refused/.test(e.text)) || {}).text || null,
-        };
-      }
-      return { hook: true, lockedCount: locked.length, started: null };
-    })()`);
+    metrics.weaponBash = await harness.evaluate(`(${probeWeaponBash.toString()})(window.KotOR)`, { timeoutMs: 60000 });
     onProgress('weapon bash route');
 
     // --- console health -----------------------------------------------------

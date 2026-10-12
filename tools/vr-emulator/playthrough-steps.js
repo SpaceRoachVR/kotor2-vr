@@ -11,6 +11,7 @@
  * character creation every time.
  */
 const { worldState, clickButtonByText, TIMEOUTS } = require('./playthrough');
+const { captureCampaignMilestone, getEbonSecurityDoorApproach } = require('./campaign-progress');
 
 // Keep this verification campaign isolated from the exploratory VRPT saves.
 // Reusing their names allowed SaveGame's first matching entry to load an older
@@ -79,6 +80,26 @@ const RETURNED_TO_EBON_HAWK = new Set([
 const MEDBAY_FIXTURE_TAGS = Object.freeze(['MedCom']);
 const MEDBAY_MAX_NAVIGATION_ATTEMPTS = 2;
 const INTERMEDIATE_WAYPOINT_RANGE = 0.8;
+// 002EBO: approach the lift's upper ramp from its west end, then climb east.
+// The smoothed path cuts north through a gap at (-2.76,-3.66).
+const EXTERIOR_RETURN_LIFT_ROUTE = Object.freeze([
+  {x:-8.8,y:-4.5,z:9.1}, {x:-8.8,y:-5.8,z:8.9}, {x:-7.3,y:-5.8,z:9.2},
+  {x:-5.5,y:-5.6,z:9.83}, {x:-3.5,y:-5.6,z:10.55}, {x:-1.5,y:-5.6,z:10.85},
+  {x:0.8,y:-5.6,z:10.85}, {x:0.8,y:-7.0,z:10.85},
+]);
+// Enter the cockpit north of its port wall before approaching the map.
+const EBON_GALAXY_MAP_APPROACH = Object.freeze([
+  {x:52.6,y:74.5,z:1.81,range:0.5,usePath:true,label:'cockpit interior'},
+  {x:51.7,y:74.6,z:1.81,range:0.4,usePath:false,label:'Galaxy Map east approach'},
+]);
+// Approach Comcon from west of the angled main-hold wall at (55.96,63.62).
+const EBON_COMMUNICATIONS_APPROACH = Object.freeze([
+  {x:55.1,y:64.7,z:1.81,range:0.3,usePath:false,label:'communications west approach'},
+  {x:55.0,y:63.0,z:1.81,range:0.3,usePath:false,label:'communications console approach'},
+]);
+// Clearance is for path nodes offset toward hull edges, never the final
+// interaction destination. Previously moveTo applied this to every target.
+const INTERMEDIATE_WAYPOINT_CLEARANCE = 0.6;
 const MEDICAL_COMPUTER_MAX_VISITS = 6;
 const GAMEPLAY_RETURN_MENU_NAMES = Object.freeze([
   'MenuCharacter',
@@ -745,7 +766,17 @@ async function clearProgressBlockingDialogue(harness, label) {
       return null;
     }
   }
-  if (blocking) {
+  if (typeof harness.navigationDialogueHandler === 'function') {
+    played = await harness.navigationDialogueHandler(label);
+    if (!played || played.finished !== true) throw new Error(`${label}: navigation conversation did not finish`);
+  } else if (harness.campaignAcceptance && state.engineMode === ENGINE_MODE_DIALOG) {
+    const { playConversation, createPriorityChooser } = require('./playthrough-peragus');
+    played = await playConversation(harness, {
+      label: `${label} interruption`,
+      choose: createPriorityChooser([/^Log out/i, /^I'll go look for a way out/i],
+        { label: `${label} interruption`, unseenFallback: true }),
+    });
+  } else if (blocking) {
     // Play it through the menu actually carrying it: driving InGameDialog
     // while InGameComputer holds the conversation reads "not visible" and
     // returns finished immediately.
@@ -767,6 +798,9 @@ async function clearProgressBlockingDialogue(harness, label) {
   // while the player stood still. End it the way the engine does.
   const after = await worldState(harness);
   if (after.engineMode !== 1) {
+    if (harness.campaignAcceptance) {
+      throw new Error(`${label}: conversation did not return to gameplay: ${JSON.stringify(after)}`);
+    }
     const ended = await harness.evaluate(`(() => {
       const cm = window.KotOR.GameState.CutsceneManager;
       if (!cm) return { located: false, reason: 'no CutsceneManager' };
@@ -1243,6 +1277,29 @@ function computeReferenceFacingFromQuaternion({ x, y, z, w }) {
 const ROUTE_LEG_MAX_LENGTH = 1.0;
 const ROUTE_LEG_MAX_RISE = 0.35;
 
+function isWithinNavigationRange(distance, range) {
+  if (!Number.isFinite(distance) || distance < 0 || !Number.isFinite(range) || range <= 0) {
+    throw new TypeError('navigation distance must be finite and non-negative; range must be positive');
+  }
+  return distance <= range;
+}
+
+/** Short pulses stop precise approaches from oscillating across their target. */
+function navigationInputDurationMs(distance, range) {
+  isWithinNavigationRange(distance, range);
+  if (distance <= range) return 0;
+  if (distance <= 3) return Math.min(180, Math.max(20, Math.floor((distance - range) * 100)));
+  return distance <= 8 ? 350 : 900;
+}
+
+function canRetryPlannedApproach({ usePath, attemptUsesPath, attempt, maxAttempts }) {
+  if (typeof usePath !== 'boolean' || typeof attemptUsesPath !== 'boolean' ||
+      !Number.isInteger(attempt) || attempt < 1 || !Number.isInteger(maxAttempts) || maxAttempts < attempt) {
+    throw new TypeError('navigation recovery requires boolean route flags and valid attempt bounds');
+  }
+  return usePath && !attemptUsesPath && attempt < maxAttempts;
+}
+
 function subdivideRouteLegs(points) {
   if (!Array.isArray(points) || points.length < 2) return points;
   const out = [points[0]];
@@ -1339,7 +1396,8 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
           // radius. Give those legs a small extra margin; requiring a player
           // to land inside the wall-facing edge made an otherwise-complete
           // 1.34 m leg fail a 1.30 m acceptance threshold.
-          range: index === planned.points.length - 1 ? range : INTERMEDIATE_WAYPOINT_RANGE,
+          range: index === planned.points.length - 1 ? range
+            : INTERMEDIATE_WAYPOINT_RANGE + INTERMEDIATE_WAYPOINT_CLEARANCE,
           timeoutMs: null,
           label: `${label} waypoint ${index + 1}/${planned.points.length}`,
           usePath: false,
@@ -1425,6 +1483,11 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
       const vitals = await playerVitals(harness);
       if (vitals) {
         if (vitals.dead) throw new Error('player died');
+        if (await handleNavigationAttacker(harness, vitals)) {
+          lastNavigation = null;
+          stalledSamples = 0;
+          continue;
+        }
         // 80%: 102PER's steam vents (2-4 each, several per second when the
         // walker crosses a cluster) took a 14-HP Exile to dead between two
         // samples at 60%.
@@ -1462,7 +1525,7 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
         stalledSamples = 0;
       }
       lastNavigation = navigation;
-      if (navigation.remaining <= Number(range) + 0.6) {
+      if (isWithinNavigationRange(navigation.remaining, range)) {
         arrived = true;
         break;
       }
@@ -1471,17 +1534,21 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
         playerX: navigation.playerX, playerY: navigation.playerY,
         referenceFacing: navigation.referenceFacing,
       });
-      await harness.evaluate(`(() => {
+      const inputSampleMs = navigationInputDurationMs(navigation.remaining, range);
+      await harness.evaluate(`(async () => {
         const controller = window.__xrDevice.controllers.left;
         controller.updateAxes('thumbstick', ${axes.x}, ${axes.y});
+        try {
+          await new Promise(resolve => setTimeout(resolve, ${inputSampleMs}));
+        } finally {
+          controller.updateAxes('thumbstick', 0, 0);
+        }
         return true;
       })()`);
       // A long fixed sample can carry the player into a hull edge before the
       // next head-relative correction. Keep broad traversal inexpensive but
       // steer tightly around authored walkmesh corners with real, finer-grain
       // thumbstick samples.
-      const inputSampleMs = navigation.remaining <= 3 ? 180 : navigation.remaining <= 8 ? 350 : 900;
-      await sleep(inputSampleMs);
     }
     if (!arrived) throw new Error('timeout');
   } catch (error) {
@@ -1943,7 +2010,23 @@ async function useTaggedWorldObject(harness, {
     if (offered && offered.inRange === true && Array.isArray(offered.actions)) break;
   }
   if (!offered || offered.inRange !== true || !Array.isArray(offered.actions)) {
-    throw new Error(`${target.name || tag}: no in-range VR actions: ${JSON.stringify(offered || null)}`);
+    const diagnosis = await harness.evaluate(`(() => {
+      const K = window.KotOR, gs = K.GameState, area = gs.module && gs.module.area;
+      const object = area && [...area.placeables, ...area.doors, ...area.creatures].find((o) => o && o.id === ${Number(target.id)});
+      const player = K.PartyManager.party[0];
+      if (!object || !player) return { found: !!object, playerFound: !!player };
+      const before = gs.ModuleObjectManager.playerSelectableObjects.includes(object);
+      const los = object.hasLineOfSight(player, gs.maxSelectableDistance);
+      gs.ModuleObjectManager.GetSelectableObjectsInRange(player);
+      return { found: true, id: object.id, tag: object.tag, type: object.objectType,
+        resref: object.templateResRef || object.template && object.template.resRef,
+        mode: gs.Mode, useable: object.isUseable(), areaFound: !!object.area,
+        distance: player.position.distanceTo(object.position), lineOfSight: los,
+        selectableBefore: before, selectableAfterRefresh: gs.ModuleObjectManager.playerSelectableObjects.includes(object),
+        playerPosition: { x: player.position.x, y: player.position.y, z: player.position.z },
+        objectPosition: { x: object.position.x, y: object.position.y, z: object.position.z } };
+    })()`);
+    throw new Error(`${target.name || tag}: no in-range VR actions: ${JSON.stringify(offered || null)}; diagnosis=${JSON.stringify(diagnosis)}`);
   }
   const action = actionPattern instanceof RegExp
     ? chooseRequiredWorldAction(offered.actions, actionPattern, target.name || tag)
@@ -2264,6 +2347,9 @@ async function navigateTo(harness, {
         : closedDoors.filter((door) => permittedDoorPromptIds.includes(door.promptId));
 
       if (!candidates.length) {
+        // A short initial approach uses a straight stick push. If it meets a
+        // wall, try the planned route before declaring every door exhausted.
+        if (canRetryPlannedApproach({ usePath, attemptUsesPath, attempt, maxAttempts })) continue;
         if (permittedDoorPromptIds !== null && closedDoors.length) {
           throw new Error(`navigateTo ${label}: stopped ${remaining}m short; refusing automatic interaction with unapproved doors ` +
             `${JSON.stringify(closedDoors.map((door) => ({ promptId: door.promptId, name: door.name, tag: door.tag, locked: door.locked, plot: door.plot })))}.`);
@@ -2605,7 +2691,10 @@ async function activateWheelAction(harness, { targetId, submenuId = null, action
  * deliberate: aiming the interaction ray from outside is fragile, and a swing
  * that missed because the ray drifted would read as combat being broken.
  */
-async function swingAt(harness, targetId) {
+async function swingAt(harness, targetId, input = 'dominant-swing') {
+  if (!['dominant-swing', 'dominant-trigger'].includes(input)) {
+    throw new TypeError('combat input must be a dominant swing or trigger');
+  }
   return harness.evaluate(`(() => {
     const spike = window.KotOR.VRSpike;
     const hooks = spike && spike.hooks;
@@ -2641,7 +2730,7 @@ async function swingAt(harness, targetId) {
         weaponMode: context.weaponMode,
         speedMetresPerSecond: 3.0,
         rollEligible: true,
-        input: 'dominant-swing',
+        input: ${JSON.stringify(input)},
         pose: { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } },
         timestamp: performance.now(),
       });
@@ -2725,7 +2814,7 @@ async function healPlayerIfInjured(harness, threshold = 8, { quick = false } = {
       medpac.useItemOnObject(player, player);
       return { attempted: true, hp, maxHp, medpac: medpac.tag || medpac.templateResRef };
     }
-    if (typeof player.addHP === 'function') {
+    if (!${harness.campaignAcceptance === true} && typeof player.addHP === 'function') {
       player.addHP(maxHp - hp);
       return { attempted: true, hp, maxHp, method: 'regen' };
     }
@@ -2754,8 +2843,43 @@ async function healPlayerIfInjured(harness, threshold = 8, { quick = false } = {
  * cannot be engaged, so a sweep can move on to the next one and report what it
  * skipped instead of stopping at the first awkward target.
  */
+function chooseDroidCombatAbility(actions) {
+  if (!Array.isArray(actions) || actions.some((action) => !action || typeof action.label !== 'string')) {
+    throw new TypeError('droid combat requires an array of labelled actions');
+  }
+  return actions.find((action) => /ion (blast|striker)/i.test(action.label)) ||
+    actions.find((action) => /(?:shock|charge) arm/i.test(action.label)) || null;
+}
+
 async function fightHostile(harness, target) {
+  const previous = harness.navigationCombatActive;
+  harness.navigationCombatActive = true;
+  try { return await fightHostileImpl(harness, target); }
+  finally { harness.navigationCombatActive = previous; }
+}
+
+async function handleNavigationAttacker(harness, vitals, { fight = fightHostile } = {}) {
+  if (typeof fight !== 'function') throw new TypeError('navigation combat requires a fight handler');
+  if (harness.navigationCombatActive || !vitals || vitals.dead || vitals.hp >= vitals.maxHp) return false;
+  const attacker = await harness.evaluate(`(() => {
+    const K=window.KotOR, player=K.PartyManager.party[0], area=K.GameState.module?.area;
+    const attacker=player?.combatData?.lastAttacker;
+    if (!attacker || !area?.creatures.includes(attacker) || attacker.isDead() || !attacker.isHostile(player)) return {found:false};
+    return {found:true,kind:'creature',id:attacker.id,tag:String(attacker.tag || ''),
+      name:String(attacker.getName()),resref:String(attacker.templateResRef || ''),type:attacker.objectType,
+      distance:player.position.distanceTo(attacker.position)};
+  })()`);
+  if (!attacker || attacker.found !== true) return false;
+  line(`  · navigation under attack: ${JSON.stringify(attacker)}`);
+  const result = await fight(harness, attacker);
+  if (!result || result.killed !== true) throw new Error(`navigation attacker ${attacker.id} was not defeated: ${result?.reason || 'missing result'}`);
+  return true;
+}
+
+async function fightHostileImpl(harness, target) {
   await healPlayerIfInjured(harness, 999);
+  const ranged = await harness.evaluate(`!!window.KotOR.PartyManager.party[0]?.equipment?.RIGHTHAND?.baseItem?.rangedWeapon`);
+  const combatRange = ranged ? 8.0 : 2.0;
 
   const position = await harness.evaluate(`(() => {
     const area = window.KotOR.GameState.module.area;
@@ -2769,7 +2893,15 @@ async function fightHostile(harness, target) {
     // A foe within ten metres is approached by a straight push; the engine
     // planner routed a 13 m approach 25 m the wrong way through a door.
     const close = Number.isFinite(Number(target.distance)) && Number(target.distance) <= 10;
-    await navigateTo(harness, { ...position, range: 1.4, label: target.name, maxAttempts: close ? 4 : 8, usePath: !close });
+    // Creature collision bodies can keep their centres about 1.6m apart.
+    // Approach within melee reach instead of asking to overlap those bodies.
+    await navigateTo(harness, { ...position, range: combatRange, label: target.name, maxAttempts: close ? 4 : 8, usePath: !close });
+    if (ranged) {
+      const nominated = await harness.evaluate(`!!window.KotOR.VRSpike.hooks.getCombatContext(${Number(target.id)})?.nominatedTargetId`);
+      // Being close enough to shoot does not make a target behind a closed
+      // doorway selectable. Walk the ordinary door-opening route first.
+      if (!nominated) await navigateTo(harness, { ...position, range: 2.0, label: target.name, maxAttempts: 4, usePath: !close });
+    }
   } catch (error) {
     return { killed: false, reason: `unreachable: ${String(error.message).slice(0, 120)}` };
   }
@@ -2805,6 +2937,9 @@ async function fightHostile(harness, target) {
         hp: c.getHP ? c.getHP() : null,
         playerHp: player.getHP ? player.getHP() : null,
         playerMaxHp: player.getMaxHP ? player.getMaxHP() : null,
+        isDroid: typeof player.getRace === 'function' && player.getRace() === 5,
+        pendingCast: (player.actionQueue || []).some((action) => /castspell|itemcast/i.test(action.constructor?.name || '')),
+        armedIntent: !!window.KotOR.VRSpike.hooks.getCombatContext(${Number(target.id)})?.stanceReadout,
         gap: +player.position.distanceTo(c.position).toFixed(2),
         pos: { x: +c.position.x.toFixed(2), y: +c.position.y.toFixed(2), z: +c.position.z.toFixed(2) },
       };
@@ -2817,7 +2952,7 @@ async function fightHostile(harness, target) {
     // faction) is not a fight; and one the walker cannot close on in five
     // rounds (behind a railing, on another deck) is not one either.
     if (status.hostile === false) return { killed: false, reason: 'not hostile' };
-    if (status.gap > 2.5) {
+    if (status.gap > combatRange + 0.5) {
       farRounds += 1;
       if (farRounds >= 5) return { killed: false, reason: `could not close (${status.gap}m after ${farRounds} rounds)` };
     } else {
@@ -2829,13 +2964,32 @@ async function fightHostile(harness, target) {
     if (status.playerHp !== null && status.playerHp <= healAt && status.playerHp > 0) {
       await healPlayerIfInjured(harness, healAt);
     }
-    if (status.gap > 2.0 && status.pos) {
+    if (status.gap > combatRange && status.pos) {
       try {
-        await moveTo(harness, { x: status.pos.x, y: status.pos.y, z: status.pos.z, range: 1.6, label: target.name, timeoutMs: 4000, usePath: false });
+        await moveTo(harness, { x: status.pos.x, y: status.pos.y, z: status.pos.z, range: combatRange, label: target.name, timeoutMs: 4000, usePath: false });
       } catch (e) { /* best effort */ }
     }
 
-    let swung = await swingAt(harness, target.id);
+    // T3's authored shock arm has unlimited uses. The normal attack driver
+    // ignored it and spent all Repair Kits trading Mining Laser shots with
+    // the landing droids. Activate the offered item ability through the wheel;
+    // do not replace a pending cast with another cast or a physical swing.
+    if (status.isDroid) {
+      const wheel = await describeActionWheel(harness, target.id);
+      const ability = chooseDroidCombatAbility(wheel.submenus?.['submenu:attacks'] || []);
+      if (ability || status.pendingCast) {
+        if (ability && !status.pendingCast && !status.armedIntent) {
+          await activateWheelAction(harness, { targetId: target.id, submenuId: 'submenu:attacks', actionLabel: ability.label });
+          line(`  · ${target.name}: armed ${ability.label}`);
+        }
+        if (!status.pendingCast) await swingAt(harness, target.id, 'dominant-trigger');
+        await sleep(1200);
+        await clearBlockingModal(harness);
+        continue;
+      }
+    }
+
+    let swung = await swingAt(harness, target.id, ranged ? 'dominant-trigger' : 'dominant-swing');
     if (!swung.ok && /not nominated|tempo not eligible|out of reach/.test(swung.reason || '')) {
       const now = await harness.evaluate(`(() => {
         const area = window.KotOR.GameState.module.area;
@@ -2848,9 +3002,9 @@ async function fightHostile(harness, target) {
         };
       })()`);
       if (now) {
-        try { await moveTo(harness, { x: now.x, y: now.y, z: now.z, range: 1.6, label: target.name, timeoutMs: 4000, usePath: false }); }
+        try { await moveTo(harness, { x: now.x, y: now.y, z: now.z, range: 2.0, label: target.name, timeoutMs: 4000, usePath: false }); }
         catch (e) { /* it may be closing on us anyway */ }
-        swung = await swingAt(harness, target.id);
+        swung = await swingAt(harness, target.id, ranged ? 'dominant-trigger' : 'dominant-swing');
       }
     }
     if (!swung.ok && round === 0) {
@@ -2863,7 +3017,8 @@ async function fightHostile(harness, target) {
 }
 
 /** Fights every live hostile in the area, nearest first. */
-async function clearHostiles(harness, { limit = 12, maxDistance = Infinity } = {}) {
+async function clearHostiles(harness, { limit = 12, maxDistance = Infinity, autoLevel = true } = {}) {
+  if (typeof autoLevel !== 'boolean') throw new TypeError('clearHostiles autoLevel must be boolean');
   const outcomes = [];
   // A foe that cannot be engaged must be set aside, not stopped on: the survey
   // hands back the same nearest hostile every time, so breaking on the first
@@ -2884,7 +3039,7 @@ async function clearHostiles(harness, { limit = 12, maxDistance = Infinity } = {
     const stats = await describeInventory(harness);
     line(`  · ${next.name} (${next.distance}m): ${result.killed ? `killed in ${result.rounds} rounds` : `SKIPPED — ${result.reason}`}` +
       ` | xp=${stats.xp} hp=${stats.hp}/${stats.maxHp} canLevelUp=${stats.canLevelUp}`);
-    if (result.killed && stats.canLevelUp) {
+    if (autoLevel && result.killed && stats.canLevelUp) {
       const levelled = await autoLevelUp(harness).catch((error) => ({ levelled: { ok: false, reason: String(error.message) } }));
       const after = await describeInventory(harness).catch(() => null);
       line(`  · auto level-up: ${JSON.stringify(levelled.levelled)}; now level ${after ? after.level : '?'} hp ${after ? after.hp + '/' + after.maxHp : '?'}`);
@@ -3430,6 +3585,7 @@ async function checkpoint(harness, name) {
     return { ...saved, diagnosis };
   }
   line(`  · checkpoint saved: ${CHECKPOINT_PREFIX} ${name}`);
+  harness.lastPlaythroughCheckpoint = name;
   if (!lastCheckpointName || CHECKPOINT_ORDER.indexOf(name) >= CHECKPOINT_ORDER.indexOf(lastCheckpointName)) lastCheckpointName = name;
   return { ...saved, validation };
 }
@@ -3483,7 +3639,8 @@ async function resumeFromCheckpoint(harness, name) {
     const gs = window.KotOR.GameState;
     const party = window.KotOR.PartyManager;
     const player = party && party.party ? party.party[0] : null;
-    return !!(gs && gs.module && player && player.position && Number.isFinite(player.position.x));
+    return !!(gs && gs.module && gs.module.readyToProcessEvents === true && !gs.loadingModule &&
+      player && player.position && Number.isFinite(player.position.x));
   })()`, TIMEOUTS.moduleLoad, 3000);
 
   // A save can land mid-movie, and movie lifecycle suspends gameplay input.
@@ -3521,240 +3678,8 @@ async function resumeFromCheckpoint(harness, name) {
   return { ...loaded, validation };
 }
 
-async function runPlaythrough(harness, url, args) {
-  const report = { started: new Date().toISOString(), steps: [], blocked: null };
-
-  const record = async (name, fn) => {
-    if (report.blocked) return false;
-    line(`\n[${report.steps.length + 1}] ${name}`);
-    const entry = { name, ok: false };
-    try {
-      try {
-        entry.result = await fn();
-      } catch (error) {
-        // A death is not a verdict on the route: reload the newest checkpoint
-        // and give the step one more go before calling it blocked.
-        const message = String((error && error.message) || error);
-        if (!/player died/i.test(message) || !lastCheckpointName) throw error;
-        line(`  · ${message}; reloading checkpoint "${lastCheckpointName}" and retrying the step once`);
-        await resumeFromCheckpoint(harness, lastCheckpointName);
-        await sleep(2000);
-        await returnToGameplay(harness);
-        entry.retriedAfterDeath = true;
-        entry.result = await fn();
-      }
-      entry.ok = true;
-    } catch (error) {
-      entry.error = String((error && error.message) || error);
-      entry.state = await worldState(harness).catch(() => null);
-      entry.console = harness.consoleMessages.slice(-25).map((m) => `${m.level}: ${m.text}`.slice(0, 300));
-      report.steps.push(entry);
-      report.blocked = { step: name, error: entry.error, state: entry.state };
-      line(`  ✗ BLOCKED: ${entry.error}`);
-      // The engine's own account of the failure, so a block can be read
-      // from the log without replaying it: recent errors and warnings first,
-      // then the last few lines of everything.
-      const noise = /rolling sound|PerfSampler|prompt candidacy|VR rooms|dialog rooms|VR targetUI|VR prompt/;
-      const recent = harness.consoleMessages.slice(-600).filter((m) => !noise.test(m.text));
-      const problems = recent.filter((m) => /error|warning/i.test(m.level) || /TypeError|ReferenceError|RangeError|Uncaught|Failed|failed/.test(m.text)).slice(-15);
-      line(`  · console problems (${problems.length}):`);
-      for (const m of problems) line(`      ${m.level}: ${String(m.text).slice(0, 260)}`);
-      line('  · console tail:');
-      for (const m of recent.slice(-20)) line(`      ${m.level}: ${String(m.text).slice(0, 260)}`);
-      return false;
-    }
-    report.steps.push(entry);
-    line('  ✓');
-    return true;
-  };
-
-  await record('boot to main menu', () => boot(harness, url));
-
-  if (args.resume) {
-    await record(`resume checkpoint "${args.resume}"`, () => resumeFromCheckpoint(harness, args.resume));
-    lastCheckpointName = args.resume;
-  } else {
-    await record('new game through character creation', () => newGameThroughCharacterCreation(harness));
-  }
-
-  await record('player updates BEFORE entering VR', async () => {
-    const counts = await countPlayerUpdates(harness);
-    line(`  · calls in 2s (flatscreen): ${JSON.stringify(counts)}`);
-    return counts;
-  });
-
-  await record('enter VR session', () => enterVrSession(harness));
-
-  await record('player updates AFTER entering VR', async () => {
-    const counts = await countPlayerUpdates(harness);
-    line(`  · calls in 2s (in session): ${JSON.stringify(counts)}`);
-    return counts;
-  });
-
-  await record('opening conversation', async () => {
-    if (resumedPast(args, 'peragus-arrival')) return { skipped: 'resumed past it' };
-    const before = await dialogueSnapshot(harness);
-    line(`  · dialogue: ${JSON.stringify({
-      visible: before.visible, state: before.state,
-      conversation: before.conversationName, replies: before.replies,
-      spoken: before.spoken,
-    })}`);
-    if (!before.visible) return { skipped: 'no conversation running' };
-    const played = await playDialogue(harness, { label: 'opening conversation' });
-    line(`  · ${played.turns} turns, ${played.transcript.length} lines`);
-    for (const entry of played.transcript.slice(0, 12)) line(`      ${entry.slice(0, 140)}`);
-    return played;
-  });
-
-  // A resumed run must not rewrite this save with the resumed state: the
-  // retry-after-death then reloaded "prologue-start" (really the mining
-  // tunnels) and walked the whole crossing again.
-  if (!args.resume) await record('checkpoint: prologue start', () => checkpoint(harness, 'prologue-start'));
-
-  await record('survey the area', async () => {
-    const survey = await surveyArea(harness);
-    if (!survey.located) throw new Error(`area survey: ${survey.reason}`);
-    line(`  · ${survey.areaName} at ${JSON.stringify(survey.playerPosition)} ${JSON.stringify(survey.counts)}`);
-    line(`  · hostiles: ${JSON.stringify(survey.hostiles.slice(0, 6))}`);
-    line(`  · doors: ${JSON.stringify(survey.nearestDoors.slice(0, 6))}`);
-    line(`  · placeables: ${JSON.stringify(survey.nearestPlaceables.slice(0, 8))}`);
-    const prompts = await listWorldPrompts(harness);
-    if (!prompts.located) throw new Error(`world prompts: ${prompts.reason}`);
-    line(`  · VR prompts (${prompts.candidateCount}): ${JSON.stringify(prompts.prompts.slice(0, 8), null, 1)}`);
-    return { survey, prompts };
-  });
-
-  await record('change equipment through the VR Menu route', async () => {
-    // The playthrough looted, spent and gained items but never moved one into
-    // a slot. Equipping is the other half of "inventory works", and in this
-    // codebase it is exactly the shape that breaks silently: a TSL menu whose
-    // buttons render but were never wired.
-    //
-    // Adaptive on purpose. T3 boards the Ebon Hawk wearing a Mining Laser, a
-    // Droid Shock Arm and a Droid Hide, so an unequip/re-equip round trip is
-    // available there. The Exile wakes from the kolto tank with nothing
-    // equipped and nothing equippable — Medpacs, Parts, a spike and a mine —
-    // which is authored, not a defect, so that case reports what it found
-    // instead of failing.
-    const before = await describeInventory(harness);
-    line(`  · ${before.playerName} equipped before: ${JSON.stringify(before.equipped)}`);
-
-    await activateWheelAction(harness, { targetId: null, actionLabel: 'Menu' });
-    await sleep(1500);
-    await clickGuiControl(harness, 'MenuTop', 'BTN_EQU');
-    await harness.waitFor(`(() => {
-      const menu = window.KotOR.GameState.MenuManager.MenuEquipment;
-      return !!(menu && menu.bVisible);
-    })()`, TIMEOUTS.short, 250);
-
-    const outcome = await harness.evaluate(`(async () => {
-      const K = window.KotOR;
-      const menu = K.GameState.MenuManager.MenuEquipment;
-      const player = K.PartyManager.party[0];
-      if (!menu) return { located: false, reason: 'no MenuEquipment' };
-      if (!player) return { located: false, reason: 'no player' };
-      const nameOf = (item) => {
-        try { return String((item && item.getName && item.getName()) || ''); } catch (e) { return ''; }
-      };
-      // ModuleCreature.equipment is keyed by NAME ('RIGHTHAND'), while the menu
-      // and equipItem() speak the numeric ModuleCreatureArmorSlot mask. Reading
-      // player.equipment[menu.slot] therefore answered undefined for every
-      // slot and reported a fully equipped T3-M4 as wearing nothing. Invert the
-      // engine's own enum rather than restating it here.
-      const SLOT_KEY = {};
-      for (const [key, value] of Object.entries(K.ModuleCreatureArmorSlot || {})) {
-        if (typeof value === 'number') SLOT_KEY[value] = key;
-      }
-      const wornIn = (slot) => (player.equipment && SLOT_KEY[slot]) ? player.equipment[SLOT_KEY[slot]] : null;
-      const clickable = (control) => {
-        const listeners = control && control.eventListeners && control.eventListeners['click'];
-        return Array.isArray(listeners) && listeners.length > 0;
-      };
-      if (!clickable(menu.BTN_EQUIP)) {
-        return { located: true, wired: false, reason: 'BTN_EQUIP has no click handler' };
-      }
-
-      const slotButtons = Object.keys(menu).filter((key) => /^BTN_INV_/.test(key));
-      const survey = [];
-      let acted = null;
-      for (const buttonName of slotButtons) {
-        const button = menu[buttonName];
-        if (!clickable(button)) { survey.push({ buttonName, wired: false }); continue; }
-        try { button.click(); } catch (error) {
-          survey.push({ buttonName, wired: true, note: 'click threw: ' + String(error && error.message || error) });
-          continue;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 140));
-        const slot = menu.slot;
-        const rows = (menu.LB_ITEMS && Array.isArray(menu.LB_ITEMS.listItems)) ? menu.LB_ITEMS.listItems : [];
-        const items = rows.filter((row) => row && typeof row.baseItemId === 'number');
-        // Unequip is expressed as the list's authored 'None' row. BTN_EQUIP
-        // guards on 'selectedItem instanceof GUIItemNone', so selecting null
-        // silently did nothing and looked like an engine that refused to
-        // unequip. Use the row the menu itself builds.
-        const noneRow = rows.find((row) => row && row.constructor && row.constructor.name === 'GUIItemNone');
-        const worn = wornIn(slot);
-        survey.push({ buttonName, wired: true, slot, offered: items.map(nameOf), worn: nameOf(worn),
-          hasNoneRow: !!noneRow });
-        // Deliberately read-only. An earlier version unequipped and re-equipped
-        // to prove the route works; it does, and the three engine defects it
-        // uncovered are fixed and unit-tested. But acting here mutated T3's
-        // loadout and that state rode along in every checkpoint the campaign
-        // wrote afterwards - the Mining Laser turned up in the left hand two
-        // stages later. Verifying the screen is live is worth a step; moving
-        // the player's weapon around mid-playthrough is not.
-      }
-      return { located: true, wired: true, survey, acted: null };
-    })()`, { timeoutMs: 90_000 });
-
-    if (!outcome.located) throw new Error(`equipment menu unavailable: ${outcome.reason}`);
-    line(`  · slot survey: ${JSON.stringify(outcome.survey || null)}`);
-    await returnToGameplay(harness);
-    const after = await describeInventory(harness);
-
-    const resumed = await worldState(harness);
-    if (resumed.engineMode !== 1) {
-      throw new Error(`the equipment screen left the engine in mode ${resumed.engineMode} (want 1=INGAME); ` +
-        `foreground=${resumed.foregroundMenu}`);
-    }
-    if (!outcome.wired) throw new Error(`the VR Equipment route is not wired: ${outcome.reason}`);
-    const unwired = (outcome.survey || []).filter((row) => row.wired === false).map((row) => row.buttonName);
-    if (unwired.length) throw new Error(`equipment slot buttons with no click handler: ${JSON.stringify(unwired)}`);
-    if (outcome.reason) throw new Error(`equipment change failed: ${outcome.reason}`);
-    // The list's 'None' row is what BTN_EQUIP's unequip branch needs; its absence
-    // would make unequipping impossible again.
-    const missingNone = (outcome.survey || []).filter((row) => row.wired && row.hasNoneRow === false)
-      .map((row) => row.buttonName);
-    if (missingNone.length) {
-      throw new Error(`equipment slots with no 'None' row to unequip with: ${JSON.stringify(missingNone)}`);
-    }
-
-    if (!outcome.acted) {
-      line(`  · ${before.playerName} has nothing equipped and nothing equippable ` +
-        `(${JSON.stringify(before.inventory)}); Equipment screen verified reachable with ` +
-        `${(outcome.survey || []).length} live slots`);
-      return { before, after, outcome, note: 'no equippable item at this point in the prologue' };
-    }
-    if (outcome.acted.kind === 'round-trip') {
-      if (!outcome.acted.emptiedOnUnequip) {
-        throw new Error(`unequipping ${outcome.acted.item} left the slot occupied: ${JSON.stringify(outcome.acted)}`);
-      }
-      if (outcome.acted.inInventoryAfterUnequip !== true) {
-        throw new Error(`unequipping ${outcome.acted.item} did not leave it in the inventory: ` +
-          JSON.stringify(outcome.acted));
-      }
-      if (outcome.acted.restored !== outcome.acted.item) {
-        throw new Error(`re-equipping did not restore ${outcome.acted.item}: ${JSON.stringify(outcome.acted)}`);
-      }
-      line(`  · unequipped and re-equipped ${JSON.stringify(outcome.acted.item)} in slot ${outcome.acted.slot}`);
-    } else if (outcome.acted.inSlotAfter !== outcome.acted.item) {
-      throw new Error(`equipping ${outcome.acted.item} did not stick: ${JSON.stringify(outcome.acted)}`);
-    } else {
-      line(`  · equipped ${JSON.stringify(outcome.acted.item)} into slot ${outcome.acted.slot}`);
-    }
-    return { before, after, outcome };
-  });
-
+/** Run the exterior repairs and return flight in the same browser session. */
+async function runEbonHawkContinuation({ harness, args, record, report }) {
   const ebonExteriorCheckpoints = new Set([
     'ebon-exterior-arrival',
     'ebon-first-mine-disarmed',
@@ -3915,6 +3840,12 @@ async function runPlaythrough(harness, url, args) {
         })()`);
       });
       await record('activate the return Utility Lift through its VR prompt', async () => {
+        await navigateTo(harness, {...EXTERIOR_RETURN_LIFT_ROUTE[0], range:0.7,
+          label:'return lift ramp west entrance', maxAttempts:3, permittedDoorPromptIds:[]});
+        for (const [index, point] of EXTERIOR_RETURN_LIFT_ROUTE.entries()) {
+          await moveTo(harness, {...point, range:0.3, usePath:false, timeoutMs:20000,
+            label:`return lift ramp ${index + 1}/${EXTERIOR_RETURN_LIFT_ROUTE.length}`});
+        }
         const lift = await useTaggedWorldObject(harness, {
           tag: 'lift_to_001',
           actionPattern: /^Use:/i,
@@ -4314,6 +4245,10 @@ async function runPlaythrough(harness, url, args) {
         await moveTo(harness, { ...waypoint, range: 0.9, usePath: false });
         routeTrace.push({ waypoint: waypoint.label, state: await worldState(harness) });
       }
+      for (const waypoint of EBON_GALAXY_MAP_APPROACH) {
+        await moveTo(harness, waypoint);
+        routeTrace.push({ waypoint: waypoint.label, state: await worldState(harness) });
+      }
       const galaxyMap = await useTaggedWorldObject(harness, {
         tag: 'Galaxymap',
         actionPattern: /^Use:/i,
@@ -4373,6 +4308,287 @@ async function runPlaythrough(harness, url, args) {
     // the actual arrival rather than replaying Ebon Hawk setup.
     args.resume = 'peragus-arrival';
   }
+
+}
+
+async function runPlaythrough(harness, url, args) {
+  harness.campaignAcceptance = args.acceptance === true;
+  harness.lastPlaythroughCheckpoint = null;
+  lastCheckpointName = null;
+  const report = { started: new Date().toISOString(), steps: [], blocked: null,
+    bootstrap: { freshGame: !args.resume, loadedFromSave: !!args.resume, prologueRoute: args.prologueRoute },
+    acceptance: harness.campaignAcceptance, target: args.until || null, targetReached: false };
+
+  const record = async (name, fn) => {
+    if (report.blocked || report.targetReached) return false;
+    line(`\n[${report.steps.length + 1}] ${name}`);
+    const entry = { name, ok: false };
+    try {
+      try {
+        entry.result = await fn();
+      } catch (error) {
+        // A death is not a verdict on the route: reload the newest checkpoint
+        // and give the step one more go before calling it blocked.
+        const message = String((error && error.message) || error);
+        if (harness.campaignAcceptance || !/player died/i.test(message) || !lastCheckpointName) throw error;
+        line(`  · ${message}; reloading checkpoint "${lastCheckpointName}" and retrying the step once`);
+        await resumeFromCheckpoint(harness, lastCheckpointName);
+        await sleep(2000);
+        await returnToGameplay(harness);
+        entry.retriedAfterDeath = true;
+        entry.result = await fn();
+      }
+      if (harness.campaignAcceptance && entry.result && entry.result.ok === false) {
+        throw new Error(`${name} failed: ${entry.result.reason || 'operation reported failure'}`);
+      }
+      entry.ok = true;
+      if (args.until && harness.lastPlaythroughCheckpoint === args.until) {
+        report.finalState = await worldState(harness);
+        report.finalXrFrames = await harness.evaluate(`(async () => {
+          const session = window.__xrDevice && window.__xrDevice.activeSession;
+          if (!session) return 0;
+          let count = 0;
+          await new Promise((resolve) => {
+            const timer = setTimeout(resolve, 5000);
+            const tick = () => {
+              count++;
+              if (count >= 10) { clearTimeout(timer); resolve(); }
+              else session.requestAnimationFrame(tick);
+            };
+            session.requestAnimationFrame(tick);
+          });
+          return count;
+        })()`, { timeoutMs: 10_000 });
+        report.pageErrors = harness.pageErrors.slice();
+        report.consoleErrors = harness.consoleMessages.filter((message) => message.level === 'error')
+          .map((message) => message.text);
+        report.vrLoopFailures = harness.consoleMessages.filter((message) => message.level === 'error' &&
+          /\[VRSpike\].*(frame|rejected|failed|threw)/i.test(message.text)).map((message) => message.text);
+        if (report.pageErrors.length) throw new Error(`acceptance reached its target with ${report.pageErrors.length} page exception(s)`);
+        report.targetReached = true;
+      }
+    } catch (error) {
+      entry.ok = false;
+      entry.error = String((error && error.message) || error);
+      entry.state = await worldState(harness).catch(() => null);
+      entry.console = harness.consoleMessages.slice(-25).map((m) => `${m.level}: ${m.text}`.slice(0, 300));
+      report.steps.push(entry);
+      report.blocked = { step: name, error: entry.error, state: entry.state };
+      line(`  ✗ BLOCKED: ${entry.error}`);
+      // The engine's own account of the failure, so a block can be read
+      // from the log without replaying it: recent errors and warnings first,
+      // then the last few lines of everything.
+      const noise = /rolling sound|PerfSampler|prompt candidacy|VR rooms|dialog rooms|VR targetUI|VR prompt/;
+      const recent = harness.consoleMessages.slice(-600).filter((m) => !noise.test(m.text));
+      const problems = recent.filter((m) => /error|warning/i.test(m.level) || /TypeError|ReferenceError|RangeError|Uncaught|Failed|failed/.test(m.text)).slice(-15);
+      line(`  · console problems (${problems.length}):`);
+      for (const m of problems) line(`      ${m.level}: ${String(m.text).slice(0, 260)}`);
+      line('  · console tail:');
+      for (const m of recent.slice(-20)) line(`      ${m.level}: ${String(m.text).slice(0, 260)}`);
+      return false;
+    }
+    report.steps.push(entry);
+    line('  ✓');
+    return true;
+  };
+
+  await record('boot to main menu', async () => {
+    await boot(harness, url);
+    if (harness.campaignAcceptance) {
+      harness.beginTrustedCapture();
+      const identity = await harness.getTrustedServingBundle();
+      report.bootstrap.servingBundleSha256 = identity.sha256;
+      return { servingBundleSha256: identity.sha256 };
+    }
+  });
+
+  if (args.resume) {
+    await record(`resume checkpoint "${args.resume}"`, () => resumeFromCheckpoint(harness, args.resume));
+    lastCheckpointName = args.resume;
+  } else {
+    await record('new game through character creation', () => newGameThroughCharacterCreation(harness));
+  }
+
+  await record('player updates BEFORE entering VR', async () => {
+    const counts = await countPlayerUpdates(harness);
+    line(`  · calls in 2s (flatscreen): ${JSON.stringify(counts)}`);
+    return counts;
+  });
+
+  await record('enter VR session', () => enterVrSession(harness));
+
+  await record('player updates AFTER entering VR', async () => {
+    const counts = await countPlayerUpdates(harness);
+    line(`  · calls in 2s (in session): ${JSON.stringify(counts)}`);
+    return counts;
+  });
+
+  await record('opening conversation', async () => {
+    if (resumedPast(args, 'peragus-arrival')) return { skipped: 'resumed past it' };
+    const before = await dialogueSnapshot(harness);
+    line(`  · dialogue: ${JSON.stringify({
+      visible: before.visible, state: before.state,
+      conversation: before.conversationName, replies: before.replies,
+      spoken: before.spoken,
+    })}`);
+    if (!before.visible) return { skipped: 'no conversation running' };
+    const played = await playDialogue(harness, { label: 'opening conversation' });
+    line(`  · ${played.turns} turns, ${played.transcript.length} lines`);
+    for (const entry of played.transcript.slice(0, 12)) line(`      ${entry.slice(0, 140)}`);
+    return played;
+  });
+
+  // A resumed run must not rewrite this save with the resumed state: the
+  // retry-after-death then reloaded "prologue-start" (really the mining
+  // tunnels) and walked the whole crossing again.
+  if (!args.resume) await record('checkpoint: prologue start', () => checkpoint(harness, 'prologue-start'));
+
+  await record('survey the area', async () => {
+    const survey = await surveyArea(harness);
+    if (!survey.located) throw new Error(`area survey: ${survey.reason}`);
+    line(`  · ${survey.areaName} at ${JSON.stringify(survey.playerPosition)} ${JSON.stringify(survey.counts)}`);
+    line(`  · hostiles: ${JSON.stringify(survey.hostiles.slice(0, 6))}`);
+    line(`  · doors: ${JSON.stringify(survey.nearestDoors.slice(0, 6))}`);
+    line(`  · placeables: ${JSON.stringify(survey.nearestPlaceables.slice(0, 8))}`);
+    const prompts = await listWorldPrompts(harness);
+    if (!prompts.located) throw new Error(`world prompts: ${prompts.reason}`);
+    line(`  · VR prompts (${prompts.candidateCount}): ${JSON.stringify(prompts.prompts.slice(0, 8), null, 1)}`);
+    return { survey, prompts };
+  });
+
+  await record('change equipment through the VR Menu route', async () => {
+    // The playthrough looted, spent and gained items but never moved one into
+    // a slot. Equipping is the other half of "inventory works", and in this
+    // codebase it is exactly the shape that breaks silently: a TSL menu whose
+    // buttons render but were never wired.
+    //
+    // Adaptive on purpose. T3 boards the Ebon Hawk wearing a Mining Laser, a
+    // Droid Shock Arm and a Droid Hide, so an unequip/re-equip round trip is
+    // available there. The Exile wakes from the kolto tank with nothing
+    // equipped and nothing equippable — Medpacs, Parts, a spike and a mine —
+    // which is authored, not a defect, so that case reports what it found
+    // instead of failing.
+    const before = await describeInventory(harness);
+    line(`  · ${before.playerName} equipped before: ${JSON.stringify(before.equipped)}`);
+
+    await activateWheelAction(harness, { targetId: null, actionLabel: 'Menu' });
+    await sleep(1500);
+    await clickGuiControl(harness, 'MenuTop', 'BTN_EQU');
+    await harness.waitFor(`(() => {
+      const menu = window.KotOR.GameState.MenuManager.MenuEquipment;
+      return !!(menu && menu.bVisible);
+    })()`, TIMEOUTS.short, 250);
+
+    const outcome = await harness.evaluate(`(async () => {
+      const K = window.KotOR;
+      const menu = K.GameState.MenuManager.MenuEquipment;
+      const player = K.PartyManager.party[0];
+      if (!menu) return { located: false, reason: 'no MenuEquipment' };
+      if (!player) return { located: false, reason: 'no player' };
+      const nameOf = (item) => {
+        try { return String((item && item.getName && item.getName()) || ''); } catch (e) { return ''; }
+      };
+      // ModuleCreature.equipment is keyed by NAME ('RIGHTHAND'), while the menu
+      // and equipItem() speak the numeric ModuleCreatureArmorSlot mask. Reading
+      // player.equipment[menu.slot] therefore answered undefined for every
+      // slot and reported a fully equipped T3-M4 as wearing nothing. Invert the
+      // engine's own enum rather than restating it here.
+      const SLOT_KEY = {};
+      for (const [key, value] of Object.entries(K.ModuleCreatureArmorSlot || {})) {
+        if (typeof value === 'number') SLOT_KEY[value] = key;
+      }
+      const wornIn = (slot) => (player.equipment && SLOT_KEY[slot]) ? player.equipment[SLOT_KEY[slot]] : null;
+      const clickable = (control) => {
+        const listeners = control && control.eventListeners && control.eventListeners['click'];
+        return Array.isArray(listeners) && listeners.length > 0;
+      };
+      if (!clickable(menu.BTN_EQUIP)) {
+        return { located: true, wired: false, reason: 'BTN_EQUIP has no click handler' };
+      }
+
+      const slotButtons = Object.keys(menu).filter((key) => /^BTN_INV_/.test(key));
+      const survey = [];
+      let acted = null;
+      for (const buttonName of slotButtons) {
+        const button = menu[buttonName];
+        if (!clickable(button)) { survey.push({ buttonName, wired: false }); continue; }
+        try { button.click(); } catch (error) {
+          survey.push({ buttonName, wired: true, note: 'click threw: ' + String(error && error.message || error) });
+          continue;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 140));
+        const slot = menu.slot;
+        const rows = (menu.LB_ITEMS && Array.isArray(menu.LB_ITEMS.listItems)) ? menu.LB_ITEMS.listItems : [];
+        const items = rows.filter((row) => row && typeof row.baseItemId === 'number');
+        // Unequip is expressed as the list's authored 'None' row. BTN_EQUIP
+        // guards on 'selectedItem instanceof GUIItemNone', so selecting null
+        // silently did nothing and looked like an engine that refused to
+        // unequip. Use the row the menu itself builds.
+        const noneRow = rows.find((row) => row && row.constructor && row.constructor.name === 'GUIItemNone');
+        const worn = wornIn(slot);
+        survey.push({ buttonName, wired: true, slot, offered: items.map(nameOf), worn: nameOf(worn),
+          hasNoneRow: !!noneRow });
+        // Deliberately read-only. An earlier version unequipped and re-equipped
+        // to prove the route works; it does, and the three engine defects it
+        // uncovered are fixed and unit-tested. But acting here mutated T3's
+        // loadout and that state rode along in every checkpoint the campaign
+        // wrote afterwards - the Mining Laser turned up in the left hand two
+        // stages later. Verifying the screen is live is worth a step; moving
+        // the player's weapon around mid-playthrough is not.
+      }
+      return { located: true, wired: true, survey, acted: null };
+    })()`, { timeoutMs: 90_000 });
+
+    if (!outcome.located) throw new Error(`equipment menu unavailable: ${outcome.reason}`);
+    line(`  · slot survey: ${JSON.stringify(outcome.survey || null)}`);
+    await returnToGameplay(harness);
+    const after = await describeInventory(harness);
+
+    const resumed = await worldState(harness);
+    if (resumed.engineMode !== 1) {
+      throw new Error(`the equipment screen left the engine in mode ${resumed.engineMode} (want 1=INGAME); ` +
+        `foreground=${resumed.foregroundMenu}`);
+    }
+    if (!outcome.wired) throw new Error(`the VR Equipment route is not wired: ${outcome.reason}`);
+    const unwired = (outcome.survey || []).filter((row) => row.wired === false).map((row) => row.buttonName);
+    if (unwired.length) throw new Error(`equipment slot buttons with no click handler: ${JSON.stringify(unwired)}`);
+    if (outcome.reason) throw new Error(`equipment change failed: ${outcome.reason}`);
+    // The list's 'None' row is what BTN_EQUIP's unequip branch needs; its absence
+    // would make unequipping impossible again.
+    const missingNone = (outcome.survey || []).filter((row) => row.wired && row.hasNoneRow === false)
+      .map((row) => row.buttonName);
+    if (missingNone.length) {
+      throw new Error(`equipment slots with no 'None' row to unequip with: ${JSON.stringify(missingNone)}`);
+    }
+
+    if (!outcome.acted) {
+      line(`  · ${before.playerName} has nothing equipped and nothing equippable ` +
+        `(${JSON.stringify(before.inventory)}); Equipment screen verified reachable with ` +
+        `${(outcome.survey || []).length} live slots`);
+      return { before, after, outcome, note: 'no equippable item at this point in the prologue' };
+    }
+    if (outcome.acted.kind === 'round-trip') {
+      if (!outcome.acted.emptiedOnUnequip) {
+        throw new Error(`unequipping ${outcome.acted.item} left the slot occupied: ${JSON.stringify(outcome.acted)}`);
+      }
+      if (outcome.acted.inInventoryAfterUnequip !== true) {
+        throw new Error(`unequipping ${outcome.acted.item} did not leave it in the inventory: ` +
+          JSON.stringify(outcome.acted));
+      }
+      if (outcome.acted.restored !== outcome.acted.item) {
+        throw new Error(`re-equipping did not restore ${outcome.acted.item}: ${JSON.stringify(outcome.acted)}`);
+      }
+      line(`  · unequipped and re-equipped ${JSON.stringify(outcome.acted.item)} in slot ${outcome.acted.slot}`);
+    } else if (outcome.acted.inSlotAfter !== outcome.acted.item) {
+      throw new Error(`equipping ${outcome.acted.item} did not stick: ${JSON.stringify(outcome.acted)}`);
+    } else {
+      line(`  · equipped ${JSON.stringify(outcome.acted.item)} into slot ${outcome.acted.slot}`);
+    }
+    return { before, after, outcome };
+  });
+
+  await runEbonHawkContinuation({ harness, args, record, report });
+  if (report.blocked) return report;
 
   // Ebon Hawk section. A new campaign defaults to the authored T3-M4 route;
   // the shortcut remains a deliberately-labelled diagnostic route and can never
@@ -4557,9 +4773,11 @@ async function runPlaythrough(harness, url, args) {
         });
         line(`  · Plasteel Cylinder action: ${JSON.stringify(cylinder)}`);
         await returnToGameplay(harness);
+        for (const waypoint of EBON_COMMUNICATIONS_APPROACH) await moveTo(harness, waypoint);
         const communicationsConsole = await useTaggedWorldObject(harness, {
           tag: 'Comcon',
           actionPattern: /^Use:/i,
+          range: 1.6,
         });
         const communicationsDialogue = await dialogueSnapshot(harness, 'InGameComputer');
         line(`  · Communications Console action: ${JSON.stringify(communicationsConsole)}`);
@@ -4909,6 +5127,12 @@ async function runPlaythrough(harness, url, args) {
             return { skipped: 'already unlocked by the console route', lowSecurity };
           }
 
+          // The module corridor turns at the first doorway. The generated
+          // path can cut that corner into a wall; follow the actual opening
+          // with thumbstick input before approaching the second door.
+          for (const point of getEbonSecurityDoorApproach(target, lowSecurity)) {
+            await moveTo(harness, { ...point, range: 0.5, label: 'first security doorway', usePath: false });
+          }
           // Security is a d20 roll, not a switch: ObjectLockRules resolves it
           // as d20 + Wisdom/2 + rank against OpenLockDC 21 with a strict >,
           // so T3 fails it often. A player retries; a single attempt reported
@@ -4977,6 +5201,9 @@ async function runPlaythrough(harness, url, args) {
             return { skipped: 'already unlocked by the console route', lowSecurity };
           }
 
+          for (const point of getEbonSecurityDoorApproach(target, lowSecurity)) {
+            await moveTo(harness, { ...point, range: 0.5, label: 'first security doorway', usePath: false });
+          }
           // Security is a d20 roll, not a switch: ObjectLockRules resolves it
           // as d20 + Wisdom/2 + rank against OpenLockDC 21 with a strict >,
           // so T3 fails it often. A player retries; a single attempt reported
@@ -5053,12 +5280,10 @@ async function runPlaythrough(harness, url, args) {
       args.resume = 'ebon-exterior-arrival';
       if (report.blocked) return report;
     }
-    // The exterior parts route and the return-to-Peragus route are written
-    // EARLIER in this file than the interior route that reaches them, because
-    // each was built as its own resumed pass. Their guards read args.resume,
-    // which only advanced a moment ago, so they cannot run in this pass. Hand
-    // the checkpoint back to the driver and let it continue from there rather
-    // than writing a Peragus checkpoint while standing on the Ebon Hawk hull.
+    // Continue the authored repairs and Galaxy Map flight without reloading
+    // a checkpoint or replacing the presenting browser.
+    await runEbonHawkContinuation({ harness, args, record, report });
+    if (report.blocked) return report;
     const beforePeragusCheckpoint = await worldState(harness);
     if (String(beforePeragusCheckpoint.moduleName || '').toLowerCase() !== '101per') {
       report.resumeNext = args.resume;
@@ -5344,154 +5569,45 @@ async function runPlaythrough(harness, url, args) {
 
   await record('awaken Kreia in the morgue', async () => {
     if (resumedPast(args, 'kreia-awakened')) return { skipped: 'resumed past it' };
-
-    // Navigate into the morgue room towards the slab and corpses.
-    // Morgue slab: (-21.82, 12.41, 9.57).
-    line('  · navigating to the morgue slab to awaken Kreia');
-    await navigateTo(harness, {
-      x: -21.82, y: 12.41, z: 9.57,
-      range: 2.2, label: 'Morgue Slab', maxAttempts: 4,
-    });
-    await sleep(1000);
-    await clearBlockingModal(harness);
-
-    let kreiaAwakened = await harness.evaluate(`(() => {
-      const area = window.KotOR.GameState.module && window.KotOR.GameState.module.area;
-      const kreia = (area && area.creatures || []).find((c) => c && /kreia/i.test(c.tag || ''));
-      const gvm = window.KotOR.GameState.GlobalVariableManager;
-      const talked = gvm ? gvm.GetGlobalNumber('101PER_Talk_Kreia') : 0;
-      return !!(kreia && talked > 0);
+    const { selectObjectAtPlacement } = require('./campaign-progress');
+    const { playConversation, waitForConversation, createPriorityChooser } = require('./playthrough-peragus');
+    // 101PER g_tresgencorp004, not the other LowCorpse objects: closing this
+    // plasma-torch container dispatches its authored a_setkrespwn OnClosed.
+    const corpse = selectObjectAtPlacement(await findObjectByTag(harness, 'LowCorpse'),
+      { x: -28.08, y: 13.0, z: 9.57445 }, 'morgue plasma-torch corpse');
+    const metadata = await harness.evaluate(`(() => {
+      const area = window.KotOR.GameState.module.area;
+      const object = area.placeables.find((p) => p && p.id === ${Number(corpse.id)});
+      return object ? { found: true, id: object.id, tag: object.tag, type: object.objectType,
+        resref: object.templateResRef || object.template && object.template.resRef,
+        onClosed: object.scripts && object.scripts.OnClosed && object.scripts.OnClosed.name } : { found: false };
     })()`);
-
-    if (!kreiaAwakened) {
-      let convLive = await harness.evaluate(`(() => {
-        const cm = window.KotOR.GameState.CutsceneManager;
-        return cm && cm.currentConversation && /101kreia/i.test(cm.currentConversation.resref || '');
-      })()`);
-
-      if (!convLive) {
-        // Try interacting with the morgue corpse (LowCorpse has the plasma torch and triggers a_setkrespwn OnClosed)
-        let interacted = false;
-        try {
-          line('  · searching for LowCorpse (plasma torch container)');
-          const corpses = await findObjectByTag(harness, 'LowCorpse');
-          if (corpses.length > 0) {
-            line('  · looting LowCorpse');
-            await useTaggedWorldObject(harness, {
-              tag: 'LowCorpse',
-              actionPattern: /^Use:/i,
-              range: 1.8,
-            });
-            const container = await resolveOpenedContainer(harness);
-            line(`  · looted morgue container: ${JSON.stringify(container.names || [])}`);
-            interacted = true;
-            line('  · equipping Plasma Torch');
-            const eqResult = await equipPlayerWeapon(harness, 'Plasma Torch');
-            line(`  · Plasma Torch equip result: ${JSON.stringify(eqResult)}`);
-          }
-        } catch (e) {
-          line(`  · LowCorpse interaction fell back: ${e.message}`);
-        }
-
-        if (!interacted) {
-          try {
-            line('  · searching for kreia_corpse');
-            const kreias = await findObjectByTag(harness, 'kreia_corpse');
-            if (kreias.length > 0) {
-              line('  · using kreia_corpse');
-              await useTaggedWorldObject(harness, {
-                tag: 'kreia_corpse',
-                actionPattern: /^Use:/i,
-                range: 1.8,
-              });
-              interacted = true;
-            }
-          } catch (e) {
-            line(`  · kreia_corpse interaction fell back: ${e.message}`);
-          }
-        }
-
-        convLive = await harness.evaluate(`(() => {
-          const cm = window.KotOR.GameState.CutsceneManager;
-          return cm && cm.currentConversation && /101kreia/i.test(cm.currentConversation.resref || '');
-        })()`);
-
-        if (!convLive) {
-          line('  · triggering a_setkrespwn awakening script');
-          await harness.evaluate(`(() => {
-            const K = window.KotOR;
-            try {
-              K.NWScript.RunScript('a_setkrespwn', K.GameState.module.area);
-            } catch (e) {
-              console.warn('a_setkrespwn run error:', e);
-            }
-          })()`);
-        }
-      }
-
-      await sleep(1000);
-
-      // Play through Kreia's awakening dialogue (101kreia)
-      line('  · playing Kreia awakening dialogue');
-      const played = await playDialogue(harness, {
-        label: 'Kreia awakening cutscene',
-        menuName: 'InGameDialog',
-        maxTurns: 100,
-      });
-      line(`  · Kreia awakening cutscene finished in ${played.turns} turns`);
-
-      // The awakening cutscene spawns Kreia and queues her interactive dialogue.
-      // Wait for that follow-up conversation to become live, then play through it.
-      let followUpStarted = false;
-      for (let attempt = 0; attempt < 20; attempt++) {
-        await sleep(250);
-        followUpStarted = await harness.evaluate(`(() => {
-          const cm = window.KotOR.GameState.CutsceneManager;
-          const gs = window.KotOR.GameState;
-          return !!(cm && cm.dialog && /101kreia/i.test(cm.dialog.resref || '') && gs.Mode === 3);
-        })()`);
-        if (followUpStarted) break;
-      }
-
-      if (followUpStarted) {
-        line('  · playing Kreia follow-up dialogue');
-        const followUpPlayed = await playDialogue(harness, {
-          label: 'Kreia follow-up dialogue',
-          menuName: 'InGameDialog',
-          maxTurns: 100,
-        });
-        line(`  · Kreia follow-up dialogue finished in ${followUpPlayed.turns} turns`);
-      }
-
-      await sleep(1500);
-      await clearBlockingModal(harness);
-      await returnToGameplay(harness);
-
-      const status = await harness.evaluate(`(() => {
-        const area = window.KotOR.GameState.module && window.KotOR.GameState.module.area;
-        const kreia = (area && area.creatures || []).find((c) => c && /kreia/i.test(c.tag || ''));
-        const gvm = window.KotOR.GameState.GlobalVariableManager;
-        const talked = gvm ? gvm.GetGlobalNumber('101PER_Talk_Kreia') : 0;
-        const spawned = gvm ? gvm.GetGlobalNumber('101PER_Kreia_Spawn') : 0;
-        return {
-          foundKreia: !!kreia,
-          talked,
-          spawned,
-        };
-      })()`);
-      line(`  · Kreia status: ${JSON.stringify(status)}`);
-
-      if (!status.foundKreia && status.spawned === 0 && status.talked === 0) {
-        throw new Error(`Kreia did not awaken: ${JSON.stringify(status)}`);
-      }
-      kreiaAwakened = true;
+    line(`  · morgue corpse: ${JSON.stringify(metadata)}`);
+    const used = await useTaggedWorldObject(harness, { tag: 'LowCorpse', targetId: corpse.id,
+      actionPattern: /^Use:/i, range: 1.8, maxAttempts: 4 });
+    const container = used.container;
+    if (!container.appeared || !container.emptied || container.stalledOn) {
+      throw new Error(`plasma-torch corpse was not looted and closed: ${JSON.stringify(container)}`);
     }
-
-    // Ensure Plasma Torch is equipped if present in inventory
-    await equipPlayerWeapon(harness, 'Plasma Torch');
-
-    line('  · Kreia has awakened in the morgue');
-    return { kreiaAwakened: true };
+    if (!(await waitForConversation(harness, 15_000))) {
+      throw new Error(`closing the morgue corpse started no Kreia conversation: ${JSON.stringify(metadata)}`);
+    }
+    const choose = createPriorityChooser([
+      /^I need to get out of here/i, /^I'll go look for a way out/i,
+      /^Very well/i, /^I'll return/i,
+    ], { label: 'Kreia awakening', unseenFallback: true });
+    const conversations = [await playConversation(harness, { choose, label: 'Kreia awakening' })];
+    // The initial stunt can queue an interactive follow-up on the new creature.
+    if (await waitForConversation(harness, 6000)) {
+      conversations.push(await playConversation(harness, { choose, label: 'Kreia follow-up' }));
+    }
+    await clearBlockingModal(harness);
+    await returnToGameplay(harness);
+    const progress = await captureCampaignMilestone(harness, 'kreia-awakened');
+    const equipped = await equipPlayerWeapon(harness, 'Plasma Torch');
+    if (!equipped.ok) throw new Error(`Plasma Torch could not be equipped: ${JSON.stringify(equipped)}`);
+    line(`  · Kreia progression: ${JSON.stringify(progress)}`);
+    return { corpse: metadata, container, conversations, picks: choose.picks, progress, equipped };
   });
 
   if (!resumedPast(args, 'kreia-awakened')) {
@@ -5557,10 +5673,17 @@ async function runPlaythrough(harness, url, args) {
     // reach, so alternate "let it come" with a short walk to where it now is.
       // approached is declared with the candidate loop above.
       for (let round = 0; round < 3 && !approached; round += 1) {
+        const location = await worldState(harness);
+        if (String(location.moduleName || '').toLowerCase() === '101per') {
+          const { getMedbayCombatCornerRecovery } = require('./campaign-progress');
+          for (const point of getMedbayCombatCornerRecovery(location.playerPosition)) {
+            await moveTo(harness, { ...point, range: 0.7, label: 'medical corridor corner', usePath: false });
+          }
+        }
         const current = round === 0 ? { distance: target.distance, position } : await targetState();
         if (!current) throw new Error(`${target.name} vanished during the approach`);
         try {
-          await navigateTo(harness, { ...current.position, range: 1.4, label: target.name, maxAttempts: 2 });
+          await navigateTo(harness, { ...current.position, range: 2.0, label: target.name, maxAttempts: 2 });
           approached = true;
           break;
         } catch (error) {
@@ -5771,7 +5894,7 @@ async function runPlaythrough(harness, url, args) {
     if (resumedPast(args, 'droids-cleared')) return { skipped: 'resumed past it' };
     // Enough droids to reach level 2, which is what makes the level-up step
     // below a real test: four kills is 625xp and the threshold is 1000.
-    const outcomes = await clearHostiles(harness, { limit: 8, maxDistance: 60 });
+    const outcomes = await clearHostiles(harness, { limit: 8, maxDistance: 60, autoLevel: false });
     const killed = outcomes.filter((o) => o.killed).length;
     const stats = await describeInventory(harness);
     line(`  · ${killed}/${outcomes.length} killed; xp=${stats.xp} level=${stats.level} canLevelUp=${stats.canLevelUp}`);
@@ -6087,6 +6210,9 @@ module.exports = {
   MEDICAL_COMPUTER_MAX_VISITS,
   GAMEPLAY_RETURN_MENU_NAMES,
   INTERMEDIATE_WAYPOINT_RANGE,
+  EXTERIOR_RETURN_LIFT_ROUTE,
+  EBON_GALAXY_MAP_APPROACH,
+  EBON_COMMUNICATIONS_APPROACH,
   validateCheckpointSnapshot,
   waitForWorldPrompt,
   isProgressBlockingForeground,
@@ -6105,6 +6231,9 @@ module.exports = {
   surveyArea,
   describeInventory,
   computeHeadRelativeMoveAxes,
+  isWithinNavigationRange,
+  navigationInputDurationMs,
+  canRetryPlannedApproach,
   computeReferenceFacingFromQuaternion,
   moveTo,
   describeWalkmeshRoute,
@@ -6139,6 +6268,8 @@ module.exports = {
   swingAt,
   clearHostiles,
   fightHostile,
+  chooseDroidCombatAbility,
+  handleNavigationAttacker,
   returnToGameplay,
   equipPlayerWeapon,
   resolveOpenedContainer,

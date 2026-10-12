@@ -1,3 +1,4 @@
+import { shouldUpdateCompanionTemplate } from "@/module/creature/CompanionTemplateOwnership";
 import { GFFObject } from "@/resource/GFFObject";
 import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
 import * as THREE from "three";
@@ -76,6 +77,7 @@ import type { Action } from "@/actions/Action";
 import { ModuleTriggerType } from "@/enums/module/ModuleTriggerType";
 import { EngineDebugType } from "@/enums/engine/EngineDebugType";
 import { TextSprite3D } from "@/engine/TextSprite3D";
+import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { ExperienceType } from "@/enums/engine/ExperienceType";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
@@ -1428,7 +1430,7 @@ export class ModuleCreature extends ModuleObject {
   }
 
   jumpToObject(target: ModuleObject){
-    console.log('jumpToObject', target, this);
+    console.log('jumpToObject', 'target', describeModuleObject(target), 'creature', describeModuleObject(this));
     if(target instanceof ModuleObject){
 
       let action = new GameState.ActionFactory.ActionJumpToObject();
@@ -1441,7 +1443,8 @@ export class ModuleCreature extends ModuleObject {
   }
 
   jumpToLocation(target: EngineLocation){
-    console.log('jumpToLocation', target, this);
+    console.log('jumpToLocation', describeModuleObject(this), target instanceof EngineLocation
+      ? `found=true position=${target.position.x},${target.position.y},${target.position.z}` : 'found=false');
     if(target instanceof EngineLocation){
       let action = new GameState.ActionFactory.ActionJumpToPoint();
       action.setParameter(0, ActionParameterType.FLOAT, target.position.x);
@@ -3711,11 +3714,20 @@ export class ModuleCreature extends ModuleObject {
   }
 
   initEffects(): void {
-    const eRacialType = new EffectRacialType();
-    eRacialType.setSubType(GameEffectDurationType.INNATE);
-    eRacialType.setSkipOnLoad(true);
-    eRacialType.setInt(0, this.getRace());
-    this.addEffect(eRacialType);
+    // The same player spawns again after a module transition. Its engine-owned
+    // racial effect survives with it; do not append another on each arrival.
+    let eRacialType = this.effects.find(effect =>
+      effect.type === GameEffectType.EffectRacialType && effect.skipOnLoad &&
+      effect.getDurationType() === GameEffectDurationType.INNATE);
+    if(!eRacialType){
+      eRacialType = new EffectRacialType();
+      eRacialType.setDurationType(GameEffectDurationType.INNATE);
+      eRacialType.setSkipOnLoad(true);
+      eRacialType.setInt(0, this.getRace());
+      this.addEffect(eRacialType);
+    }else{
+      eRacialType.setInt(0, this.getRace());
+    }
     
     this.initPerceptionList();
     this.updateCollision();
@@ -3724,7 +3736,16 @@ export class ModuleCreature extends ModuleObject {
   }
 
   load(){
-    if(this.getTemplateResRef()){
+    if(this.initialized){
+      // A retained party creature is authoritative live state, not a fresh
+      // savegame object. Rehydrating its own saved template appends effects and
+      // inventory again and replaces equipped items without releasing them.
+      // Module loading resets object/script/faction managers, so refresh those
+      // registrations while preserving buffs, their expiry, and item identity.
+      GameState.ModuleObjectManager.AddObjectById(this);
+      this.loadScripts();
+      GameState.FactionManager.AddCreatureToFaction(this);
+    }else if(this.getTemplateResRef()){
       //Load template and merge fields
       const buffer = ResourceLoader.loadCachedResource(ResourceTypes['utc'], this.getTemplateResRef());
       if(buffer){
@@ -3890,6 +3911,13 @@ export class ModuleCreature extends ModuleObject {
   }
 
   async loadHead(): Promise<OdysseyModel3D> {
+    // attachHead transfers the render nodes into the body; the head model
+    // itself is parentless but still owns a subscription to its cached MDL.
+    if(this.head instanceof OdysseyModel3D){
+      this.head.removeFromParent();
+      this.head.dispose();
+      this.head = undefined;
+    }
     let appearance = this.creatureAppearance;
     // Same missing-row case as loadBody, which runs immediately before this.
     // Guarding only loadBody would move the same crash down one line.
@@ -3921,11 +3949,6 @@ export class ModuleCreature extends ModuleObject {
 
     try
     {
-      if(this.head instanceof OdysseyModel3D && this.head.parent){
-        this.head.parent.remove(this.head);
-        this.head.dispose();
-      }
-
       this.head = head;
       this.head.userData.moduleObject = this;
       this.model.attachHead(head);
@@ -5095,7 +5118,8 @@ export class ModuleCreature extends ModuleObject {
 
     this.template = gff;
 
-    if(this.npcId >= 0){
+    if(shouldUpdateCompanionTemplate(this, GameState.PartyManager.party, GameState.PartyManager.Player)
+      && GameState.PartyManager.NPCS[this.npcId]){
       GameState.PartyManager.NPCS[this.npcId].template = this.template;
     }
 

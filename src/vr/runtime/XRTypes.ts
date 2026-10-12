@@ -4,6 +4,7 @@ export enum SemanticXRAction {
   Move = 'move',
   Turn = 'turn',
   Select = 'select',
+  Scroll = 'scroll',
   Cancel = 'cancel',
   Use = 'use',
   Grab = 'grab',

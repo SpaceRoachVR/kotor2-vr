@@ -294,15 +294,18 @@ export class ModulePath {
   }
 
   dispose(){
-    this.helperGeometry.dispose();
-    this.helperMaterial.dispose();
-    this.helperMesh.removeFromParent();
+    this.helperGeometry?.dispose();
+    this.helperMaterial?.dispose();
+    this.helperMesh?.removeFromParent();
 
     this.helperPositions = undefined;
     this.helperColors = undefined;
     this.helperMesh = undefined;
     this.helperGeometry = undefined;
     this.helperMaterial = undefined;
+    this.points.length = 0;
+    this.walkEdges.length = 0;
+    this.area = undefined;
   }
 
   setPathHelpersVisibility(state = false){

@@ -108,6 +108,12 @@ function startAssetService() {
     // Same port the emulator harness uses; the two never run together, because
     // they both want the asset service.
     `--remote-debugging-port=${CDP_PORT}`,
+    // Run the WebXR device service outside the sandbox so the OBS VR Capture
+    // OpenXR layer can stream frames. The layer loads into that process either
+    // way, but sandboxed it cannot open OBS's shared-memory block
+    // (Local\SpaceRoachVR_Capture_IPC) or write its log, so the OBS source
+    // stays black. Only the XR service leaves the sandbox; renderers keep it.
+    '--disable-features=XRSandbox',
     url,
   ];
 

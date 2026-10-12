@@ -44,6 +44,14 @@ function profileController(
 }
 
 describe('XRInputRouter', () => {
+  test('routes physical right-stick scrolling only in UI, regardless of dominant hand', () => {
+    const router = new XRInputRouter(BUILT_IN_XR_PROFILES, { dominantHand: 'left' });
+    const controllers = [questController('left', [0, 0, 0, -1]), questController('right', [0, 0, 0, 1])];
+    const scroll = router.route(controllers, new Set(['ui'])).filter(a => a.action === SemanticXRAction.Scroll);
+    expect(scroll).toEqual([expect.objectContaining({ hand: 'right', axes: [0, 1] })]);
+    expect(router.route(controllers, new Set(['locomotion'])).some(a => a.action === SemanticXRAction.Scroll)).toBe(false);
+  });
+
   test('routes Quest off-hand movement and dominant-hand turning', () => {
     const router = new XRInputRouter();
     const actions = router.route(

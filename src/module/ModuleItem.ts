@@ -1,4 +1,5 @@
 import { ModuleObject } from "@/module/ModuleObject";
+import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 import type { ModuleCreature } from "@/module/ModuleCreature";
 import { BaseItem } from "@/engine/BaseItem";
 import { EffectDisguise } from "@/effects/EffectDisguise";
@@ -573,6 +574,13 @@ export class ModuleItem extends ModuleObject {
   }
 
   async loadModel(): Promise<OdysseyModel3D> {
+    // Droids can equip weapons without a corresponding hand attachment node.
+    // Their old item model is then parentless, so body teardown cannot own it.
+    if(this.model){
+      this.model.removeFromParent();
+      this.model.dispose();
+      this.model = undefined;
+    }
     if(!this.baseItem){ 
       this.model = new OdysseyModel3D;
       return this.model;
@@ -601,6 +609,7 @@ export class ModuleItem extends ModuleObject {
       this.model = model;
       return this.model;
     }catch(e){
+      console.warn('ModuleItem.loadModel failed', describeModuleObject(this), 'model', defaultModel, e);
       this.model = new OdysseyModel3D;
       return this.model;
     }

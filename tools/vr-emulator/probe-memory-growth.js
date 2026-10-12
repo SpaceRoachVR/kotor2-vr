@@ -1,10 +1,8 @@
 /**
  * ROADMAP 0.3 — characterise the memory growth across successive module loads.
  *
- * The sweep survives only because it can throw the page away: every full run
- * today crossed 3 GB of JS heap in roughly 20-25 module loads and reloaded,
- * three or four times per run, and every one of those was heap-triggered rather
- * than the module-count backstop. A headset session has no reload.
+ * Historical sweeps crossed 3 GB of JS heap in roughly 20-25 module loads.
+ * A headset session needs resource lifetimes that support continuous play.
  *
  * WHY THIS MEASURES RATHER THAN SNAPSHOTS FIRST
  *
@@ -27,39 +25,39 @@ const fs = require('fs');
 const path = require('path');
 const { VrHarness } = require('./harness');
 const { startAssetService } = require('./asset-service');
+const { bootstrapFreshNewGame } = require('../parity/engine-snapshot');
+const { enterVrSession } = require('./playthrough-steps');
 
 const EVIDENCE_DIR = path.join(__dirname, 'evidence');
+
+function runtimeFailures(consoleMessages, pageErrors) {
+  return [...pageErrors, ...consoleMessages
+    .filter(message => message.level === 'error' && /\[VRSpike\].*(frame|rejected|failed|threw)/i.test(message.text))
+    .map(message => message.text)];
+}
 
 function parseArgs(argv) {
   const args = { url: null, cycles: 3, modules: ['101PER', '102PER'], out: EVIDENCE_DIR, census: false, hold: 0 };
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--url') args.url = argv[++i];
-    else if (argv[i] === '--cycles') args.cycles = Number(argv[++i]);
-    else if (argv[i] === '--modules') args.modules = argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
-    else if (argv[i] === '--out') args.out = argv[++i];
-    else if (argv[i] === '--census') args.census = true;
-    else if (argv[i] === '--hold') args.hold = Number(argv[++i]);
+    const option = argv[i];
+    if (option === '--census') { args.census = true; continue; }
+    if (!['--url', '--cycles', '--modules', '--out', '--hold'].includes(option)) {
+      throw new Error(`Unknown memory probe option: ${option}`);
+    }
+    const value = argv[++i];
+    if (!value || value.startsWith('--')) throw new Error(`Missing value for ${option}`);
+    if (option === '--url') args.url = value;
+    else if (option === '--cycles') args.cycles = Number(value);
+    else if (option === '--modules') args.modules = value.split(',').map(s => s.trim().toUpperCase());
+    else if (option === '--out') args.out = value;
+    else if (option === '--hold') args.hold = Number(value);
+  }
+  if (!Number.isSafeInteger(args.cycles) || args.cycles < 1) throw new Error('Cycles must be a positive integer');
+  if (!Number.isSafeInteger(args.hold) || args.hold < 0) throw new Error('Hold must be a non-negative integer');
+  if (!args.modules.length || args.modules.some(name => !/^[A-Z0-9_]{1,16}$/.test(name))) {
+    throw new Error('Modules must be comma-separated resource names');
   }
   return args;
-}
-
-async function clickButtonByText(harness, text) {
-  const box = await harness.evaluate('(() => {\n' +
-    '  const wanted = ' + JSON.stringify(text) + '.toLowerCase();\n' +
-    '  const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };\n' +
-    '  const btn = Array.from(document.querySelectorAll("button")).filter(visible)\n' +
-    '    .find(b => (b.textContent || "").trim().toLowerCase() === wanted);\n' +
-    '  if (!btn) return null;\n' +
-    '  const r = btn.getBoundingClientRect();\n' +
-    '  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };\n' +
-    '})()');
-  if (!box) throw new Error('No visible button labelled "' + text + '"');
-  for (const type of ['mousePressed', 'mouseReleased']) {
-    await harness.cdp.send('Input.dispatchMouseEvent', {
-      type, x: box.x, y: box.y, button: 'left', clickCount: 1,
-      buttons: type === 'mousePressed' ? 1 : 0,
-    });
-  }
 }
 
 /** Every candidate retainer, counted in one pass. */
@@ -68,6 +66,17 @@ const SAMPLE = [
   '  const out = {};',
   '  const K = window.KotOR;',
   '  const gs = K.GameState;',
+  '  out.moduleFound = !!gs.module;',
+  '  out.module = gs.module ? gs.module.filename : null;',
+  '  out.xrPresenting = !!gs.renderer.xr.isPresenting;',
+  '  out.renderFrame = gs.renderer.info.render.frame;',
+  '  const player = gs.PartyManager.Player;',
+  '  out.player = player ? { found: true, resRef: player.getTemplateResRef(), tag: player.getTag(), id: player.id, type: player.objectType, effects: {}, inventory: player.inventory.length } : { found: false };',
+  '  if (player) for (const effect of player.effects) { const type = effect.constructor.name; out.player.effects[type] = (out.player.effects[type] || 0) + 1; }',
+  '  out.scriptInstances = K.NWScript?.NWScriptInstanceMap?.size ?? null;',
+  '  out.uncachedScriptSituations = K.NWScript ? [...K.NWScript.NWScriptInstanceMap.values()].filter(instance => instance.isStoreState && K.NWScript.scripts.get(instance.nwscript?.name) !== instance.nwscript).length : null;',
+  '  out.waypointHelpers = gs.group?.waypoints?.children.length ?? null;',
+  '  out.staleWaypointHelpers = gs.group?.waypoints?.children.filter(helper => helper.userData.area && !gs.module?.area?.rooms.some(room => room.model === helper.userData.area)).length ?? null;',
   '  try { out.heapMb = +(performance.memory.usedJSHeapSize / 1048576).toFixed(1); } catch (e) { out.heapMb = null; }',
   '  try {',
   '    const info = gs.renderer.info;',
@@ -92,6 +101,7 @@ const SAMPLE = [
   '    let nodes = 0, meshes = 0;',
   '    gs.scene.traverse((o) => { nodes++; if (o.isMesh) meshes++; });',
   '    out.sceneNodes = nodes;',
+  '    out.sceneMeshes = meshes;',
   '  } catch (e) {}',
   '  // Points are the specific suspect: OdysseyModel3D.dispose guards its',
   '  // geometry/material release behind an instanceof THREE.Mesh check, and',
@@ -102,7 +112,6 @@ const SAMPLE = [
   '    gs.scene.traverse((o) => { if (o.isPoints) { points++; if (o.geometry) pointsWithGeometry++; } });',
   '    out.scenePoints = points;',
   '    out.scenePointsWithGeometry = pointsWithGeometry;',
-  '    out.sceneMeshes = meshes;',
   '  } catch (e) {}',
   '  try { out.moduleObjects = gs.ModuleObjectManager.GetObjectCount ? gs.ModuleObjectManager.GetObjectCount() : null; } catch (e) {}',
   '  try { out.partySize = K.PartyManager.party.length; } catch (e) {}',
@@ -114,10 +123,10 @@ const SAMPLE = [
 const loadModule = (name) => [
   '(async () => {',
   '  const gs = window.KotOR.GameState;',
-  '  gs.loadingModule = false;',
-  '  try { gs.MenuManager.ClearMenus(); } catch (e) {}',
-  '  const previous = gs.module;',
-  '  Promise.resolve(gs.LoadModule(' + JSON.stringify(name) + ')).catch(() => undefined);',
+  '  if (gs.loadingModule) throw new Error("Engine is already loading a module");',
+  '  const observation = { module: ' + JSON.stringify(name) + ', error: null };',
+  '  window.__memoryProbeLoad = observation;',
+  '  Promise.resolve(gs.LoadModule(observation.module)).catch(error => { observation.error = String(error); });',
   '  return true;',
   '})()',
 ].join('\n');
@@ -125,7 +134,9 @@ const loadModule = (name) => [
 const landed = [
   '(() => {',
   '  const gs = window.KotOR.GameState;',
-  '  return !!(gs.module && gs.loadingModule === false && gs.module.readyToProcessEvents === true && gs.module.area);',
+  '  const observation = window.__memoryProbeLoad;',
+  '  if (observation && observation.error) throw new Error(observation.error);',
+  '  return !!(observation && gs.module && String(gs.module.filename).toUpperCase() === observation.module && gs.loadingModule === false && gs.module.readyToProcessEvents === true && gs.module.area);',
   '})()',
 ].join('\n');
 
@@ -139,26 +150,25 @@ async function main() {
   const readings = [];
   try {
     await harness.launch(url);
+    // Use the normal skip route for skippable movies; decoding the entire
+    // opening movie is unrelated to measuring module resource lifetimes.
+    await harness.evaluate(`window.__memoryProbeMovieSkip = setInterval(() => {
+      const video = window.KotOR?.GameState?.VideoManager;
+      if (video?.currentMovie?.skippable) video.skipMovie();
+    }, 250)`);
     try {
-      await harness.waitFor(
-        'Array.from(document.querySelectorAll("button")).some(b => (b.textContent||"").trim() === "OK")', 60000);
-      await clickButtonByText(harness, 'OK');
-    } catch (e) { /* already accepted */ }
-    await harness.waitFor('!!(window.KotOR && window.KotOR.GameState && window.KotOR.GameState.MenuManager)', 240000);
-    await harness.waitFor('!!window.KotOR.GameState.MenuManager.MainMenu', 240000);
-
-    await harness.evaluate('(async () => { await window.KotOR.SaveGame.GetSaveGames(); return window.KotOR.SaveGame.saves.length; })()',
-      { timeoutMs: 180000 });
-    await harness.evaluate([
-      '(async () => {',
-      '  const gs = window.KotOR.GameState;',
-      '  gs.MenuManager.ClearMenus();',
-      '  if (gs.module) { try { gs.module.dispose(); } catch (e) {} gs.module = undefined; }',
-      '  Promise.resolve(window.KotOR.SaveGame.saves[0].load()).catch(() => undefined);',
-      '  return true;',
-      '})()',
-    ].join('\n'));
-    await harness.waitFor(landed, 300000, 3000);
+      await bootstrapFreshNewGame(harness, message => console.log(message));
+    } finally {
+      await harness.evaluate('clearInterval(window.__memoryProbeMovieSkip); delete window.__memoryProbeMovieSkip; true');
+    }
+    await harness.evaluate(`(() => {
+      const gs = window.KotOR.GameState;
+      const cm = gs.CutsceneManager;
+      if (String(cm.dialog?.resref || '').toLowerCase() === 'intro' && cm.active) cm.endConversation(true);
+      gs.MenuManager.InGameOverlay.open();
+      return true;
+    })()`);
+    await enterVrSession(harness);
 
   /**
    * Live BufferGeometry instances, grouped so a leak names itself.
@@ -169,14 +179,16 @@ async function main() {
    * is the leak, and the name usually says whose it is.
    */
   const census = async () => {
+    const objectGroup = 'memory-probe-census';
     try {
       const proto = await harness.cdp.send('Runtime.evaluate', {
         expression: '(() => { let g = null; window.KotOR.GameState.scene.traverse((o) => { if (!g && o.isMesh && o.geometry) g = o.geometry; }); if (!g) return null; let p = Object.getPrototypeOf(g); while (p && p.constructor && p.constructor.name !== "BufferGeometry" && Object.getPrototypeOf(p)) { p = Object.getPrototypeOf(p); } return p; })()',
         returnByValue: false,
+        objectGroup,
       });
       const protoId = proto && proto.result && proto.result.objectId;
       if (!protoId) return null;
-      const objects = await harness.cdp.send('Runtime.queryObjects', { prototypeObjectId: protoId });
+      const objects = await harness.cdp.send('Runtime.queryObjects', { prototypeObjectId: protoId, objectGroup });
       const arrayId = objects && objects.objects && objects.objects.objectId;
       if (!arrayId) return null;
       const summary = await harness.cdp.send('Runtime.callFunctionOn', {
@@ -198,14 +210,22 @@ async function main() {
       return summary && summary.result ? summary.result.value : null;
     } catch (e) {
       return { error: String(e && e.message || e) };
+    } finally {
+      await harness.cdp.send('Runtime.releaseObjectGroup', { objectGroup });
     }
   };
 
     const measure = async (label) => {
       // Retained, not merely uncollected. Without this every delta below is
       // garbage a GC would have taken anyway.
-      try { await harness.cdp.send('HeapProfiler.collectGarbage'); } catch (e) {}
+      const frame = await harness.evaluate('window.KotOR.GameState.renderer.info.render.frame');
+      await harness.waitFor(`window.KotOR.GameState.renderer.xr.isPresenting && window.KotOR.GameState.renderer.info.render.frame > ${frame + 10}`, 30000, 500);
+      await harness.cdp.send('HeapProfiler.collectGarbage');
       const sample = await harness.evaluate(SAMPLE, { timeoutMs: 60000 });
+      const failures = runtimeFailures(harness.consoleSince(), harness.pageErrors);
+      if (failures.length) throw new Error(`Memory probe encountered runtime failures: ${failures.slice(0, 3).join('\n')}`);
+      const heap = await harness.cdp.send('Runtime.getHeapUsage');
+      sample.heapMb = +(heap.usedSize / 1048576).toFixed(1);
       sample.label = label;
       if (args.census) sample.census = await census();
       readings.push(sample);
@@ -218,6 +238,7 @@ async function main() {
         'texCache=' + String(sample.textureLoaderCache).padStart(5),
         'resCache=' + String(sample.resourceCacheEntries).padStart(6),
         'nodes=' + String(sample.sceneNodes).padStart(6),
+        'effects=' + JSON.stringify(sample.player.effects),
       );
       return sample;
     };
@@ -227,13 +248,16 @@ async function main() {
       for (const name of args.modules) {
         await harness.evaluate(loadModule(name));
         await harness.waitFor(landed, 300000, 2000);
+        await harness.waitFor(`window.KotOR.GameState.Mode === 1`, 30000, 500);
         await measure(`cycle ${cycle} ${name}`);
       }
     }
 
     fs.mkdirSync(args.out, { recursive: true });
     const outFile = path.join(args.out, 'memory-growth.json');
-    fs.writeFileSync(outFile, JSON.stringify({ modules: args.modules, cycles: args.cycles, readings }, null, 2));
+    fs.writeFileSync(outFile, JSON.stringify({ modules: args.modules, cycles: args.cycles,
+      pageErrors: harness.pageErrors, runtimeFailures: runtimeFailures(harness.consoleSince(), harness.pageErrors),
+      consoleErrors: harness.consoleSince().filter(message => message.level === 'error'), readings }, null, 2));
 
     // Steady state, not the first load. The first load of a run is still
     // settling - the party spawns, the scene graph fills - so differencing
@@ -242,7 +266,7 @@ async function main() {
     // costs, which is the number that matters for a long session.
     const sameModule = {};
     for (const r of readings) {
-      const m = /cycle d+ (S+)/.exec(r.label || '');
+      const m = /cycle \d+ (\S+)/.exec(r.label || '');
       if (!m) continue;
       (sameModule[m[1]] = sameModule[m[1]] || []).push(r);
     }
@@ -299,4 +323,8 @@ holding the page open for ${args.hold}s on CDP port 9447 — attach experiments 
   }
 }
 
-main().catch((error) => { console.error(error); process.exit(1); });
+if (require.main === module) {
+  main().catch((error) => { console.error(error); process.exitCode = 1; });
+}
+
+module.exports = { parseArgs, loadModule, landed, SAMPLE, runtimeFailures };

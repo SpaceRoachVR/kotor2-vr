@@ -1308,13 +1308,17 @@ export class PartyManager {
    * @returns void
    */
   static Save(){
+    // Only explicit party recruitment/removal changes CurrentMembers.
+    // A scripted possession (T3's Peragus errand) is a live NPC player, not
+    // a recruited follower. Saving it into CurrentMembers made the later
+    // hand-back restore T3 alongside the Exile before his authored rescue.
+    const leaderNpcId = PartyManager.party[0]?.npcId;
+    for(const member of PartyManager.CurrentMembers){
+      member.isLeader = member.memberID === leaderNpcId;
+    }
     const npcs = PartyManager.party.filter( (pm) => pm.npcId >= 0 );
     for(let i = 0; i < npcs.length; i++){
       const pm = npcs[i];
-      PartyManager.CurrentMembers[i] = {
-        isLeader: i == 0 ? true : false,
-        memberID: pm.npcId
-      };
       PartyManager.SavePartyMember(pm.npcId);
     }
   }
@@ -1414,7 +1418,7 @@ export class PartyManager {
    * @param nIdx - The index of the party member to load
    * @returns void
    */
-  static async LoadPartyMember(nIdx: number = 0){
+  static async LoadPartyMember(nIdx: number = 0, initializeSpawn: boolean = true){
     const npc = PartyManager.NPCS[PartyManager.CurrentMembers[nIdx].memberID];
     const template = npc.template;
 
@@ -1466,7 +1470,7 @@ export class PartyManager {
         GameState.group.party.add( partyMember.container );
 
         partyMember.getCurrentRoom();
-        partyMember.onSpawn();
+        if(initializeSpawn) partyMember.onSpawn();
       }else{
         const spawn = PartyManager.GetSpawnLocation(currentSlot);
         currentSlot.position.copy(spawn.position);

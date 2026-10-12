@@ -4,6 +4,7 @@ import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { AppearanceManager } from "@/managers/AppearanceManager";
 import type { ModuleCreature } from "@/module";
 import { BitWise } from "@/utility/BitWise";
+import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 
 /**
  * EffectDisguise class.
@@ -46,9 +47,9 @@ export class EffectDisguise extends GameEffect {
         creature.pm_Appearance = creature.appearance;
         creature.pm_IsDisguised = true;
         creature.setAppearance(this.getInt(0));
-        console.log('Disguise applying', creature, this);
+        console.log('Disguise applying', describeModuleObject(creature), 'appearance', this.getInt(0));
         creature.loadModel().then( () => {
-          console.log('Disguise applied', creature, this);
+          console.log('Disguise applied', describeModuleObject(creature), 'appearance', this.getInt(0));
         });
       }
     }
@@ -62,9 +63,9 @@ export class EffectDisguise extends GameEffect {
         creature.pm_IsDisguised = false;
         creature.setAppearance(creature.appearance);
       }
-      console.log('Disguise removing', creature, this);
+      console.log('Disguise removing', describeModuleObject(creature), 'appearance', this.getInt(0));
       creature.loadModel().then( () => {
-        console.log('Disguise removed', creature, this);
+        console.log('Disguise removed', describeModuleObject(creature), 'appearance', this.getInt(0));
       });
     }
   }

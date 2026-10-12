@@ -88,6 +88,7 @@ export class AreaMap {
   }
 
   generateAlphaTexture(){
+    this.fogAlphaTexture?.dispose();
     const resX = this.mapResX+1;
     const resY = this.mapResY+1;
     this.fogAlphaPixelData = new Uint8Array(resX * resY);
@@ -309,9 +310,12 @@ export class AreaMap {
   }
 
   dispose(){
+    this.fogAlphaTexture?.dispose();
+    this.fogAlphaTexture = undefined;
     for(let i = 0; i < this.mapNotes.length; i++){
       this.processEventListener('mapNoteRemoved', [this.mapNotes[i]]);
     }
+    this.mapNotes.length = 0;
   }
 
   export(): GFFStruct {

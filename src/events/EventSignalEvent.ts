@@ -1,4 +1,5 @@
 import { GameEvent } from "@/events/GameEvent";
+import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 import { GameState } from "@/GameState";
 import { GameEventType } from "@/enums/events/GameEventType";
 import { GFFDataType } from "@/enums/resource/GFFDataType";
@@ -48,7 +49,7 @@ export class EventSignalEvent extends GameEvent {
 
   execute(){
     const obj = this.getObject() as ModuleObject;
-    console.log('EventSignalEvent', this.eventType, obj, this.getCaller());
+    console.log('EventSignalEvent', this.eventType, 'object', describeModuleObject(obj), 'caller', describeModuleObject(this.getCaller()));
     if(!BitWise.InstanceOfObject(obj, ModuleObjectType.ModuleObject)){
       return;
     }

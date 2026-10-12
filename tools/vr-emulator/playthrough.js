@@ -5,13 +5,16 @@
  *   node tools/vr-emulator/playthrough.js --url "<url>"   # reuse a running one
  *   node tools/vr-emulator/playthrough.js --prologue-route continue
  *   node tools/vr-emulator/playthrough.js --prologue-route skip # diagnostic only
+ *   node tools/vr-emulator/playthrough.js --acceptance --until t3-fuel-depot
  *
  * Drives a NEW GAME from character creation through the Peragus prologue under
  * an emulated Quest 3, inside a live immersive session, and reports the first
  * step that could not be completed.
  *
- * This is a blocker-finder, not a gate. `vr:check` asserts a fixed list of
- * behaviours; this one walks the actual game and stops where the game stops.
+ * Diagnostic mode finds blockers and permits saved-state replays. Acceptance
+ * mode requires a fresh authored game in one browser with no death reloads,
+ * a trusted bundle identity, advancing XR frames, and no page exceptions or
+ * VR loop failures at the requested campaign checkpoint.
  *
  * Everything it touches goes through the real engine entry points — GUI control
  * click handlers, the action wheel model, the world-prompt routes — so a step
@@ -45,6 +48,8 @@ function parseArgs(argv) {
     // available only for focused Peragus diagnosis and cannot be used as
     // end-to-end acceptance evidence.
     prologueRoute: 'continue',
+    acceptance: false,
+    until: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const argument = argv[i];
@@ -56,6 +61,13 @@ function parseArgs(argv) {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1) throw new Error('--stop-at requires a positive integer');
       args.stopAt = value;
+    }
+    else if (argument === '--acceptance') args.acceptance = true;
+    else if (argument === '--until') {
+      const value = argv[++i];
+      const checkpoints = require('./playthrough-peragus').PERAGUS_CHECKPOINT_ORDER;
+      if (!checkpoints.includes(value)) throw new Error('--until requires a Peragus campaign checkpoint');
+      args.until = value;
     }
     else if (argv[i] === '--headed') args.headless = false;
     // Resume from a checkpoint this driver saved earlier, so a re-test does not
@@ -74,6 +86,10 @@ function parseArgs(argv) {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
+  if (args.acceptance && (args.resume || args.prologueRoute !== 'continue')) {
+    throw new Error('--acceptance requires a fresh game and the authored prologue');
+  }
+  if (args.acceptance && !args.until) throw new Error('--acceptance requires an explicit --until checkpoint');
   return args;
 }
 
@@ -182,16 +198,8 @@ if (require.main === module) {
       await waitForPort(8479).catch(() => undefined);
     }
 
-    // The walkthrough is written as a sequence of resumable stages, and some
-    // stages are written earlier in the file than the stage that reaches them
-    // — their guards read args.resume, which only advances mid-pass. When a
-    // pass ends by handing back a checkpoint rather than finishing, continue
-    // from it instead of making the operator re-invoke by hand.
-    //
-    // Each pass gets its own browser: `boot` launches one on a fixed CDP port,
-    // so reusing the harness across passes fails with "port already in use".
-    // A fresh browser per pass also keeps one pass's renderer state out of the
-    // next, which matters on a build with known memory growth.
+    // Diagnostic runs can still resume unfinished stages. Acceptance must
+    // remain in one browser, without any saved-state reload.
     let report;
     const seen = new Set();
     let resume = args.resume;
@@ -200,7 +208,7 @@ if (require.main === module) {
       for (let pass = 1; ; pass += 1) {
         if (pass > 1) console.log(`
 === continuing from checkpoint "${resume}" (pass ${pass}) ===`);
-        const harness = new VrHarness({ port: 9431, headless: args.headless });
+        const harness = new VrHarness({ port: 9431, headless: args.headless, observeServingBundle: args.acceptance });
         try {
           report = await runPlaythrough(harness, url, { ...args, resume });
         } finally {
@@ -211,6 +219,10 @@ if (require.main === module) {
         }
         passes.push({ pass, resume: resume ?? null, steps: report.steps.length, resumeNext: report.resumeNext ?? null });
         if (report.blocked || !report.resumeNext) break;
+        if (args.acceptance) {
+          report.blocked = { step: 'continuous campaign', error: 'acceptance would require a checkpoint reload' };
+          break;
+        }
         if (seen.has(report.resumeNext) || pass >= 8) {
           report.blocked = {
             step: 'playthrough driver',
@@ -222,6 +234,11 @@ if (require.main === module) {
         resume = report.resumeNext;
       }
       report.passes = passes;
+      report.finished = new Date().toISOString();
+      if (args.until && !report.targetReached && !report.blocked) {
+        report.blocked = { step: 'campaign target', error: `checkpoint ${args.until} was not reached` };
+      }
+      if (args.acceptance) report.verdict = require('./campaign-progress').evaluateCampaignAcceptance(report);
     } finally {
       if (service) service.stop();
     }
@@ -231,7 +248,7 @@ if (require.main === module) {
       JSON.stringify(report, null, 2),
     );
     console.log(`\nreport -> tools/vr-emulator/evidence/playthrough-report.json`);
-    process.exit(report.blocked ? 1 : 0);
+    process.exit(report.blocked || (report.verdict && !report.verdict.passed) ? 1 : 0);
   })().catch((error) => {
     console.error('\nPLAYTHROUGH ERROR:', error && error.stack || error);
     process.exit(1);

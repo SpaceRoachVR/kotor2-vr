@@ -1,4 +1,6 @@
 import { GameState } from "@/GameState";
+import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
+import { getTransitionPlayerNpcId, resolveSavedControlledNpcId } from "@/managers/ControlledPlayerIdentity";
 import { WindManager } from "@/managers/WindManager";
 import { GFFObject } from "@/resource/GFFObject";
 import type { OdysseyFace3 } from "@/three/odyssey/OdysseyFace3";
@@ -347,6 +349,8 @@ export class ModuleArea extends ModuleObject {
 
   dispose(){
     this.areaMap.dispose();
+    this.path?.dispose();
+    this.path = undefined;
 
     //clear area room objects
     while (this.rooms.length){
@@ -381,6 +385,13 @@ export class ModuleArea extends ModuleObject {
     //clear area trigger objects
     while (this.triggers.length){
       this.triggers[0].destroy();
+    }
+
+    // Encounter meshes live in the scene's trigger group too. Leaving them
+    // attached retains mesh.userData.moduleObject -> encounter.area after
+    // every visit, including the old area's GFF and walkmesh data.
+    for (const encounter of this.encounters.splice(0)) {
+      encounter.destroy();
     }
 
     //clear area waypoint objects
@@ -1266,7 +1277,7 @@ export class ModuleArea extends ModuleObject {
     }
 
     if(this.git.RootNode.hasField('SWVarTable')){
-      console.log("SWVarTable", this.git);
+      console.log('SWVarTable', describeModuleObject(this));
       let localBools = this.git.RootNode.getFieldByLabel('SWVarTable').getChildStructs()[0].getFieldByLabel('BitArray').getChildStructs();
       //console.log(localBools);
       for(let i = 0; i < localBools.length; i++){
@@ -1540,7 +1551,7 @@ export class ModuleArea extends ModuleObject {
         0
       );
     }else if(this.transWP instanceof GFFObject){
-      console.log('TransWP', this.transWP);
+      console.log('TransWP', this.transWP.RootNode.getFieldByLabel('Tag')?.getValue());
       return new EngineLocation(
         this.transWP.RootNode.getFieldByLabel('XPosition').getValue(),
         this.transWP.RootNode.getFieldByLabel('YPosition').getValue(),
@@ -1692,10 +1703,11 @@ export class ModuleArea extends ModuleObject {
   }
 
   async loadPlayer(): Promise<void> {
-    console.log('Loading Player', GameState.PartyManager.Player)
+    console.log('Loading Player', describeModuleObject(GameState.PartyManager.Player));
     try{
       if(GameState.PartyManager.Player instanceof ModuleCreature){
-        GameState.PartyManager.Player.npcId = -1;
+        GameState.PartyManager.Player.npcId = getTransitionPlayerNpcId(
+          GameState.PartyManager.Player.isPlayer, GameState.PartyManager.Player.npcId);
 
         //The player's `area` is normally refreshed once per frame by ModuleCreature.update(),
         //which hasn't run yet in the new module. Set it now so the getCurrentRoom() call below
@@ -1733,8 +1745,16 @@ export class ModuleArea extends ModuleObject {
           console.error(e);
         }
       }else{
-        let player = new ModulePlayer( this.getPlayerTemplate() );
-        player.npcId = -1;
+        const playerTemplate = this.getPlayerTemplate();
+        const savedTag = String(playerTemplate.RootNode.getFieldByLabel('Tag')?.getValue() || '');
+        const npcId = resolveSavedControlledNpcId(savedTag, Object.entries(GameState.PartyManager.NPCS).map(([slot, npc]) => ({
+          npcId: Number(slot),
+          available: !!npc?.available,
+          tag: String(npc?.template?.RootNode.getFieldByLabel('Tag')?.getValue() || ''),
+        })));
+        const player = npcId >= 0 ? new ModuleCreature(playerTemplate) : new ModulePlayer(playerTemplate);
+        player.isPM = true;
+        player.npcId = npcId;
         
         player.load();
         // GameState.currentLeader = player;
@@ -1773,7 +1793,8 @@ export class ModuleArea extends ModuleObject {
   async loadParty(): Promise<void> {
     console.log('Loading Party Member');
     for(let i = 0; i < GameState.PartyManager.CurrentMembers.length; i++){
-      await GameState.PartyManager.LoadPartyMember(i);
+      // initAreaObjects owns spawn initialization and suppresses scripts for saved games.
+      await GameState.PartyManager.LoadPartyMember(i, false);
     }
 
     // Module.Load calls ModuleObjectManager.Reset(), which clears ObjectList.
@@ -2023,6 +2044,7 @@ export class ModuleArea extends ModuleObject {
       const waypnt = this.waypoints[i];
       waypnt.load();
       const wpObj = new THREE.Object3D();
+      waypnt.setSceneHelper(wpObj);
       wpObj.name = waypnt.getTag();
       wpObj.position.copy(waypnt.position);
       wpObj.quaternion.setFromAxisAngle(new THREE.Vector3(0,0,1), Math.atan2(-waypnt.getYOrientation(), -waypnt.getXOrientation()));

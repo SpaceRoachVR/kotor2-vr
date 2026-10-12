@@ -247,18 +247,14 @@ const CHECKS = [
   {
     id: 'weapon-bash-route',
     describe: 'a weapon swing at a locked object follows its authored Bash, or refuses when there is none',
-    // ROADMAP 3.17. The checked module (101PER) has one locked object, the
-    // plot-held MorgueDoor, whose authored menu offers only Use — so what this
-    // proves live is the refusal: a swing never invents a Bash the engine does
-    // not offer. The start path is covered by the XR-loop test. With no locked
-    // object at all, the check fails rather than passing on nothing.
+    // A swing must follow an explicit Bash pick from an authored prompt.
+    // With no locked target or no sampled prompt, this fails on missing evidence.
     run: (m) => {
       const b = m.weaponBash || {};
       const startedOnce = b.started === true && b.secondStarted === false;
-      const refusedCorrectly = b.started === false && b.secondStarted === false &&
-        /no Bash among/.test(b.refusal || '');
+      const refusedCorrectly = b.started === false && b.secondStarted === false && b.authoredBashAbsent === true;
       return {
-        ok: b.hook === true && (startedOnce || refusedCorrectly),
+        ok: b.hook === true && b.unselectedBlocked === true && b.lockedCount > 0 && (startedOnce || refusedCorrectly),
         detail: `${startedOnce ? 'STARTED' : refusedCorrectly ? 'REFUSED (no authored Bash)' : 'WRONG'} ` +
           `locked=${m.weaponBash?.lockedCount} target=${m.weaponBash?.targetTag} ` +
         `started=${m.weaponBash?.started} inCombat=${m.weaponBash?.inCombat} ` +
@@ -372,6 +368,22 @@ const CHECKS = [
       ok: (m.pageErrors?.length ?? 0) === 0,
       detail: `pageErrors=${m.pageErrors?.length}${m.pageErrors?.length ? `: ${m.pageErrors[0].slice(0, 120)}` : ''}`,
     }),
+  },
+  {
+    id: 'save-list-thumbstick-scroll',
+    describe: 'right thumbstick scrolls the overflowing load-game list without selecting or loading',
+    run: (m) => {
+      const s = m.saveListScroll;
+      const finite = s && ['before', 'down', 'neutral', 'neutralAfter', 'up', 'bottom', 'maxScroll']
+        .every(key => Number.isFinite(s[key]));
+      return {
+        ok: !!finite && s.found === true && s.presenting === true && s.maxScroll > 0
+          && s.down > s.before && s.up < s.down && s.up >= 0
+          && s.neutral === s.neutralAfter && s.bottom === s.maxScroll
+          && s.selectedUnchanged === true && s.moduleUnchanged === true,
+        detail: s ? JSON.stringify(s) : 'metric absent; found=false',
+      };
+    },
   },
   {
     id: 'console-errors-baseline',

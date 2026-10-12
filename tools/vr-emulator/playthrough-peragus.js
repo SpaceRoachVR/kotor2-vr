@@ -12,6 +12,8 @@
  * that back each stage are summarised inline where a step depends on them.
  */
 const { worldState, TIMEOUTS } = require('./playthrough');
+const { captureCampaignMilestone } = require('./campaign-progress');
+const { planDoorCrossing } = require('./door-crossing');
 
 // playthrough-steps.js requires this file while it is still loading (for the
 // checkpoint order), so its helpers are looked up at call time rather than
@@ -39,6 +41,7 @@ const returnToGameplay = lazy('returnToGameplay');
 const dialogueSnapshot = lazy('dialogueSnapshot');
 const waitForModule = lazy('waitForModule');
 const activateWheelAction = lazy('activateWheelAction');
+const clickGuiControl = lazy('clickGuiControl');
 const checkpoint = lazy('checkpoint');
 const clearProgressBlockingDialogue = lazy('clearProgressBlockingDialogue');
 const readGlobalNumber = lazy('readGlobalNumber');
@@ -253,6 +256,9 @@ async function playConversation(harness, { choose, label = 'conversation', maxTu
         try { cm.playerSkipEntry(cm.currentEntry); } catch (e) {} return true; })()`);
       idle += 1;
       if (idle > 40) {
+        if (harness.campaignAcceptance) {
+          throw new Error(`${label}: engine held DIALOG mode with no visible conversation menu`);
+        }
         // DIALOG mode with nothing to show and nothing to skip is a
         // conversation the engine has lost track of, not one to wait on.
         // End it the way clearProgressBlockingDialogue does, and say so:
@@ -706,8 +712,6 @@ async function stageAdministrationLevel(ctx) {
     // the locked door to have been tried — an action VR does not offer on a
     // key-locked door. Talking to Atton directly reaches the same tree
     // ("You back here to torture me?" -> "I've come to let you out.").
-    await travelTo(harness, { ...ATTON_CAGE, label: "Atton's cage", range: 2.6, sweepRadius: 20, via: ROUTE_CONSOLE_TO_PRISON });
-    await sleep(800);
     let played = null;
     const chooser = createPriorityChooser([
       /let you out/i,
@@ -728,8 +732,25 @@ async function stageAdministrationLevel(ctx) {
       /heard rumors of a war/i,
       /^Who are you\?/i,
     ], { label: 'Atton', unseenFallback: true });
+    const interruptions = [];
+    const previousHandler = harness.navigationDialogueHandler;
+    harness.navigationDialogueHandler = async (label) => {
+      const conversation = await playConversation(harness, { choose: chooser, label: `${label}: Atton` });
+      interruptions.push(conversation);
+      return conversation;
+    };
+    try {
+      await travelTo(harness, { ...ATTON_CAGE, label: "Atton's cage", range: 2.6, sweepRadius: 20, via: ROUTE_CONSOLE_TO_PRISON });
+    } finally {
+      harness.navigationDialogueHandler = previousHandler;
+    }
+    await sleep(800);
     // The door's own OnOpen may already have started it.
-    if (await waitForConversation(harness, 2000)) {
+    const codeAfterApproach = await readGlobalNumber(harness, '101PER_Know_Adm_Code');
+    if (interruptions.length && codeAfterApproach.value === 1) {
+      played = { finished: true, turns: interruptions.reduce((total, item) => total + item.turns, 0),
+        transcript: interruptions.flatMap((item) => item.transcript) };
+    } else if (await waitForConversation(harness, 2000)) {
       played = await playConversation(harness, { choose: chooser, label: 'Atton (door)' });
     } else {
       const atton = (await findObjectByTag(harness, 'Atton'))[0];
@@ -753,13 +774,14 @@ async function stageAdministrationLevel(ctx) {
     }
     // a_setcode fires on "Be my guest - the comm's all yours", which unlocks the
     // console's comm functions (admlog E2, c_chkcode). Verify it took.
-    const code = await readGlobalNumber(harness, '101PER_Switch');
+    const code = await readGlobalNumber(harness, '101PER_Know_Adm_Code');
     const cage = await findObjectByTag(harness, 'Atton').catch(() => []);
-    line(`  · 101PER_Switch=${JSON.stringify(code.value)} Atton at ${JSON.stringify(cage[0] && cage[0].position)}`);
+    line(`  · 101PER_Know_Adm_Code=${JSON.stringify(code.value)} Atton at ${JSON.stringify(cage[0] && cage[0].position)}`);
     if (!chooser.picks.some((pick) => /reach someone on the comm/i.test(pick))) {
       throw new Error(`Atton never reached the console conversation; picked ${JSON.stringify(chooser.picks)}`);
     }
-    return { picks: chooser.picks, transcript: played.transcript.slice(-10), code: code.value };
+    const progress = await captureCampaignMilestone(harness, 'atton-freed');
+    return { picks: chooser.picks, transcript: played.transcript.slice(-10), code, progress };
   });
   if (report.blocked) return;
   if (!resumedPast(args, 'atton-freed')) {
@@ -802,7 +824,8 @@ async function stageAdministrationLevel(ctx) {
     if (!switched) {
       throw new Error(`106PER loaded but the player was never switched to T3-M4: ${JSON.stringify({ before, after })}`);
     }
-    return { picks: chooser.picks, transcript: result.played.transcript.slice(-8), before, after };
+    const progress = await captureCampaignMilestone(harness, 't3-hangar');
+    return { picks: chooser.picks, transcript: result.played.transcript.slice(-8), before, after, progress };
   });
   if (report.blocked) return;
   if (!resumedPast(args, 't3-hangar')) {
@@ -1066,9 +1089,21 @@ async function transitThroughDoor(harness, { tag, near, label, expectModule, pla
   })()`, 25_000, 500).then(() => true).catch(() => false);
   await moveTo(harness, { ...beyond, range: 0.8, usePath: false, timeoutMs: 20_000, label: `${label} (through)` }).catch(() => undefined);
   if (!(await crossed)) {
-    line(`  · ${label}: walking through did not change module; trying once more from the doorway`);
-    await moveTo(harness, { ...door.position, range: 0.5, usePath: false, timeoutMs: 15_000, label: `${label} (doorway)` }).catch(() => undefined);
-    await moveTo(harness, { ...beyond, range: 0.8, usePath: false, timeoutMs: 15_000, label: `${label} (through again)` }).catch(() => undefined);
+    // Combat can leave the player beside the door: extrapolating from that
+    // position walks along the transition line instead of crossing it.
+    const geometry = await harness.evaluate(`(() => {
+      const area = window.KotOR.GameState.module?.area;
+      const target = area?.doors.find(candidate => candidate.id === ${JSON.stringify(door.id)});
+      return { found: !!target, id: target?.id, tag: target?.tag, type: target?.objectType,
+        resref: target?.templateResRef, transitionLine: target?.transitionLine };
+    })()`);
+    line(`  · ${label}: crossing retry geometry ${JSON.stringify(geometry)}`);
+    if (!geometry.found) throw new Error(`${label}: transition door disappeared before crossing retry`);
+    const current = await playerSnapshot(harness);
+    const crossing = planDoorCrossing(current.position, geometry.transitionLine);
+    line(`  · ${label}: crossing perpendicular to the transition line ${JSON.stringify(crossing)}`);
+    await moveTo(harness, { ...crossing.approach, range: 0.5, usePath: false, timeoutMs: 20_000, label: `${label} (aligned approach)` });
+    await moveTo(harness, { ...crossing.beyond, range: 0.8, usePath: false, timeoutMs: 20_000, label: `${label} (aligned crossing)` }).catch(() => undefined);
   }
   await waitForModule(harness, expectModule, TIMEOUTS.moduleLoad);
   if (playerTag) {
@@ -1160,12 +1195,28 @@ const HANGAR_SECURE_FOOTLOCKER = { x: 25.1, y: 81.0, z: 9.3 };
 const HANGAR_CONTROL = { x: 0.0, y: 36.4, z: 12.8 };             // HangarTer
 const HANGAR_FUEL_DEPOT_DOOR = { x: -61.9, y: 5.0, z: 9.3 };      // Door_to_103PER
 const FUEL_CONTROL_STATION = { x: -28.4, y: 1.4, z: 22.4 };       // ComputerPanel
+// Connected 103pera upper-deck faces. The generic planner chooses overlapping
+// lower-deck anchors (z 11.9) and then tries to walk through the upper walls.
+const ROUTE_T3_TO_FUEL_CONTROL = [
+  { x: -10.5, y: 52.1, z: 22.4 }, { x: -10.8, y: 48.4, z: 22.4 },
+  { x: -15.4, y: 43.5, z: 22.4 }, { x: -15.9, y: 39.9, z: 22.4 },
+  { x: -19.7, y: 34.3, z: 22.4 }, { x: -22.9, y: 32.5, z: 22.4 },
+  { x: -27.2, y: 27.3, z: 22.4 }, { x: -29.6, y: 22.5, z: 22.4 },
+  { x: -33.6, y: 20.3, z: 22.4 }, { x: -34.6, y: 17.3, z: 22.4 },
+  { x: -38.9, y: 15.1, z: 22.4 }, { x: -36.0, y: 9.3, z: 22.4 },
+  { x: -31.0, y: 4.7, z: 22.4 }, FUEL_CONTROL_STATION,
+];
 
 // 106PER's storage level (z 9.3) and the sub-level landing (z 0.8) are joined
 // by a ramp that loops north through rooms 106PER17..21; the walkmesh planner
 // keeps trying the ledge straight between them, which is a wall.
 const ROUTE_STORAGE_TO_SUBLEVEL = [
-  { x: -7.8, y: 74.1, z: 9.3 }, { x: -14.9, y: 75.5, z: 9.3 }, { x: -15.9, y: 93.5, z: 7.2 }, { x: -22.4, y: 111.0, z: 7.4 },
+  { x: -7.8, y: 74.1, z: 9.3 }, { x: -14.9, y: 75.5, z: 9.3 }, { x: -15.9, y: 93.5, z: 7.2 },
+  // Walk both corners of the top landing. A diagonal from its centre to
+  // the descending ramp cuts the open space between ramps and strands T3
+  // under ranged fire. The landing is at z=5.1, not the ramp's z=7.4.
+  { x: -15.9, y: 102.0, z: 5.6 }, { x: -15.9, y: 110.0, z: 5.1 },
+  { x: -22.4, y: 111.0, z: 5.1 }, { x: -28.8, y: 111.0, z: 5.1 }, { x: -28.8, y: 102.0, z: 4.6 },
   { x: -28.8, y: 93.5, z: 3.0 }, { x: -34.7, y: 75.5, z: 3.2 },
 ];
 const ROUTE_SUBLEVEL_TO_STORAGE = [...ROUTE_STORAGE_TO_SUBLEVEL].reverse();
@@ -1176,7 +1227,11 @@ const ROUTE_CARGO_HOLD_TO_CONTROL = [
   { x: 0.0, y: 52.0, z: 9.3 }, { x: 0.0, y: 44.0, z: 12.0 },
 ];
 const ROUTE_STORAGE_TO_FUEL_DEPOT_DOOR = [
-  { x: 0.0, y: 64.0, z: 9.3 }, { x: 0.0, y: 52.0, z: 9.3 }, { x: -9.6, y: 49.8, z: 9.3 }, { x: -26.0, y: 32.1, z: 9.4 },
+  // The central platform ramp is bounded by walls south of y=56.3.
+  // Leave its north end before turning west onto the lower corridor.
+  { x: 0.0, y: 64.0, z: 9.3 }, { x: 0.0, y: 59.0, z: 9.35 },
+  { x: -5.0, y: 59.0, z: 9.35 }, { x: -6.0, y: 50.0, z: 9.35 },
+  { x: -9.6, y: 49.8, z: 9.3 }, { x: -29.0, y: 36.0, z: 9.35 },
   { x: -40.2, y: 11.8, z: 9.4 }, { x: -41.1, y: 5.0, z: 9.4 }, { x: -46.7, y: 5.0, z: 9.3 }, { x: -54.5, y: 5.0, z: 9.3 },
 ];
 
@@ -1186,6 +1241,33 @@ async function expectPlayerTag(harness, tag, label) {
     throw new Error(`${label}: expected to be playing ${tag}, but party[0] is ${JSON.stringify(player)}`);
   }
   return player;
+}
+
+async function equipT3IonStriker(harness) {
+  await expectPlayerTag(harness, 't3m4', 'ion equipment');
+  await activateWheelAction(harness, { targetId: null, actionLabel: 'Menu' });
+  await sleep(500);
+  await clickGuiControl(harness, 'MenuTop', 'BTN_EQU');
+  await harness.waitFor(`!!window.KotOR.GameState.MenuManager.MenuEquipment?.bVisible`, TIMEOUTS.short, 250);
+  const selected = await harness.evaluate(`(() => {
+    const K=window.KotOR, menu=K.GameState.MenuManager.MenuEquipment;
+    menu.BTN_INV_ARM_L.click();
+    const item=(menu.LB_ITEMS.listItems || []).find(item => item &&
+      typeof item.getName === 'function' && /^Droid Ion Striker$/i.test(String(item.getName())));
+    if (!item) return {ok:false, reason:'Droid Ion Striker not offered in the left-arm equipment list'};
+    if (menu.slot !== K.ModuleCreatureArmorSlot.LEFTARMBAND) return {ok:false, reason:'left-arm slot is locked'};
+    menu.LB_ITEMS.onSelected(item);
+    menu.BTN_EQUIP.click();
+    return {ok:true, item:String(item.getName())};
+  })()`);
+  if (!selected.ok) throw new Error(`ion equipment: ${selected.reason}`);
+  await harness.waitFor(`(() => {
+    const item=window.KotOR.PartyManager.party[0]?.equipment?.LEFTARMBAND;
+    return !!item && /^Droid Ion Striker$/i.test(String(item.getName()));
+  })()`, TIMEOUTS.short, 250);
+  await returnToGameplay(harness);
+  line(`  · equipped ${selected.item} through the equipment menu`);
+  return selected;
 }
 
 async function stageT3Rescue(ctx) {
@@ -1219,6 +1301,7 @@ async function stageT3Rescue(ctx) {
     await travelTo(harness, { ...SUBLEVEL_PARTS_CORPSE, label: 'sub-level corpse', range: 2.2, sweepRadius: 14, rounds: 4 });
     await lootTagged(harness, { tag: 'LowCorpse', near: SUBLEVEL_PARTS_CORPSE, label: 'Corpse (parts)' });
     await lootTagged(harness, { tag: 'LowBroknDrd', near: SUBLEVEL_PARTS_DROID, label: 'Broken Droid (parts)' });
+    const ionEquipment = await equipT3IonStriker(harness);
     const after = await inventoryReport(harness, 'after the sub-level');
     if (after.counts.parts < 1) throw new Error(`no Parts after the sub-level (had ${start.counts.parts})`);
     if (after.counts.mines < 1) throw new Error('no mine after the sub-level corpse');
@@ -1227,7 +1310,7 @@ async function stageT3Rescue(ctx) {
       tag: 'DOOR_103PER2', near: SUBLEVEL_RETURN_DOOR, label: 'door back to the hangar bay',
       expectModule: '106per', playerTag: 't3m4',
     });
-    return { start: start.counts, after: after.counts, down: down.arrived, up: up.arrived };
+    return { start: start.counts, after: after.counts, ionEquipment, down: down.arrived, up: up.arrived };
   });
   if (report.blocked) return;
   if (!resumedPast(args, 't3-sublevel-parts')) {
@@ -1290,7 +1373,8 @@ async function stageT3Rescue(ctx) {
       tag: 'Door_to_103PER', near: HANGAR_FUEL_DEPOT_DOOR, label: 'turbolift to the fuel depot',
       expectModule: '103per', playerTag: 't3m4', via: ROUTE_STORAGE_TO_FUEL_DEPOT_DOOR,
     });
-    return { picks: chooser.picks, transcript: result.played.transcript.slice(-6), door: state, arrived: transit.arrived };
+    const progress = await captureCampaignMilestone(harness, 't3-fuel-depot');
+    return { picks: chooser.picks, transcript: result.played.transcript.slice(-6), door: state, arrived: transit.arrived, progress };
   });
   if (report.blocked) return;
   if (!resumedPast(args, 't3-fuel-depot')) {
@@ -1305,7 +1389,8 @@ async function stageT3Rescue(ctx) {
     // hatch on Peragus Administration Level." (a_sett3ambush) -> "Log out."
     // Logging out springs the Mark II ambush; the cutscene ends with T3
     // dumped in the fuel line and control back with the Exile in 101PER.
-    await travelTo(harness, { ...FUEL_CONTROL_STATION, label: 'Fuel Control Station', range: 2.4, sweepRadius: 16, rounds: 4 });
+    await travelTo(harness, { ...FUEL_CONTROL_STATION, label: 'Fuel Control Station', range: 2.4,
+      sweepRadius: 8, rounds: 4, via: ROUTE_T3_TO_FUEL_CONTROL, usePath: false });
     const chooser = createPriorityChooser([
       /Call up emergency system schematics/i,
       /Open emergency hatch on Peragus Administration Level/i,
@@ -1333,7 +1418,8 @@ async function stageT3Rescue(ctx) {
     line(`  · back in ${back.module} as ${back.name} at ${JSON.stringify(back.position)}`);
     const atton = await openHatchWithAtton(harness);
     await returnToGameplay(harness);
-    return { picks: chooser.picks, transcript: result.played.transcript.slice(-6), ambush: ambush.value, back, atton: atton.picks };
+    const progress = await captureCampaignMilestone(harness, 'hatch-opened');
+    return { picks: chooser.picks, transcript: result.played.transcript.slice(-6), ambush: ambush.value, back, atton: atton.picks, progress };
   });
   if (report.blocked) return;
   if (!resumedPast(args, 'hatch-opened')) {
@@ -1554,7 +1640,8 @@ async function stageMiningTunnels(ctx) {
     await returnToGameplay(harness);
     const arrived = await playerSnapshot(harness);
     line(`  · now in ${arrived.module} at ${JSON.stringify(arrived.position)}`);
-    return { atton: atton.picks, hatch: hatchState, arrived };
+    const progress = await captureCampaignMilestone(harness, 'mining-tunnels');
+    return { atton: atton.picks, hatch: hatchState, arrived, progress };
   });
   if (report.blocked) return;
   if (!resumedPast(args, 'mining-tunnels')) {
@@ -2373,13 +2460,13 @@ async function stageHangarEscape(ctx) {
 async function runPeragusCampaign(ctx) {
   const stages = [stageAdministrationLevel, stageT3Rescue, stageMiningTunnels, stageDormitories, stageHarbinger, stageHangarEscape];
   for (const stage of stages) {
-    if (ctx.report.blocked) return;
+    if (ctx.report.blocked || ctx.report.targetReached) return;
     await stage(ctx);
   }
 }
 
 module.exports = {
-  ROUTES: { ROUTE_MAIN_BODY_TO_VIBROCUTTER, ROUTE_VIBROCUTTER_TO_SECURITY_ROOM, ROUTE_SECURITY_ROOM_TO_CONSOLE, ROUTE_CONSOLE_TO_PRISON, ROUTE_PRISON_TO_CONSOLE, ROUTE_STORAGE_TO_SUBLEVEL, ROUTE_SUBLEVEL_TO_STORAGE, ROUTE_CARGO_HOLD_TO_CONTROL, ROUTE_STORAGE_TO_FUEL_DEPOT_DOOR, ROUTE_CONSOLE_TO_HATCH, ROUTE_TUNNELS_TO_CORE, ROUTE_CORE_TO_EXIT, ROUTE_DEPOT_TO_MAINTENANCE, ROUTE_MAINTENANCE_TO_AIRLOCK, EXTERIOR_TO_DORMS, ROUTE_DORMS_TO_TURBOLIFT, ROUTE_DORM_ARRIVAL_TO_BLISTER, ROUTE_BLISTER_TO_DOCKING, ROUTE_CMD_TO_BRIDGE, ROUTE_BRIDGE_TO_CREW, ROUTE_CREW_TO_LIFT, ROUTE_ENGINE_ARRIVAL_TO_JUNCTION, ROUTE_JUNCTION_TO_MAINT_ROOM, ROUTE_MAINT_ROOM_TO_STORAGE, ROUTE_STORAGE_TO_ENGINE, ROUTE_ENGINE_TO_HATCH, ROUTE_LINE_MINE_LEGS, ROUTE_MINE3_TO_STATION, ROUTE_STATION_TO_FIELD, ROUTE_FIELD_TO_TURBOLIFT, ROUTE_HANGAR_ARRIVAL_TO_CONTROL, ROUTE_CONTROL_TO_DECON, ROUTE_DECON_TO_RAMP },
+  ROUTES: { ROUTE_T3_TO_FUEL_CONTROL, ROUTE_MAIN_BODY_TO_VIBROCUTTER, ROUTE_VIBROCUTTER_TO_SECURITY_ROOM, ROUTE_SECURITY_ROOM_TO_CONSOLE, ROUTE_CONSOLE_TO_PRISON, ROUTE_PRISON_TO_CONSOLE, ROUTE_STORAGE_TO_SUBLEVEL, ROUTE_SUBLEVEL_TO_STORAGE, ROUTE_CARGO_HOLD_TO_CONTROL, ROUTE_STORAGE_TO_FUEL_DEPOT_DOOR, ROUTE_CONSOLE_TO_HATCH, ROUTE_TUNNELS_TO_CORE, ROUTE_CORE_TO_EXIT, ROUTE_DEPOT_TO_MAINTENANCE, ROUTE_MAINTENANCE_TO_AIRLOCK, EXTERIOR_TO_DORMS, ROUTE_DORMS_TO_TURBOLIFT, ROUTE_DORM_ARRIVAL_TO_BLISTER, ROUTE_BLISTER_TO_DOCKING, ROUTE_CMD_TO_BRIDGE, ROUTE_BRIDGE_TO_CREW, ROUTE_CREW_TO_LIFT, ROUTE_ENGINE_ARRIVAL_TO_JUNCTION, ROUTE_JUNCTION_TO_MAINT_ROOM, ROUTE_MAINT_ROOM_TO_STORAGE, ROUTE_STORAGE_TO_ENGINE, ROUTE_ENGINE_TO_HATCH, ROUTE_LINE_MINE_LEGS, ROUTE_MINE3_TO_STATION, ROUTE_STATION_TO_FIELD, ROUTE_FIELD_TO_TURBOLIFT, ROUTE_HANGAR_ARRIVAL_TO_CONTROL, ROUTE_CONTROL_TO_DECON, ROUTE_DECON_TO_RAMP },
   runPeragusCampaign,
   PERAGUS_CHECKPOINT_ORDER,
   PERAGUS_CHECKPOINT_EXPECTATIONS,
@@ -2395,4 +2482,5 @@ module.exports = {
   playConversation,
   waitForConversation,
   playerSnapshot,
+  equipT3IonStriker,
 };

@@ -76,6 +76,7 @@ function standardBindings(
     { action: SemanticXRAction.Move, context: 'locomotion', hand: 'offhand', input: { kind: 'axis2d', xIndex: stickAxes[0], yIndex: stickAxes[1] } },
     { action: SemanticXRAction.Turn, context: 'locomotion', hand: 'dominant', input: { kind: 'axis2d', xIndex: stickAxes[0], yIndex: stickAxes[1] } },
     { action: SemanticXRAction.Select, context: 'ui', hand: 'dominant', input: { kind: 'button', index: 0 } },
+    { action: SemanticXRAction.Scroll, context: 'ui', hand: 'right', input: { kind: 'axis2d', xIndex: stickAxes[0], yIndex: stickAxes[1] } },
     { action: SemanticXRAction.Select, context: 'gameplay', hand: 'dominant', input: { kind: 'button', index: 0 } },
     // Either hand, matching world-prompt below. The wheel's ray is resolved by
     // hit rather than by role (see VRPointerHandResolver), so it follows

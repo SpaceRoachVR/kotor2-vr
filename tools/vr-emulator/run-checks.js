@@ -3,6 +3,7 @@
  *
  *   npm run vr:check                       # starts its own asset service
  *   npm run vr:check -- --url "<launch>"   # reuse a running one
+ *   npm run vr:check -- --save "Saves/<folder>" # use a known reproducible save
  *
  * Boots the browser build against an emulated Quest 3, drives a real save, and
  * asserts the behaviour previous sessions had to verify by hand. Exits non-zero
@@ -22,10 +23,14 @@ const EVIDENCE_DIR = path.join(__dirname, 'evidence');
 const ASSET_SERVER = path.join(__dirname, '..', 'asset-http', 'asset-server.js');
 
 function parseArgs(argv) {
-  const args = { url: null, port: 9430, keepEvidence: true };
+  const args = { url: null, port: 9430, keepEvidence: true, saveDirectory: undefined };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--url') args.url = argv[++i];
     else if (argv[i] === '--port') args.port = Number(argv[++i]);
+    else if (argv[i] === '--save') {
+      args.saveDirectory = argv[++i];
+      if (!args.saveDirectory || args.saveDirectory.startsWith('--')) throw new Error('Missing save directory for --save');
+    }
   }
   return args;
 }
@@ -183,6 +188,7 @@ function warnIfBundleIsStale() {
     const metrics = await collectVrMetrics({
       url,
       port: args.port,
+      saveDirectory: args.saveDirectory,
       onProgress: (step) => console.log(`  · ${step}`),
     });
     fs.writeFileSync(

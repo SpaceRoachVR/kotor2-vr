@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 import type { Action } from "@/actions/Action";
 import { ActionQueue } from "@/actions/ActionQueue";
 import { AudioEmitter } from "@/audio/AudioEmitter";
@@ -4053,7 +4054,7 @@ export class ModuleObject {
    */
   destroy(){
     this.destroyed = true;
-    try{ console.log('destroy', this.getTag(), this);}catch(e: any){}
+    console.log('destroy', describeModuleObject(this));
     try{
       this.container.removeFromParent();
 

@@ -1,4 +1,6 @@
 import * as path from "path";
+import { prepareSavedGameLoad, restoreSavedPlayerTemplates } from "@/engine/SaveGameSession";
+import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 import { GFFObject } from "@/resource/GFFObject";
 import { TextureLoader } from "@/loaders";
 import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
@@ -322,6 +324,8 @@ export class SaveGame {
    * // Game state is now restored and ready to play
    */
   async load(){
+    console.log("SaveGame.load: replacing session", "module", GameState.module?.filename || "none", "player", describeModuleObject(GameState.PartyManager.Player));
+    prepareSavedGameLoad(GameState);
     localStorage.setItem(`${GameState.GameKey}_last_save_id`, SaveGame.saves.indexOf(this).toString());
     GameState.isLoadingSave = true;
     GameState.TutorialWindowTracker = [];
@@ -357,6 +361,7 @@ export class SaveGame {
     await this.loadPIFO();
     //Load pc if it exists
     await this.loadPC();
+    restoreSavedPlayerTemplates(GameState.PartyManager, this.pc);
     //Load The Last Module
     console.log('SaveGame', this.getLastModule(), 'Loading Module...');
     GameState.LoadModule(this.getLastModule(), null);

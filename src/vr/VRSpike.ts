@@ -6,6 +6,7 @@ import type { HeldItemVisualDescriptor } from "./runtime/XRControllerAnchorHost"
 import type { VRHandModelLoader } from "./runtime/hands/VRHandModel";
 import { XRGamepadReader } from "./runtime/XRGamepadReader";
 import { XRInputFrameBuilder } from "./runtime/XRInputFrameBuilder";
+import { VRPointerPoseSmoother } from "./runtime/VRPointerPoseSmoother";
 import { VRInputRecorder } from "./runtime/recording/VRInputRecorder";
 import { VRTracePlayer } from "./runtime/recording/VRTracePlayer";
 import type { VRPlayerOptions } from "./runtime/recording/VRTracePlayer";
@@ -547,6 +548,7 @@ export class VRSpike {
     refreshPins?: () => void;
   } | null = null;
   private static readonly inputRouter = new XRInputRouter();
+  private static readonly pointerPoseSmoother = new VRPointerPoseSmoother();
   static readonly inputRecorder = new VRInputRecorder();
   static readonly tracePlayer = new VRTracePlayer();
   private static dominantHand: XRHandRole = 'right';
@@ -1029,6 +1031,7 @@ export class VRSpike {
     VRSpike.traceXRStartupCallbacksSeen = 0;
     VRSpike.previousXRInputTimestamp = null;
     VRSpike.locomotionInputErrorReported = false;
+    VRSpike.pointerPoseSmoother.reset();
     VRSpike.trackedInputErrorReported = false;
     VRSpike.panelInputErrorReported = false;
     VRSpike.movieInputErrorReported = false;
@@ -1384,6 +1387,7 @@ export class VRSpike {
       let inputFrame = VRSpike.tracePlayer.isPlaying()
         ? VRSpike.tracePlayer.sample(timestamp)
         : null;
+      const recordedPointerPose = inputFrame !== null;
 
       if (!inputFrame) {
         inputFrame = XRInputFrameBuilder.build(
@@ -1414,9 +1418,14 @@ export class VRSpike {
       VRSpike.controllerAnchorHost.setPresentationSuppressed(presentationOwnsView);
       // While a menu, dialogue or movie owns the view the weapon is hidden, so
       // panels keep the controller's own ray. In the world a held blaster aims.
-      const aimedFrame = (presentationOwnsView || !inputFrame)
-        ? inputFrame
-        : VRSpike.alignRaysToHeldWeapons(inputFrame, VRSpike.controllerAnchorHost);
+      // Recorded frames already contain the filtered ray; avoid filtering a
+      // replay a second time and changing its authored interaction targets.
+      const pointerFrame = inputFrame && !recordedPointerPose
+        ? VRSpike.pointerPoseSmoother.smoothFrame(inputFrame, rig)
+        : inputFrame;
+      const aimedFrame = (presentationOwnsView || !pointerFrame)
+        ? pointerFrame
+        : VRSpike.alignRaysToHeldWeapons(pointerFrame, VRSpike.controllerAnchorHost);
       VRSpike.latestInputFrame = aimedFrame;
       VRSpike.controllerAnchorHost.update(aimedFrame);
       if (VRSpike.scene) {
@@ -1478,6 +1487,7 @@ export class VRSpike {
   }
 
   private static clearTrackedInput(): void {
+    VRSpike.pointerPoseSmoother.reset();
     VRSpike.miniGameInput?.reset();
     VRSpike.closeRadialMenuForLifecycle(true);
     VRSpike.latestInputFrame = null;
@@ -1581,7 +1591,8 @@ export class VRSpike {
         menu,
         actions,
         pointerHit?.guiPosition ?? null,
-        context.pointerSink
+        context.pointerSink,
+        VRSpike.latestXRFrameTimestamp
       );
     } catch (error) {
       if (!VRSpike.panelInputErrorReported) {
