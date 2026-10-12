@@ -19,6 +19,7 @@ import {
 } from "@/gui/listrow/defaultListRows";
 import { applyCustomProtoRowSkin } from "@/gui/listrow/applyProtoTemplateSkin";
 import { renderGuiSceneToTexture } from "@/gui/renderGuiSceneToTexture";
+import { disposeListRow } from "@/gui/listrow/disposeListRow";
 import type { LegacyGUIVRPointerSemanticTarget } from "@/vr/runtime/LegacyGUIVRPointerAdapter";
 import { getGUIListBoxVRPointerTargetsAtPointer } from "@/vr/runtime/GUIListBoxVRPointerTargets";
 
@@ -311,6 +312,7 @@ export class GUIListBox extends GUIControl {
     if (index >= 0 && index < this.children.length) {
       const removed = this.children[index];
       removed.widget.parent?.remove(removed.widget);
+      disposeListRow(removed.widget);
       this.children.splice(index, 1);
       if (index < this.listItems.length) {
         this.listItems.splice(index, 1);
@@ -385,7 +387,9 @@ export class GUIListBox extends GUIControl {
 
   private _clearItems(){
     for (let i = this.itemGroup.children.length - 1; i >= 0; i--) {
-      this.itemGroup.remove(this.itemGroup.children[i]);
+      const row = this.itemGroup.children[i];
+      this.itemGroup.remove(row);
+      disposeListRow(row);
     }
     this.listItems = [];
     this.children = [];
