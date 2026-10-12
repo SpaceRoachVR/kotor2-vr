@@ -1924,6 +1924,16 @@ First shippable artifact.
 - **7.5** Optional AI-upscaled texture pack support — see below. Blocked on
   usage permission from the mod author.
 - **7.6** Swoop race (211TEL) playable in VR — see below. ✅ ridden in the headset 2026-09-26 and works (bc8b8325, 3eaddf99); still needs a rider who isn't the developer.
+- **7.7** ☐ Lab station crafting (create / breakdown / upgrade). **Headset round 17
+  (2026-10-12):** using the 101PER medbay Lab Station does nothing. Its script calls
+  `ShowChemicalUpgradeScreen` (routine 773), which has no implementation
+  (`action: undefined` in `NWScriptDefK2.ts`; console:
+  `NWScript Action ShowChemicalUpgradeScreen not found`). The companions
+  `GetChemicals` (774) and `GetChemicalPieceValue` (775) are unimplemented too, so
+  this is a missing feature, not a routine: TSL's item-creation screen
+  (create from components/chemicals, break items down into them) has to be built,
+  then made usable in VR like the other menus. Check the repair workbench
+  (`ShowUpgradeScreen`) in the same pass; round 17 never reached one.
 
 M4-78 is out of scope.
 
