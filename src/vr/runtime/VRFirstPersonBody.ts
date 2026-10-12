@@ -32,6 +32,22 @@ import * as THREE from 'three';
  * world behind its screen; and the flatscreen path, party-select portraits and
  * every other camera are left exactly as they were.
  */
+/**
+ * Marks an effect model attached to a creature (a beam, a Force aura) as part
+ * of the world rather than of the body, so first person still draws it.
+ *
+ * Round 14 (N4): T3-M4's Shock Arm and Flame Thrower beams are parented to the
+ * caster's model, and playing as T3 the whole model was hidden, beam and all.
+ */
+export const VR_KEEP_IN_FIRST_PERSON = 'kotor2vrKeepInFirstPerson';
+
+export function markVisibleInFirstPerson(object: THREE.Object3D): void {
+  object.userData[VR_KEEP_IN_FIRST_PERSON] = true;
+}
+
+/** A layer no camera enables; see hidePlayerBodyForFirstPerson. */
+const FIRST_PERSON_HIDDEN_LAYER = 31;
+
 export function hidePlayerBodyForFirstPerson(
   body: THREE.Object3D | null | undefined,
 ): () => void {
@@ -39,8 +55,47 @@ export function hidePlayerBodyForFirstPerson(
   // something the engine had deliberately hidden — a creature mid-spawn, or a
   // player hidden by a script. Same rule as hideWorldForTheater.
   if (!body || !body.visible) return () => {};
-  body.visible = false;
-  return () => { body.visible = true; };
+  let kept = false;
+  if (typeof body.traverse === "function") body.traverse((object) => { if (object.userData?.[VR_KEEP_IN_FIRST_PERSON]) kept = true; });
+  if (!kept) {
+    body.visible = false;
+    return () => { body.visible = true; };
+  }
+  // An effect rides on the body: hide every visible branch that does not lead
+  // to one, and leave the path down to the effect (and the effect) drawn.
+  const hidden: THREE.Object3D[] = [];
+  // A node on the path to the effect cannot be made invisible (that hides
+  // the effect under it too). When it draws something itself, a body mesh
+  // with the beam parented below, it moves to a layer no camera renders;
+  // layers, unlike visibility, are not inherited. Critic run 4: those meshes
+  // stayed drawn in first person.
+  const relayered: Array<[THREE.Object3D, number]> = [];
+  const holdsKept = (object: THREE.Object3D): boolean => {
+    let found = false;
+    object.traverse((child) => { if (child.userData?.[VR_KEEP_IN_FIRST_PERSON]) found = true; });
+    return found;
+  };
+  const drawsItself = (object: THREE.Object3D): boolean =>
+    (object as any).isMesh === true || (object as any).isPoints === true || (object as any).isLine === true;
+  const hideBranch = (object: THREE.Object3D) => {
+    for (const child of object.children) {
+      if (child.userData?.[VR_KEEP_IN_FIRST_PERSON]) continue;
+      if (holdsKept(child)) {
+        if (drawsItself(child) && child.layers) {
+          relayered.push([child, child.layers.mask]);
+          child.layers.set(FIRST_PERSON_HIDDEN_LAYER);
+        }
+        hideBranch(child);
+        continue;
+      }
+      if (child.visible) { child.visible = false; hidden.push(child); }
+    }
+  };
+  hideBranch(body);
+  return () => {
+    for (const object of hidden) object.visible = true;
+    for (const [object, mask] of relayered) object.layers.mask = mask;
+  };
 }
 
 export interface VRPointLike { readonly x: number; readonly y: number; readonly z: number; }

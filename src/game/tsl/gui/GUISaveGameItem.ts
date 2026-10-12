@@ -26,13 +26,18 @@ export class GUISaveGameItem extends GUIProtoItem {
   }
 
   getNodeName(){
-    const saveTimeString = `${toPaddedDigit(this.node.TIMESTAMP.getHours())}:${toPaddedDigit(this.node.TIMESTAMP.getMinutes())}:${toPaddedDigit(this.node.TIMESTAMP.getSeconds())} - ${toPaddedDigit(this.node.TIMESTAMP.getDate())}, ${toPaddedDigit(this.node.TIMESTAMP.getMonth() + 1)}, ${toPaddedDigit(this.node.TIMESTAMP.getFullYear(), 4)}`;
+    // A save with no stored time showed the moment the list was read (critic
+    // run 13); show no time rather than a wrong one.
+    const timeKnown = (this.node as any).timestampKnown !== false;
+    const stamp = `${toPaddedDigit(this.node.TIMESTAMP.getHours())}:${toPaddedDigit(this.node.TIMESTAMP.getMinutes())}:${toPaddedDigit(this.node.TIMESTAMP.getSeconds())} - ${toPaddedDigit(this.node.TIMESTAMP.getDate())}, ${toPaddedDigit(this.node.TIMESTAMP.getMonth() + 1)}, ${toPaddedDigit(this.node.TIMESTAMP.getFullYear(), 4)}`;
+    const saveTimeString = timeKnown ? stamp : '';
     if(this.node.isNewSave){
       return this.node.getFullName();
     }else if(this.node.getIsAutoSave()){
       return GameState.TLKManager.GetStringById(1593).Value + "\n" + saveTimeString;
     }else if(this.node.getIsQuickSave()){
-      return GameState.TLKManager.GetStringById(47991).Value + "\n" + saveTimeString;
+      // TSL's string 47991 is empty; 48752 is "Quick Save" (critic runs 12-13).
+      return (GameState.TLKManager.GetStringById(47991).Value || GameState.TLKManager.GetStringById(48752).Value || 'Quick Save') + "\n" + saveTimeString;
     }else{
       return this.node.getSaveNumber() + " : " + this.node.getSaveName() + "\n" + saveTimeString;
     }

@@ -23,6 +23,8 @@ export interface VRConsumableUseGesture {
 export interface VRConsumableUseGestureConfiguration {
   /** How far below the head centre the zone sits (the neck), metres. */
   readonly zoneDropMetres: number;
+  /** How far behind the eyes, toward the neck, metres. */
+  readonly zoneBackMetres: number;
   /** Radius of the zone around that point, metres. */
   readonly zoneRadiusMetres: number;
   /** How long the hand must stay in the zone before it counts. */
@@ -40,8 +42,13 @@ export interface VRConsumableUseGestureInput {
 
 const DEFAULT_CONFIGURATION: VRConsumableUseGestureConfiguration = {
   zoneDropMetres: 0.15,
-  zoneRadiusMetres: 0.22,
-  dwellMilliseconds: 150,
+  // 0.22 m / 150 ms fired while reading an armed stim (critic runs 3-4);
+  // 0.12 m centred under the eyes sat in front of the throat and was hard to
+  // hit (critic run 5). The centre now also moves back toward the neck
+  // (zoneBackMetres), and the player hears a click on entering the zone.
+  zoneBackMetres: 0.07,
+  zoneRadiusMetres: 0.15,
+  dwellMilliseconds: 250,
   cooldownMilliseconds: 800,
 };
 
@@ -51,6 +58,7 @@ export class VRConsumableUseGestureController {
   private readonly configuration: VRConsumableUseGestureConfiguration;
   private dwellStartedAt: number | null = null;
   private nextGestureAt = Number.NEGATIVE_INFINITY;
+  private inZone = false;
 
   constructor(configuration: Partial<VRConsumableUseGestureConfiguration> = {}) {
     this.configuration = { ...DEFAULT_CONFIGURATION, ...configuration };
@@ -65,6 +73,11 @@ export class VRConsumableUseGestureController {
     return this.dwellStartedAt !== null;
   }
 
+  /** True while the armed hand is inside the zone, through refusals and cooldowns. */
+  get isInZone(): boolean {
+    return this.inZone;
+  }
+
   process(inputFrame: XRInputFrame, input: VRConsumableUseGestureInput): VRConsumableUseGesture | null {
     if (!Number.isFinite(input.timestamp) || input.timestamp < 0) {
       throw new RangeError('timestamp must be finite and non-negative');
@@ -72,6 +85,7 @@ export class VRConsumableUseGestureController {
     if (input.hand !== 'left' && input.hand !== 'right') {
       throw new RangeError('hand must be left or right');
     }
+    this.inZone = false;
     if (!input.armed) {
       this.dwellStartedAt = null;
       return null;
@@ -83,11 +97,18 @@ export class VRConsumableUseGestureController {
       return null;
     }
     const zoneCentre = head.position.clone().addScaledVector(WORLD_UP, -this.configuration.zoneDropMetres);
+    // Back from the eyes toward the neck, along the head's level forward.
+    if (this.configuration.zoneBackMetres > 0 && head.orientation) {
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(head.orientation);
+      forward.z = 0;
+      if (forward.lengthSq() > 1e-8) zoneCentre.addScaledVector(forward.normalize(), -this.configuration.zoneBackMetres);
+    }
     const distance = hand.pose.position.distanceTo(zoneCentre);
     if (!Number.isFinite(distance) || distance > this.configuration.zoneRadiusMetres) {
       this.dwellStartedAt = null;
       return null;
     }
+    this.inZone = true;
     if (input.timestamp < this.nextGestureAt) return null;
     if (this.dwellStartedAt === null) this.dwellStartedAt = input.timestamp;
     if (input.timestamp - this.dwellStartedAt < this.configuration.dwellMilliseconds) return null;
@@ -98,6 +119,7 @@ export class VRConsumableUseGestureController {
   }
 
   reset(): void {
+    this.inZone = false;
     this.dwellStartedAt = null;
     this.nextGestureAt = Number.NEGATIVE_INFINITY;
   }

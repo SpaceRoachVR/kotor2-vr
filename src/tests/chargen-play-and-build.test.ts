@@ -58,7 +58,7 @@ describe('the feat list survives feats that have prerequisites', () => {
   });
 
   test('the list is still applied to the control', () => {
-    expect(source).toMatch(/this\.LB_FEATS\.setItems\(groups\)/);
+    expect(source).toMatch(/this\.LB_FEATS\.setItems\(groups(, \{ keepScroll: true \})?\)/);
   });
 
   test('uses source feat indexes rather than positions in a filtered list', () => {

@@ -25,3 +25,22 @@ export function releaseUnstartedItemCastCombatAction(
   combatRound.action = undefined;
   return true;
 }
+
+/**
+ * The same release for a Force power (CAST_SPELL). An out-of-range cast in VR
+ * fails before its round starts; leaving it as the round's action made the
+ * round read as committed for good, so no swing ever released again (critic
+ * run 5).
+ */
+export function releaseUnstartedCastSpellCombatAction(
+  combatRound: ItemCastSpellRoundState | null | undefined,
+): boolean {
+  if (!combatRound || combatRound.roundStarted === true) {
+    return false;
+  }
+  if (combatRound.action?.actionType !== CombatActionType.CAST_SPELL) {
+    return false;
+  }
+  combatRound.action = undefined;
+  return true;
+}

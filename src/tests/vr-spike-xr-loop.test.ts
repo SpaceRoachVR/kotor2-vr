@@ -812,6 +812,8 @@ describe('VRSpike XR loop ownership', () => {
       }),
     };
 
+    // A swing is two fast samples within 120 ms (critic run 15).
+    (VRSpike as any).processCombatInput(980);
     (VRSpike as any).processCombatInput(1_000);
 
     expect(combatEvents).toEqual([expect.objectContaining({
@@ -973,6 +975,8 @@ describe('VRSpike XR loop ownership', () => {
     expect(bufferServiced).not.toHaveBeenCalled();
 
     paused = false;
+    // A swing is two fast samples within 120 ms (critic run 15).
+    (VRSpike as any).processCombatInput(1_180);
     (VRSpike as any).processCombatInput(1_200);
     expect(swings).toHaveLength(1);
   });
@@ -1163,6 +1167,7 @@ describe('VRSpike XR loop ownership', () => {
     let readiness = 0;
     let inCombat = true;
     let released = false;
+    let roundOpen: boolean | undefined = undefined;
     VRSpike.hooks = {
       update: () => undefined,
       getPlayerPosition: () => null,
@@ -1170,7 +1175,7 @@ describe('VRSpike XR loop ownership', () => {
       getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
       getCombatContext: () => ({
         actorId: '7', nominatedTargetId: '42', weaponMode: 'melee-one-handed', inCombat,
-        stanceReadout: '', tempoReadiness: readiness, onCombatSwing: () => undefined,
+        stanceReadout: '', tempoReadiness: readiness, roundOpen, onCombatSwing: () => undefined,
       }),
       serviceCombatSwingBuffer: () => ({ released, armed: false }),
     };
@@ -1200,6 +1205,20 @@ describe('VRSpike XR loop ownership', () => {
     readiness = 1;
     (VRSpike as any).processCombatInput(1_096);
     expect(ticks()).toHaveLength(2);
+
+    // In combat, readiness reading 1 because the aim left every target is not
+    // a round opening either when the host reports the round itself (critic
+    // run 4: the tick followed the aim).
+    inCombat = true;
+    roundOpen = false;
+    readiness = 0;
+    (VRSpike as any).processCombatInput(1_112);
+    readiness = 1;
+    (VRSpike as any).processCombatInput(1_128);
+    expect(ticks()).toHaveLength(2);
+    roundOpen = true;
+    (VRSpike as any).processCombatInput(1_144);
+    expect(ticks()).toHaveLength(3);
   });
 
   test('clears a stale soft lock and target-dependent transient state after engine invalidation', () => {
@@ -1406,7 +1425,7 @@ describe('VRSpike XR loop ownership', () => {
     expect(process).not.toHaveBeenCalled();
   });
 
-  test('cancels an active VR combat request with Quest B exactly once', () => {
+  test('cancels an active VR combat request when Quest B is held, exactly once; a tap is only Pause', () => {
     const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
     let cancelCount = 0;
     VRSpike.session = {
@@ -1427,18 +1446,36 @@ describe('VRSpike XR loop ownership', () => {
       }),
     };
 
-    buttons[5] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processCombatCancel();
-    (VRSpike as any).processCombatCancel();
+    let now = 10_000;
+    const clock = jest.spyOn(performance, 'now').mockImplementation(() => now);
+    let paused = false;
+    const pause = jest.spyOn(VRSpike as any, 'isPlayerPaused').mockImplementation(() => paused);
+    const press = (down: boolean) => {
+      buttons[5] = down ? { pressed: true, touched: true, value: 1 } : { pressed: false, touched: false, value: 0 };
+      (VRSpike as any).processCombatCancel();
+    };
+    try {
+      // Round 15 (PF4): a tap of B pauses; it must not clear the queue.
+      press(true); now += 200; press(true); press(false);
+      expect(cancelCount).toBe(0);
 
-    expect(cancelCount).toBe(1);
+      // Held for 0.6 s it cancels, once, however long it is held.
+      press(true); now += 600; press(true); now += 500; press(true);
+      expect(cancelCount).toBe(1);
 
-    // A genuine release and re-press cancels again.
-    buttons[5] = { pressed: false, touched: false, value: 0 };
-    (VRSpike as any).processCombatCancel();
-    buttons[5] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processCombatCancel();
-    expect(cancelCount).toBe(2);
+      // A genuine release and a new hold cancels again.
+      press(false); press(true); now += 650; press(true);
+      expect(cancelCount).toBe(2);
+
+      // Never while paused, even held, nor when the hold began in the pause.
+      press(false); paused = true; press(true); now += 700; press(true);
+      paused = false; now += 700; press(true);
+      expect(cancelCount).toBe(2);
+      press(false);
+    } finally {
+      clock.mockRestore();
+      pause.mockRestore();
+    }
   });
 
   test('cancels combat even when the nominated target no longer qualifies', () => {
@@ -1468,8 +1505,18 @@ describe('VRSpike XR loop ownership', () => {
       },
     };
 
-    buttons[5] = { pressed: true, touched: true, value: 1 };
-    (VRSpike as any).processCombatCancel();
+    let now = 20_000;
+    const clock = jest.spyOn(performance, 'now').mockImplementation(() => now);
+    const pause = jest.spyOn(VRSpike as any, 'isPlayerPaused').mockImplementation(() => false);
+    try {
+      buttons[5] = { pressed: true, touched: true, value: 1 };
+      (VRSpike as any).processCombatCancel();
+      now += 600;
+      (VRSpike as any).processCombatCancel();
+    } finally {
+      clock.mockRestore();
+      pause.mockRestore();
+    }
 
     expect(cancelCount).toBe(1);
     expect(requestedTargets).toEqual([null]);
@@ -1675,7 +1722,10 @@ describe('VRSpike XR loop ownership', () => {
 
     (VRSpike as any).processCombatInput(1_000);
     expect(uses).toEqual([]);
+    // The dwell is 300 ms since critic run 4; 200 ms is not yet a use.
     (VRSpike as any).processCombatInput(1_200);
+    expect(uses).toEqual([]);
+    (VRSpike as any).processCombatInput(1_350);
 
     expect(uses).toEqual([expect.objectContaining({ hand: 'left' })]);
   });
@@ -1803,7 +1853,7 @@ describe('VRSpike XR loop ownership', () => {
       } } },
     };
     (VRSpike as any).comfortSettingsHost = {
-      clear: jest.fn(), present: jest.fn(), rowAtRay: jest.fn(() => 2),
+      clear: jest.fn(), present: jest.fn(), rowAtRay: jest.fn(() => 2), setHighlightedRow: jest.fn(), setCloseButton: jest.fn(),
       object: new THREE.Mesh(new THREE.PlaneGeometry(1, 1)),
     };
     const rows = [
@@ -2436,7 +2486,9 @@ describe('VRSpike XR loop ownership', () => {
 
       input.leftButtons[4] = pressedButton();
       (VRSpike as any).processRadialMenuInput();
-      input.leftButtons[0] = pressedButton();
+      // The aiming hand pulls its own trigger: the triggering hand's ray
+      // picks (critic run 12: the other hand's ray answered for it).
+      (aiming === 'left' ? input.leftButtons : input.rightButtons)[0] = pressedButton();
       (VRSpike as any).processRadialMenuInput();
 
       expect(activate).toHaveBeenCalledTimes(1);

@@ -1,3 +1,4 @@
+import { findItemStackTarget } from "@/managers/InventoryManager";
 import * as THREE from "three";
 import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 import type { Action } from "@/actions/Action";
@@ -11,6 +12,7 @@ import { applyEffectDuration, inheritLinkDuration } from "@/effects/GameEffectDu
 import EngineLocation from "@/engine/EngineLocation";
 import { ActionParameterType } from "@/enums/actions/ActionParameterType";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
+import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { ModuleCreatureAnimState } from "@/enums/module/ModuleCreatureAnimState";
 import { ModulePlaceableAnimState } from "@/enums/module/ModulePlaceableAnimState";
 import { NWScriptEventType } from "@/enums/nwscript/NWScriptEventType";
@@ -57,6 +59,17 @@ import { TURN_SPEED_SLOW } from "@/engine/TurnSpeeds";
 import { actionParameterToStruct } from "@/actions/actionParameterStructs";
 import { compileTalkString } from "@/resource/TalkStringCompiler";
 
+
+/** Effects that act once when applied and leave nothing to keep. */
+const ONE_SHOT_EFFECT_TYPES: ReadonlySet<number> = new Set([
+  GameEffectType.EffectDamage,
+  GameEffectType.EffectHeal,
+  GameEffectType.EffectDamageForcePoints,
+  GameEffectType.EffectHealForcePoints,
+  // Markers of a cast that failed; they lingered for minutes (critic run 13).
+  GameEffectType.EffectForceResisted,
+  GameEffectType.EffectForceFizzle,
+]);
 
 /**
 * ModuleObject class.
@@ -507,7 +520,18 @@ export class ModuleObject {
       //Length is re-read each pass: a TEMPORARY effect removes itself when it
       //expires, and a cached length then reads past the end and throws.
       for(let i = 0; i < this.effects.length; i++){
-        this.effects[i]?.update(delta);
+        // One broken effect must not stop this object's update: a Death Field
+        // whose model is missing from TSL threw every frame and froze every
+        // creature it touched for ~45 s (critic run 17).
+        try {
+          this.effects[i]?.update(delta);
+        } catch (error) {
+          const effect: any = this.effects[i];
+          if (effect && !effect.updateErrorReported) {
+            effect.updateErrorReported = true;
+            console.error('ModuleObject: effect update failed', effect?.type, error);
+          }
+        }
       }
     }
 
@@ -692,7 +716,7 @@ export class ModuleObject {
     action.setParameter(4, ActionParameterType.INT, ignoreStartRange ? 1 : 0);
     action.setParameter(5, ActionParameterType.DWORD, ModuleObjectConstant.OBJECT_INVALID);
     action.clearable = clearable;
-    console.log('ModuleObject.actionDialogObject', action);
+    console.log('ModuleObject.actionDialogObject', this.getTag?.());
     this.actionQueue.add(action);
   }
 
@@ -1866,7 +1890,7 @@ export class ModuleObject {
           this.triggerSpellCastAtEvent( event );
         break;
         default:
-          console.error('scriptEventHandler', 'Unhandled Event', event, this);
+          console.error('scriptEventHandler', 'Unhandled Event', event?.type ?? event, this.getTag?.());
         break;
       }
     }
@@ -2001,14 +2025,21 @@ export class ModuleObject {
    * @returns 
    */
   addItem(item: ModuleItem){
+    // load() re-reads the template's StackSize; keep a stack the caller set
+    // (CreateItemOnObject on a container or NPC used to give one).
+    const presetStack = item.getStackSize();
     item.load();
-    
-    const eItem = this.getItemByTag(item.getTag());
+    if(presetStack !== undefined && presetStack > 0) item.setStackSize(presetStack);
+    if(this.inventory.includes(item)) return item;
+
+    const eItem = findItemStackTarget(this.inventory, item);
     if(eItem){
       eItem.setStackSize(eItem.getStackSize() + item.getStackSize());
+      eItem.setPossessor?.(this);
       return eItem;
     }else{
       this.inventory.push(item);
+      item.setPossessor?.(this);
       return item;
     }
   }
@@ -2020,21 +2051,53 @@ export class ModuleObject {
    * @returns 
    */
   removeItem(item: ModuleItem, nCount = 1): ModuleItem {
-    const eItem = this.getItemByTag(item.getTag());
+    // A party member holds nothing in its own inventory: the party pool is
+    // the bag. Removing from `inventory` found nothing, so a planted mine, a
+    // spent security tunneler and an auto-removed key were never used up, and
+    // a script's take did nothing (critic run 6).
+    if(this.isPartyMember()){
+      const pool = GameState.InventoryManager;
+      // The object itself, else a plain stack of the same tag; never an
+      // upgraded copy standing in for a different item (critic run 7).
+      const held = pool.inventory.includes(item) ? item : findItemStackTarget(pool.inventory, item);
+      if(!held) return undefined;
+      if(nCount < held.getStackSize()){
+        pool.removeItem(held, nCount);
+        const taken = held.clone();
+        taken.setStackSize(nCount);
+        return taken;
+      }
+      pool.removeItem(held, held.getStackSize());
+      return held;
+    }
+    // The very object first: by tag alone, removing an upgraded blade took the
+    // plain copy beside it instead (critic run 4).
+    const eItem = this.inventory.includes(item) ? item : this.getItemByTag(item.getTag());
 
     if(!eItem){
       return undefined;
     }
 
     const idx = this.inventory.indexOf(eItem);
+    // A party member's tag lookup answers from the shared pool, so the item
+    // may not be in this inventory at all; splice(-1) deleted the last entry
+    // (critic run 5).
+    if(idx < 0){
+      return undefined;
+    }
 
     if(nCount < eItem.getStackSize()){
       eItem.setStackSize(eItem.getStackSize() - nCount);
-    }else{
-      this.inventory.splice(idx, 1);
+      // Only a split needs a new object: the part taken away.
+      const taken = eItem.clone();
+      taken.setStackSize(nCount);
+      return taken;
     }
-
-    return eItem.clone();
+    this.inventory.splice(idx, 1);
+    if(eItem.possessor === this) eItem.setPossessor(undefined);
+    // The whole entry left: it is the item itself. Cloning here exported and
+    // re-parsed a GFF on every removal (critic run 5).
+    return eItem;
   }
 
   /**
@@ -2087,9 +2150,11 @@ export class ModuleObject {
       return GameState.InventoryManager.getItemByTag(sTag) as ModuleItem;
     }
 
+    // Case-insensitive, as the party pool's lookup already is.
+    const tag = String(sTag ?? '').toLowerCase();
     for(let i = 0; i < this.inventory.length; i++){
       let item = this.inventory[i];
-      if(item.getTag() == sTag)
+      if(String(item.getTag()).toLowerCase() == tag)
         return item;
     }
     return;
@@ -2759,7 +2824,12 @@ export class ModuleObject {
     let roll = Dice.roll(1, DiceType.d20);
     let bonus = CombatRound.GetMod(this.getCON()) + this.getAutoBalanceSaveBonus();
     
-    if((roll + this.getFortitudeSave(nSaveType) + bonus) >= nDC){
+    const total = roll + this.getFortitudeSave(nSaveType) + bonus;
+    try { GameState.onSavingThrowRolled?.(this, oVersus, 'Fortitude', roll, total, nDC); } catch { /* log only */ }
+    if(total >= nDC){
+      // Tell the VR player their power was saved against (critic run 15: a saved
+      // Stun Droid looked like it did nothing).
+      try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }
       return 1
     }
 
@@ -2785,7 +2855,12 @@ export class ModuleObject {
     let roll = Dice.roll(1, DiceType.d20);
     let bonus = CombatRound.GetMod(this.getDEX()) + this.getAutoBalanceSaveBonus();
     
-    if((roll + this.getReflexSave(nSaveType) + bonus) >= nDC){
+    const total = roll + this.getReflexSave(nSaveType) + bonus;
+    try { GameState.onSavingThrowRolled?.(this, oVersus, 'Reflex', roll, total, nDC); } catch { /* log only */ }
+    if(total >= nDC){
+      // Tell the VR player their power was saved against (critic run 15: a saved
+      // Stun Droid looked like it did nothing).
+      try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }
       return 1
     }
 
@@ -2819,7 +2894,12 @@ export class ModuleObject {
     let roll = Dice.roll(1, DiceType.d20);
     let bonus = CombatRound.GetMod(this.getWIS()) + this.getAutoBalanceSaveBonus();
 
-    if((roll + this.getWillSave(nSaveType) + bonus) >= nDC){
+    const total = roll + this.getWillSave(nSaveType) + bonus;
+    try { GameState.onSavingThrowRolled?.(this, oVersus, 'Will', roll, total, nDC); } catch { /* log only */ }
+    if(total >= nDC){
+      // Tell the VR player their power was saved against (critic run 15: a saved
+      // Stun Droid looked like it did nothing).
+      try { GameState.onSavingThrowMade?.(this, oVersus); } catch { /* feedback only */ }
       return 1
     }
 
@@ -2857,14 +2937,39 @@ export class ModuleObject {
    * @param oCaster 
    * @returns 
    */
+  /**
+   * ResistForce: Force resistance works as spell resistance. A target with
+   * none (most creatures, every Peragus droid) never resists; one with some
+   * resists when the caster's d20 + caster level fails to beat it. The old
+   * rule (d20 + target level against 10 + caster level, from a forum post)
+   * let a droid shrug off Stun Droid after its 15 FP were spent (critic run 14).
+   */
   resistForce(oCaster: ModuleObject){
     if(BitWise.InstanceOfObject(this, ModuleObjectType.ModuleCreature) && BitWise.InstanceOfObject(oCaster, ModuleObjectType.ModuleCreature)){
-      //https://gamefaqs.gamespot.com/boards/516675-star-wars-knights-of-the-old-republic/62811657
-      //1d20 + their level vs. a DC of your level plus 10
-      let roll = Dice.roll(1, DiceType.d20, (this as any).getTotalClassLevel());
-      return (roll > 10 + (oCaster as any).getTotalClassLevel());
+      const resistance = this.getForceResistance();
+      if(resistance <= 0) return false;
+      const roll = Dice.roll(1, DiceType.d20, (oCaster as any).getTotalClassLevel());
+      const resisted = roll < resistance;
+      if(resisted) this.lastForceResistedAt = Date.now();
+      return resisted;
     }
     return 0;
+  }
+
+  /** When ResistForce last succeeded for this object (ms); the resisted notice reads it. */
+  lastForceResistedAt = 0;
+
+  /** Force resistance from effects (items apply theirs as effects). */
+  getForceResistance(): number {
+    let total = 0;
+    let best = 0;
+    for(const effect of this.effects){
+      if(!effect) continue;
+      // The strongest source, not the sum: FR 10 and 14 made 24 (critic run 15).
+      if(effect.type == GameEffectType.EffectForceResistanceIncrease) best = Math.max(best, Number(effect.getInt(0)) || 0);
+      else if(effect.type == GameEffectType.EffectForceResistanceDecrease) total -= Number(effect.getInt(0)) || 0;
+    }
+    return Math.max(0, best + total);
   }
 
   /**
@@ -2912,6 +3017,12 @@ export class ModuleObject {
     effect.setAttachedObject(this);
     effect.loadModel();
     effect.onApply(this);
+    // An instant hit or heal has done its work in onApply. Kept, they piled up
+    // on every creature in a fight (16 after one, critic run 11), and each
+    // was walked every frame for the rest of the session.
+    if(effect.getDurationType() == GameEffectDurationType.INSTANT && ONE_SHOT_EFFECT_TYPES.has(effect.type)){
+      return;
+    }
     this.effects.push(effect);
   }
 
@@ -3546,7 +3657,12 @@ export class ModuleObject {
    * @param max_distance 
    * @returns 
    */
-  hasLineOfSight(oTarget: ModuleObject, max_distance = 30){
+  /**
+   * @param ignorePerceptionRange measure only the sight line, not how far this
+   *   object perceives: the player selecting a target asks whether the player
+   *   can see it, not whether it would notice the player.
+   */
+  hasLineOfSight(oTarget: ModuleObject, max_distance = 30, ignorePerceptionRange = false){
     if(!this.spawned || !GameState.module.readyToProcessEvents)
       return false;
     
@@ -3578,7 +3694,7 @@ export class ModuleObject {
     this.#tmpPositionB.z += 1;
     const distance = this.#tmpPositionA.distanceTo(this.#tmpPositionB);
 
-    if(this.perceptionRange){
+    if(this.perceptionRange && !ignorePerceptionRange){
       const primaryRange = this.getPerceptionRangePrimary();
       if(distance > primaryRange){
         return false;
@@ -3607,7 +3723,8 @@ export class ModuleObject {
 
     for(let j = 0, jl = doors.length; j < jl; j++){
       const door = doors[j];
-      if(!door || door == (this as any) || door.isOpen()) continue;
+      // Neither end of the sight line blocks it: a closed door is not hidden by itself.
+      if(!door || door == (this as any) || door == (oTarget as any) || door.isOpen()) continue;
       const box3 = door.box;
       if(!box3) continue;
       if(GameState.raycaster.ray.intersectsBox(box3) || box3.containsPoint(this.#tmpPositionA)){
@@ -3717,7 +3834,7 @@ export class ModuleObject {
    * @param attackResult 
    */
   attackCreature(target: ModuleObject, feat?: any, isCutsceneAttack: boolean = false, attackDamage:number = 0, attackAnimation?: any, attackResult?: any) {
-    console.warn("Method not implemented.", this.tag, target);
+    console.warn("Method not implemented.", this.tag, (target as any)?.getTag?.());
   }
   /**
    * Set the commandable state
@@ -4174,26 +4291,38 @@ export class ModuleObject {
       //Clear references to prevent circular references
       this.area = undefined;
       this.room = undefined;
-      this.lookAtObject = undefined;
-      this.lastTriggerEntered = undefined;
-      this.lastTriggerExited = undefined;
-      this.lastAreaEntered = undefined;
-      this.lastAreaExited = undefined;
-      this.lastModuleEntered = undefined;
-      this.lastModuleExited = undefined;
-      this.lastDoorEntered = undefined;
-      this.lastDoorExited = undefined;
-      this.lastPlaceableEntered = undefined;
-      this.lastPlaceableExited = undefined;
-      this.lastAoeEntered = undefined;
-      this.lastAoeExited = undefined;
-      this.conversation = undefined;
-      this.linkedToObject = undefined;
+      this.clearAreaReferences();
 
       GameState.ModuleObjectManager.RemoveObject(this); 
     }catch(e){
       console.error('ModuleObject.destroy', e);
     }
+  }
+
+  /**
+   * Forgets the objects of the area this object was last in: the trigger,
+   * door, placeable and AoE it last entered or left, what it looked at, its
+   * conversation. A party member keeps its instance across a module load, and
+   * each of these reached the whole outgoing area through it - its trigger's
+   * walkmesh leads to the rooms, the rooms to every door and model - so every
+   * load kept the last area alive (ROADMAP 0.3; round 14 ran 0.77 -> 2.2 GB).
+   */
+  clearAreaReferences(){
+    this.lookAtObject = undefined;
+    this.lastTriggerEntered = undefined;
+    this.lastTriggerExited = undefined;
+    this.lastAreaEntered = undefined;
+    this.lastAreaExited = undefined;
+    this.lastModuleEntered = undefined;
+    this.lastModuleExited = undefined;
+    this.lastDoorEntered = undefined;
+    this.lastDoorExited = undefined;
+    this.lastPlaceableEntered = undefined;
+    this.lastPlaceableExited = undefined;
+    this.lastAoeEntered = undefined;
+    this.lastAoeExited = undefined;
+    this.conversation = undefined;
+    this.linkedToObject = undefined;
   }
 
 }

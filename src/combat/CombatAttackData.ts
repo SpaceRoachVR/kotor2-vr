@@ -15,6 +15,7 @@ import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot"
 import { abilityModifier, NO_AUTO_BALANCE, strengthAddsToDamage } from "@/combat/TSLCombatRules";
 import { reduceDamageList, resolveStructureDamage } from "@/engine/interaction/StructureDamageRules";
 import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
+import { resolveCriticalMultiplierBonus, resolvePowerAttackDamage } from "@/combat/CombatFeatRules";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
 
@@ -199,7 +200,10 @@ export class CombatAttackData {
       return;
     };
 
-    const damageMultiplier = isCritial ? this.attackWeapon.baseItem.criticalHitMultiplier : 1.0;
+    // Power Attack/Blast raise the critical multiplier by 1 (feat text, critic run 5).
+    const damageMultiplier = isCritial
+      ? this.attackWeapon.baseItem.criticalHitMultiplier + resolveCriticalMultiplierBonus(feat?.id, !!this.attackWeapon.isRangedWeapon())
+      : 1.0;
     // Off-hand means a second weapon: a mining droid carries its only weapon in
     // the left-hand slot, and that is not an off-hand blaster.
     const offHandBlasterPistol = this.attackSlot == ModuleCreatureArmorSlot.LEFTHAND &&
@@ -222,25 +226,13 @@ export class CombatAttackData {
         this.damageList[this.attackWeapon.getDamageBonusType()].addDamage(this.attackWeapon.getDamageBonus() * damageMultiplier);
       }
 
-      if( 
-        creature.getHasFeat(CombatFeatType.POWER_ATTACK) || 
-        creature.getHasFeat(CombatFeatType.POWER_BLAST)
-      ){
-        this.damageList[DamageType.BASE].addDamage(5 * damageMultiplier);
-      }
-
-      if( 
-        creature.getHasFeat(CombatFeatType.IMPROVED_POWER_ATTACK) || 
-        creature.getHasFeat(CombatFeatType.IMPROVED_POWER_BLAST)
-      ){
-        this.damageList[DamageType.BASE].addDamage(8 * damageMultiplier);
-      }
-
-      if( 
-        creature.getHasFeat(CombatFeatType.MASTER_POWER_ATTACK) || 
-        creature.getHasFeat(CombatFeatType.MASTER_POWER_BLAST) 
-      ){
-        this.damageList[DamageType.BASE].addDamage(10 * damageMultiplier);
+      // Power Attack / Power Blast add damage only on an attack that uses
+      // them, at the tier used: melee for Attack, ranged for Blast. Merely
+      // knowing the feat used to add it to every hit, the tiers stacking to
+      // +23, so choosing the mode changed nothing (critic run 3).
+      const powerBonus = resolvePowerAttackDamage(feat?.id, !!this.attackWeapon.isRangedWeapon());
+      if(powerBonus > 0){
+        this.damageList[DamageType.BASE].addDamage(powerBonus * damageMultiplier);
       }
 
       let specBonus = this.calculateWeaponSpecBonus(creature, this.attackWeapon);
@@ -380,3 +372,7 @@ export class CombatAttackData {
   }
 
 }
+
+/** Bonus damage for the Power Attack / Power Blast feat an attack uses (0 for any other). */
+// Moved to CombatFeatRules (TSL values +3/+7/+12, critic run 5); re-exported for callers.
+export { resolvePowerAttackDamage } from "@/combat/CombatFeatRules";

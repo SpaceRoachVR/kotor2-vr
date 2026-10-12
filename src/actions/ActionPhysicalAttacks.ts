@@ -102,8 +102,11 @@ export class ActionPhysicalAttacks extends Action {
 
         return ActionStatus.IN_PROGRESS;
       }else{
-        owner.force = 0;
-        owner.speed = 0;
+        // VR moves the player from the stick, which sets force every frame; zeroing it here rooted a player strafing while an attack or cast waited for its round (critic run 4).
+        if(!ActionApproachPolicy.isApproachSuppressedFor(owner)){
+          owner.force = 0;
+          owner.speed = 0;
+        }
 
         if(!owner.combatRound){
           return ActionStatus.FAILED;

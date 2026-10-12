@@ -182,6 +182,10 @@ export class BaseItem {
       baseItem.criticalHitMultiplier = TwoDAObject.normalizeValue(row.crithitmult, 'number', 1) as number;
     if(row.hasOwnProperty('basecost'))
       baseItem.baseCost = TwoDAObject.normalizeValue(row.basecost, 'number', 1) as number;
+    // Armor's Dexterity cap (baseitems.2da `dexbonus`); never read before, so
+    // heavy armor let full Dexterity through to Defense (critic run 3).
+    if(row.hasOwnProperty('dexbonus'))
+      baseItem.dexBonus = TwoDAObject.normalizeValue(row.dexbonus, 'number', -1) as number;
     if(row.hasOwnProperty('stacking'))
       baseItem.stacking = TwoDAObject.normalizeValue(row.stacking, 'number', 99) as number;
     if(row.hasOwnProperty('itemmultiplier'))

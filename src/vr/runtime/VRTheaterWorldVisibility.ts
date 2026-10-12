@@ -47,3 +47,42 @@ export function hideWorldForTheater(
     for (let i = 0; i < hidden.length; i++) hidden[i].visible = true;
   };
 }
+
+/** The VR objects a loading screen needs: the panel and the pointer aimed at it. */
+const VR_LOADING_INTERFACE_NAMES: ReadonlySet<string> = new Set([
+  'Kotor2VR.VRPanelHost',
+  'Kotor2VR.VRPanelPointerRay',
+  'Kotor2VR.VRPanelPointerCursor',
+  // The XR rig: the player's controllers and the loading floor ring. Hiding
+  // it left the loading screen in a void with no hands (critic run 6).
+  'VRSpike.rig',
+]);
+
+/**
+ * The engine hides the whole world scene while a module loads, and the VR
+ * panel is a child of that scene, so the retail loading screen was rendered
+ * into the panel and never drawn: a player waited in black (Allen,
+ * 2026-10-02; measured: the panel's parent chain read `Scene!HIDDEN` for the
+ * whole 20 s load). For one XR render this shows the scene again with every
+ * child hidden except the loading interface, so the loading screen floats in
+ * the dark instead of nothing. Does nothing while the scene is visible.
+ */
+export function revealVRInterfaceOverHiddenWorld(
+  worldScene: THREE.Object3D | null | undefined,
+): () => void {
+  if (!worldScene || worldScene.visible) return () => {};
+  const children = worldScene.children;
+  if (!Array.isArray(children)) return () => {};
+  if (!children.some((child) => child?.visible && child.name === 'Kotor2VR.VRPanelHost')) return () => {};
+  const hidden: THREE.Object3D[] = [];
+  for (const child of children) {
+    if (!child || !child.visible || VR_LOADING_INTERFACE_NAMES.has(child.name)) continue;
+    child.visible = false;
+    hidden.push(child);
+  }
+  worldScene.visible = true;
+  return () => {
+    worldScene.visible = false;
+    for (const child of hidden) child.visible = true;
+  };
+}

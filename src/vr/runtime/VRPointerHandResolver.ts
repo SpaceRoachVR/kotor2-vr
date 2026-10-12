@@ -1,3 +1,4 @@
+import { isUsableXRPose } from './XRTypes';
 import { XRHandInputFrame, XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 /**
@@ -39,6 +40,19 @@ export class VRPointerHandResolver {
   resolve<THit>(
     frame: XRInputFrame | null | undefined,
     hitTest: VRPointerHitTest<THit>,
+    /**
+     * The hand whose trigger fired this frame. Its ray decides the pick: with
+     * both rays on a panel the sticky off hand answered for a right-hand
+     * trigger and opened the wrong item (critic run 12).
+     */
+    selectingHand: XRHandRole | null = null,
+    /**
+     * Tried first when no trigger is down, ahead of the sticky hand, so the
+     * highlight shows what that hand's trigger would pick (critic run 16: the
+     * highlight followed the off hand while the weapon hand's trigger
+     * changed another row).
+     */
+    preferredHand: XRHandRole | null = null,
   ): VRResolvedPointerHand<THit> | null {
     if (!frame) {
       this.activeHand = null;
@@ -46,9 +60,15 @@ export class VRPointerHandResolver {
     }
 
     // The sticky hand is tried first so a hit it still holds wins outright.
-    const order = this.activeHand
-      ? [this.activeHand, ...SCAN_ORDER.filter((role) => role !== this.activeHand)]
-      : SCAN_ORDER;
+    // While a trigger is down only that hand's ray may pick: the other
+    // hand never answers for it.
+    const order: readonly XRHandRole[] = selectingHand
+      ? [selectingHand]
+      : preferredHand
+        ? [preferredHand, ...SCAN_ORDER.filter((role) => role !== preferredHand)]
+        : this.activeHand
+          ? [this.activeHand, ...SCAN_ORDER.filter((role) => role !== this.activeHand)]
+          : SCAN_ORDER;
 
     for (const hand of order) {
       const pose = VRPointerHandResolver.trackedRay(frame.hands[hand]);
@@ -82,6 +102,6 @@ export class VRPointerHandResolver {
 
   private static trackedRay(hand: XRHandInputFrame | undefined): XRWorldPose | null {
     const pose = hand?.targetRayPose;
-    return pose?.trackingState === 'tracked' ? pose : null;
+    return isUsableXRPose(pose) ? pose : null;
   }
 }

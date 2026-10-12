@@ -1,3 +1,4 @@
+import { markVisibleInFirstPerson } from "@/vr/runtime/VRFirstPersonBody";
 import { AudioEmitter } from "@/audio/AudioEmitter";
 import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
@@ -21,7 +22,13 @@ import { GameEffect } from "@/effects/GameEffect";
  * @author KobaltBlu <https://github.com/KobaltBlu>
  * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
  */
+/** An F (fire-and-forget) effect's impact plays in about 3 s. */
+const FIRE_AND_FORGET_LIFETIME_MS = 3500;
+
 export class EffectVisualEffect extends GameEffect {
+  fireAndForgetMs = 0;
+  removed = false;
+
   visualEffect: any;
   model: OdysseyModel3D;
   impact_model: OdysseyModel3D;
@@ -52,6 +59,17 @@ export class EffectVisualEffect extends GameEffect {
 
   update(delta = 0){
     super.update(delta);
+
+    // Fire-and-forget effects play their impact and are done. Applied
+    // permanently (Death Field, Drain Life), they stayed on the creature for
+    // good, their models among them (critic run 18).
+    if(this.visualEffect?.type_fd == 'F' && this.object){
+      this.fireAndForgetMs = (this.fireAndForgetMs || 0) + delta * 1000;
+      if(this.fireAndForgetMs > FIRE_AND_FORGET_LIFETIME_MS){
+        this.object.removeEffect(this);
+        return;
+      }
+    }
 
     if(this.durationEnded && this.getDurationType() == GameEffectDurationType.TEMPORARY){
       return;
@@ -127,6 +145,8 @@ export class EffectVisualEffect extends GameEffect {
       if(this.object.model && this.model){
         for(let node of this.object.model.nodes){
           let c_node = this.model.nodes.get(node[0]);
+          // The effect model need not have every node the creature has.
+          if(!c_node) continue;
           c_node.position.copy(node[1].position);
           c_node.quaternion.copy(node[1].quaternion);
           c_node.scale.copy(node[1].scale);
@@ -134,7 +154,7 @@ export class EffectVisualEffect extends GameEffect {
       }
 
       this.model.position.copy(this.object.position);
-      this.model.rotation.copy(this.object.model.rotation);
+      if(this.object.model) this.model.rotation.copy(this.object.model.rotation);
 
       this.model.update(delta);
 
@@ -205,7 +225,12 @@ export class EffectVisualEffect extends GameEffect {
             context: this.object.context
           }).then(
             (model: OdysseyModel3D) => {
+              // Removed while the model loaded: never attach it.
+              if(this.removed){ model.dispose(); return; }
               this.impact_model = model;
+              // Drawn in first person too: a heal or Force effect on the
+              // player is the only sign it landed (round 14).
+              markVisibleInFirstPerson(model);
               if(this.object.model){
                 if(this.object.model.impact){
                   this.object.model.impact.add(this.impact_model);
@@ -241,6 +266,7 @@ export class EffectVisualEffect extends GameEffect {
           context: this.object.context,
         }).then((model: OdysseyModel3D) => {
           this.impact_root_model = model;
+          markVisibleInFirstPerson(model);
           if(this.object.model){
             this.object.model.add(this.impact_root_model);
             TextureLoader.LoadQueue();
@@ -391,6 +417,7 @@ export class EffectVisualEffect extends GameEffect {
   }
 
   onRemove(){
+    this.removed = true;
     if(this.model instanceof OdysseyModel3D){
       this.model.dispose();
     }

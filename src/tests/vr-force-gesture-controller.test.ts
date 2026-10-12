@@ -38,6 +38,26 @@ describe('VRForceGestureController', () => {
 
     expect(gesture).toMatchObject({ kind: 'push', hand: 'left' });
   });
+  test('without pose velocity (Virtual Desktop) a flick is measured from successive positions', () => {
+    // Round 15: VDXR reports no linearVelocity, so Push and Pull never fired.
+    const controller = new VRForceGestureController({ minimumFlickSpeedMetresPerSecond: 1 });
+    const at = (z: number): XRInputFrame => {
+      const f = frame(new THREE.Vector3());
+      const hand = f.hands.right!;
+      return { ...f, hands: { right: { ...hand, pose: { ...hand.pose, position: new THREE.Vector3(0, 0, z), linearVelocity: null as THREE.Vector3 | null } } } };
+    };
+
+    // The hand is tracked before the grip goes down, so the first gripped
+    // frame already has a speed.
+    expect(controller.process(at(0), false, 1_000)).toBeNull();
+    expect(controller.process(at(-0.04), true, 1_020)).toMatchObject({ kind: 'push', hand: 'right' });
+    controller.reset();
+    controller.process(at(0), false, 2_000);
+    expect(controller.process(at(0.04), true, 2_020)).toMatchObject({ kind: 'pull' });
+    controller.process(at(0), false, 3_000);
+    expect(controller.process(at(0.002), true, 3_020)).toBeNull();
+  });
+
 });
 
 function frame(velocity: THREE.Vector3, hand: 'left' | 'right' = 'right'): XRInputFrame {

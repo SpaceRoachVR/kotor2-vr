@@ -26,7 +26,18 @@ async function main() {
   const target = await findPageTarget(PORT, (u) => /\/game\//.test(u));
   const cdp = await CdpSession.connect(target.webSocketDebuggerUrl);
   write(`ATTACH ${target.url}`);
-  cdp.on('Runtime.consoleAPICalled', (p) => write(`${p.type.toUpperCase().padEnd(7)} ${format(p.args)}`));
+  // The inspector keeps every logged argument alive for later inspection, so a
+  // log line that passes an object (engine code does) holds it - a destroyed
+  // door, its model - for as long as the recorder is attached (ROADMAP 0.3).
+  // The text is already written; let the inspector drop the objects.
+  let sinceDiscard = 0;
+  cdp.on('Runtime.consoleAPICalled', (p) => {
+    write(`${p.type.toUpperCase().padEnd(7)} ${format(p.args)}`);
+    if (++sinceDiscard >= 100) {
+      sinceDiscard = 0;
+      cdp.send('Runtime.discardConsoleEntries').catch(() => {});
+    }
+  });
   cdp.on('Runtime.exceptionThrown', (p) => {
     const d = p.exceptionDetails || {};
     write(`EXCEPT  ${(d.exception && d.exception.description) || d.text}`);

@@ -11,8 +11,8 @@ room-scale VR mod for **KOTOR II: The Sith Lords** (Steam Legacy PC build).
 - Repo: `C:\Users\allen\source\repos\kotor2-vr`
 - Game assets: `D:\SteamLibrary\steamapps\common\Knights of the Old Republic II`
 - `origin` is `SpaceRoachVR/kotor2-vr` (pushed; PRs go into `spike/stereo-perf`).
-  `upstream` is `KobaltBlu/KotOR.js` — nothing sent there; upstreaming waits until
-  the full VR project is done.
+  `upstream` is `KobaltBlu/KotOR.js` — PRs #110 and #111 were sent on request
+  (2026-09-26); anything further waits to be asked.
 - Design decisions: `DESIGN.md`. Phase plan: `ROADMAP.md`.
 
 ## Orient yourself first

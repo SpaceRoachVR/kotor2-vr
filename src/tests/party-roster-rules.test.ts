@@ -30,7 +30,7 @@ describe('registerPartyRosterMember', () => {
 
   test('AddCreatureToParty records the slot on the creature and on the roster', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'managers', 'PartyManager.ts'), 'utf8');
-    const start = source.indexOf('static AddCreatureToParty(slot = 1, creature: ModuleCreature){');
+    const start = source.indexOf('static AddCreatureToParty(slot = 1, creature: ModuleCreature)');
     const body = source.slice(start, source.indexOf('static SwitchPlayerCharacter(', start));
     expect(body).toContain('creature.npcId = slot;');
     expect(body).toContain('registerPartyRosterMember(PartyManager.CurrentMembers, slot)');

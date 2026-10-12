@@ -16,6 +16,10 @@ import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { ActionParameterType, ModuleDoorAnimState, ModuleObjectConstant, SignalEventType } from "@/enums";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 
+/** How close a trap must be for the passive Awareness roll, and how often it rolls. */
+const TRAP_SEARCH_RANGE_METRES = 10;
+const TRAP_SEARCH_INTERVAL_SECONDS = 3;
+
 
 const OBJECTS_INSIDE_UPDATE_THRESHOLD = 15; // 15 frame ticks
 
@@ -247,6 +251,29 @@ export class ModuleTrigger extends ModuleObject {
     GameState.group.triggers.add(this.container);
   }
 
+  /**
+   * Passive detection, as retail: while the controlled character is near an
+   * undetected, detectable trap, a d20 + Awareness roll against TrapDetectDC
+   * every 3 s. Nothing detected traps at all, so the 001EBO prologue's hull
+   * mines (DC 20) stayed invisible, the engine-room door could never be
+   * opened, and the prologue dead-ended (headset round 16).
+   */
+  private trapSearchTimer = 0;
+  updatePassiveTrapDetection(delta = 0){
+    if(!this.trapFlag || this.trapDetected || !this.trapDetectable) return;
+    this.trapSearchTimer -= delta;
+    if(this.trapSearchTimer > 0) return;
+    this.trapSearchTimer = TRAP_SEARCH_INTERVAL_SECONDS;
+    try{
+      const searcher: any = GameState.getCurrentPlayer?.();
+      if(!searcher?.position || !this.position) return;
+      if(searcher.position.distanceTo(this.position) > TRAP_SEARCH_RANGE_METRES) return;
+      const awareness = Number(searcher.getSkillTotal?.(3)) || 0; // SkillType.AWARENESS
+      const roll = 1 + Math.floor(Math.random() * 20);
+      if(roll + awareness >= (Number(this.trapDetectDC) || 0)) this.detectTrap();
+    }catch(e){ /* detection is best effort */ }
+  }
+
   detectTrap(){
     if(this.trapDetected){ return; }
     this.trapDetected = true;
@@ -332,6 +359,8 @@ export class ModuleTrigger extends ModuleObject {
     if(this.willDestroy || this.destroyed){
       return;
     }
+
+    this.updatePassiveTrapDetection(delta);
 
     if(!this.room) this.getCurrentRoom();
     try{
@@ -442,7 +471,7 @@ export class ModuleTrigger extends ModuleObject {
     action.setParameter(4, ActionParameterType.INT, ignoreStartRange ? 1 : 0);
     action.setParameter(5, ActionParameterType.DWORD, ModuleObjectConstant.OBJECT_INVALID);
     action.clearable = clearable;
-    console.log('ModuleTrigger.actionDialogObject', action);
+    console.log('ModuleTrigger.actionDialogObject', this.getTag?.());
     const player = GameState.getCurrentPlayer();
     if(!player){
       console.warn('ModuleTrigger.actionDialogObject: Player not found');

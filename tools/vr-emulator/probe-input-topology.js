@@ -43,7 +43,7 @@ async function clickButtonByText(harness, text) {
   );
 
   const mark = await harness.evaluate(`window.__xrHarness.log.length`);
-  await clickButtonByText(harness, 'Enter VR (spike)');
+  await clickButtonByText(harness, 'Enter VR');
   await new Promise((r) => setTimeout(r, 8000));
 
   const topologyWarnings = await harness.evaluate(

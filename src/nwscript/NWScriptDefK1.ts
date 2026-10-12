@@ -9,6 +9,7 @@ import { GameEffectType } from "@/enums/effects/GameEffectType";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
 import { NWModuleObjectType } from "@/enums/nwscript/NWModuleObjectType";
 import { GameState } from "@/GameState";
+import { AutoSaveManager } from "@/engine/AutoSaveManager";
 import type { ModuleCreature, ModuleObject, ModuleArea, ModuleDoor, ModuleEncounter, ModuleItem, ModuleMGEnemy, ModuleMGObstacle, ModuleMGPlayer, ModulePlaceable, ModuleSound, ModuleStore, ModuleTrigger } from "@/module";
 import type { TalentObject } from "@/talents/TalentObject";
 import type { GameEffect } from "@/effects/GameEffect";
@@ -451,7 +452,19 @@ NWScriptDefK1.Actions = {
     args: [NWScriptDataType.OBJECT, NWScriptDataType.STRING],
     action: function(this: NWScriptInstance, args: [ModuleObject, string]){
       if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleObject)){
-        return args[0].getItemByTag( args[1] );
+        const held = args[0].getItemByTag( args[1] );
+        if(held) return held;
+        // Worn items count as possessed: a quest check for an equipped item
+        // (a disguise, a worn ID) failed while it was on the body (critic
+        // runs 3 and 4).
+        const tag = String(args[1] ?? '').toLowerCase();
+        const equipment = (args[0] as any).equipment;
+        if(equipment && tag){
+          for(const item of Object.values(equipment) as any[]){
+            if(item && typeof item.getTag === 'function' && String(item.getTag()).toLowerCase() === tag) return item;
+          }
+        }
+        return undefined;
       }else{
         return undefined;
       }
@@ -468,12 +481,16 @@ NWScriptDefK1.Actions = {
         const item = new GameState.Module.ModuleArea.ModuleItem(new GFFObject(buffer));
         item.initProperties();
         item.setStackSize(args[2]);
+        // Return what the inventory holds: when the new item merged into an
+        // existing stack, the object built here is an orphan, and a script
+        // that equipped or destroyed it acted on nothing (critic run 4).
+        let held: any;
         if(GameState.PartyManager.party.indexOf(args[1] as any) > -1){
-          GameState.InventoryManager.addItem(item);
+          held = GameState.InventoryManager.addItem(item);
         }else{
-          args[1].addItem(item);
+          held = args[1].addItem(item);
         }
-        return item;
+        return held || item;
       }
       return undefined;
     }
@@ -1177,6 +1194,8 @@ NWScriptDefK1.Actions = {
       let effect = new GameState.GameEffectFactory.EffectDamage();
       effect.setCreator(this.caller);
       effect.setSpellId(this.getSpellId());
+      // Script damage (grenades, powers, traps) gets a Combat log line.
+      (effect as any).fromScript = true;
 
       // One slot, not two: writing the amount into both the typed slot and
       // slot 14 doubled every scripted hit (see scriptedDamageComponents).
@@ -1531,8 +1550,10 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [],
     action: function(this: NWScriptInstance, args: []){
+      // The caster's DC, not a constant 10: the value was computed and
+      // thrown away (critic run 15).
       if(BitWise.InstanceOfObject(this.caller, ModuleObjectType.ModuleCreature)){
-        (this.caller as ModuleCreature).getSpellSaveDC();
+        return (this.caller as ModuleCreature).getSpellSaveDC();
       }
 
       return 10;
@@ -3079,11 +3100,11 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject]){
+      // Neutral reputation only. Friends and the party counted as neutral,
+      // so area powers and grenades that spare neutrals never touched the
+      // thrower or the party (critic run 15: no Reflex save inside the blast).
       if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)){
-        if( ( GameState.PartyManager.party.indexOf(args[0] as any) >= 0 ? NW_TRUE : NW_FALSE ) && ( GameState.PartyManager.party.indexOf(args[1] as any) >= 0 ? NW_TRUE : NW_FALSE ) ){
-          return NW_TRUE;
-        }
-        return args[1].isFriendly(args[0]) || args[1].isNeutral(args[0]) ? NW_TRUE : NW_FALSE;
+        return args[1].isNeutral(args[0]) ? NW_TRUE : NW_FALSE;
       }
       return NW_FALSE;
     }
@@ -3570,14 +3591,39 @@ NWScriptDefK1.Actions = {
       // initAreaObjects, with the main thread wedged hard enough that the page
       // could not service CDP. That is a hang on entering the module, not just
       // a sweep failure.
-      const possessor = item.possessor;
-      if(BitWise.InstanceOfObject(possessor, ModuleObjectType.ModuleObject)){
-        (possessor as ModuleObject).removeItem(item, 1);
+      // The whole item moves, stack and all, as retail does. Taking one off
+      // the source while handing the same object (and its stack) to the
+      // destination left a stack in both inventories (critic run 3).
+      // An item in a container or an NPC's bag often has no possessor set,
+      // and the pool removal below then no-op'd and left it in the source
+      // too (critic run 4). Find the holder when it is not recorded.
+      const area: any = GameState.module?.area;
+      const candidates: any[] = [item.possessor, this.caller, ...GameState.PartyManager.party,
+        ...(area?.creatures || []), ...(area?.placeables || [])].filter(Boolean);
+      // Worn: take it off the body first. GetItemPossessedBy now finds worn
+      // items, and handing one on left it equipped on the giver too (critic
+      // run 5).
+      const wearer = candidates.find((o) => o?.equipment && Object.values(o.equipment).includes(item));
+      if(wearer && typeof wearer.takeOffWornItem === 'function') wearer.takeOffWornItem(item);
+      // A recorded holder counts only if it still holds the item: looting
+      // left the container named as the holder of an item now in the party
+      // bag, and the hand-in removed nothing (critic run 5).
+      let possessor: any = item.possessor;
+      if(possessor && !(Array.isArray(possessor.inventory) && possessor.inventory.includes(item))) possessor = undefined;
+      if(!possessor && !GameState.InventoryManager.inventory.includes(item)){
+        possessor = candidates.find((o) => Array.isArray(o?.inventory) && o.inventory.includes(item));
+      }
+      const whole = Math.max(1, Number(item.getStackSize()) || 1);
+      if(wearer){
+        // Already off the body; nothing to remove from an inventory.
+      }else if(BitWise.InstanceOfObject(possessor, ModuleObjectType.ModuleObject)){
+        (possessor as ModuleObject).removeItem(item, whole);
       }else{
         // Not held by an object: the party pool is the only other owner. This
         // no-ops silently when the item is in neither.
-        GameState.InventoryManager.removeItem(item, 1);
+        GameState.InventoryManager.removeItem(item, whole);
       }
+      item.setStackSize(whole);
 
       if(GameState.PartyManager.party.indexOf(giveTo as any) >= 0){
         GameState.InventoryManager.addItem(item);
@@ -4057,7 +4103,8 @@ NWScriptDefK1.Actions = {
     args: [NWScriptDataType.INTEGER, NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [number, ModuleObject]){
       if(BitWise.InstanceOfObject(args[1], ModuleObjectType.ModuleCreature)){
-        return args[1].getSkillLevel(args[0]);
+        // The total, with the key ability modifier, as retail returns it.
+        return (args[1] as ModuleCreature).getSkillTotal(args[0]);
       }else{
         return 0;
       }
@@ -6290,7 +6337,11 @@ NWScriptDefK1.Actions = {
     comment: "512: Only if we are in a single player game, AutoSave the game.\n",
     name: "DoSinglePlayerAutoSave",
     type: NWScriptDataType.VOID,
-    args: []
+    args: [],
+    action: function(this: NWScriptInstance, args: []){
+      // Deferred until play is quiet: scripts call this mid-scene.
+      AutoSaveManager.request('script');
+    }
   },
   513:{
     comment: "513: Get the game difficulty (GAME_DIFFICULTY_*).\n",
@@ -6509,7 +6560,11 @@ NWScriptDefK1.Actions = {
     comment: "529: - oTrapObject: a placeable, door or trigger\n- oCreature\n* Returns TRUE if oCreature has detected oTrapObject\n",
     name: "GetTrapDetectedBy",
     type: NWScriptDataType.INTEGER,
-    args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT]
+    args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT],
+    // Detection is shared by the party, as the engine tracks one flag per trap.
+    action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject]){
+      return (args[0] as any)?.trapDetected ? NW_TRUE : NW_FALSE;
+    }
   },
   530:{
     comment: "530: - oTrapObject: a placeable, door or trigger\n* Returns TRUE if oTrapObject has been flagged as visible to all creatures.\n",
@@ -6707,7 +6762,15 @@ NWScriptDefK1.Actions = {
     comment: "550: Set oDetector to have detected oTrap.\n",
     name: "SetTrapDetectedBy",
     type: NWScriptDataType.INTEGER,
-    args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT]
+    args: [NWScriptDataType.OBJECT, NWScriptDataType.OBJECT],
+    // Unimplemented, so scripts that reveal a trap to the player did nothing
+    // (headset round 16: invisible 001EBO hull mines).
+    action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject]){
+      const trap: any = args[0];
+      if(!trap || typeof trap.detectTrap !== 'function') return NW_FALSE;
+      trap.detectTrap();
+      return NW_TRUE;
+    }
   },
   551:{
     comment: "551: Note: Only placeables, doors and triggers can be trapped.\n* Returns TRUE if oObject is trapped.\n",
@@ -6932,8 +6995,7 @@ NWScriptDefK1.Actions = {
     args: [NWScriptDataType.INTEGER, NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [number, ModuleObject]){
       if(BitWise.InstanceOfObject(args[1], ModuleObjectType.ModuleCreature)){
-        GameState.PartyManager.AddCreatureToParty(args[0], (args[1] as ModuleCreature));
-        return NW_TRUE;
+        return GameState.PartyManager.AddCreatureToParty(args[0], (args[1] as ModuleCreature)) ? NW_TRUE : NW_FALSE;
       }
       return NW_FALSE;
     }

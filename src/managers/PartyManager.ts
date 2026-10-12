@@ -303,11 +303,22 @@ export class PartyManager {
       }
     }
 
+    // The save's journal replaces the one in play: loading added it to the
+    // live journal, so entries doubled on every load (critic run 12).
+    GameState.JournalManager.ClearEntries();
     if(gff.RootNode.hasField('JNL_Entries')){
       const entries = gff.RootNode.getFieldByLabel('JNL_Entries').getChildStructs();
+      // One entry per plot, at its highest state: saves written while
+      // loading doubled the journal hold duplicates (the round-15 QUICKSAVE
+      // has 16 for 8 plots; critic run 13).
+      const byPlot = new Map<string, JournalEntry>();
       for(let i = 0; i < entries.length; i++){
-        GameState.JournalManager.AddEntry(JournalEntry.FromStruct(entries[i]));
+        const entry = JournalEntry.FromStruct(entries[i]);
+        const key = String(entry.plot_id ?? '').toLowerCase();
+        const held = byPlot.get(key);
+        if(!held || entry.state > held.state) byPlot.set(key, entry);
       }
+      for(const entry of byPlot.values()) GameState.JournalManager.AddEntry(entry);
     }
 
     if(gff.RootNode.hasField('PT_DLG_MSG_LIST')){
@@ -1044,6 +1055,7 @@ export class PartyManager {
     }
     PartyManager.NPCS[npcId].available = true;
     PartyManager.NPCS[npcId].canSelect = true;
+    object.ensureForcePointsFromClasses?.();
     PartyManager.NPCS[npcId].template = object.save();
     return true;
   }
@@ -1054,12 +1066,33 @@ export class PartyManager {
    * @param creature - The creature to add to the list of Party Members
    * @returns void
    */
-  static AddCreatureToParty(slot = 1, creature: ModuleCreature){
+  static AddCreatureToParty(slot = 1, creature: ModuleCreature): boolean {
     if(!BitWise.InstanceOfObject(creature, ModuleObjectType.ModuleCreature)){
-      return;
+      return false;
     }
 
     creature = creature as ModuleCreature;
+    creature.ensureForcePointsFromClasses?.();
+    // Already in the party (this creature, or this NPC slot's member): retail
+    // reports success and adds nothing. A second add pushed a duplicate.
+    // Every member counts, the leader too: when the player controls an NPC
+    // (T3 in the fuel pipe), skipping party[0] let that NPC be added twice.
+    if(PartyManager.party.includes(creature) ||
+      PartyManager.party.some((member) => member && member.npcId === slot)){
+      return true;
+    }
+    // No room: the party does not grow past three, but the NPC is not lost
+    // either. It joins the roster as available, so the party selection
+    // screen offers it, and the call reports failure as retail does. Refusing
+    // outright left a scripted recruit nowhere (critic run 4).
+    if(PartyManager.party.length >= PartyManager.MaxSize){
+      console.warn('AddCreatureToParty: party is full; NPC made available instead', slot, creature.getTag?.());
+      if(PartyManager.NPCS[slot]){
+        PartyManager.NPCS[slot].available = true;
+        PartyManager.NPCS[slot].template = creature.template;
+      }
+      return false;
+    }
     creature.isPM = true;
     creature.clearAllActions();
     PartyManager.NPCS[slot].available = true;
@@ -1080,6 +1113,7 @@ export class PartyManager {
     if(cIdx > -1){
       GameState.module.area.creatures.splice(cIdx, 1);
     }
+    return true;
   }
 
   /**
@@ -1108,10 +1142,20 @@ export class PartyManager {
     // possessed instance and the roster's member was gone until the next
     // module load. Fold the companion instance into the switch, and restore
     // the outgoing possessed member as a companion afterwards.
+    // Where the companion taking control stands. A leader switch hands you
+    // that body where it is, as retail does; it used to be rebuilt on the
+    // outgoing leader's spot, stacking the party with the camera inside the
+    // old leader (critic runs 19-20). Scripted swaps keep the old behaviour.
+    let companionSpawn: THREE.Vector3 | null = null;
+    let companionQuaternion: THREE.Quaternion | null = null;
     if(npcId >= 0){
       const companionIndex = PartyManager.party.findIndex((pm, index) => index > 0 && pm && pm.npcId == npcId);
       if(companionIndex > 0){
         const companion = PartyManager.party[companionIndex];
+        if(keepOutgoingPlayer && companion.position){
+          companionSpawn = companion.position.clone();
+          companionQuaternion = companion.quaternion.clone();
+        }
         try{ PartyManager.NPCS[npcId].template = companion.save(); }catch(e){ console.error(e); }
         PartyManager.party.splice(companionIndex, 1);
         try{ companion.destroy(); }catch(e){ console.error(e); }
@@ -1149,14 +1193,15 @@ export class PartyManager {
 
     try{
       const spawn = oldPC.position.clone();
-      const quaternion = oldPC.quaternion.clone();
+      const leaderSpawn = companionSpawn ?? spawn;
+      const quaternion = companionQuaternion ?? oldPC.quaternion.clone();
 
       partyMember.isPM = true;
       partyMember.isPC = 1;
       partyMember.npcId = npcId;
       partyMember.load();
       partyMember.clearAllActions();
-      partyMember.position.copy(spawn);
+      partyMember.position.copy(leaderSpawn);
       partyMember.quaternion.copy(quaternion);
       partyMember.loadScripts();
 
@@ -1180,7 +1225,7 @@ export class PartyManager {
 
       partyMember.loadModel().then( (model: OdysseyModel3D) => {
         model.userData.moduleObject = partyMember;
-        partyMember.position.copy(spawn);
+        partyMember.position.copy(leaderSpawn);
         partyMember.quaternion.copy(quaternion);
         model.hasCollision = true;
         

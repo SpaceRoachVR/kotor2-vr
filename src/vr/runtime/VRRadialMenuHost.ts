@@ -28,6 +28,8 @@ type CanvasSurface = {
 };
 
 const NORMAL_WEDGE_COLOR = 0x13252c;
+const UNAVAILABLE_WEDGE_COLOR = 0x0b1316;
+const UNAVAILABLE_HOVER_WEDGE_COLOR = 0x3a3f42;
 const NORMAL_BORDER_COLOR = 0x3d9fb5;
 const HOVER_WEDGE_COLOR = 0x9a6819;
 const HOVER_BORDER_COLOR = 0xffd15c;
@@ -370,7 +372,15 @@ export class VRRadialMenuHost {
     this.iconMaterialById.set(entry.id, iconMaterial);
 
     const labelSurface = this.createCanvasSurface(384, 96, true);
-    drawSliceLabel(labelSurface, entry.label);
+    const unavailable = isEntryUnavailable(entry);
+    drawSliceLabel(labelSurface, entry.label, unavailable);
+    if (unavailable) {
+      // Greyed: dim icon and label, so a power the pool can't pay reads as such.
+      iconMaterial.opacity = 0.3;
+      iconMaterial.color.setHex(0x8a8a8a);
+      material.color.setHex(UNAVAILABLE_WEDGE_COLOR);
+      wedge.userData.unavailable = true;
+    }
     const label = new THREE.Mesh(
       new THREE.PlaneGeometry(0.135, 0.034),
       this.createCanvasMaterial(labelSurface.texture),
@@ -405,7 +415,12 @@ export class VRRadialMenuHost {
       if (!wedge) continue;
       const hovered = presentation.hoveredId === entry.id;
       wedge.position.z = hovered ? VR_RADIAL_LAYOUT.hoverExtrusionMetres : 0;
-      wedge.material.color.setHex(hovered ? HOVER_WEDGE_COLOR : NORMAL_WEDGE_COLOR);
+      // A greyed power stays grey under the pointer (critic run 18: it lit
+      // full orange like any other).
+      const unavailable = wedge.userData.unavailable === true;
+      wedge.material.color.setHex(hovered
+        ? (unavailable ? UNAVAILABLE_HOVER_WEDGE_COLOR : HOVER_WEDGE_COLOR)
+        : unavailable ? UNAVAILABLE_WEDGE_COLOR : NORMAL_WEDGE_COLOR);
       wedge.material.opacity = hovered ? HOVER_WEDGE_OPACITY : NORMAL_WEDGE_OPACITY;
       const border = wedge.getObjectByName(`Kotor2VR.RadialMenu.Border.${entry.id}`) as THREE.Line | undefined;
       const borderMaterial = border?.material as THREE.LineBasicMaterial | undefined;
@@ -416,7 +431,12 @@ export class VRRadialMenuHost {
     this.centerMaterial.color.setHex(cancelHovered ? HOVER_WEDGE_COLOR : CANCEL_DISC_COLOR);
     this.centerMaterial.opacity = cancelHovered ? HOVER_WEDGE_OPACITY : 0.98;
     const hoveredEntry = this.currentEntries.find((entry) => entry.id === presentation.hoveredId);
-    this.updatePlaque(cancelHovered ? 'Cancel' : hoveredEntry?.label ?? presentation.menu.title, cancelHovered || Boolean(hoveredEntry));
+    const hoveredUnavailable = !!hoveredEntry && isEntryUnavailable(hoveredEntry);
+    this.updatePlaque(
+      cancelHovered ? 'Cancel'
+        : hoveredEntry ? (hoveredUnavailable ? `${hoveredEntry.label} — not enough Force points` : hoveredEntry.label)
+          : presentation.menu.title,
+      (cancelHovered || Boolean(hoveredEntry)) && !hoveredUnavailable);
   }
 
   private updatePlaque(text: string, hovered: boolean): void {
@@ -494,6 +514,10 @@ export class VRRadialMenuHost {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('radial menu canvas context unavailable');
     const texture = new THREE.CanvasTexture(canvas);
+    // No mipmaps, so a non-power-of-two canvas is not resized on the CPU at
+    // every upload (round 15: 382 resize warnings).
+    texture.generateMipmaps = false;
+    texture.minFilter = THREE.LinearFilter;
     texture.encoding = THREE.sRGBEncoding;
     texture.needsUpdate = true;
     this.ownedCanvasTextures.add(texture);
@@ -557,7 +581,7 @@ function isFiniteVector3(vector: THREE.Vector3): boolean {
 
 function createPageKey(presentation: VRRadialPresentation): string {
   const entries = presentation.page.entries
-    .map((entry) => `${entry.kind}:${entry.id}:${entry.label}:${iconForEntry(entry) ?? ''}`)
+    .map((entry) => `${entry.kind}:${entry.id}:${entry.label}:${iconForEntry(entry) ?? ''}:${isEntryUnavailable(entry) ? 'x' : ''}`)
     .join('|');
   return `${presentation.menu.id}:${presentation.pageIndex}:${entries}`;
 }
@@ -601,10 +625,15 @@ function resolveIconForEntry(entry: VRRadialMenuItem) {
   });
 }
 
-function drawSliceLabel(surface: CanvasSurface, label: string): void {
+function isEntryUnavailable(entry: VRRadialMenuItem): boolean {
+  if (entry.kind !== 'action' || typeof entry.isUnavailable !== 'function') return false;
+  try { return entry.isUnavailable() === true; } catch { return false; }
+}
+
+function drawSliceLabel(surface: CanvasSurface, label: string, unavailable = false): void {
   const { canvas, context, texture } = surface;
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = '#ffffff';
+  context.fillStyle = unavailable ? '#7d8a90' : '#ffffff';
   context.font = '600 34px Arial, sans-serif';
   context.textAlign = 'center';
   context.textBaseline = 'middle';

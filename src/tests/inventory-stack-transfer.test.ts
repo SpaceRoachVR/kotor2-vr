@@ -22,6 +22,8 @@ class TransferredItem {
   getBaseItemId() { return this.baseItemId; }
   getTag() { return 'parts'; }
   getModelVariation() { return 0; }
+  // Parts stack (baseitems.2da stacking 99); findItemStackTarget checks it.
+  getBaseItem() { return { stacking: 99 }; }
 }
 
 beforeEach(() => {

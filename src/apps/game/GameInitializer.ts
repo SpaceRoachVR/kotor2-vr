@@ -226,6 +226,24 @@ export class GameInitializer {
     KotOR.GameState.AutoPauseManager.Init();
 
     /**
+     * Autosave: retail's area-entry and DoSinglePlayerAutoSave saves.
+     */
+    KotOR.AutoSaveManager.world = {
+      // The emulator harness shares the player's save folder: a probe that
+      // reloads an area must not overwrite the real autosave (it did, once).
+      // A probe testing autosave sets __xrHarnessAllowAutosave.
+      enabled: () => KotOR.GameState.iniConfig.getProperty('Game Options.AutoSave') != 0 &&
+        !((window as any).__xrHarness && !(window as any).__xrHarnessAllowAutosave),
+      canSave: () => KotOR.GameState.Mode == KotOR.EngineMode.INGAME
+        && !KotOR.GameState.loadingModule
+        && !KotOR.GameState.CutsceneManager.active
+        && !KotOR.SaveGame.saving
+        && !!KotOR.GameState.module?.readyToProcessEvents,
+      inCombat: () => KotOR.GameState.PartyManager.party.some((member) => !!member?.combatData?.combatState),
+      save: (slot) => KotOR.SaveGame.SaveCurrentGame('', 0, slot),
+    };
+
+    /**
      * Initialize GLobal Variabled
      */
     KotOR.GameState.GlobalVariableManager.Init();

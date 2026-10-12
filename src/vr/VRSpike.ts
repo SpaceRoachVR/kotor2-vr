@@ -1,3 +1,4 @@
+import { isUsableXRPose } from './runtime/XRTypes';
 import * as THREE from "three";
 import { XRCoordinateConverter } from "./runtime/XRCoordinateConverter";
 import { HeadHeightCalibration } from './runtime/HeadHeightCalibration';
@@ -42,7 +43,7 @@ import { VRTeleportMarkerHost } from "./runtime/VRTeleportMarkerHost";
 import { resolveVRTeleportAim } from "./runtime/VRTeleportAimResolver";
 import { VRComfortVignetteHost } from "./runtime/VRComfortVignetteHost";
 import { VRCutsceneFadeHost, VRCutsceneFadeEnvelope } from "./runtime/VRCutsceneFadeHost";
-import { hideWorldForTheater } from "./runtime/VRTheaterWorldVisibility";
+import { hideWorldForTheater, revealVRInterfaceOverHiddenWorld } from "./runtime/VRTheaterWorldVisibility";
 import { hidePlayerBodyForFirstPerson, isCameraInsideBody } from "./runtime/VRFirstPersonBody";
 import { hideGuiRootsForPanel } from "./runtime/VRPanelSceneVisibility";
 import { VRComfortSettingsHost, VRComfortSettingsRow } from "./runtime/VRComfortSettingsHost";
@@ -59,13 +60,19 @@ import {
 import {
   VRCombatVisualEventObserver,
   VRCombatAttackResultObserver,
+  VR_MUZZLE_HEIGHT_METRES,
   type VRCombatActorSnapshot,
 } from "./runtime/VRCombatVisualEvents";
 import { BOLT_TRAVEL_MS, VRBlasterBoltHost } from "./runtime/VRBlasterBoltHost";
 import { VRBladeSparkHost } from "./runtime/VRBladeSparkHost";
 import { resolveVRCombatFeedback } from "./runtime/VRCombatFeedback";
+import { VRPanelStickScroll } from "./runtime/VRPanelStickScroll";
+import { VRControlsGuideHost } from "./runtime/VRControlsGuide";
+import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue, type VRCombatCueWeapon, type VRCombatCueSoundLoader, type VRCombatCuePlayOptions } from "./runtime/VRCombatCueAudio";
+import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateHost";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
 import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
+import { VRRefusalNoticeHost, describeVRRefusal } from "./runtime/VRRefusalNoticeHost";
 import { VRPauseIndicatorHost } from "./runtime/VRPauseIndicatorHost";
 import type { VRHapticPattern } from "./runtime/VRHapticFeedback";
 import { VRDroidExplosionHost } from "./runtime/VRDroidExplosionHost";
@@ -168,6 +175,11 @@ interface VRCutsceneInputContext extends VRMovieInputContext {
    * dialogue as a floating panel. Absent is treated as 'theater'.
    */
   readonly presentation?: 'theater' | 'world';
+  /**
+   * Show the theater over black, as a movie is: the conversation moves the
+   * player, so the room around them is about to change (round 15).
+   */
+  readonly hideWorld?: boolean;
 }
 
 interface VRMovieInputContexts {
@@ -180,6 +192,8 @@ export interface VRSpikeHooks {
   update: (timestamp: number, source: EngineFrameSource) => void;
   /** Player's feet in world space, or null before a module is loaded. */
   getPlayerPosition: () => THREE.Vector3 | null;
+  /** Unit wall normals the player touched in the last 600 ms (wall-slide steadying). */
+  getRecentWallNormals?: () => readonly { x: number; y: number }[];
   /**
    * The player's current room walkmesh, for the wall soft-block check —
    * room-scale head tracking can cross a wall the joystick-driven avatar
@@ -195,6 +209,16 @@ export interface VRSpikeHooks {
   getSoftBlockFloor?: (floorZ: number) => VRWalkmeshQuery | null;
   /** Comfort settings (ROADMAP 2.5/2.6): locomotion/turn mode and vignette. */
   getComfortSettings?: () => VRComfortSettings;
+  /** Where combat cue sounds go: the engine's audio context and GUI channel. */
+  getCombatCueAudioOutput?: () => { context: BaseAudioContext; destination: AudioNode; loadSound: VRCombatCueSoundLoader } | null;
+  /** Every retail sound the combat cues may use, so the first of each is not late. */
+  getCombatCuePreloadSounds?: () => string[];
+  /** Why the player cannot act right now (stunned, knocked down, ...), or null. */
+  getPlayerDisabledState?: () => string | null;
+  /** The attacker's own weaponsounds.2da sounds for a cue, and where it happened. */
+  resolveCombatCueSounds?: (attackerId: string | number, targetId: string | number, cue: VRCombatCue) => VRCombatCuePlayOptions | null;
+  /** The controlled character's HP and FP, for the wrist plate. */
+  getPlayerVitals?: () => VRPlayerVitals | null;
   setComfortSettings?: (patch: Partial<VRComfortSettings>) => void;
   /**
    * Flips the player between the engine's walk and run rates. The rates and the
@@ -296,6 +320,10 @@ export interface VRSpikeHooks {
    * two ranges was targetable by the rules of combat and invisible to aim
    * resolution. Returns null when there is no actor to aim from.
    */
+  /** The id of the creature the player controls (party[0]); changes on a leader switch. */
+  getControlledActorId?: () => number | null;
+  /** True when the id is a dead creature (a corpse the interaction ray found). */
+  isDeadCreature?: (id: number) => boolean;
   getCombatAimCandidates?: () => {
     readonly actorPosition: THREE.Vector3;
     readonly maxRangeMetres: number;
@@ -434,6 +462,8 @@ export interface VRSpikeHooks {
    */
   getComfortSettingsPanelContext?: () => {
     readonly rows: readonly VRComfortSettingsRow[];
+    /** The controls guide is open beside the panel. */
+    readonly controlsGuide?: boolean;
     activateRow(index: number): void;
     close(): void;
   } | null;
@@ -478,6 +508,16 @@ export interface VRSpikeHooks {
   } | null;
   /** Current world reticle target for the headset-readable name label. */
   getWorldTargetIndicator?: () => VRWorldTargetIndicator | null;
+}
+
+/** How long B must be held to cancel combat; a tap is Pause (round 15, PF4). */
+const VR_COMBAT_CANCEL_HOLD_MS = 600;
+
+/** Thumbstick deadzone for walking and smooth turning. */
+const VR_STICK_DEADZONE = 0.15;
+function applyStickDeadzone(magnitude: number): number {
+  if (!Number.isFinite(magnitude) || magnitude <= VR_STICK_DEADZONE) return 0;
+  return Math.min(1, (magnitude - VR_STICK_DEADZONE) / (1 - VR_STICK_DEADZONE));
 }
 
 export class VRSpike {
@@ -552,6 +592,9 @@ export class VRSpike {
   static readonly inputRecorder = new VRInputRecorder();
   static readonly tracePlayer = new VRTracePlayer();
   private static dominantHand: XRHandRole = 'right';
+  /** The weapon hand the player chose (ROADMAP 3.15). */
+  static get currentDominantHand(): XRHandRole { return VRSpike.dominantHand; }
+  private static controlsGuideHost: VRControlsGuideHost | null = null;
   private static inputCapabilityValidator = new XRInputCapabilityValidator();
   private static desktopLoopNeedsRestart = false;
   private static readonly sessionController = new XRSessionController({
@@ -589,8 +632,78 @@ export class VRSpike {
   // ray crosses several in the course of an ordinary swing, and 180 ms let the
   // lock hop between them — reported as "aim still quickly flickers between
   // opponents when they're grouped".
-  private static readonly combatTargetLock = new VRCombatTargetLock({ switchDwellMilliseconds: 400 });
+  // The lock outlives a glance away for 2.5 s: at 0.5 s turning the head
+  // dropped it, and the next cast thrust failed silently (critic run 12).
+  private static readonly combatTargetLock = new VRCombatTargetLock({ switchDwellMilliseconds: 400, aimLossGraceMilliseconds: 2500 });
   private static offhandGrenadeTriggerHeld = false;
+  private static steadiedFeet: THREE.Vector3 | null = null;
+  private static lastControlledActorId: number | null | undefined = undefined;
+  private static steadiedRawFeet: THREE.Vector3 | null = null;
+
+  /**
+   * Sliding along a wall the engine pushes the player into it and back out
+   * every frame, and the camera copied it: a 15 Hz, 1-4 cm sideways buzz, and
+   * 10 cm lurches at corners (critic runs 17-18). While a wall was touched in
+   * the last 600 ms, the camera follows motion along the wall in full and
+   * motion into or away from it at a quarter rate, never more than 8 cm
+   * behind the player.
+   */
+  private static steadyFeetAtWalls(feet: THREE.Vector3, snap: boolean): THREE.Vector3 {
+    const previous = VRSpike.steadiedFeet;
+    const lastRaw = VRSpike.steadiedRawFeet;
+    VRSpike.steadiedRawFeet = feet.clone();
+    let normals: readonly { x: number; y: number }[] = [];
+    try { normals = VRSpike.hooks?.getRecentWallNormals?.() ?? []; } catch { normals = []; }
+    if (!previous || !lastRaw || snap || previous.distanceTo(feet) > 0.5) {
+      VRSpike.steadiedFeet = feet.clone();
+      return VRSpike.steadiedFeet;
+    }
+    // The player's own step this frame, always taken in full along the wall.
+    const delta = feet.clone().sub(lastRaw);
+    for (const n of normals) {
+      const along = delta.x * n.x + delta.y * n.y;
+      delta.x -= n.x * along * 0.75;
+      delta.y -= n.y * along * 0.75;
+    }
+    const next = previous.clone().add(delta);
+    // Any lag left from the wall eases out: a quarter per frame at a wall,
+    // faster once off it.
+    const ease = normals.length ? 0.1 : 0.35;
+    next.x += (feet.x - next.x) * ease;
+    next.y += (feet.y - next.y) * ease;
+    next.z = feet.z;
+    const lag = Math.hypot(feet.x - next.x, feet.y - next.y);
+    if (lag < 0.002) {
+      next.x = feet.x; next.y = feet.y;
+    } else if (lag > 0.08) {
+      const k = 0.08 / lag;
+      next.x = feet.x + (next.x - feet.x) * k;
+      next.y = feet.y + (next.y - feet.y) * k;
+    }
+    VRSpike.steadiedFeet = next;
+    return next;
+  }
+  private static pausedUseNoticeAt = Number.NEGATIVE_INFINITY;
+  /** The off hand was last at the neck (a medpac): no palm cast just after. */
+  private static offhandBusyAt = Number.NEGATIVE_INFINITY;
+  /** Follows the off hand for a few seconds after a grenade trigger, as the projectile's launch point. */
+  private static readonly throwHandAnchor = new THREE.Object3D();
+  private static throwHandAnchorUntil = Number.NEGATIVE_INFINITY;
+  private static throwHandRole: XRHandRole | null = null;
+
+  /** The off-hand anchor while a throw is in flight, else null. */
+  static resolveThrowHandAnchor(): THREE.Object3D | null {
+    if (!VRSpike.isPresenting || performance.now() > VRSpike.throwHandAnchorUntil) return null;
+    return VRSpike.throwHandAnchor;
+  }
+
+  private static updateThrowHandAnchor(inputFrame: XRInputFrame | null): void {
+    if (!VRSpike.throwHandRole || performance.now() > VRSpike.throwHandAnchorUntil) return;
+    const pose = inputFrame?.hands?.[VRSpike.throwHandRole]?.pose;
+    if (!pose?.position) return;
+    VRSpike.throwHandAnchor.position.copy(pose.position);
+    VRSpike.throwHandAnchor.updateMatrixWorld(true);
+  }
   private static dominantShotTriggerHeld = false;
   private static combatTargetHighlightHost: VRCombatTargetHighlightHost | null = null;
   private static combatTargetHighlightErrorReported = false;
@@ -612,6 +725,11 @@ export class VRSpike {
   private static bladeSparkHost: VRBladeSparkHost | null = null;
   private static readonly damageTracker = new VRDamageFeedbackTracker();
   private static damageFlashHost: VRDamageFlashHost | null = null;
+  private static combatCueAudio: VRCombatCueAudio | null = null;
+  private static readonly panelStickScroll = new VRPanelStickScroll();
+  private static panelStickScrollAt: number | null = null;
+  private static combatCueAudioErrorReported = false;
+  private static healthPlateHost: VRHealthPlateHost | null = null;
   private static pauseIndicatorHost: VRPauseIndicatorHost | null = null;
   /** The wheel was open during a player pause, for the unpause-on-close option. */
   private static radialOpenWhilePaused = false;
@@ -673,7 +791,8 @@ export class VRSpike {
   private static panelHost: VRPanelHost | null = null;
   private static keyboardHost: VRKeyboardHost | null = null;
   private static readonly keyboardInputController = new VRKeyboardInputController();
-  private static readonly combatInputController = new VRCombatInputController();
+  // Two fast samples within 120 ms: one-frame pops and wrist snaps are not swings (critic runs 13-15).
+  private static readonly combatInputController = new VRCombatInputController({ minimumFastSamples: 2 });
   private static readonly forceGestureController = new VRForceGestureController();
   private static readonly forceCastGestureController = new VRForceCastGestureController();
   private static readonly consumableUseGestureController = new VRConsumableUseGestureController();
@@ -687,6 +806,10 @@ export class VRSpike {
   private static comfortSettingsPointerHost: VRPanelPointerHost | null = null;
   private static readonly comfortSettingsPointerHand = new VRPointerHandResolver();
   private static comfortSettingsSelectHeld = false;
+  /** When B went down this press, for tap (Pause) versus hold (cancel combat). */
+  private static pauseDownAt: number | null = null;
+  /** This B press was used by a panel (closing the VR Menu) and must not pause. */
+  private static pausePressConsumed = false;
   private static comfortSettingsCancelHeld = false;
   private static keyboardSelectHeld = false;
   private static keyboardCancelHeld = false;
@@ -844,7 +967,7 @@ export class VRSpike {
   private static addButton(supported: boolean, unavailableText = 'VR unavailable'): void {
     const btn = document.createElement('button');
     btn.id = 'vr-spike-button';
-    btn.textContent = supported ? 'Enter VR (spike)' : unavailableText;
+    btn.textContent = supported ? 'Enter VR' : unavailableText;
     Object.assign(btn.style, {
       position: 'fixed',
       right: '12px',
@@ -1193,8 +1316,12 @@ export class VRSpike {
     VRSpike.damageTracker.reset();
     VRSpike.damageFlashHost?.dispose();
     VRSpike.damageFlashHost = null;
+    VRSpike.healthPlateHost?.dispose();
+    VRSpike.healthPlateHost = null;
     VRSpike.pauseIndicatorHost?.dispose();
     VRSpike.pauseIndicatorHost = null;
+    VRSpike.refusalNoticeHost?.dispose();
+    VRSpike.refusalNoticeHost = null;
     VRSpike.radialOpenWhilePaused = false;
     VRSpike.cutsceneFadeHost?.dispose();
     VRSpike.cutsceneFadeHost = null;
@@ -1202,7 +1329,7 @@ export class VRSpike {
     VRSpike.lastCutsceneCamera = null;
 
     const btn = document.getElementById('vr-spike-button');
-    if (btn) btn.textContent = 'Enter VR (spike)';
+    if (btn) btn.textContent = 'Enter VR';
 
     // A successful XR bind lets the queued desktop callback drain while Three
     // presents. Failed binds leave that existing desktop chain intact and must
@@ -1399,6 +1526,7 @@ export class VRSpike {
         );
       }
       VRSpike.latestInputFrame = inputFrame;
+      VRSpike.updateThrowHandAnchor(inputFrame);
       const viewerPosition = frame.getViewerPose(referenceSpace)?.transform.position;
       if (viewerPosition && Number.isFinite(viewerPosition.x) && Number.isFinite(viewerPosition.y) &&
         Number.isFinite(viewerPosition.z)) {
@@ -1587,13 +1715,33 @@ export class VRSpike {
       // menu's yet — so the ray must not keep last frame's position either.
       if (!pointerHit) VRSpike.panelPointerHost?.clear();
       VRSpike.latestPanelPointerPosition = pointerHit?.guiPosition.clone() ?? null;
-      return VRSpike.panelInputController.process(
+      // The pointer hand's stick scrolls the list under the pointer.
+      if (pointerHit && dominantHand) {
+        const now = performance.now();
+        const deltaSeconds = VRSpike.panelStickScrollAt === null ? 0 : (now - VRSpike.panelStickScrollAt) / 1000;
+        VRSpike.panelStickScrollAt = now;
+        const axes = dominantHand.axes ?? [];
+        const stickY = Number.isFinite(axes[3]) ? axes[3] : (axes[1] ?? 0);
+        const rows = VRSpike.panelStickScroll.update(stickY, deltaSeconds);
+        if (rows !== 0) context.pointerSink.scrollPointer?.(rows);
+      } else {
+        VRSpike.panelStickScroll.reset();
+        VRSpike.panelStickScrollAt = null;
+      }
+      const owned = VRSpike.panelInputController.process(
         menu,
         actions,
         pointerHit?.guiPosition ?? null,
         context.pointerSink,
         VRSpike.latestXRFrameTimestamp
       );
+      // B pressed Back on a menu: the same press must not also toggle Pause
+      // when it is released over the game (critic run 13: closing the
+      // Character screen with B left the game paused).
+      // Only when the menu has a Back for B; otherwise the press did nothing
+      // and swallowed the next pause (critic run 14).
+      if (VRSpike.panelInputController.takeActivatedButton() === 'b' && (menu as any)?._button_b) VRSpike.pausePressConsumed = true;
+      return owned;
     } catch (error) {
       if (!VRSpike.panelInputErrorReported) {
         VRSpike.panelInputErrorReported = true;
@@ -1905,17 +2053,29 @@ export class VRSpike {
     const scene = VRSpike.scene;
     if (!context || !inputFrame || !session || !scene) {
       VRSpike.clearComfortSettingsPointer();
-      VRSpike.comfortSettingsSelectHeld = false;
-      VRSpike.comfortSettingsCancelHeld = false;
+      // Held while closed: the trigger press that opens the panel from the
+      // wheel must be released before the panel takes a click. It clicked the
+      // row under the ray in the same press (critic run 11: Dominant Hand
+      // switched to Left on opening).
+      VRSpike.comfortSettingsSelectHeld = true;
+      VRSpike.comfortSettingsCancelHeld = true;
       return false;
     }
     try {
       if (!VRSpike.comfortSettingsHost) VRSpike.comfortSettingsHost = new VRComfortSettingsHost(scene);
+      VRSpike.comfortSettingsHost.setCloseButton(VRSpike.dominantHand === 'left' ? 'Y' : 'B');
       VRSpike.comfortSettingsHost.present(inputFrame.head, context.rows);
+      // The combat update doesn't run while the panel owns input, so the
+      // hilt's queued-power text stayed over a row (critic runs 18-19).
+      VRSpike.weaponStanceHost?.clear();
 
+      // 'radial-wheel' adds the either-hand trigger Select: the ray follows
+      // whichever hand points, so either trigger clicks. Menu Select alone is
+      // the dominant trigger, and a left-hander's ray drew from the right hand
+      // that could not click (critic run 12).
       const actions = VRSpike.inputRouter.route(
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
-        new Set(['ui', 'interaction'])
+        new Set(['ui', 'interaction', 'radial-wheel'])
       );
       const selectPressed = actions.some((action) =>
         (action.action === SemanticXRAction.Select || action.action === SemanticXRAction.Use) && action.pressed
@@ -1927,18 +2087,42 @@ export class VRSpike {
       // left hand did nothing at all — the panel read as inert. Resolve the
       // row from whichever hand is actually on it, and draw that hand's ray.
       const panel = VRSpike.comfortSettingsHost.object;
+      const pressedHand = actions.find((action) =>
+        (action.action === SemanticXRAction.Select || action.action === SemanticXRAction.Use) && action.pressed
+      )?.hand ?? null;
+      // Only the hand that owns the highlight clicks: with both rays on the
+      // panel, the off hand's trigger changed its own, unhighlighted row
+      // (critic run 17). A hand pointing alone owns the highlight anyway.
+      const highlightHand = VRSpike.comfortSettingsPointerHand.pointingHand;
+      // Run 18: nulling the hand only moved the click to the other ray's row.
+      // A press by the hand that doesn't own the highlight does nothing.
+      const offHandPress = !!(pressedHand && highlightHand && pressedHand !== highlightHand);
+      const selectingHand = offHandPress ? null : pressedHand;
       const resolution = VRSpike.comfortSettingsPointerHand.resolve(
         inputFrame,
         (pose) => VRSpike.comfortSettingsHost?.rowAtRay(pose) ?? null,
+        selectingHand === 'left' || selectingHand === 'right' ? selectingHand : null,
+        VRSpike.dominantHand,
       );
       VRSpike.drawComfortSettingsPointer(scene, panel, resolution?.pose ?? VRSpike.anyTrackedRay(inputFrame));
+      VRSpike.comfortSettingsHost.setHighlightedRow(resolution?.hit ?? null);
+      if (context.controlsGuide) {
+        if (!VRSpike.controlsGuideHost) VRSpike.controlsGuideHost = new VRControlsGuideHost(scene);
+        VRSpike.controlsGuideHost.present(panel, VRSpike.dominantHand);
+      } else {
+        VRSpike.controlsGuideHost?.clear();
+      }
 
-      if (selectPressed && !VRSpike.comfortSettingsSelectHeld && resolution) {
+      if (selectPressed && !offHandPress && !VRSpike.comfortSettingsSelectHeld && resolution) {
         context.activateRow(resolution.hit);
       }
       VRSpike.comfortSettingsSelectHeld = selectPressed;
 
-      if (cancelPressed && !VRSpike.comfortSettingsCancelHeld) context.close();
+      if (cancelPressed && !VRSpike.comfortSettingsCancelHeld) {
+        context.close();
+        // B closed the panel; the same press must not also pause the game.
+        VRSpike.pausePressConsumed = true;
+      }
       VRSpike.comfortSettingsCancelHeld = cancelPressed;
     } catch (error) {
       VRSpike.clearComfortSettingsPointer();
@@ -1974,7 +2158,7 @@ export class VRSpike {
   private static anyTrackedRay(inputFrame: XRInputFrame): XRWorldPose | null {
     for (const hand of ['right', 'left'] as const) {
       const pose = inputFrame.hands[hand]?.targetRayPose;
-      if (pose?.trackingState === 'tracked') return pose;
+      if (isUsableXRPose(pose)) return pose;
     }
     return null;
   }
@@ -1982,6 +2166,7 @@ export class VRSpike {
   /** Tears down the comfort panel and its pointer together. */
   private static clearComfortSettingsPointer(): void {
     VRSpike.comfortSettingsHost?.clear();
+    VRSpike.controlsGuideHost?.clear();
     VRSpike.comfortSettingsPointerHost?.clear();
     VRSpike.comfortSettingsPointerHand.reset();
   }
@@ -2126,7 +2311,7 @@ export class VRSpike {
 
   private static resolveRayPreview(inputFrame: XRInputFrame, hand: XRHandRole) {
     const handFrame = inputFrame.hands[hand];
-    if (!handFrame || handFrame.targetRayPose.trackingState !== 'tracked') return null;
+    if (!handFrame || !isUsableXRPose(handFrame.targetRayPose)) return null;
     const preview = VRSpike.interactionSystem.preview(inputFrame, hand);
     return preview?.interactionMode === 'ray' ? preview : null;
   }
@@ -2164,7 +2349,7 @@ export class VRSpike {
     hand: XRHandRole,
   ): string | null {
     const pose = inputFrame.hands[hand]?.targetRayPose;
-    return pose?.trackingState === 'tracked' ? host.resolveRay(hand, pose) : null;
+    return isUsableXRPose(pose) ? host.resolveRay(hand, pose) : null;
   }
 
   private static filterWorldPromptSelectEdges(actions: readonly RoutedXRAction[]): readonly RoutedXRAction[] {
@@ -2321,7 +2506,7 @@ export class VRSpike {
    */
   private static resolveAimedCombatTargetId(): number | null {
     const rayPose = VRSpike.latestInputFrame?.hands[VRSpike.dominantHand]?.targetRayPose;
-    if (!rayPose || rayPose.trackingState !== 'tracked') return null;
+    if (!rayPose || !isUsableXRPose(rayPose)) return null;
     try {
       const context = VRSpike.hooks?.getCombatAimCandidates?.() ?? null;
       if (!context || !context.candidates.length) return null;
@@ -2341,7 +2526,13 @@ export class VRSpike {
 
   /** Interaction aim first, then combat reach. See `resolveAimedCombatTargetId`. */
   private static resolveAimedTargetIdForCombat(): number | null {
-    return VRSpike.resolveAimedTargetId() ?? VRSpike.resolveAimedCombatTargetId();
+    const aimed = VRSpike.resolveAimedTargetId();
+    // A corpse under the ray (lootable, so the interaction ray takes it) hid
+    // the live droid behind it: 0 of 6 swings registered (critic run 19).
+    let dead = false;
+    try { dead = aimed !== null && VRSpike.hooks?.isDeadCreature?.(aimed) === true; } catch { dead = false; }
+    if (aimed !== null && !dead) return aimed;
+    return VRSpike.resolveAimedCombatTargetId() ?? aimed;
   }
 
   private static parseModuleObjectTargetId(id: string | null): number | null {
@@ -2373,9 +2564,23 @@ export class VRSpike {
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['combat', 'interaction', 'ui'])
       );
-      const cancelPressed = actions.some((action) =>
+      const buttonDown = actions.some((action) =>
         action.action === SemanticXRAction.Cancel && action.hand === VRSpike.dominantHand && action.pressed
       );
+      // B is also Pause. A tap pauses or resumes and nothing else; cancelling
+      // combat needs B held for VR_COMBAT_CANCEL_HOLD_MS, never while paused.
+      // A tap used to cancel too, clearing the actions just queued in the
+      // pause (round 15, PF4). A press that began paused never cancels.
+      const now = performance.now();
+      if (!buttonDown) {
+        VRSpike.combatCancelDownSince = null;
+      } else if (VRSpike.isPlayerPaused()) {
+        VRSpike.combatCancelDownSince = Number.POSITIVE_INFINITY;
+      } else if (VRSpike.combatCancelDownSince === null) {
+        VRSpike.combatCancelDownSince = now;
+      }
+      const cancelPressed = buttonDown && VRSpike.combatCancelDownSince !== null &&
+        now - VRSpike.combatCancelDownSince >= VR_COMBAT_CANCEL_HOLD_MS;
       if (cancelPressed && !VRSpike.combatCancelHeld) {
         // Resolve the context without a nominated target: a cancel must still
         // work when the thing that started the round no longer qualifies.
@@ -2386,6 +2591,8 @@ export class VRSpike {
         // re-queued the round anyway" — which need different fixes.
         const before = VRSpike.hooks?.describeCombatQueue?.() ?? 'n/a';
         context?.cancel?.();
+        // Holding B stopped combat with nothing to say so (critic run 20).
+        if (context?.cancel) VRSpike.showNotice('Combat stopped', 1500, 'info');
         const after = VRSpike.hooks?.describeCombatQueue?.() ?? 'n/a';
         // cancel() demonstrably runs, yet rounds keep starting — so something
         // re-queues the attack. Compare the queue immediately either side of
@@ -2424,6 +2631,8 @@ export class VRSpike {
   }
 
   private static pendingCancelTraceFrames = 0;
+  /** When B went down this press; +Infinity if it went down while paused. */
+  private static combatCancelDownSince: number | null = null;
   private static combatCancelErrorReported = false;
 
   private static processCombatInput(timestamp: number): void {
@@ -2472,6 +2681,19 @@ export class VRSpike {
     // plan can be read. Latching the triggers now means a trigger held through
     // the pause does not fire the moment it ends.
     if (VRSpike.isPlayerPaused()) {
+      // A medpac held to the neck while paused did nothing and said nothing
+      // (critic run 18). It still waits for the pause to end; now it says so.
+      try {
+        const frame = VRSpike.latestInputFrame;
+        if (frame && (context as any).armedConsumable === true) {
+          const hand: XRHandRole = VRSpike.dominantHand === 'right' ? 'left' : 'right';
+          VRSpike.consumableUseGestureController.process(frame, { hand, armed: true, timestamp });
+          if (VRSpike.consumableUseGestureController.isInZone && timestamp - VRSpike.pausedUseNoticeAt > 3000) {
+            VRSpike.pausedUseNoticeAt = timestamp;
+            VRSpike.showNotice('Paused: tap B to resume, then use it', 2500, 'info');
+          }
+        }
+      } catch { /* notice only */ }
       VRSpike.updateHiltTimer(context.weaponMode, 0, context.inCombat, context.stanceReadout, false);
       VRSpike.updateCombatTargetHighlight();
       VRSpike.roundReadyLatched = false;
@@ -2533,6 +2755,11 @@ export class VRSpike {
       const offhandShotPressed = offhandTriggerPressed && context.offhandShotAvailable === true;
       if (offhandTriggerPressed && !VRSpike.offhandGrenadeTriggerHeld) {
         if (!offhandShotPressed) {
+          // The throw leaves from this hand: the cast plays its conjure
+          // (about a second) before the projectile flies.
+          VRSpike.throwHandRole = offhandHand;
+          VRSpike.throwHandAnchorUntil = performance.now() + 4000;
+          VRSpike.updateThrowHandAnchor(inputFrame);
           context.onGrenadeTrigger?.();
         } else if (VRSpike.isPresentationShotAllowed(context)) {
           VRSpike.firePresentationShot(context, timestamp, offhandHand, () => context.playOffhandShotSound?.());
@@ -2664,6 +2891,15 @@ export class VRSpike {
         }
       }
     }
+    // Once per session, the first time there is a player to control: how to
+    // reach the wheel and the Controls Guide. Nothing pointed a first-time
+    // player at either (critic runs 12-13).
+    if (!VRSpike.controlsHintShown && !foregroundSurfaceOwnsInput && VRSpike.hooks?.getPlayerPosition?.()) {
+      VRSpike.controlsHintShown = true;
+      const wheelButton = VRSpike.dominantHand === 'left' ? 'A' : 'X';
+      VRSpike.showNotice(`Hold ${wheelButton}: action wheel  ·  VR Menu > Controls Guide`, 8000, 'info');
+    }
+    VRSpike.refusalNoticeHost?.update(performance.now());
     if (!paused && !VRSpike.pauseIndicatorHost) return;
     if (!VRSpike.camera) return;
     try {
@@ -2709,13 +2945,17 @@ export class VRSpike {
    */
   private static pulseRoundReady(
     session: XRSession,
-    context: { readonly inCombat: boolean; readonly tempoReadiness?: number },
+    context: { readonly inCombat: boolean; readonly tempoReadiness?: number; readonly roundOpen?: boolean },
     bufferedSwingReleased: boolean,
   ): void {
-    const open = context.inCombat === true &&
-      ((context.tempoReadiness ?? 0) >= 1 || bufferedSwingReleased);
+    // roundOpen follows the player's round alone. Readiness also reads 1 when
+    // the aim leaves every target, which ticked with no round boundary
+    // (critic run 4); it remains the fallback for hosts that do not report it.
+    const roundOpen = context.roundOpen ?? ((context.tempoReadiness ?? 0) >= 1);
+    const open = context.inCombat === true && (roundOpen || bufferedSwingReleased);
     if (open && !VRSpike.roundReadyLatched) {
       void VRSpike.haptics.pulse(session, VRSpike.dominantHand, ROUND_READY_HAPTIC);
+      VRSpike.playCombatCue('ready');
     }
     VRSpike.roundReadyLatched = open;
   }
@@ -2768,6 +3008,7 @@ export class VRSpike {
     stanceReadout = '',
     swingArmed = false,
   ): void {
+    VRSpike.lastCombatWeaponMode = weaponMode;
     // The hilt timer is a diegetic ring on the weapon itself, so it belongs on
     // the grip anchor. The blaster laser is an *aiming* line and must use the
     // target-ray anchor instead — grip and target-ray orientations differ
@@ -2795,7 +3036,11 @@ export class VRSpike {
       if (!VRSpike.weaponStanceHost) {
         VRSpike.weaponStanceHost = new VRWeaponStanceHost(gripAnchor);
       }
-      VRSpike.weaponStanceHost.present(stanceReadout);
+      // Not over an open VR Menu: "STUN DROID" hid a row's value (critic run 18).
+      let panelOpen = false;
+      try { panelOpen = !!VRSpike.hooks?.getComfortSettingsPanelContext?.(); } catch { /* treat as closed */ }
+      VRSpike.weaponStanceHost.present(panelOpen ? '' : stanceReadout);
+      VRSpike.weaponStanceHost.faceViewer(VRSpike.camera);
     } catch (error) {
       VRSpike.weaponStanceHost?.clear();
       if (!VRSpike.weaponStanceErrorReported) {
@@ -2883,6 +3128,12 @@ export class VRSpike {
         timestamp,
       });
       if (!gesture) return false;
+      // Bringing the hand down from the neck after a medpac read as a palm
+      // thrust at the target and cast the queued power (critic run 19).
+      if (timestamp - VRSpike.offhandBusyAt < 1200) {
+        VRSpike.forceCastGestureController.reset();
+        return false;
+      }
       return context.onForceCastGesture(gesture) === true;
     } catch (error) {
       if (!VRSpike.forceGestureErrorReported) {
@@ -2906,11 +3157,23 @@ export class VRSpike {
   ): boolean {
     const armed = context.armedConsumable === true && typeof context.onConsumableUseGesture === 'function';
     try {
+      const wasInZone = VRSpike.consumableUseGestureController.isInZone;
       const gesture = VRSpike.consumableUseGestureController.process(inputFrame, {
         hand: offhandHand,
         armed,
         timestamp,
       });
+      // Entering the zone clicks, so the player knows to hold it there
+      // (critic run 5: nothing said you were in it).
+      // Once per stay: a refused use restarts the dwell, and the chime
+      // repeated every second while the item rested there (critic run 15),
+      // then every 3 s (critic run 17). Entering the zone chimes; staying in
+      // it through refusals does not.
+      if (!wasInZone && VRSpike.consumableUseGestureController.isInZone && timestamp - VRSpike.neckZoneChimedAt > 1000) {
+        VRSpike.neckZoneChimedAt = timestamp;
+        VRSpike.playCombatCue('neck-zone', 0, true);
+      }
+      if (VRSpike.consumableUseGestureController.isInZone) VRSpike.offhandBusyAt = timestamp;
       if (!gesture || !armed) return false;
       return context.onConsumableUseGesture!(gesture) === true;
     } catch (error) {
@@ -2937,7 +3200,7 @@ export class VRSpike {
         new Set(['global', 'radial-wheel'])
       );
       const menuPressed = actions.some((action) =>
-        action.action === SemanticXRAction.Menu && action.hand === 'left' && action.pressed
+        action.action === SemanticXRAction.Menu && action.hand !== VRSpike.dominantHand && action.pressed
       );
       // No hand filter: the binding table already scopes radial-wheel Select to
       // 'either', and the wheel's ray follows whichever hand aims at it. Testing
@@ -2969,8 +3232,12 @@ export class VRSpike {
       const host = VRSpike.radialMenuHost;
       // Either hand may aim at the wheel. Binding the ray to one controller is
       // invisible to the player, so the other hand reads as a dead pointer.
+      const wheelSelectHand = actions.find((action) =>
+        action.action === SemanticXRAction.Select && action.pressed
+      )?.hand ?? null;
       const rayResolution = wasOpen && host
-        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose))
+        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose),
+          wheelSelectHand === 'left' || wheelSelectHand === 'right' ? wheelSelectHand : null)
         : null;
       if (!rayResolution) VRSpike.radialRayHand.reset();
       const rayHit = rayResolution?.hit ?? null;
@@ -3012,7 +3279,7 @@ export class VRSpike {
     host: VRRadialMenuHost,
     targetRayPose: XRWorldPose | undefined,
   ) {
-    return targetRayPose?.trackingState === 'tracked'
+    return isUsableXRPose(targetRayPose)
       ? host.resolveTouch(targetRayPose.position)
       : null;
   }
@@ -3193,7 +3460,7 @@ export class VRSpike {
         new Set(['global']),
       );
       const menuPressed = actions.some((action) =>
-        action.action === SemanticXRAction.Menu && action.hand === 'left' && action.pressed
+        action.action === SemanticXRAction.Menu && action.hand !== VRSpike.dominantHand && action.pressed
       );
       VRSpike.radialMenuPressedLastFrame = menuPressed;
       VRSpike.radialMenuController.synchronizeMenuPressed(menuPressed);
@@ -3279,15 +3546,30 @@ export class VRSpike {
       // Pause and PartyCommand are 'global' context, routed here alongside
       // Recenter for the same reason: this path already runs every XR frame
       // that gameplay owns. Both are edge-triggered.
+      // B is Pause and, held, Cancel combat. Pause toggles when a short press
+      // is RELEASED: toggling on the press paused the game at once, and the
+      // combat cancel (which never fires while paused) could never be reached
+      // by holding B (critic run 11). A press a panel used (closing the VR
+      // Menu) does not pause either.
       const pausePressed = routedActions.some((action) =>
         action.action === SemanticXRAction.Pause && action.pressed
       );
+      const pauseNow = performance.now();
       if (pausePressed && !VRSpike.pauseToggleHeld) {
-        try {
-          VRSpike.hooks?.togglePause?.();
-        } catch (error) {
-          console.error('[VRSpike] pause toggle rejected', error);
+        VRSpike.pauseDownAt = pauseNow;
+      }
+      if (!pausePressed && VRSpike.pauseToggleHeld) {
+        const tap = !VRSpike.pausePressConsumed && VRSpike.pauseDownAt !== null &&
+          pauseNow - VRSpike.pauseDownAt < VR_COMBAT_CANCEL_HOLD_MS;
+        if (tap) {
+          try {
+            VRSpike.hooks?.togglePause?.();
+          } catch (error) {
+            console.error('[VRSpike] pause toggle rejected', error);
+          }
         }
+        VRSpike.pauseDownAt = null;
+        VRSpike.pausePressConsumed = false;
       }
       VRSpike.pauseToggleHeld = pausePressed;
 
@@ -3319,7 +3601,9 @@ export class VRSpike {
 
       const rawMoveAxes = new THREE.Vector2(move.axes[0], -move.axes[1]);
       const inputDirection = rawMoveAxes.clone();
-      const inputMagnitude = Math.min(1, inputDirection.length());
+      // A stick resting a little off centre moved the player; rescaled so
+      // movement starts from zero past the deadzone (critic run 13).
+      const inputMagnitude = applyStickDeadzone(Math.min(1, inputDirection.length()));
       if (inputMagnitude > 0) inputDirection.divideScalar(inputMagnitude);
 
       const orientation = viewerPose.transform.orientation;
@@ -3338,7 +3622,10 @@ export class VRSpike {
 
       // Match the legacy KOTOR camera convention: stick-right decreases
       // world yaw and therefore turns the view and creature to the right.
-      const turnAxisValue = -(turn?.axes?.[0] ?? 0);
+      // Deadzoned: a drifting stick turned the world at 3.5 deg/s from a 0.03
+      // deflection, and flickered the vignette (critic run 13).
+      const rawTurn = -(turn?.axes?.[0] ?? 0);
+      const turnAxisValue = Math.sign(rawTurn) * applyStickDeadzone(Math.abs(rawTurn));
       const useSnapTurn = comfortSettings.turnMode === 'snap';
       const snapTurnDeltaRadians = useSnapTurn
         ? VRSpike.snapTurnController.process(
@@ -3370,15 +3657,29 @@ export class VRSpike {
 
       if (comfortSettings.locomotionMode === 'blink') {
         VRSpike.processTeleportLocomotion(rawMoveAxes, headWorldOrientation);
-        VRSpike.updateComfortVignette(0);
+        VRSpike.updateComfortVignette(0, deltaSeconds);
       } else {
         VRSpike.teleportController.reset();
     VRSpike.clearTeleportMarker();
         applyLocomotion(resolvedLocomotion);
         // Discrete comfort modes (snap turn) don't need the vignette — it's
         // a mitigation for continuous vection, not instant reorientation.
+        // Smooth turning is vection too (critic run 12: the vignette stayed
+        // off for a whole smooth turn); a snap turn is not.
+        const smoothTurning = useSnapTurn ? 0 : Math.min(1, Math.abs(turnAxisValue));
+        // How fast the player actually moves, not how far the stick is
+        // pushed: against a wall the view darkened fully with no movement
+        // (critic run 14). Full strength at a run (about 4 m/s).
+        const position = VRSpike.hooks?.getPlayerPosition?.() ?? null;
+        let movedSpeed = 0;
+        if (position && VRSpike.vignetteLastPosition && deltaSeconds > 0) {
+          movedSpeed = Math.hypot(position.x - VRSpike.vignetteLastPosition.x, position.y - VRSpike.vignetteLastPosition.y) / deltaSeconds;
+        }
+        VRSpike.vignetteLastPosition = position ? { x: position.x, y: position.y } : null;
+        const moving = resolvedLocomotion.magnitude > 0 ? Math.min(1, movedSpeed / 4) : 0;
         VRSpike.updateComfortVignette(
-          comfortSettings.vignetteEnabled ? resolvedLocomotion.magnitude : 0
+          comfortSettings.vignetteEnabled ? Math.max(moving, smoothTurning) : 0,
+          deltaSeconds,
         );
       }
     } catch (error) {
@@ -3389,13 +3690,20 @@ export class VRSpike {
     }
   }
 
-  private static updateComfortVignette(intensity: number): void {
+  /** The vignette eases in and out over ~150 ms; it snapped in one frame (critic run 12). */
+  private static comfortVignetteLevel = 0;
+  private static vignetteLastPosition: { x: number; y: number } | null = null;
+  private static updateComfortVignette(intensity: number, deltaSeconds = 1 / 72): void {
     if (!VRSpike.camera) return;
-    if (intensity <= 0 && !VRSpike.comfortVignetteHost) return;
+    const target = Number.isFinite(intensity) ? Math.min(1, Math.max(0, intensity)) : 0;
+    const step = Math.min(1, Math.max(0, deltaSeconds) / 0.15);
+    VRSpike.comfortVignetteLevel += (target - VRSpike.comfortVignetteLevel) * step;
+    if (VRSpike.comfortVignetteLevel < 0.01 && target === 0) VRSpike.comfortVignetteLevel = 0;
+    if (VRSpike.comfortVignetteLevel <= 0 && !VRSpike.comfortVignetteHost) return;
     if (!VRSpike.comfortVignetteHost) {
       VRSpike.comfortVignetteHost = new VRComfortVignetteHost(VRSpike.camera);
     }
-    VRSpike.comfortVignetteHost.setIntensity(intensity);
+    VRSpike.comfortVignetteHost.setIntensity(VRSpike.comfortVignetteLevel);
   }
 
   /**
@@ -3655,6 +3963,10 @@ export class VRSpike {
     const renderer = VRSpike.renderer;
     const scene = VRSpike.scene;
     if (!renderer || !scene || !VRSpike.camera || !VRSpike.rig) return;
+    // Off unless this frame's world submission turns it on: a theater frame
+    // returns early and used to inherit it (critic run 7).
+    VRSpike.ensureCombatCueAudio();
+    VRSpike.watchPlayerDisabled();
 
     // WebXRManager binds this target before invoking the frame callback.
     // KOTOR's GUI texture renders may replace it with an offscreen target and
@@ -3669,6 +3981,7 @@ export class VRSpike {
     // physical head pose.
     const cutsceneContext = VRSpike.hooks?.getCutsceneContext?.() ?? null;
     const theaterCutscene = !!cutsceneContext && cutsceneContext.presentation !== 'world';
+    VRSpike.theaterHidesWorld = theaterCutscene && cutsceneContext?.hideWorld === true;
     if (VRSpike.followCamera && worldCamera) {
       // A scripted cutscene/dialogue camera cut moves the *player*/*camera*
       // to frame a shot — invisible on flatscreen because FollowerCamera is
@@ -3746,13 +4059,30 @@ export class VRSpike {
     // immediately, so nothing else - cutscenes, the theater path, the
     // flatscreen camera, portraits - observes it hidden.
     const restoreBody = hidePlayerBodyForFirstPerson(playerBody);
+    // While a module loads the engine hides the world scene, panel and all;
+    // draw the loading screen over the dark instead. No floor is drawn: the
+    // blue disc critic run 6 asked for confused the headset player (round 15).
+    const restoreHiddenWorld = revealVRInterfaceOverHiddenWorld(scene);
     try {
       renderer.render(scene, VRSpike.camera);
     } finally {
+      restoreHiddenWorld();
       restoreBody();
     }
     VRSpike.perf.recordXRRender(frameTimestamp);
     renderer.autoClear = prevAutoClear;
+  }
+
+  /**
+   * The theater shows a whole movie or world frame, never a cut-out. World
+   * pixels carry their texture's alpha, which on heads and bodies is the
+   * envmap mask, not coverage: blended, the room behind the theater showed
+   * through faces in the security-camera feeds (round 15, F16).
+   */
+  private static makeTheaterOpaque(host: VRPanelHost): void {
+    const material = host.object.material as THREE.Material;
+    material.transparent = false;
+    material.needsUpdate = true;
   }
 
   private static reportMissingMovieRenderPrerequisite(kind: 'movie' | 'cutscene', hadInputFrame: boolean): void {
@@ -3801,6 +4131,7 @@ export class VRSpike {
           distanceMetres: 2.25,
           widthMetres: 2.4,
         });
+        VRSpike.makeTheaterOpaque(VRSpike.movieHost);
       }
       VRSpike.movieHost.present(
         VRSpike.movieOwner,
@@ -3913,6 +4244,7 @@ export class VRSpike {
     try {
       if (!VRSpike.movieHost) {
         VRSpike.movieHost = new VRPanelHost(worldScene, VRSpike.THEATER_PANEL_OPTIONS);
+        VRSpike.makeTheaterOpaque(VRSpike.movieHost);
       }
       VRSpike.movieHost.present(
         VRSpike.cutsceneOwner,
@@ -3978,7 +4310,19 @@ export class VRSpike {
       if (VRSpike.xrFrameRenderTarget) renderer.setRenderTarget(VRSpike.xrFrameRenderTarget);
       const previousAutoClear = renderer.autoClear;
       renderer.autoClear = true;
-      renderer.render(worldScene, VRSpike.camera);
+      const restoreWorld = VRSpike.theaterHidesWorld
+        ? hideWorldForTheater(worldScene, VRSpike.movieHost.object)
+        : () => {};
+      // The room around the theater is drawn from the player's own eyes, so
+      // the player's own body goes, as in the world path: its hair drew
+      // across the view in the Peragus holorecord (critic runs 15-16).
+      const restoreOwnBody = hidePlayerBodyForFirstPerson(playerBody);
+      try {
+        renderer.render(worldScene, VRSpike.camera);
+      } finally {
+        restoreOwnBody();
+        restoreWorld();
+      }
       VRSpike.perf.recordXRRender(frameTimestamp);
       renderer.autoClear = previousAutoClear;
     } catch (error) {
@@ -3986,6 +4330,9 @@ export class VRSpike {
       console.error('[VRSpike] cutscene theater presentation rejected', error);
     }
   }
+
+  /** This frame's theater is shown over black (VRCutsceneInputContext.hideWorld). */
+  private static theaterHidesWorld = false;
 
   /** Places a newly focused keyboard only after this frame's rig synchronization. */
   private static renderKeyboard(): void {
@@ -4288,6 +4635,7 @@ export class VRSpike {
       VRSpike.bladeSparkHost?.update(nowMs);
       VRSpike.damageFlashHost?.update(nowMs);
       VRSpike.droidExplosionHost?.update(nowMs);
+      VRSpike.presentHealthPlate();
     } catch (error) {
       if (!VRSpike.combatVisualsErrorReported) {
         VRSpike.combatVisualsErrorReported = true;
@@ -4307,12 +4655,23 @@ export class VRSpike {
     worldScene: THREE.Object3D,
     nowMs: number,
   ): void {
+    VRSpike.voiceUnhurtHitOnPlayer(nowMs);
     const events = VRSpike.attackResultObserver.observe(snapshots);
     const session = VRSpike.session;
     if (!session) return;
     for (const event of events) {
       // ROADMAP 3.14: remember who last hit the player, so the hit-point drop
       // that follows can be shown on the right side.
+      if (localActorId !== null && event.targetId === localActorId) {
+        VRSpike.lastAttackOnPlayer = { attackerId: event.attackerId, targetId: event.targetId };
+        if (HIT_ATTACK_RESULTS.has(event.attackResult)) {
+          VRSpike.pendingHitOnPlayer = {
+            atMs: nowMs, critical: event.attackResult === CRITICAL_ATTACK_RESULT,
+            attackerId: event.attackerId, targetId: event.targetId,
+          };
+        }
+
+      }
       if (localActorId !== null && event.targetId === localActorId && HIT_ATTACK_RESULTS.has(event.attackResult)) {
         const attacker = snapshots.find((snapshot) => snapshot.id === event.attackerId);
         if (attacker?.position) {
@@ -4333,6 +4692,28 @@ export class VRSpike {
       // A deflection is felt when the bolt reaches the blade, not when it leaves the gun.
       const delayMs = feedback.effect === 'deflect' ? BOLT_TRAVEL_MS : 0;
       VRSpike.playHapticSequence(session, VRSpike.dominantHand, feedback.pulses, feedback.gapMs, delayMs);
+      // Heard and seen as well as felt: round 12 felt no haptics at all.
+      const cue = cueForVRCombatOutcome(feedback.outcome);
+      if (cue) {
+        const placed = VRSpike.hooks?.resolveCombatCueSounds?.(event.attackerId, event.targetId, cue) ?? null;
+        VRSpike.playCombatCue(cue, delayMs, false, placed);
+      }
+      if (feedback.role === 'attacker' && (feedback.outcome === 'hit' || feedback.outcome === 'critical')) {
+        const attacker = snapshots.find((snapshot) => snapshot.id === event.attackerId);
+        const struck = attacker?.attackTargetAimPoint
+          ?? (attacker?.attackTargetPosition
+            ? attacker.attackTargetPosition.clone().setZ(attacker.attackTargetPosition.z + VR_MUZZLE_HEIGHT_METRES)
+            : null);
+        if (struck) {
+          const sparks = VRSpike.ensureBladeSparkHost(worldScene);
+          if (feedback.outcome === 'critical') {
+            sparks.spark(struck, nowMs, 0, 1.8);
+            sparks.spark(struck, nowMs, 90, 2.2);
+          } else {
+            sparks.spark(struck, nowMs);
+          }
+        }
+      }
       if (feedback.effect === 'clash') {
         const bladePoint = VRSpike.resolveBladeContactPoint();
         if (bladePoint) VRSpike.ensureBladeSparkHost(worldScene).spark(bladePoint, nowMs);
@@ -4348,19 +4729,53 @@ export class VRSpike {
       headForward: head ? new THREE.Vector3(0, 0, -1).applyQuaternion(head.orientation) : null,
       nowMs,
     });
-    if (damage) VRSpike.presentDamage(session, damage, nowMs);
+    // Already down before this drop: no hurt sound, haptics or flash over
+    // the defeat screen (critic run 14: two hurt cues after death).
+    const hp = typeof local?.hitPoints === 'number' ? local.hitPoints : null;
+    const wasDown = VRSpike.lastLocalHitPoints !== null && VRSpike.lastLocalHitPoints <= 0;
+    // Below a quarter of the pool, once per drop: only the wrist number said
+    // so (critic run 20). A notice and a pulse in both hands.
+    const maxHp = typeof (local as any)?.maxHitPoints === 'number' ? (local as any).maxHitPoints : null;
+    if (hp !== null && maxHp && hp > 0) {
+      const low = hp <= maxHp * 0.25;
+      if (low && !VRSpike.lowHealthWarned) {
+        VRSpike.lowHealthWarned = true;
+        VRSpike.showNotice(`Low health: ${hp} / ${maxHp}`, 2500);
+        try {
+          VRSpike.pulseHand('left', { durationMs: 160, amplitude: 0.8 });
+          VRSpike.pulseHand('right', { durationMs: 160, amplitude: 0.8 });
+        } catch { /* haptics optional */ }
+      } else if (!low && hp > maxHp * 0.35) {
+        VRSpike.lowHealthWarned = false;
+      }
+    }
+    VRSpike.lastLocalHitPoints = hp;
+    if (damage && !wasDown) VRSpike.presentDamage(session, damage, nowMs);
   }
 
   /**
    * ROADMAP 3.14 — a red edge on the side the hit came from, and a pulse in
    * that side's hand. Front, behind and unattributed hits use both.
    */
+  private static lastLocalHitPoints: number | null = null;
+  private static lowHealthWarned = false;
+  private static neckZoneChimedAt = Number.NEGATIVE_INFINITY;
+
   private static presentDamage(session: XRSession, damage: VRDamageEvent, nowMs: number): void {
     const pattern = damage.side === 'unknown'
       ? DAMAGE_UNATTRIBUTED_HAPTIC
       : damage.critical ? DAMAGE_CRITICAL_HAPTIC : DAMAGE_HAPTIC;
     const hands: XRHandRole[] = damage.side === 'left' ? ['left'] : damage.side === 'right' ? ['right'] : ['left', 'right'];
     for (const hand of hands) void VRSpike.haptics.pulse(session, hand, pattern);
+    // The hurt sound plays with the red edge, on the HP drop, whatever did
+    // the damage (a blaster, a grenade, a Force power, poison). Voicing it
+    // from the attacker's Hit event left every ranged hit silent: retail
+    // ranged attack animations have no Hit event (critic run 10).
+    VRSpike.pendingHitOnPlayer = null;
+    const hurtCue = damage.critical ? 'hurt-critical' : 'hurt';
+    const lastHit = VRSpike.lastAttackOnPlayer;
+    VRSpike.playCombatCue(hurtCue, 0, false,
+      lastHit ? VRSpike.hooks?.resolveCombatCueSounds?.(lastHit.attackerId, lastHit.targetId, hurtCue) ?? null : null);
 
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
     if (comfort.damageFlashEnabled === false || !VRSpike.camera) return;
@@ -4373,6 +4788,167 @@ export class VRSpike {
         console.error('[VRSpike] damage flash rejected', error);
       }
     }
+  }
+
+  /**
+   * Round 14: "Force powers didn't seem to work at all." They cast (the log
+   * shows Force Valor's script running), but a power's effects play on the
+   * player's own body, which is hidden in first person, so nothing told the
+   * player it went off. A rising tone and a blue burst at the casting hand.
+   */
+  static presentLocalForceCast(): void {
+    VRSpike.playCombatCue('force');
+    const scene = VRSpike.scene;
+    const hand = VRSpike.controllerAnchorHost?.getAnchor(VRSpike.dominantHand === 'right' ? 'left' : 'right')
+      ?? VRSpike.controllerAnchorHost?.getAnchor(VRSpike.dominantHand) ?? null;
+    if (!scene || !hand) return;
+    const at = hand.getWorldPosition(new THREE.Vector3());
+    const sparks = VRSpike.ensureBladeSparkHost(scene);
+    const now = performance.now();
+    sparks.spark(at, now, 0, 1.6, 0x6fc8ff);
+    sparks.spark(at, now, 120, 2.4, 0x9fe0ff);
+  }
+
+  /** A refused request (grenade out of range, no target, save refused). */
+  /**
+   * Refusals and saves are interface feedback, not combat sounds: they play
+   * with Combat Sounds off, since a refusal heard by nobody is silent again
+   * (critic run 4).
+   */
+  static playRefusedCue(): void {
+    VRSpike.playCombatCue('refused', 0, true);
+  }
+
+  /**
+   * The retail error sound and, in view, why (critic runs 4-5: one sound
+   * for every refusal, nothing for a player who cannot hear it).
+   */
+  static signalRefusal(shape: string): void {
+    VRSpike.playRefusedCue();
+    const text = describeVRRefusal(shape);
+    if (!text || !VRSpike.camera) return;
+    try {
+      if (!VRSpike.refusalNoticeHost) VRSpike.refusalNoticeHost = new VRRefusalNoticeHost(VRSpike.camera);
+      VRSpike.refusalNoticeHost.show(text, performance.now());
+    } catch (error) {
+      console.error('[VRSpike] refusal notice rejected', error);
+    }
+  }
+
+  private static refusalNoticeHost: VRRefusalNoticeHost | null = null;
+  private static controlsHintShown = false;
+
+
+  /**
+   * Creates the cue player as the session's frames begin and preloads every
+   * retail sound it may use (critic run 7: created on the first cue, and only
+   * the defaults were preloaded).
+   */
+  private static ensureCombatCueAudio(): void {
+    if (VRSpike.combatCueAudio) return;
+    try {
+      const output = VRSpike.hooks?.getCombatCueAudioOutput?.();
+      if (!output) return;
+      VRSpike.combatCueAudio = new VRCombatCueAudio(output.context, output.destination, output.loadSound);
+      void VRSpike.combatCueAudio.preload([
+        ...VRCombatCueAudio.defaultSounds(),
+        ...(VRSpike.hooks?.getCombatCuePreloadSounds?.() ?? []),
+      ]);
+    } catch (error) {
+      console.error('[VRSpike] combat cue audio setup rejected', error);
+    }
+  }
+
+  /** Shown for as long as the effect holds the player (critic run 7: 1.8 s of a 6 s stun, feat stuns only). */
+  private static lastDisabledState: string | null = null;
+  private static watchPlayerDisabled(): void {
+    let state: string | null = null;
+    try { state = VRSpike.hooks?.getPlayerDisabledState?.() ?? null; } catch { state = null; }
+    if (state) VRSpike.showNotice(state, 600);
+    VRSpike.lastDisabledState = state;
+  }
+
+  /** A short line low in view, without the error sound (a status, not a refusal). */
+  static showNotice(text: string, holdMs?: number, tone: 'refusal' | 'info' = 'refusal'): void {
+    if (!text || !VRSpike.camera) return;
+    try {
+      if (!VRSpike.refusalNoticeHost) VRSpike.refusalNoticeHost = new VRRefusalNoticeHost(VRSpike.camera);
+      VRSpike.refusalNoticeHost.show(text, performance.now(), holdMs, tone);
+    } catch (error) {
+      console.error('[VRSpike] notice rejected', error);
+    }
+  }
+
+  static playSavedCue(): void {
+    VRSpike.playCombatCue('saved', 0, true);
+  }
+
+  /** The weapon family whose retail sounds the combat cues use. */
+  private static lastCombatWeaponMode: CombatWeaponMode = 'unarmed';
+  private static combatCueWeapon(): VRCombatCueWeapon {
+    const mode = VRSpike.lastCombatWeaponMode;
+    if (mode === 'blaster') return 'ranged';
+    if (mode === 'unarmed') return 'unarmed';
+    return 'melee';
+  }
+
+  /** A combat result you can hear, unless Combat Sounds is off. */
+  /**
+   * A hit on the player that the HP drop has not voiced yet. Damage is applied
+   * with the roll, so a hit that takes HP is voiced within a frame or two; one
+   * that takes none (a shield) is voiced 0.3 s after the roll.
+   */
+  private static pendingHitOnPlayer: { atMs: number; critical: boolean; attackerId: string | number; targetId: string | number } | null = null;
+  private static voiceUnhurtHitOnPlayer(nowMs: number): void {
+    const pending = VRSpike.pendingHitOnPlayer;
+    if (!pending || nowMs - pending.atMs < 300) return;
+    VRSpike.pendingHitOnPlayer = null;
+    VRSpike.playHurtCue(pending.attackerId, pending.targetId, pending.critical);
+  }
+
+  /** A blow on the player: the attacker's weapon on the player's material. */
+  static playHurtCue(attackerId: string | number, targetId: string | number, critical: boolean): void {
+    const cue = critical ? 'hurt-critical' : 'hurt';
+    VRSpike.playCombatCue(cue, 0, false, VRSpike.hooks?.resolveCombatCueSounds?.(attackerId, targetId, cue) ?? null);
+  }
+
+  /** Who last attacked the player, so the hurt cue uses their weapon. */
+  private static lastAttackOnPlayer: { attackerId: string | number; targetId: string | number } | null = null;
+
+  private static playCombatCue(cue: VRCombatCue, delayMs = 0, always = false, options: VRCombatCuePlayOptions | null = null): void {
+    const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
+    if (!always && comfort.combatSoundsEnabled === false) return;
+    try {
+      if (!VRSpike.combatCueAudio) {
+        const output = VRSpike.hooks?.getCombatCueAudioOutput?.();
+        if (!output) return;
+        VRSpike.combatCueAudio = new VRCombatCueAudio(output.context, output.destination, output.loadSound);
+        void VRSpike.combatCueAudio.preload(VRCombatCueAudio.defaultSounds());
+      }
+      void VRSpike.combatCueAudio.play(cue, delayMs, VRSpike.combatCueWeapon(), options ?? {});
+    } catch (error) {
+      if (!VRSpike.combatCueAudioErrorReported) {
+        VRSpike.combatCueAudioErrorReported = true;
+        console.error('[VRSpike] combat cue sound rejected', error);
+      }
+    }
+  }
+
+  /** HP and FP on the off-hand wrist, shown when the player glances at it. */
+  private static presentHealthPlate(): void {
+    const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
+    const offHand: XRHandRole = VRSpike.dominantHand === 'right' ? 'left' : 'right';
+    const anchor = VRSpike.controllerAnchorHost?.getAnchor(offHand) ?? null;
+    if (comfort.healthPlateEnabled === false || !anchor || !VRSpike.camera) {
+      VRSpike.healthPlateHost?.clear();
+      return;
+    }
+    if (!VRSpike.healthPlateHost || VRSpike.healthPlateHost.object.parent !== anchor) {
+      VRSpike.healthPlateHost?.dispose();
+      VRSpike.healthPlateHost = new VRHealthPlateHost(anchor);
+    }
+    const head = VRSpike.camera.getWorldPosition(new THREE.Vector3());
+    VRSpike.healthPlateHost.present(VRSpike.hooks?.getPlayerVitals?.() ?? null, head);
   }
 
   private static ensureBladeSparkHost(worldScene: THREE.Object3D): VRBladeSparkHost {
@@ -4571,6 +5147,18 @@ export class VRSpike {
       facing + Math.PI / 2 + VRSpike.yawOffset + VRSpike.turnYaw
     );
 
+    // A leader switch (Y) puts the player in another body: seat the head over
+    // it. The rig stayed where the old leader stood, beside the new one, whose
+    // hood and braids filled the view until the stick moved (critic run 19).
+    let controlledId: number | null = null;
+    try { controlledId = VRSpike.hooks?.getControlledActorId?.() ?? null; } catch { controlledId = null; }
+    if (controlledId !== VRSpike.lastControlledActorId) {
+      if (VRSpike.lastControlledActorId !== undefined) {
+        VRSpike.rigAnchorPending = true;
+        VRSpike.steadiedFeet = null;
+      }
+      VRSpike.lastControlledActorId = controlledId;
+    }
     const feet = VRSpike.hooks?.getPlayerPosition() ?? null;
     const localHead = VRSpike.latestLocalHeadPosition;
     const headOffset = localHead ? localHead.clone().applyQuaternion(rig.quaternion) : null;
@@ -4601,7 +5189,7 @@ export class VRSpike {
     VRSpike.lastRigFacing = facing;
 
     if (feet) {
-      rig.position.copy(feet);
+      rig.position.copy(VRSpike.steadyFeetAtWalls(feet, resumedAfterGap));
     } else {
       if (!VRSpike.syncRigFallbackReported) {
         VRSpike.syncRigFallbackReported = true;

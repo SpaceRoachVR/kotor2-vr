@@ -66,6 +66,7 @@ export class MenuAbilities extends K1_MenuAbilities {
         this.close();
       });
       this._button_b = this.BTN_EXIT;
+      this.LB_ABILITY.onSelected = (node: any) => this.describeAbility(node);
 
       this.BTN_SKILLS.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -112,6 +113,9 @@ export class MenuAbilities extends K1_MenuAbilities {
     const groups = [];
     for (let i = 0; i < knownFeats.length; i++) {
       const feat = knownFeats[i];
+      // Internal rows have no icon ("Complex Unarmed Animations" drew a white
+      // square with a blank pane; critic run 15).
+      if (!feat || /^XXXX/i.test(String((feat as any).label ?? '')) || !String((feat as any).icon ?? '').trim() || String((feat as any).icon).trim() === '****') continue;
       const group: TalentFeat[] = [];
       const prereqfeat1 = feats[feat.prereqFeat1];
       const prereqfeat2 = feats[feat.prereqFeat2];
@@ -119,7 +123,11 @@ export class MenuAbilities extends K1_MenuAbilities {
         group.push(feat);
         for (let j = 0; j < featCount; j++) {
           const chainFeat = feats[j];
-          if (chainFeat.prereqFeat1 == i || chainFeat.prereqFeat2 == i) {
+          // Successors of THIS feat, by feat id: comparing against the list
+          // position `i` chained unrelated feats (Power Attack -> Improved
+          // Flurry, critic run 13). Internal rows (XXXX_*) are never shown.
+          if (!chainFeat || /^XXXX/i.test(String((chainFeat as any).label ?? ''))) continue;
+          if (chainFeat.prereqFeat1 == feat.id || chainFeat.prereqFeat2 == feat.id) {
             if (chainFeat.prereqFeat1 != -1 && chainFeat.prereqFeat2 != -1) {
               group[2] = chainFeat;
             } else {
@@ -145,7 +153,7 @@ export class MenuAbilities extends K1_MenuAbilities {
     const allowedTypes = [1, 6];
     const knownSpells: any[] = [];
 
-    const unknownSpells: number[] = [176, 177, 178, 179, 180, 181, 182];
+
 
     const allowedSpells: any[] = [];
     for (let i = 0; i < spellCount; i++) {
@@ -156,7 +164,10 @@ export class MenuAbilities extends K1_MenuAbilities {
       //skip unsupported spells
       if(allowedTypes.indexOf(usertype) == -1){ continue; }
 
-      if(!GameState.PartyManager.party[0].getHasSpell(id) && unknownSpells.indexOf(id) == -1){ continue; }
+      // Only powers the character knows. Spells 176-182 (unused rows, one
+      // named "Super duper advanced lightning") were always added and showed
+      // as nine "?" icons and the screen's title (critic run 12).
+      if(!GameState.PartyManager.party[0].getHasSpell(id)){ continue; }
 
       allowedSpells.push(spell);
     }
@@ -266,7 +277,83 @@ export class MenuAbilities extends K1_MenuAbilities {
     console.log(this.LB_ABILITY.GUIProtoItemClass);
 
     this.LB_ABILITY.setItems(items);
+    // Describe the first entry: nothing was selected on open, so the pane
+    // showed the GUI's placeholder ("Super duper advanced lightning", +00).
+    this.describeAbility(items[0]);
 
+  }
+
+  /**
+   * Fills the name, value boxes and description for the selected entry (none
+   * of it was ever filled; critic runs 12-13). Skills: rank, ability and feat
+   * bonus, total. Powers: base Force point cost, alignment adjustment, cost
+   * for this character.
+   */
+  /** The Powers icons report here: name, text and the cost boxes together (critic run 14). */
+  describeSpell(spell: any){
+    this.describeAbility(spell);
+  }
+
+  describeFeat(feat: any){
+    this.describeAbility(feat);
+  }
+
+  describeAbility(node: any){
+    const creature: any = GameState.PartyManager.party[0];
+    const signed = (n: number) => (n >= 0 ? '+' : '') + String(n).padStart(2, '0');
+    const tlk = (id: unknown) => {
+      const n = Number(id);
+      return Number.isInteger(n) && n >= 0 ? String(GameState.TLKManager.GetStringById(n)?.Value ?? '') : '';
+    };
+    try{
+      if(!node){
+        this.LBL_NAME?.setText('');
+        this.getDescriptionList()?.setItem(null);
+        return;
+      }
+      if(this.filter === AbilityFilter.SKILLS){
+        // The boxes' captions are the Powers tab's by default ("Base Cost /
+        // Dark Side / Total Rank" over a skill; critic run 14).
+        this.LBL_SKILLRANK?.setText(tlk(1579));
+        this.LBL_BONUS?.setText(tlk(32129));
+        this.LBL_TOTAL?.setText(tlk(41904));
+        const rank = Number(node.rank) || 0;
+        const total = typeof creature?.getSkillTotal === 'function' ? creature.getSkillTotal(node.id) : rank;
+        this.LBL_NAME?.setText(node.getName?.() ?? '');
+        this.LBL_RANKVAL?.setText(String(rank).padStart(2, '0'));
+        this.LBL_BONUSVAL?.setText(signed(total - rank));
+        this.LBL_TOTALVAL?.setText(String(total).padStart(2, '0'));
+        this.LB_DESC.setItem(node.getDescription?.() || null);
+        return;
+      }
+      if(this.filter === AbilityFilter.POWERS){
+        const group: any[] = Array.isArray(node) ? node.filter(Boolean) : [node];
+        const row = group[group.length - 1];
+        const id = Number(row?.__index);
+        const base = Number.parseInt(String(row?.forcepoints ?? '0'), 10) || 0;
+        let cost = base;
+        try{ cost = new GameState.TalentSpell(id).getForcePointCostFor(creature); }catch(e){}
+        const side = String(row?.goodevil ?? '').trim().toUpperCase();
+        this.LBL_SKILLRANK?.setText(tlk(37655));
+        this.LBL_BONUS?.setText(side === 'G' ? tlk(41891) : side === 'E' ? tlk(41890) : '');
+        this.LBL_TOTAL?.setText('Cost');
+        this.LBL_NAME?.setText(tlk(row?.name));
+        this.LBL_RANKVAL?.setText(String(base).padStart(2, '0'));
+        this.LBL_BONUSVAL?.setText(signed(cost - base));
+        this.LBL_TOTALVAL?.setText(String(cost).padStart(2, '0'));
+        this.LB_DESC.setItem(tlk(row?.spelldesc) || null);
+        return;
+      }
+      const group: any[] = Array.isArray(node) ? node.filter(Boolean) : [node];
+      // The highest feat of the chain this character owns: the last of the
+      // chain described an unowned Weapon Specialization (critic run 14).
+      const owned = group.filter((f: any) => typeof creature?.getHasFeat !== 'function' || creature.getHasFeat(f?.id));
+      const feat = owned[owned.length - 1] ?? group[0];
+      this.LBL_NAME?.setText(tlk(feat?.name));
+      this.LB_DESC_FEATS.setItem(tlk(feat?.description) || null);
+    }catch(e){
+      console.warn('MenuAbilities: describe failed', e);
+    }
   }
   
 }

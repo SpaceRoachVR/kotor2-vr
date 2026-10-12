@@ -414,6 +414,20 @@ export class GFFField {
   setValue(val: any): this {
 
     switch(this.type){
+      // 64-bit fields are written from `data`: a value set any other way was
+      // written as zero bytes, and read back as the next field's data (a save
+      // TIMESTAMP read as 1601, critic run 7).
+      case GFFDataType.DWORD64:
+      case GFFDataType.INT64: {
+        const bytes = new Uint8Array(8);
+        const view = new DataView(bytes.buffer);
+        const big = typeof val === 'bigint' ? val : BigInt(Math.trunc(Number(val) || 0));
+        if(this.type === GFFDataType.DWORD64) view.setBigUint64(0, BigInt.asUintN(64, big), true);
+        else view.setBigInt64(0, BigInt.asIntN(64, big), true);
+        this.setData(bytes);
+        this.value = big;
+        return this;
+      }
       case GFFDataType.CEXOLOCSTRING:
         if(val instanceof CExoLocString){
           this.cexoLocString = val;

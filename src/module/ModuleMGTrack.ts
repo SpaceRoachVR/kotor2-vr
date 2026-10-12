@@ -55,7 +55,7 @@ export class ModuleMGTrack extends ModuleObject {
     });
 
     try{
-      console.log('track', model);
+      console.log('track', model?.name);
       this.model = model;
       model.name = this.track;
     }catch(e){

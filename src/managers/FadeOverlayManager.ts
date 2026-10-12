@@ -57,6 +57,26 @@ export class FadeOverlayManager {
     FadeOverlayManager.material.opacity = duration === 0 ? 0 : 1;
   }
 
+  /**
+   * No fade at all: the overlay is hidden and nothing is in progress.
+   *
+   * The fade only advances during in-game updates. Quitting to the main menu
+   * left a load's fade-to-black (or a half-finished fade-in) frozen at full
+   * opacity; flat, the main menu is drawn over it, but every VR panel
+   * composites the fade quad, so the main menu came up solid black in the
+   * headset (round 14: "selected close game from the menu ... the screen is
+   * black").
+   */
+  static Clear(){
+    FadeOverlayManager.state = FadeOverlayState.NONE;
+    FadeOverlayManager.elapsed = 0;
+    FadeOverlayManager.duration = 0;
+    FadeOverlayManager.wait = 0;
+    FadeOverlayManager.holdForScript = false;
+    FadeOverlayManager.material.opacity = 0;
+    FadeOverlayManager.material.visible = false;
+  }
+
   static FadeInFromCutscene(){
     if(FadeOverlayManager.state == FadeOverlayState.FADED_OUT || FadeOverlayManager.state == FadeOverlayState.FADING_OUT){
       FadeOverlayManager.FadeIn(1, 0, 0, 0);

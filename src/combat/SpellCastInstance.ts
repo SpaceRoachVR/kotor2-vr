@@ -33,6 +33,8 @@ export class SpellCastInstance {
   iconresref: any;
   projectileHook: any;
   projectileOrigin: THREE.Vector3;
+  /** Launched from the VR throwing hand rather than the body's hand bone. */
+  projectileFromVRHand = false;
   projectileTarget: THREE.Vector3;
   projectileCurve: THREE.QuadraticBezierCurve3;
 
@@ -96,9 +98,21 @@ export class SpellCastInstance {
           context: this.owner.context
         }).then((model: OdysseyModel3D) => {
           this.projectile = model;
-          console.log('projectile', model);
-          if(this.owner.model){
+          console.log('projectile loaded', this.spell.projmodel);
+          // In VR the player's body is hidden and its hand bone sits at the
+          // hip: the grenade appeared there (critic runs 14-17). VR supplies
+          // the throwing controller instead.
+          const vrHook = GameState.resolveVRProjectileHook?.(this.owner) ?? null;
+          if(vrHook){
+            // At the hand before its first frame: it drew at the world origin
+            // for ~100 ms (critic run 18).
+            vrHook.getWorldPosition(model.position);
+            this.owner.context.group.effects.add(model);
+            this.projectileHook = vrHook;
+            this.projectileFromVRHand = true;
+          }else if(this.owner.model){
             if(this.owner.model.rhand){
+              this.owner.model.rhand.getWorldPosition(model.position);
               this.owner.context.group.effects.add(model);
               this.projectileHook = this.owner.model.rhand;
               //TextureLoader.LoadQueue();
@@ -128,7 +142,10 @@ export class SpellCastInstance {
     }else if(this.castTime > 0){
       this.conjuring = false;
 
-      this.castTimeProgress = this.castTime / (this.spell.getCastTime() * 0.5);
+      // The flatscreen throw animation holds the grenade for the first half of
+      // the cast. A VR throw has already left the hand: it flies the whole
+      // cast (critic run 18: it sat in the hand ~1 s after the pull).
+      this.castTimeProgress = this.castTime / (this.spell.getCastTime() * (this.projectileFromVRHand ? 1 : 0.5));
       if(this.castTimeProgress > 1){
         this.castTimeProgress = 1;
       }
@@ -191,7 +208,7 @@ export class SpellCastInstance {
     }
 
     if(this.impactscript){
-      console.log('Casting spell', this.impactscript, this);
+      console.log('Casting spell', this.impactscript);
       const instance = GameState.NWScript.Load(this.impactscript);
       if(instance) {
         //pass the talent to the script instance and run it
@@ -231,6 +248,9 @@ export class SpellCastInstance {
     }
 
     if(this.projectile){
+      // Disposed but left in the scene, every spent grenade stayed visible
+      // for the rest of the session (critic run 18).
+      this.projectile.removeFromParent();
       this.projectile.dispose();
     }
 
@@ -239,7 +259,7 @@ export class SpellCastInstance {
   dispose(){
 
     if(this.casthandmodel) this.casthandmodel.dispose();
-    if(this.projectile) this.projectile.dispose();
+    if(this.projectile){ this.projectile.removeFromParent(); this.projectile.dispose(); }
     if(this.container) this.container.removeFromParent();
   }
 

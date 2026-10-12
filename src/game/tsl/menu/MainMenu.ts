@@ -87,6 +87,7 @@ export class MainMenu extends K1_MainMenu {
             window.close();
             return;
           }
+          if(GameState.onMenuQuit?.()) return;
           alert('To exit the game in your browser, close this tab or window. For the best experience, open the game from the KotOR.js launcher so Exit Game works from the menu.');
         }
       });
@@ -106,7 +107,7 @@ export class MainMenu extends K1_MainMenu {
           // manageLighting: false,
           context: this._3dView
         }).then((model: OdysseyModel3D) => {
-          console.log('Model Loaded', model);
+          console.log('Model Loaded', model?.name);
           this._3dViewModel = model;
           
           this._3dView.camera.position.copy(model.camerahook.position);

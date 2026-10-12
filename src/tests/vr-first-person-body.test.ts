@@ -73,7 +73,7 @@ describe('first-person body suppression is wired to the right render', () => {
   test('applies to the first-person world submission', () => {
     const at = spike.indexOf('const restoreBody = hidePlayerBodyForFirstPerson(playerBody);');
     expect(at).toBeGreaterThan(-1);
-    const block = spike.slice(at, at + 300);
+    const block = spike.slice(at, at + 700);
     expect(block).toContain('renderer.render(scene, VRSpike.camera);');
     // Restored in a finally, so a throwing render cannot leave the player
     // permanently invisible to every other camera.
@@ -92,7 +92,11 @@ describe('first-person body suppression is wired to the right render', () => {
     const cutsceneAt = spike.indexOf('private static renderCutscene(');
     expect(cutsceneAt).toBeGreaterThan(-1);
     const cutscene = spike.slice(cutsceneAt);
-    expect(cutscene.split('hidePlayerBodyForFirstPerson(').length - 1).toBe(1);
+    // Two passes: the theater shot (hidden only when its camera is inside the
+    // body) and the room around the theater, drawn from the player's own eyes
+    // (always hidden there; critic runs 15-16: the player's hair in view).
+    expect(cutscene.split('hidePlayerBodyForFirstPerson(').length - 1).toBe(2);
+    expect(cutscene).toMatch(/const restoreOwnBody = hidePlayerBodyForFirstPerson\(playerBody\);\s*try \{\s*renderer\.render\(worldScene, VRSpike\.camera\)/);
     expect(cutscene).toMatch(/isCameraInsideBody\(cameraPosition, feet\)\s*\?\s*hidePlayerBodyForFirstPerson\(playerBody\)/);
 
     const movieAt = spike.indexOf('static renderMovie(');
@@ -142,5 +146,30 @@ describe('isCameraInsideBody', () => {
 
   test('bad numbers never hide the body', () => {
     expect(isCameraInsideBody({ x: NaN, y: 0, z: 0 }, feet)).toBe(false);
+  });
+});
+
+// Round 14 (N4): playing as T3, the Shock Arm and Flame Thrower beams hang off
+// T3's model, and first person hid the whole model with them.
+describe('effects riding on the hidden body', () => {
+  const { markVisibleInFirstPerson } = require('@/vr/runtime/VRFirstPersonBody');
+  test('a marked effect stays drawn while the body is hidden, and all is restored', () => {
+    const THREE_ = require('three');
+    const body = new THREE_.Group();
+    const torso = new THREE_.Object3D();
+    const hand = new THREE_.Object3D();
+    const beam = new THREE_.Object3D();
+    const glove = new THREE_.Object3D();
+    body.add(torso, hand);
+    hand.add(beam, glove);
+    markVisibleInFirstPerson(beam);
+    const restore = hidePlayerBodyForFirstPerson(body);
+    expect(body.visible).toBe(true);
+    expect(torso.visible).toBe(false);
+    expect(hand.visible).toBe(true);
+    expect(glove.visible).toBe(false);
+    expect(beam.visible).toBe(true);
+    restore();
+    expect(torso.visible && glove.visible && beam.visible).toBe(true);
   });
 });

@@ -297,17 +297,18 @@ export class ModuleObjectManager {
     results = results.concat(this.module.area.doors);
     results = results.concat(this.module.area.placeables);
 
-    results.sort(
-      function(a,b) {
-        try{
-          let distanceA = a.position.distanceTo(oObject.position);
-          let distanceB = b.position.distanceTo(oObject.position);
-          return (distanceB > distanceA) ? -1 : ((distanceA > distanceB) ? 1 : 0);
-        }catch(e){
-          return 0;
-        }
+    // Nearest first, from the given object or else the leader. Called every
+    // frame with no object (the cursor's hover scan), the old comparator threw
+    // on every comparison, ~900 caught exceptions a frame in 102PER, and left
+    // the list unsorted (round 15 perf).
+    const origin: any = oObject?.position ?? (PartyManager.party[0] as any)?.position;
+    if(origin){
+      const distance = new Map<ModuleObject, number>();
+      for(const o of results){
+        distance.set(o, o?.position ? o.position.distanceToSquared(origin) : Infinity);
       }
-    );
+      results.sort((a, b) => distance.get(a) - distance.get(b));
+    }
 
     let result: any;
     let count = results.length;
@@ -649,6 +650,12 @@ export class ModuleObjectManager {
 
     if((oType & NWModuleObjectType.CREATURE) == NWModuleObjectType.CREATURE){ //CREATURE
       object_pool = object_pool.concat(this.module.area.creatures);
+      // The party is not in the area's creature list: no grenade, area power
+      // or explosion could reach the player or companions, enemy or own
+      // (critic run 16: a frag at 2.6 m gave the thrower no Reflex save).
+      for (const member of PartyManager.party) {
+        if (member && !object_pool.includes(member as any)) object_pool.push(member as any);
+      }
     }
 
     if((oType & NWModuleObjectType.ITEM) == NWModuleObjectType.ITEM){ //ITEM
@@ -806,8 +813,16 @@ export class ModuleObjectManager {
         continue;
       }
 
-      //Ignore objects that we don't have line of sight to
-      const hasLineOfSight = obj.hasLineOfSight(player, GameState.maxSelectableDistance);
+      //Ignore objects that we don't have line of sight to. The player's sight
+      //line, not the object's perception: a mining droid in plain view 6 m
+      //away could not be targeted because its own perception range is short
+      //(critic run 11).
+      // Either way round: from the player's side a wall-mounted console's
+      // centre can sit just behind the room's own walls (critic run 12: the
+      // Central Controller stopped being usable), while the object's own
+      // perception range is too short for a droid in plain view.
+      const hasLineOfSight = player.hasLineOfSight(obj, GameState.maxSelectableDistance, true) ||
+        obj.hasLineOfSight(player, GameState.maxSelectableDistance, true);
       if(!hasLineOfSight){
         continue;
       }

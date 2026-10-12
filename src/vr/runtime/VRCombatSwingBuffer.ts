@@ -51,6 +51,12 @@ export type VRCombatSwingDropReason =
  * a pause would fire on resume with nobody asking for it.
  */
 const BUFFERABLE_REASONS: ReadonlySet<VRCombatTempoGateReason> = new Set<VRCombatTempoGateReason>([
+  // The engine holds a round paused for the whole of an attack
+  // (ActionPhysicalAttacks pauses it ROUND_LENGTH) and for half a round when
+  // the creature is attacked, so in a real fight almost every swing between
+  // round openings lands here. Not buffering it threw those swings away
+  // (critic run 3); the player's own pause is EngineState.PAUSED, not this.
+  'round-paused',
   'round-active',
   'scheduled-action-pending',
   'player-action-committed',

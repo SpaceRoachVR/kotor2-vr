@@ -1,5 +1,6 @@
 import type { GUILabel, GUIListBox, GUIButton } from "@/gui";
 import { MenuMessages as K1_MenuMessages } from "@/game/kotor/KOTOR";
+import { GameState } from "@/GameState";
 
 enum MessageType {
   DIALOG = 1,
@@ -58,6 +59,8 @@ export class MenuMessages extends K1_MenuMessages {
         e.stopPropagation();
         this.close();
       });
+      // B closes it, as the Exit button does (critic run 14: B did nothing here).
+      this._button_b = this.BTN_EXIT;
 
       this.BTN_DIALOG.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -85,6 +88,18 @@ export class MenuMessages extends K1_MenuMessages {
 
       resolve();
     });
+  }
+
+  show(){
+    super.show();
+    // TSL has a Combat list; K1's show() put every line under Feedback and
+    // left Combat empty (critic runs 16-17).
+    const entries = GameState.FeedbackMessageManager.Entries.slice(0).reverse();
+    // Lines saved by older builds carry dialog.tlk sort prefixes ("{05}").
+    const clean = (e: any) => String(e.message ?? '').replace(/\{\d+\}/g, '');
+    this.LB_MESSAGES.setItems(entries.filter((e: any) => !e.combat).map(clean));
+    this.LB_COMBAT.setItems(entries.filter((e: any) => e.combat).map(clean));
+    this.updateListVisibility();
   }
 
   updateListVisibility(){

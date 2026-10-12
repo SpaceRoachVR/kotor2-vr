@@ -43,6 +43,18 @@ export interface VRComfortSettings {
    * Off unless the player turns it on; absent reads as off.
    */
   readonly unpauseOnWheelClose?: boolean;
+  /**
+   * Hit, miss and critical knocks you can hear (2026-09-29), so combat never
+   * depends on haptics alone. On unless turned off; absent reads as on.
+   */
+  readonly combatSoundsEnabled?: boolean;
+  /** HP/FP plate on the off-hand wrist (2026-09-29). Absent reads as on. */
+  readonly healthPlateEnabled?: boolean;
+  /**
+   * How large the in-world dialogue (subtitles and replies) is drawn: 1,
+   * 1.3 or 1.6. Absent reads as 1. Asked for in six reviews (critic run 6).
+   */
+  readonly dialogueTextScale?: number;
 }
 export type InteractionMode = 'near-touch' | 'ray' | 'grab';
 export type CombatWeaponMode =
@@ -61,6 +73,11 @@ export interface XRWorldPose {
   readonly linearVelocity: THREE.Vector3 | null;
   readonly angularVelocity: THREE.Vector3 | null;
   readonly trackingState: XRTrackingState;
+  /**
+   * The rig's world matrix this frame (play space to world). Lets hand motion
+   * be measured without the rig's own movement; see XRPoseMotion.
+   */
+  readonly trackingToWorld?: THREE.Matrix4;
 }
 
 export interface XRButtonState {
@@ -128,4 +145,14 @@ export interface AreaVRPatch {
   readonly collisionProxyIds: readonly string[];
   readonly hiddenObjectIds: readonly string[];
   readonly metadata: Readonly<Record<string, string>>;
+}
+
+/**
+ * A pose good enough to aim with. A Quest reports a controller as emulated
+ * (position estimated) for moments when it loses sight of it - at the neck,
+ * behind the head - and the emulator always does; requiring 'tracked' killed
+ * aim mid-gesture and made the emulator unable to aim at all (critic run 11).
+ */
+export function isUsableXRPose(pose: { readonly trackingState?: XRTrackingState } | null | undefined): boolean {
+  return !!pose && pose.trackingState !== 'unavailable';
 }

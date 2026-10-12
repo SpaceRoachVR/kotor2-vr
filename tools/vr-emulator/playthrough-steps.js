@@ -1335,7 +1335,7 @@ function subdivideRouteLegs(points) {
  * live immersive session. This routine instead sends left-stick axes through
  * IWER, the same route a Quest controller uses in the product.
  */
-async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label = 'destination', usePath = true }) {
+async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label = 'destination', usePath = true, autoHeal = true }) {
   // Scale the wait with the distance actually to be covered. A fixed 45s budget
   // was fine across a room and hopeless across 70m of Peragus, so long walks
   // timed out mid-stride and every distant fixture reported "unreachable" —
@@ -1401,6 +1401,9 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
           timeoutMs: null,
           label: `${label} waypoint ${index + 1}/${planned.points.length}`,
           usePath: false,
+          // Passed on: the legs healed with medpacs even when the caller
+          // asked not to (critic run 16).
+          autoHeal,
         });
       }
       // Finish directly. The planner's last waypoint is not the target: smooth()
@@ -1414,6 +1417,7 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
         label: `${label} final approach`,
         usePath: false,
         timeoutMs: 30000,
+        autoHeal,
       });
     }
   }
@@ -1492,7 +1496,9 @@ async function moveTo(harness, { x, y, z, range = 1.2, timeoutMs = null, label =
         // walker crosses a cluster) took a 14-HP Exile to dead between two
         // samples at 60%.
         const healAt = Math.max(8, Math.ceil((vitals.maxHp || 0) * 0.8));
-        if (vitals.hp <= healAt) await healPlayerIfInjured(harness, healAt, { quick: true });
+        // autoHeal: false for reviews and checks that count medpacs or HP
+        // (critic run 12: the walker quietly used medpacs).
+        if (autoHeal && vitals.hp <= healAt) await healPlayerIfInjured(harness, healAt, { quick: true });
       }
       // Nudge a walk that has stopped dead. An authored conversation can
       // interrupt mid-leg and leave gameplay input suppressed after it ends;

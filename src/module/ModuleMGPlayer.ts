@@ -156,7 +156,7 @@ export class ModuleMGPlayer extends ModuleObject {
   constructor(template: GFFObject){
     super();
     this.objectType |= ModuleObjectType.ModuleMGPlayer;
-    console.log('ModuleMGPlayer', template, this);
+    console.log('ModuleMGPlayer');
     this.template = template;
 
     this.camera = null;
@@ -220,7 +220,7 @@ export class ModuleMGPlayer extends ModuleObject {
   }
 
   setTrack(model = new OdysseyObject3D()){
-    console.log('track', model);
+    console.log('track', model?.name);
     this.track = model;
     this.rotation.reorder('YZX');
 

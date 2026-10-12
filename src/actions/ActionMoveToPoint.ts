@@ -25,6 +25,10 @@ export class ActionMoveToPoint extends Action {
 
   target_position: THREE.Vector3 = new THREE.Vector3();
   real_target_position: THREE.Vector3 = new THREE.Vector3();
+  /** Where the owner stood when the stuck window began, and how long ago. */
+  private stuckFrom: THREE.Vector3 | null = null;
+  private stuckSeconds = 0;
+  private repathed = false;
 
   constructor( actionId: number = -1, groupId: number = -1 ){
     super(actionId, groupId);
@@ -87,6 +91,42 @@ export class ActionMoveToPoint extends Action {
         (this.owner as any).blockingTimer = 0;
         this.owner.collisionTimer = 0;
       }
+
+      // Stuck: walking but not getting anywhere, sliding along a wall the
+      // path ran through. Peragus mining droids ground into tunnel walls for
+      // the whole 30 s timeout (round 15, Q4). Re-path once; if still stuck,
+      // an NPC gives the move up. The player's own moves are left alone,
+      // except a scripted one in a cutscene: that jumps to its destination,
+      // as the timeout would, so the scene's next action can run (round 15:
+      // a closing lift door stopped the scripted run out of the lift).
+      const scripted = !!GameState.CutsceneManager?.active;
+      if(this.owner !== GameState.getCurrentPlayer() || scripted){
+        if(!this.stuckFrom){
+          this.stuckFrom = this.owner.position.clone();
+          this.stuckSeconds = 0;
+        }
+        this.stuckSeconds += delta;
+        if(this.stuckSeconds >= 2){
+          const moved = Utility.Distance2D(this.owner.position, this.stuckFrom);
+          this.stuckFrom = this.owner.position.clone();
+          this.stuckSeconds = 0;
+          if(moved < 0.3){
+            if(!this.repathed){
+              this.repathed = true;
+              this.setComputedPath(undefined);
+              this.target_position.copy(this.owner.area.getNearestWalkablePoint(this.target_position, this.owner.getHitDistance()));
+              this.calculatePath();
+            }else{
+              this.owner.setAnimationState(ModuleCreatureAnimState.IDLE);
+              this.owner.force = 0;
+              this.owner.speed = 0;
+              this.setComputedPath(undefined);
+              if(scripted) this.queueJumpFallback();
+              return ActionStatus.FAILED;
+            }
+          }
+        }
+      }
   
       const point = this.computedPath.points[0];
       if(point){
@@ -119,31 +159,37 @@ export class ActionMoveToPoint extends Action {
 
       const timeout = this.getParameter<number>(8) - delta;
       if(timeout <= 0){
-        const fallback_action = new GameState.ActionFactory.ActionJumpToPoint(undefined, this.groupId);
-        fallback_action.setParameter(0, ActionParameterType.FLOAT, this.real_target_position.x);
-        fallback_action.setParameter(1, ActionParameterType.FLOAT, this.real_target_position.y);
-        fallback_action.setParameter(2, ActionParameterType.FLOAT, this.real_target_position.z);
-        fallback_action.setParameter(3, ActionParameterType.DWORD, GameState.module.area.id);
-        fallback_action.setParameter(4, ActionParameterType.INT, 0);
-        fallback_action.setParameter(5, ActionParameterType.FLOAT, 20.0);
-        fallback_action.setParameter(6, ActionParameterType.FLOAT, 0);//target.rotation.x);
-        fallback_action.setParameter(7, ActionParameterType.FLOAT, 0)//target.rotation.y);
-        this.owner.actionQueue.addFront(fallback_action);
+        this.queueJumpFallback();
         return ActionStatus.FAILED;
       }
       this.setParameter(8, timeout);
 
       return ActionStatus.IN_PROGRESS;
     }else{
-      this.owner.setAnimationState(ModuleCreatureAnimState.IDLE);
-      this.owner.force = 0;
-      this.owner.speed = 0;
-      this.setComputedPath(undefined);
-      return ActionStatus.COMPLETE;
+      return this.arrive();
     }
+  }
 
+  /** As ActionJumpToObject: go straight to the destination. */
+  private queueJumpFallback(): void {
+    const fallback_action = new GameState.ActionFactory.ActionJumpToPoint(undefined, this.groupId);
+    fallback_action.setParameter(0, ActionParameterType.FLOAT, this.real_target_position.x);
+    fallback_action.setParameter(1, ActionParameterType.FLOAT, this.real_target_position.y);
+    fallback_action.setParameter(2, ActionParameterType.FLOAT, this.real_target_position.z);
+    fallback_action.setParameter(3, ActionParameterType.DWORD, GameState.module.area.id);
+    fallback_action.setParameter(4, ActionParameterType.INT, 0);
+    fallback_action.setParameter(5, ActionParameterType.FLOAT, 20.0);
+    fallback_action.setParameter(6, ActionParameterType.FLOAT, 0);//target.rotation.x);
+    fallback_action.setParameter(7, ActionParameterType.FLOAT, 0)//target.rotation.y);
+    this.owner.actionQueue.addFront(fallback_action);
+  }
+
+  private arrive(): ActionStatus {
+    this.owner.setAnimationState(ModuleCreatureAnimState.IDLE);
+    this.owner.force = 0;
+    this.owner.speed = 0;
     this.setComputedPath(undefined);
-    return ActionStatus.FAILED;
+    return ActionStatus.COMPLETE;
   }
 
   calculatePath(){

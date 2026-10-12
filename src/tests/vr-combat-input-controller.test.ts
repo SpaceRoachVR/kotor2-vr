@@ -36,6 +36,8 @@ describe('VRCombatInputController', () => {
     const nearHilt = (y: number) => new THREE.Vector3(0, y, -0.55);
 
     controller.process(frame(0, 0, nearHilt(0)), context('melee-one-handed', 0, true));
+    // A two-handed swing must be fast on two samples running (critic run 14).
+    expect(controller.process(frame(80, -0.15, nearHilt(-0.15)), context('melee-one-handed', 80, true))).toHaveLength(0);
     const swing = controller.process(frame(160, -0.3, nearHilt(-0.3)), context('melee-one-handed', 160, true));
 
     expect(swing[0]).toMatchObject({ weaponMode: 'melee-two-handed', hand: 'right' });
@@ -80,6 +82,10 @@ describe('VRCombatInputController', () => {
       frame(0, rearHandY, new THREE.Vector3(0, 0.15, -0.4)),
       context('melee-one-handed', 0, true),
     );
+    controller.process(
+      frame(60, rearHandY, new THREE.Vector3(0.075, 0.075, -0.4)),
+      context('melee-one-handed', 60, true),
+    );
     const swing = controller.process(
       // Off hand swings across; dominant hand has not moved at all.
       frame(120, rearHandY, new THREE.Vector3(0.15, 0, -0.4)),
@@ -89,6 +95,158 @@ describe('VRCombatInputController', () => {
     expect(swing).toHaveLength(1);
     expect(swing[0]).toMatchObject({ weaponMode: 'melee-two-handed' });
     expect(swing[0].speedMetresPerSecond).toBeGreaterThan(0.8);
+  });
+
+  test('a still two-handed grip with tracking jitter never attacks (critic run 13)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, bladeSampleDistanceMetres: 0.6 });
+    let swings = 0;
+    // Hands 7 cm apart on the hilt; the off hand jitters +/-5 mm every frame
+    // for 4 s at 72 Hz while the dominant hand holds still.
+    for (let i = 0; i < 288; i++) {
+      const t = i * (1000 / 72);
+      const jitter = (i % 2 === 0 ? 1 : -1) * 0.005;
+      swings += controller.process(
+        frame(t, 0, new THREE.Vector3(jitter, 0.07, -0.4)),
+        context('melee-one-handed', t, true),
+      ).length;
+    }
+    expect(swings).toBe(0);
+  });
+
+  test('a reacquisition jump (tracking state change) is not a swing (critic run 13)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8 });
+    const withState = (f: XRInputFrame, state: 'tracked' | 'emulated'): XRInputFrame =>
+      ({ ...f, hands: { right: { ...f.hands.right!, pose: { ...f.hands.right!.pose, trackingState: state } } } });
+    controller.process(withState(frame(0, 0), 'emulated'), context('melee-one-handed', 0));
+    // Tracking comes back 0.3 m away, 40 ms later.
+    expect(controller.process(withState(frame(40, 0.3), 'tracked'), context('melee-one-handed', 40))).toHaveLength(0);
+    // A real swing once tracking has settled still counts.
+    controller.process(withState(frame(200, 0.3), 'tracked'), context('melee-one-handed', 200));
+    expect(controller.process(withState(frame(240, 0.5), 'tracked'), context('melee-one-handed', 240))).toHaveLength(1);
+  });
+
+  test('in game, a one-frame pop is not a swing but a swing over frames is (critic run 15)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    controller.process(frame(0, 0), context('melee-one-handed', 0));
+    // A 0.10 m pop in one 40 ms frame, then still.
+    expect(controller.process(frame(40, 0.1), context('melee-one-handed', 40))).toHaveLength(0);
+    expect(controller.process(frame(400, 0.1), context('melee-one-handed', 400))).toHaveLength(0);
+    // A real swing: fast on two frames running.
+    expect(controller.process(frame(440, 0.2), context('melee-one-handed', 440))).toHaveLength(0);
+    expect(controller.process(frame(480, 0.35), context('melee-one-handed', 480))).toHaveLength(1);
+  });
+
+  test('in game at low frame rate with repeated poses, a deliberate swing lands (critic run 16)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    // 75 ms frames, each pose shown twice; the hand sweeps 0.6 m in 300 ms.
+    const ys = [0, 0, 0, 0, 0.15, 0.15, 0.3, 0.3, 0.45, 0.45, 0.6, 0.6];
+    let swings = 0;
+    ys.forEach((y, i) => { swings += controller.process(frame(i * 75, y), context('melee-one-handed', i * 75)).length; });
+    expect(swings).toBeGreaterThan(0);
+  });
+
+  test('in game, a pop out and back is not a swing (critic run 16)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    [0, 0, 0.06, 0, 0, 0].forEach((y, i) => { swings += controller.process(frame(i * 40, y), context('melee-one-handed', i * 40)).length; });
+    [0, 0.25, 0, 0].forEach((y, i) => { swings += controller.process(frame(1000 + i * 40, y), context('melee-one-handed', 1000 + i * 40)).length; });
+    expect(swings).toBe(0);
+  });
+
+  test('in game at 60 ms frames, a pop or flick out and back is not a swing (critic run 17)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    // 8 cm out in one frame, back the next, several times.
+    [0, 0, 0.08, 0, 0, 0.08, 0, 0.08, 0, 0].forEach((y, i) => { swings += controller.process(frame(i * 60, y), context('melee-one-handed', i * 60)).length; });
+    expect(swings).toBe(0);
+  });
+
+  test('in game, an 8 cm jab is not a swing; a 30 cm stroke at 60 ms frames is (critic run 17)', () => {
+    const jab = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    [0, 0, 0.04, 0.08, 0.08, 0.08].forEach((y, i) => { swings += jab.process(frame(i * 40, y), context('melee-one-handed', i * 40)).length; });
+    expect(swings).toBe(0);
+    const stroke = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let strokes = 0;
+    [0, 0, 0.1, 0.2, 0.3, 0.3].forEach((y, i) => { strokes += stroke.process(frame(i * 60, y), context('melee-one-handed', i * 60)).length; });
+    expect(strokes).toBeGreaterThan(0);
+  });
+
+  test('in game, a quick return stroke is recovery, not a second swing (critic run 18)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    // Out 0.75 m in ~250 ms at 50 ms frames, then back 0.6 m over ~700 ms.
+    const out = [0, 0, 0.15, 0.3, 0.45, 0.6, 0.75];
+    const back = [0.66, 0.57, 0.48, 0.39, 0.3, 0.21, 0.15, 0.15, 0.15];
+    out.forEach((y, i) => { swings += controller.process(frame(i * 50, y), context('melee-one-handed', i * 50)).length; });
+    expect(swings).toBeGreaterThan(0);
+    const afterOut = swings;
+    back.forEach((y, i) => { const t = 400 + i * 80; swings += controller.process(frame(t, y), context('melee-one-handed', t)).length; });
+    expect(swings).toBe(afterOut);
+    // A fresh swing the same way later still counts.
+    const again = [0.15, 0.15, 0.3, 0.45, 0.6, 0.75];
+    again.forEach((y, i) => { const t = 2500 + i * 50; swings += controller.process(frame(t, y), context('melee-one-handed', t)).length; });
+    expect(swings).toBeGreaterThan(afterOut);
+  });
+
+  test('in game, continuous forehand/backhand strokes keep swinging (critic run 18)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    // 0.6 m strokes of 300 ms, alternating, at 60 ms frames, for 9 s.
+    for (let t = 0, i = 0; t < 9000; t += 60, i++) {
+      const phase = (t % 600) / 300;
+      const y = phase < 1 ? phase * 0.6 : (2 - phase) * 0.6;
+      swings += controller.process(frame(t, y), context('melee-one-handed', t)).length;
+    }
+    expect(swings).toBeGreaterThanOrEqual(5);
+  });
+
+  test('in game, a held follow-through then a slow return is one swing; a fast backhand is two (critic run 19)', () => {
+    const held = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    // Slash 0.75 m in ~250 ms, hold 800 ms, return 0.6 m in ~450 ms.
+    [0, 0, 0.15, 0.3, 0.45, 0.6, 0.75].forEach((y, i) => { swings += held.process(frame(i * 50, y), context('melee-one-handed', i * 50)).length; });
+    [0.75, 0.75].forEach((y, i) => { const t = 700 + i * 400; swings += held.process(frame(t, y), context('melee-one-handed', t)).length; });
+    [0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.15].forEach((y, i) => { const t = 1150 + i * 75; swings += held.process(frame(t, y), context('melee-one-handed', t)).length; });
+    expect(swings).toBe(1);
+    const backhand = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let both = 0;
+    [0, 0, 0.15, 0.3, 0.45, 0.6, 0.75].forEach((y, i) => { both += backhand.process(frame(i * 50, y), context('melee-one-handed', i * 50)).length; });
+    [0.75, 0.6, 0.45, 0.3, 0.15, 0, 0].forEach((y, i) => { const t = 700 + i * 50; both += backhand.process(frame(t, y), context('melee-one-handed', t)).length; });
+    expect(both).toBe(2);
+  });
+
+  test('in game, one slow 1 s sweep is one swing event (critic run 17)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    for (let t = 0; t <= 1000; t += 50) swings += controller.process(frame(t, (t / 1000) * 1.3), context('melee-one-handed', t)).length;
+    for (let t = 1050; t <= 2000; t += 50) swings += controller.process(frame(t, 1.3), context('melee-one-handed', t)).length;
+    expect(swings).toBe(1);
+  });
+
+  test('in game, a pop that stays put is not a swing', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    [0, 0, 0.25, 0.25, 0.25, 0.25].forEach((y, i) => { swings += controller.process(frame(i * 40, y), context('melee-one-handed', i * 40)).length; });
+    expect(swings).toBe(0);
+  });
+
+  test('in game, +/-1 cm hilt jitter in a two-handed grip never swings, a real two-handed sweep does (critic run 16)', () => {
+    const controller = new VRCombatInputController({ minimumSwingSpeedMetresPerSecond: 0.8, minimumFastSamples: 2 });
+    let swings = 0;
+    for (let i = 0; i < 150; i++) {
+      const t = i * 40;
+      const jitter = (i % 2 === 0 ? 1 : -1) * 0.01;
+      swings += controller.process(frame(t, 0, new THREE.Vector3(jitter, 0.12, -0.4)), context('melee-one-handed', t, true)).length;
+    }
+    expect(swings).toBe(0);
+    // Both hands sweep down together.
+    let sweep = 0;
+    [0, 0.1, 0.2, 0.3, 0.4].forEach((d, i) => {
+      const t = 7000 + i * 50;
+      sweep += controller.process(frame(t, -d, new THREE.Vector3(0, 0.12 - d, -0.4)), context('melee-one-handed', t, true)).length;
+    });
+    expect(sweep).toBeGreaterThan(0);
   });
 
   test('a double-bladed or dual-wield stance is never promoted', () => {

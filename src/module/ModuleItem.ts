@@ -37,6 +37,11 @@ import type { SWWeaponSound } from "@/engine/rules/SWWeaponSound";
 * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
 * @memberof KotOR
 */
+/** Fields a split-off copy must not inherit: identity and placement. */
+const VR_CLONE_SKIP_FIELDS: ReadonlySet<string> = new Set([
+  'ObjectId', 'ID', 'XPosition', 'YPosition', 'ZPosition', 'XOrientation', 'YOrientation', 'ZOrientation',
+]);
+
 export class ModuleItem extends ModuleObject {
   equippedRes: any;
   baseItemId: number;
@@ -112,12 +117,43 @@ export class ModuleItem extends ModuleObject {
 
   }
 
+  /**
+   * One item split off this one. The copy used to share this item's
+   * template, so setting the copy's StackSize to 1 rewrote the original's
+   * too, and the next load() collapsed the source stack (critic run 4).
+   * The template is now copied, without its ObjectId, so the two stay
+   * separate objects.
+   */
   clone(): ModuleItem {
-    const nItem = new ModuleItem(this.template);
-    nItem.initProperties();
-    if(nItem.template){
-      nItem.template.getFieldByLabel('StackSize')?.setValue(1);
+    let template: GFFObject;
+    try{
+      template = new GFFObject(this.template.getExportBuffer());
+    }catch(e){
+      template = new GFFObject();
+      for(const field of this.template.RootNode.fields) template.RootNode.addField(field);
     }
+    // The item as it is now, not as its template was: charges spent, the
+    // identified flag, upgrades and properties live on the object until a
+    // save writes them (critic run 5: the copy lost them).
+    try{
+      const runtime = this.save();
+      for(const field of runtime.fields){
+        if(!field || VR_CLONE_SKIP_FIELDS.has(field.label)) continue;
+        // save() hands back the template's own UpgradeSlot field objects; the
+        // exported copy already has its own, and taking these would alias the
+        // two items' slots (critic run 6).
+        if(/^UpgradeSlot\d$/.test(field.label)) continue;
+        template.RootNode.removeFieldByLabel(field.label);
+        template.RootNode.addField(field);
+      }
+    }catch(e){
+      console.warn('ModuleItem.clone: runtime state not copied', e);
+    }
+    template.RootNode.removeFieldByLabel('ObjectId');
+    template.RootNode.removeFieldByLabel('ID');
+    const nItem = new ModuleItem(template);
+    nItem.initProperties();
+    nItem.template.getFieldByLabel('StackSize')?.setValue(1);
     nItem.stackSize = 1;
     return nItem;
   }
@@ -218,7 +254,10 @@ export class ModuleItem extends ModuleObject {
   }
 
   getName(){
-    return this.getLocalizedName();
+    // dialog.tlk item names carry {..} sort prefixes ("{05}Vibroblade") that
+    // retail never shows (critic run 11).
+    const name = this.getLocalizedName();
+    return typeof name === 'string' ? name.replace(/\{[^}]*\}/g, '').trim() : name;
   }
 
   getEquippedRes(){
@@ -615,6 +654,32 @@ export class ModuleItem extends ModuleObject {
     }
   }
 
+  /**
+   * The item's own 3D model for holding in a VR hand, without touching
+   * `this.model`. Medpacs and stims name `I_Null` as their default model,
+   * which loadModel loads literally (an empty model); their real models are
+   * `<itemclass>_<variation>` (i_medeqpmnt_001, i_adrnaline_002...). Round 15
+   * asked to see an armed medpac, stim or grenade in the hand.
+   */
+  async loadHeldPresentationModel(): Promise<OdysseyModel3D | null> {
+    if(!this.baseItem) return null;
+    const itemclass = String(this.baseItem.itemClass ?? '').replace(/ [\s\S]*$/g,'').trim().toLowerCase();
+    let resref = String(this.baseItem.defaultModel ?? '').replace(/ [\s\S]*$/g,'').trim().toLowerCase();
+    const variation = ('000'+this.getModelVariation()).substr(-3);
+    if(!resref || resref == 'i_null'){
+      resref = itemclass+'_'+variation;
+    }else{
+      resref = this.nthStringConverter(resref, this.getModelVariation());
+      if(!parseInt(resref.substr(-3))) resref = itemclass+'_'+variation;
+    }
+    try{
+      const mdl = await MDLLoader.loader.load(resref);
+      return await OdysseyModel3D.FromMDL(mdl, { context: this.context, lighting: true });
+    }catch(e){
+      return null;
+    }
+  }
+
   nthStringConverter(name = '', nth = 1){
     let value = nth.toString();
     name = name.substr(0, name.length - value.length);
@@ -790,6 +855,14 @@ export class ModuleItem extends ModuleObject {
       this.upgrades = this.template.getFieldByLabel('Upgrades').getValue();
     }
 
+    if(this.template.RootNode.hasField('K2VR_UsesDay')){
+      (this as any).wornCastUseState = {
+        charges: Number(this.charges) || 0,
+        usesDay: this.template.getFieldByLabel('K2VR_UsesDay').getValue(),
+        usesToday: this.template.RootNode.hasField('K2VR_UsesToday') ? this.template.getFieldByLabel('K2VR_UsesToday').getValue() : 0,
+      };
+    }
+
     if(this.template.RootNode.hasField('UpgradeLevel')){
       this.upgradeLevel = this.template.getFieldByLabel('UpgradeLevel').getValue();
     }
@@ -839,13 +912,20 @@ export class ModuleItem extends ModuleObject {
     if(this.template.RootNode.hasField('PaletteID'))
       this.palleteID = this.template.RootNode.getFieldByLabel('PaletteID').getValue();
 
-    this.weaponSound = GameState.SWRuleSet.weaponSounds[this.baseItem?.poweredItem];
+    // baseitems.2da `weaponmattype` names the weaponsounds.2da row (0 Unarmed,
+    // 1 Lightsaber, 2 Blade, 3 Large Blade). `powereditem` (0/1) was used, so
+    // every vibroblade swung and hit with the Unarmed sounds (critic run 6
+    // sweep, read from the retail tables). Blasters have none.
+    const materialType = Number(this.baseItem?.weaponMaterialType);
+    this.weaponSound = Number.isInteger(materialType) && materialType >= 0
+      ? GameState.SWRuleSet.weaponSounds[materialType]
+      : undefined;
 
     this.initialized = true
 
   }
 
-  setPossessor( oCreature: ModuleCreature){
+  setPossessor( oCreature: ModuleObject){
     this.possessor = oCreature;
   }
 
@@ -854,7 +934,7 @@ export class ModuleItem extends ModuleObject {
   }
 
   onEquip(oCreature: ModuleCreature){
-    console.log('ModuleItem.onEquip', oCreature, this);
+    console.log('ModuleItem.onEquip', oCreature?.getTag?.(), this.getTag?.());
     if(this.isDisguise()){
       oCreature.removeEffectsByType( GameEffectType.EffectDisguise ); //EFFECT_DISGUISE
       let eDisguise = new EffectDisguise();
@@ -871,15 +951,22 @@ export class ModuleItem extends ModuleObject {
     this.setPossessor(oCreature);
   }
 
-  onUnEquip(oCreature: ModuleCreature){
-    console.log('ModuleItem.onUnEquip', oCreature, this);
+  /**
+   * Returns the party-pool entry the item went back to (it may have merged
+   * into an identical copy already in the bag), or undefined when it was
+   * not returned. unequipSlot uses this so it never adds the item twice.
+   */
+  onUnEquip(oCreature: ModuleCreature): ModuleItem | undefined {
+    console.log('ModuleItem.onUnEquip', oCreature?.getTag?.(), this.getTag?.());
     oCreature.removeEffectsByCreator(this);
+    let returned: ModuleItem | undefined;
     if(GameState.PartyManager.party.indexOf(oCreature) >= 0){
-      GameState.InventoryManager.addItem(this);
+      returned = GameState.InventoryManager.addItem(this);
     }else{
       //oCreature.inventory.push(this);
     }
     this.setPossessor(undefined);
+    return returned;
   }
 
   destroy(): void {
@@ -904,6 +991,22 @@ export class ModuleItem extends ModuleObject {
     itemStruct.addField( new GFFField(GFFDataType.WORD, 'StackSize') ).setValue(this.stackSize);
     itemStruct.addField( new GFFField(GFFDataType.BYTE, 'Stolen') ).setValue(this.stolen);
     itemStruct.addField( new GFFField(GFFDataType.DWORD, 'Upgrades') ).setValue(this.upgrades);
+    // TSL upgrade state. Nothing in the port edits it yet, so the template's
+    // own fields are the item's state; they used to be dropped on save, and an
+    // upgraded lightsaber came back plain (critic run 4).
+    itemStruct.addField( new GFFField(GFFDataType.BYTE, 'UpgradeLevel') ).setValue(this.upgradeLevel || 0);
+    // The port's worn-activatable use count (ItemCastUseLimit), so "1 use per
+    // day" survives a save and load (critic run 6). Not a retail field;
+    // retail ignores unknown fields.
+    const wornUse = (this as any).wornCastUseState;
+    if(wornUse && wornUse.usesDay !== undefined){
+      itemStruct.addField( new GFFField(GFFDataType.INT, 'K2VR_UsesDay') ).setValue(wornUse.usesDay | 0);
+      itemStruct.addField( new GFFField(GFFDataType.INT, 'K2VR_UsesToday') ).setValue((wornUse.usesToday ?? 0) | 0);
+    }
+    for(let i = 0; i < 6; i++){
+      const label = 'UpgradeSlot' + i;
+      if(this.template?.RootNode?.hasField(label)) itemStruct.addField(this.template.getFieldByLabel(label));
+    }
     // An item with no flag was added by script (CreateItemOnObject) and is loot
     // by construction. Writing undefined read back as 0 and would have made it
     // vanish from a corpse after a save and load. See CorpseLoot.

@@ -1,3 +1,4 @@
+import { GameEngineType } from "@/enums/engine/GameEngineType";
 import { GameState } from "@/GameState";
 import { JournalEntry } from "@/engine/JournalEntry";
 import { GameMenu } from "@/gui";
@@ -10,7 +11,7 @@ enum JournalSort {
   PLANET = 3,
 }
 
-enum JournalQuestMode {
+export enum JournalQuestMode {
   ACTIVE = 0,
   COMPLETED = 1,
 }
@@ -22,8 +23,10 @@ const STRREF_BY_NAME      = 32174;
 const STRREF_BY_PRIORITY  = 32175;
 const STRREF_BY_PLANET    = 32176;
 
-const STRREF_MODE_ACTIVE    = 32177;
-const STRREF_MODE_COMPLETED = 32178;
+// TSL's dialog.tlk has 32177 = "Completed Quests" and 32178 = "Active Quests":
+// the journal titled the active list "Completed Quests" (critic run 13).
+const STRREF_MODE_ACTIVE_K1 = 32177;
+const STRREF_MODE_COMPLETED_K1 = 32178;
 
 /**
  * MenuJournal class.
@@ -34,6 +37,12 @@ const STRREF_MODE_COMPLETED = 32178;
  * @author KobaltBlu <https://github.com/KobaltBlu>
  * @license {@link https://www.gnu.org/licenses/gpl-3.0.txt|GPLv3}
  */
+function modeStrRef(mode: JournalQuestMode): number {
+  const tsl = GameState.GameKey == GameEngineType.TSL;
+  if (mode === JournalQuestMode.ACTIVE) return tsl ? STRREF_MODE_COMPLETED_K1 : STRREF_MODE_ACTIVE_K1;
+  return tsl ? STRREF_MODE_ACTIVE_K1 : STRREF_MODE_COMPLETED_K1;
+}
+
 export class MenuJournal extends GameMenu {
 
   LB_ITEMS: GUIListBox;
@@ -119,9 +128,9 @@ export class MenuJournal extends GameMenu {
   GetQuestModeBTNLabel(): string {
     switch(this.mode){
       case JournalQuestMode.ACTIVE:
-        return GameState.TLKManager.GetStringById(STRREF_MODE_COMPLETED).Value;
+        return GameState.TLKManager.GetStringById(modeStrRef(JournalQuestMode.COMPLETED)).Value;
       case JournalQuestMode.COMPLETED:
-        return GameState.TLKManager.GetStringById(STRREF_MODE_ACTIVE).Value;
+        return GameState.TLKManager.GetStringById(modeStrRef(JournalQuestMode.ACTIVE)).Value;
     }
   }
 
@@ -141,8 +150,8 @@ export class MenuJournal extends GameMenu {
 
   GetMenuTitle(): string {
     let questModeLabel = (
-      this.mode == JournalQuestMode.ACTIVE ? GameState.TLKManager.GetStringById(STRREF_MODE_ACTIVE).Value :
-      this.mode == JournalQuestMode.COMPLETED ? GameState.TLKManager.GetStringById(STRREF_MODE_COMPLETED).Value : ''
+      this.mode == JournalQuestMode.ACTIVE ? GameState.TLKManager.GetStringById(modeStrRef(JournalQuestMode.ACTIVE)).Value :
+      this.mode == JournalQuestMode.COMPLETED ? GameState.TLKManager.GetStringById(modeStrRef(JournalQuestMode.COMPLETED)).Value : ''
     );
     let sortModeLabel = (
       this.sort == JournalSort.RECIEVED ? GameState.TLKManager.GetStringById(STRREF_BY_RECIEVED).Value :

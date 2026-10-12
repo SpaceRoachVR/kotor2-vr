@@ -266,11 +266,14 @@ export class NWScriptStack {
 
     let stack = new NWScriptStack();
   
-    stack.basePointer = struct.getFieldByLabel('BasePointer').getValue() * 4;
-    stack.pointer = struct.getFieldByLabel('StackPointer').getValue() * 4;
-    let stackSize = struct.getFieldByLabel('TotalSize').getValue();
+    // A saved stack can lack any of these (admin-return threw four times on
+    // load and lost the queued actions; critic run 16): missing reads as 0.
+    const read = (label: string): number => Number(struct?.getFieldByLabel?.(label)?.getValue?.()) || 0;
+    stack.basePointer = read('BasePointer') * 4;
+    stack.pointer = read('StackPointer') * 4;
+    let stackSize = read('TotalSize');
   
-    if(stackSize){
+    if(stackSize && struct.getFieldByLabel('Stack')){
       let stackStructs = struct.getFieldByLabel('Stack').getChildStructs();
   
       for(let i = 0, len = stackStructs.length; i < len; i++){

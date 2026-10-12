@@ -191,12 +191,19 @@ class VrHarness {
 
     const target = await findPageTarget(this.port, (u) => this.observeServingBundle ? u === 'about:blank' : u.startsWith('http://'));
     this.cdp = await CdpSession.connect(target.webSocketDebuggerUrl);
+    this.consoleSinceDiscard = 0;
 
     this.cdp.on('Runtime.consoleAPICalled', (params) => {
       const text = (params.args || [])
         .map((a) => (a.value !== undefined ? String(a.value) : a.description || a.type))
         .join(' ');
       this.consoleMessages.push({ level: params.type, text });
+      // Text kept; let the inspector release the logged objects it otherwise
+      // holds for inspection (they skewed every memory measurement).
+      if (++this.consoleSinceDiscard >= 100) {
+        this.consoleSinceDiscard = 0;
+        this.cdp.send('Runtime.discardConsoleEntries').catch(() => {});
+      }
     });
     this.cdp.on('Runtime.exceptionThrown', (params) => {
       const d = params.exceptionDetails || {};

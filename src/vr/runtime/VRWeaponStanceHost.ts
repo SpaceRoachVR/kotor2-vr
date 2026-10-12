@@ -86,6 +86,18 @@ export class VRWeaponStanceHost {
     handAnchor.add(this.object);
   }
 
+  /**
+   * Turns the plaque to face the viewer, keeping its place at the hilt. Fixed
+   * to the hand, it read upside down or reversed whenever the blade was
+   * raised or turned (critic runs 12-13: "POWER ATTACK" reversed).
+   */
+  faceViewer(viewer: THREE.Object3D | null | undefined): void {
+    if (!viewer || !this.object.visible || !this.object.parent) return;
+    const parentWorld = this.object.parent.getWorldQuaternion(new THREE.Quaternion());
+    const viewerWorld = viewer.getWorldQuaternion(new THREE.Quaternion());
+    this.object.quaternion.copy(parentWorld.invert().multiply(viewerWorld));
+  }
+
   get isVisible(): boolean {
     return this.object.visible;
   }

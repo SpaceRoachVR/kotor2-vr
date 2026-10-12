@@ -57,7 +57,7 @@ export class ActionPlayAnimation extends Action {
       this.owner.setAnimationState(this.animation);
       this.animationLength = this.owner.getAnimationLength(this.animation);
     }else{
-      console.error('ActionPlayAnimation Invalid animation', this.owner.getName(), this.animation, this);
+      console.error('ActionPlayAnimation Invalid animation', this.owner.getName(), this.animation);
       return ActionStatus.FAILED;
     }
     

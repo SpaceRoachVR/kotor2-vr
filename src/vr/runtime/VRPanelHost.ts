@@ -27,6 +27,23 @@ export interface VRPanelPresentOptions {
   readonly region?: VRPanelRegion | null;
   /** Added to the panel's height relative to the head when it is placed. */
   readonly verticalOffsetMetres?: number;
+  /**
+   * Show the region this wide, keeping its aspect. Without it a region keeps
+   * the size it had inside the full canvas, which for a trimmed 800x600 menu
+   * left it 0.8 m wide - smaller text than the guidelines allow.
+   */
+  readonly regionWidthMetres?: number;
+  /** How much of the growth to regionWidthMetres to apply (0..1, default 1). */
+  readonly regionEnlargeFraction?: number;
+  /** Scales the shown panel, keeping its place (dialogue text size). */
+  readonly scale?: number;
+  /** 'top' keeps the top edge where it was, so a larger panel grows downward. */
+  readonly scaleAnchor?: 'centre' | 'top';
+  /**
+   * A dark plate behind the panel, 0..1 opacity. The in-world dialogue's text
+   * floated over the scene with nothing behind it (critic run 11).
+   */
+  readonly backingOpacity?: number;
 }
 
 const FULL_REGION: VRPanelRegion = { uMin: 0, uMax: 1, vMin: 0, vMax: 1 };
@@ -149,7 +166,15 @@ export class VRPanelHost {
     // A legacy menu owns one world-space surface for its entire visible
     // lifetime. Recomputing this pose every XR frame turns it into a
     // head-locked HUD and makes controller rays appear to drift with the
-    // player. Only place it when a different menu opens.
+    // player. Only place it when a different menu opens, or when the player
+    // has been moved far from it: a module load moves the rig to the new
+    // area partway through the loading screen, which left the screen behind
+    // in the old area, far away (round 15).
+    if (this.activeOwner === owner && this.object.visible) {
+      const dx = this.object.position.x - headPose.position.x;
+      const dy = this.object.position.y - headPose.position.y;
+      if (Math.hypot(dx, dy) > Math.max(3, this.options.distanceMetres * 2)) this.activeOwner = null;
+    }
     if (this.activeOwner !== owner) {
       // Never pin a panel from a pose that has not arrived yet. A head exactly
       // at the world origin is the first frame of a session before tracking
@@ -164,13 +189,51 @@ export class VRPanelHost {
     }
 
     const aspect = viewportWidth / viewportHeight;
-    this.object.scale.set(
-      this.options.widthMetres * (region.uMax - region.uMin),
-      (this.options.widthMetres / aspect) * (region.vMax - region.vMin),
-      1
-    );
+    const width = this.options.widthMetres * (region.uMax - region.uMin);
+    const height = (this.options.widthMetres / aspect) * (region.vMax - region.vMin);
+    const fullEnlarge = options.region && Number.isFinite(options.regionWidthMetres) && (options.regionWidthMetres as number) > 0 && width > 0
+      ? (options.regionWidthMetres as number) / width
+      : 1;
+    const fraction = Number.isFinite(options.regionEnlargeFraction)
+      ? Math.min(1, Math.max(0, options.regionEnlargeFraction as number))
+      : 1;
+    const enlarge = 1 + (fullEnlarge - 1) * fraction;
+    const extra = Number.isFinite(options.scale) && (options.scale as number) > 0 ? (options.scale as number) : 1;
+    this.object.scale.set(width * enlarge * extra, height * enlarge * extra, 1);
+    // A larger dialogue panel grows down, not up over the speaker (critic run 7).
+    if (this.placedZ !== null) {
+      this.object.position.z = options.scaleAnchor === 'top'
+        ? this.placedZ - (extra - 1) * height * enlarge / 2
+        : this.placedZ;
+    }
     this.object.visible = true;
+    this.applyBacking(options.backingOpacity);
   }
+
+  private backing: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null = null;
+
+  private applyBacking(opacity: number | undefined): void {
+    const wanted = Number.isFinite(opacity) && (opacity as number) > 0 ? Math.min(1, opacity as number) : 0;
+    if (!wanted) {
+      if (this.backing) this.backing.visible = false;
+      return;
+    }
+    if (!this.backing) {
+      this.backing = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.04, 1.06),
+        new THREE.MeshBasicMaterial({ color: 0x02080b, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      this.backing.name = 'Kotor2VR.VRPanelHost.backing';
+      this.backing.frustumCulled = false;
+      this.backing.renderOrder = this.object.renderOrder - 1;
+      this.backing.position.z = -0.001;
+      this.object.add(this.backing);
+    }
+    this.backing.material.opacity = wanted;
+    this.backing.visible = true;
+  }
+
+  private placedZ: number | null = null;
 
   private place(owner: object, headPose: XRWorldPose, verticalOffsetMetres = 0): void {
 
@@ -188,6 +251,7 @@ export class VRPanelHost {
       this.options.distanceMetres
     );
     this.object.position.z = headPose.position.z + VRPanelHost.getVerticalOffset(owner) + verticalOffsetMetres;
+    this.placedZ = this.object.position.z;
 
     const worldUp = new THREE.Vector3(0, 0, 1);
     const panelNormal = forward.clone().negate();

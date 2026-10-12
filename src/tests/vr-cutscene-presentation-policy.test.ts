@@ -224,3 +224,36 @@ describe('the Peragus wake-up (101awake) stays in the world', () => {
     }))).toBe('world');
   });
 });
+
+// 2026-09-29, Allen's call after the critic review: a conversation with
+// someone standing here ignores the authored camera cuts. Every shot of it
+// stays in the world, wherever the authored camera is, and nothing fades
+// between them; only the theater fades between cuts.
+describe('in-world conversations ignore authored cuts', () => {
+  const kreia = new THREE.Vector3(57, 81, 1.8);
+  test('every camera kind stays in the world while the speaker is here', () => {
+    for (const cameraKind of ['dialog', 'placeable', 'animated'] as const) {
+      for (const cameraPosition of [new THREE.Vector3(55, 82, 3), new THREE.Vector3(10, 10, 3), null]) {
+        expect(resolveVRCutscenePresentation(shot({
+          cameraKind,
+          cameraPosition,
+          participantPositions: [kreia],
+          creatureParticipantPositions: [kreia],
+          theaterAlreadyShown: true,
+        }))).toBe('world');
+      }
+    }
+  });
+
+  test('the cut fade is only ever triggered on the theater path', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const spike: string = fs.readFileSync(path.join(__dirname, '..', 'vr', 'VRSpike.ts'), 'utf8');
+    const triggers = spike.split('cutsceneFadeEnvelope.trigger(').length - 1;
+    expect(triggers).toBe(1);
+    const theater = spike.indexOf('private static renderCutscene(');
+    const trigger = spike.indexOf('cutsceneFadeEnvelope.trigger(');
+    expect(trigger).toBeGreaterThan(theater);
+    expect(trigger).toBeLessThan(spike.indexOf('\n  private static ', theater + 30));
+  });
+});

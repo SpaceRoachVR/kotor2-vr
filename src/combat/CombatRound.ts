@@ -10,9 +10,13 @@ import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { GameEffectType } from "@/enums/effects/GameEffectType";
 import { CombatFeatType } from "@/enums/combat/CombatFeatType";
 import { AttackResult } from "@/enums/combat/AttackResult";
+import { BaseItemType } from "@/enums/combat/BaseItemType";
+import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
 import { WeaponWield } from "@/enums/combat/WeaponWield";
 import { ActionType } from "@/enums/actions/ActionType";
 import { WeaponSize } from "@/enums/combat/WeaponSize";
+import { resolveTwoWeaponPenalty } from "@/combat/TwoWeaponRules";
+import { resolveFeatOnHitSave, resolveFeatSaveDC, resolveThreatRangeMin, resolveThreatRangeMultiplier } from "@/combat/CombatFeatRules";
 import { DamageType } from "@/enums/combat/DamageType";
 import { DiceType } from "@/enums/combat/DiceType";
 import { TextSprite3D } from "@/engine/TextSprite3D";
@@ -24,6 +28,16 @@ import { GameState } from "@/GameState";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
 import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
 import { resolveAttackRoll } from "@/combat/TSLCombatRules";
+
+/** Ranks attack results so a round reports its best attack. */
+function bestAttackResult(previous: AttackResult | undefined, next: AttackResult): AttackResult {
+  const rank = (r: AttackResult | undefined) =>
+    r === AttackResult.CRITICAL_HIT ? 4 :
+    r === AttackResult.HIT_SUCCESSFUL || r === AttackResult.AUTOMATIC_HIT ? 3 :
+    r === AttackResult.DEFLECTED || r === AttackResult.PARRIED ? 2 :
+    r === AttackResult.MISS ? 1 : 0;
+  return rank(previous) > rank(next) ? previous as AttackResult : next;
+}
 
 /**
  * CombatRound class.
@@ -130,7 +144,7 @@ export class CombatRound {
    * Begin the combat round
    */
   beginCombatRound(){
-    console.log('beginCombatRound', this.owner.tag);
+    // (per-round begin/end logs removed: one line every 3 s per combatant)
     if(!BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)) return;
 
     const owner: ModuleCreature = this.owner as any;
@@ -200,7 +214,7 @@ export class CombatRound {
    * End the combat round
    */
   endCombatRound(){
-    console.log('endCombatRound', this.owner.tag);
+
     this.roundStarted = false;
     const combatData = this.owner.combatData;
     combatData.lastCombatFeatUsed = undefined;
@@ -291,7 +305,11 @@ export class CombatRound {
     this.roundPaused = true;
     this.roundPausedBy = pauseOwner;
     this.pauseTimer = pauseTimer;
+    this.pauseLength = pauseTimer;
   }
+
+  /** The length the current pause started at; the VR hilt ring reads it. */
+  pauseLength: number = 0;
 
   /**
    * Unpause the round for the given pause owner
@@ -399,6 +417,12 @@ export class CombatRound {
          */
         if(creature.equipment.LEFTHAND){
           this.calculateWeaponAttack(creature, creature.equipment.LEFTHAND, ModuleCreatureArmorSlot.LEFTHAND, combatAction);
+        }else if(this.isDoubleBladed(creature.equipment.RIGHTHAND)){
+          // A double-bladed weapon fights as two weapons: the second blade is
+          // the off-hand attack, with the two-weapon penalties (feat.2da Two-
+          // Weapon Fighting: "a double-bladed weapon or two weapons"). It used
+          // to get one attack a round (critic runs 3 and 4).
+          this.calculateWeaponAttack(creature, creature.equipment.RIGHTHAND, ModuleCreatureArmorSlot.LEFTHAND, combatAction);
         }
 
         /**
@@ -520,10 +544,58 @@ export class CombatRound {
   isDualWielding(creature: ModuleCreature): boolean {
     const rightHand = creature.equipment.RIGHTHAND;
     const leftHand = creature.equipment.LEFTHAND;
+    if(!leftHand && this.isDoubleBladed(rightHand)) return true;
     return (
       rightHand && ( rightHand.getBaseItem().weaponWield != WeaponWield.STUN_BATON ) &&
       leftHand && ( leftHand.getBaseItem().weaponWield != WeaponWield.STUN_BATON )
     );
+  }
+
+  /**
+   * Double-bladed swords, vibro double-blades and double lightsabers:
+   * baseitems.2da weaponwield 3 with "Double" in the label. The quarterstaff
+   * shares weaponwield 3 but is not double-bladed.
+   */
+  isDoubleBladed(weapon: ModuleItem | undefined): boolean {
+    // baseitems.2da rows 6, 7 and 9 (critic run 5: not a label match).
+    const id = weapon?.getBaseItemId?.();
+    return id === BaseItemType.DOUBLE_BLADED_SWORD || id === BaseItemType.VIBRO_DOUBLE_BLADE ||
+      id === BaseItemType.DOUBLE_BLADED_LIGHTSABER;
+  }
+
+  /**
+   * Critical Strike / Sniper Shot stun on a hit, Power Attack / Blast knock
+   * down on a critical, each unless the target makes the Fortitude save the
+   * feat text names (CombatFeatRules).
+   */
+  private applyFeatOnHit(creature: ModuleCreature, weapon: ModuleItem | undefined, combatAction: CombatRoundAction, critical: boolean){
+    if(!weapon) return;
+    const save = resolveFeatOnHitSave(combatAction.feat?.id, !!weapon.isRangedWeapon?.());
+    if(!save || (save.on === 'critical' && !critical)) return;
+    const target = combatAction.target as ModuleObject;
+    if(!target || (typeof target.isDead === 'function' && target.isDead())) return;
+    // Droids (race 5) do not stun: TSL's Force Stun skips them and Stun Droid
+    // exists for them. The engine has no immunity system yet (critic run 6).
+    if(save.effect === 'stun' && (target as any).getRace?.() === 5) return;
+    try{
+      const ability = save.ability === 'STR' ? creature.getSTR() : save.ability === 'DEX' ? creature.getDEX() : creature.getINT();
+      const dc = resolveFeatSaveDC(save, creature.getTotalClassLevel?.() ?? 0, CombatRound.GetMod(ability));
+      if(typeof target.fortitudeSave === 'function' && target.fortitudeSave(dc, 0, creature)) return;
+      const effect = save.effect === 'stun'
+        ? new GameState.GameEffectFactory.EffectSetState()
+        : new GameState.GameEffectFactory.EffectKnockdown();
+      if(save.effect === 'stun') effect.setInt(0, 4); // Stunned, as EffectStunned()
+      effect.setCreator(creature);
+      effect.setDurationType(GameEffectDurationType.TEMPORARY);
+      effect.setDuration(save.seconds);
+      effect.initialize();
+      target.addEffect(effect);
+      // A stunned or knocked-down VR player otherwise only found out by being
+      // refused (critic run 6).
+      try { GameState.onPlayerDisabled?.(target, save.effect === 'stun' ? 'Stunned' : 'Knocked down', save.seconds); } catch { /* feedback only */ }
+    }catch(e){
+      console.error('CombatRound: feat on-hit effect failed', e);
+    }
   }
 
   /**
@@ -535,48 +607,14 @@ export class CombatRound {
   calculateTwoWeaponPenalty(creature: ModuleCreature, slot: ModuleCreatureArmorSlot.RIGHTHAND|ModuleCreatureArmorSlot.LEFTHAND){
     if(!creature) return 0;
     if(creature.isSimpleCreature()) return 0;
-
-    const rightHand = creature.equipment.RIGHTHAND;
-    const leftHand = creature.equipment.LEFTHAND;
-
-    /**
-     * Main Hand Penalty
-     */
-    if(slot == ModuleCreatureArmorSlot.RIGHTHAND){
-      let penalty = 6;
-      if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_MASTERY)){
-        penalty = 2;
-      }else if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_ADVANCED)){
-        penalty = 4;
-      }
-      if(
-        rightHand.getBaseItem().weaponWield == WeaponWield.TWO_HANDED_SWORD ||
-        rightHand.getBaseItem().weaponWield == WeaponWield.BLASTER_PISTOL
-      ){
-        penalty -= 2;
-      }
-      return Math.max(penalty, 0);
-    }
-
-    /**
-     * Off Hand Penalty
-     */
-    if(slot == ModuleCreatureArmorSlot.LEFTHAND){
-      let penalty = 10;
-      if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_MASTERY)){
-        penalty = 2;
-      }else if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_ADVANCED)){
-        penalty = 4;
-      }else if(creature.getHasFeat(CombatFeatType.TWO_WEAPON_FIGHTING)){
-        penalty = 6;
-      }
-      if(leftHand.getBaseItem().weaponSize == WeaponSize.SMALL){
-        penalty -= 2;
-      }
-      return Math.max(penalty, 0);
-    }
-
-    return 0;
+    return resolveTwoWeaponPenalty({
+      offHand: slot == ModuleCreatureArmorSlot.LEFTHAND,
+      // "Balanced" is a light off-hand weapon (a short blade or a pistol). It
+      // eases the MAIN hand by 2; the main hand's own weapon used to decide
+      // it, and the relief went to the off hand (critic runs 3 and 4).
+      balancedOffHand: Number(creature.equipment.LEFTHAND?.getBaseItem?.()?.weaponSize) == WeaponSize.SMALL,
+      hasFeat: (feat: number) => !!creature.getHasFeat(feat),
+    });
   }
 
   /**
@@ -600,37 +638,56 @@ export class CombatRound {
     // misses, natural 20 hits, and a threat needs a second roll to become a
     // critical. This used to add bonuses before testing the threat range, hit
     // only on beating defense, and make every threat an automatic critical hit.
+    const natural = Dice.roll(1, DiceType.d20);
     const roll = resolveAttackRoll({
-      natural: Dice.roll(1, DiceType.d20),
+      natural,
       attackBonus,
       defense: combatAction.target.getAC(),
-      threatRangeMin: weapon ? weapon.getCriticalThreatRangeMin() + 1 : 20,
+      // Critical Strike / Sniper Shot widen the threat range 2x/3x/4x.
+      threatRangeMin: weapon
+        ? resolveThreatRangeMin(weapon.getCriticalThreatRangeMin() + 1,
+          resolveThreatRangeMultiplier(combatAction.feat?.id, !!weapon.isRangedWeapon?.()))
+        : 20,
       threatNatural: Dice.roll(1, DiceType.d20),
     });
     const attackRoll = roll.total;
     const isCritical = roll.critical;
     const hasAssuredHit = creature.hasEffect(GameEffectType.EffectAssuredHit);
     const attack = this.attackList[this.currentAttack];
+    if(!attack) return;
     attack.attackSlot = weaponSlot;
+    const previousResult = this.currentAttack > 0 ? combatAction.attackResult : undefined;
     if(hasAssuredHit || roll.hit){
       if(this.tryBlasterDeflection(creature, weapon, attackRoll, combatAction, attack)){
-        combatAction.attackResult = AttackResult.DEFLECTED;
+        // Through the same ranking as hits and misses: a main-blade hit then a
+        // deflected off-hand shot is a round that hit (critic run 6).
+        combatAction.attackResult = bestAttackResult(previousResult, AttackResult.DEFLECTED);
       }else{
-        combatAction.attackResult = (!hasAssuredHit && isCritical) ? AttackResult.CRITICAL_HIT : AttackResult.HIT_SUCCESSFUL;
+        const result = (!hasAssuredHit && isCritical) ? AttackResult.CRITICAL_HIT : AttackResult.HIT_SUCCESSFUL;
+        combatAction.attackResult = bestAttackResult(previousResult, result);
         attack.reactObject = combatAction.target;
         attack.attackWeapon = weapon;
-        attack.attackResult = combatAction.attackResult;
+        attack.attackResult = result;
         attack.calculateDamage(creature, !hasAssuredHit && isCritical, combatAction.feat);
+        this.applyFeatOnHit(creature, weapon, combatAction, result === AttackResult.CRITICAL_HIT);
       }
     }else{
-      combatAction.attackResult = AttackResult.MISS;
+      // The round's result is its best attack: a double-blade's off-hand
+      // miss after a main-blade hit used to report the round as a miss
+      // (critic run 5), and the VR feedback played the miss cue.
+      combatAction.attackResult = bestAttackResult(previousResult, AttackResult.MISS);
       attack.reactObject = combatAction.target;
       attack.attackWeapon = weapon;
-      attack.attackResult = combatAction.attackResult;
+      attack.attackResult = AttackResult.MISS;
     }
 
     // Log to combat menu - create feedback message for the attack result
-    this.logAttackResult(creature, weapon, combatAction, isCritical, hasAssuredHit);
+    this.logAttackResult(creature, weapon, combatAction, isCritical, hasAssuredHit, {
+      natural, bonus: attackBonus, total: attackRoll,
+      result: attack.attackResult,
+      damage: attack.attackResult === AttackResult.HIT_SUCCESSFUL || attack.attackResult === AttackResult.CRITICAL_HIT
+        ? Number(attack.getTotalDamage?.()) || 0 : 0,
+    });
 
     this.currentAttack++;
   }
@@ -820,8 +877,38 @@ export class CombatRound {
    * @param isCritical - Whether the attack was a critical hit
    * @param hasAssuredHit - Whether the attack had assured hit effect
    */
-  logAttackResult(creature: ModuleCreature, weapon: ModuleItem | undefined, combatAction: CombatRoundAction, isCritical: boolean, hasAssuredHit: boolean) {
+  logAttackResult(creature: ModuleCreature, weapon: ModuleItem | undefined, combatAction: CombatRoundAction, isCritical: boolean, hasAssuredHit: boolean,
+    rollInfo?: { natural: number; bonus: number; total: number; result: AttackResult; damage: number }) {
     const { FeedbackMessageManager } = GameState;
+    // Retail's Combat tab (dialog.tlk 1404 and 1403): "<attacker> attacks
+    // <target> : *<result>* : (<d20> + <bonus> = <total>)", then the damage.
+    // The old line named no target, roll or damage (critic run 19).
+    if(rollInfo && combatAction?.target){
+      const words: Partial<Record<AttackResult, string>> = {
+        [AttackResult.CRITICAL_HIT]: 'critical hit',
+        [AttackResult.HIT_SUCCESSFUL]: 'hit',
+        [AttackResult.AUTOMATIC_HIT]: 'automatic hit',
+        [AttackResult.MISS]: 'miss',
+        [AttackResult.PARRIED]: 'parried',
+        [AttackResult.DEFLECTED]: 'deflected',
+        [AttackResult.ATTACK_RESISTED]: 'resisted',
+      };
+      const attacker = creature.getName();
+      const target = (combatAction.target as any)?.getName?.() || 'target';
+      // dialog.tlk words it "automatic hit" (critic run 20).
+      const word = hasAssuredHit && rollInfo.result !== AttackResult.MISS ? 'automatic hit' : (words[rollInfo.result] ?? 'attack');
+      const sign = rollInfo.bonus < 0 ? '-' : '+';
+      // The tab lists newest first: the damage line goes in first so it reads
+      // below its attack (critic run 20).
+      if(rollInfo.damage > 0){
+        FeedbackMessageManager.AddLine(`${attacker} damages ${target} for ${rollInfo.damage} damage`, true, FeebackMessageColor.ATTACK);
+      }
+      FeedbackMessageManager.AddLine(
+        `${attacker} attacks ${target} : *${word}* : (${rollInfo.natural} ${sign} ${Math.abs(rollInfo.bonus)} = ${rollInfo.total})`, true,
+        rollInfo.result === AttackResult.MISS ? FeebackMessageColor.INFO : FeebackMessageColor.ATTACK);
+      console.log(`Combat Log: ${attacker} attacks ${target} : *${word}* : (${rollInfo.natural} ${sign} ${Math.abs(rollInfo.bonus)} = ${rollInfo.total})${rollInfo.damage > 0 ? ` for ${rollInfo.damage}` : ''}`);
+      return;
+    }
 
     let message = '';
     let color = FeebackMessageColor.ATTACK;
@@ -887,6 +974,7 @@ export class CombatRound {
     entry.message = message;
     entry.color = color;
     entry.type = 0; // Standard combat feedback type
+    entry.combat = true;
 
     FeedbackMessageManager.AddEntry(entry);
 

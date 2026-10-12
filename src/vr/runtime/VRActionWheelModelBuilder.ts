@@ -31,6 +31,8 @@ export interface VRActionWheelEngineAction {
    * and then paginating.
    */
   readonly panelIndex: number;
+  /** See VRRadialActionItem.isUnavailable. */
+  isUnavailable?(): boolean;
   revalidate(): boolean;
   activate(): void;
 }
@@ -101,6 +103,12 @@ export interface VRActionWheelBuildContext {
    * there rather than reopening the wheel.
    */
   readonly openMenu: () => void;
+  /**
+   * Saves to retail's "000000 - QUICKSAVE" slot. Offered only out of combat
+   * (retail refuses to save in a fight), so the combat root keeps its six
+   * items.
+   */
+  readonly quickSave?: () => void;
   /**
    * True when the player has queued actions or is in combat — the only state in
    * which clearing is meaningful. The wheel omits the route otherwise rather
@@ -289,11 +297,15 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
     ));
   }
 
+  if (!hostile && typeof context.quickSave === 'function') {
+    items.push(createStaticAction('menu:quicksave', 'Quick Save', undefined, context.quickSave));
+  }
+
   // VR-only, so there is no authored KOTOR icon to point at; the fallback is
   // the correct outcome rather than a missing-texture warning.
   items.push(createStaticAction(
     'menu:comfort-settings',
-    'Comfort Settings',
+    'VR Menu',
     undefined,
     context.openComfortSettings,
   ));
@@ -468,6 +480,9 @@ function appendEngineActions(
       id: `engine:${stableId}`,
       label: action.label.trim(),
       ...(action.icon === undefined ? {} : { icon: action.icon.trim() }),
+      ...(typeof action.isUnavailable === 'function' ? { isUnavailable: () => {
+        try { return action.isUnavailable!() === true; } catch { return false; }
+      } } : {}),
       revalidate: () => safelyRevalidateEngineAction(action),
       activate: () => action.activate(),
     });

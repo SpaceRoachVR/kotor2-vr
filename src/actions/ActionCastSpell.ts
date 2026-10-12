@@ -9,6 +9,8 @@ import { ModuleObjectConstant } from "@/enums/module/ModuleObjectConstant";
 import { GameState } from "@/GameState";
 // import { TalentSpell } from "@/talents/TalentSpell";
 import { BitWise } from "@/utility/BitWise";
+import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
+import { releaseUnstartedCastSpellCombatAction } from "@/actions/ItemCastSpellRoundCleanup";
 import type { ModuleObject } from "@/module/ModuleObject";
 
 /**
@@ -51,6 +53,15 @@ export class ActionCastSpell extends Action {
 
     if(this.spell){
       if(!this.spell.inRange(this.target, this.owner)){
+        // VR owns the player's position; the walk into cast range would drag
+        // the rig. Fail like ActionItemCastSpell does (critic run 4: a Force
+        // power kept while moving could walk the player).
+        if(ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
+          console.info('ActionCastSpell: out of range, approach suppressed', this.spell?.id);
+          releaseUnstartedCastSpellCombatAction((this.owner as any).combatRound);
+          try { GameState.onItemCastRejected?.(this.owner, undefined, 'out of Force range'); } catch { /* feedback is best effort */ }
+          return ActionStatus.FAILED;
+        }
 
         // (this.owner as any).openSpot = undefined;
         let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint(this.groupId);
@@ -68,13 +79,24 @@ export class ActionCastSpell extends Action {
         return ActionStatus.IN_PROGRESS;
 
       }else{
-        if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)){
+        // VR moves the player from the stick, which sets force every frame; zeroing it here rooted a player strafing while an attack or cast waited for its round (critic run 4).
+        if(BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature) && !ActionApproachPolicy.isApproachSuppressedFor(this.owner)){
           this.owner.force = 0;
           this.owner.speed = 0;
         }
 
         if(this.owner.combatRound){
           const combatRound = this.owner.combatRound;
+          // A Force power costs Force points; one the caster cannot afford is
+          // not cast. Nothing charged them, so powers were free (critic run 11).
+          const caster: any = this.owner;
+          const cost = typeof caster.getFP === 'function' ? this.spell.getForcePointCostFor(caster) : 0;
+          if(!combatRound.roundPaused && cost > 0 && caster.getFP() < cost){
+            console.info('ActionCastSpell: not enough Force points', this.spell?.id, caster.getFP(), cost);
+            releaseUnstartedCastSpellCombatAction(combatRound);
+            try { GameState.onItemCastRejected?.(this.owner, undefined, 'not enough Force points'); } catch { /* feedback is best effort */ }
+            return ActionStatus.FAILED;
+          }
           if(!combatRound.roundPaused) {
             
             combatRound.beginCombatRound();
@@ -87,6 +109,7 @@ export class ActionCastSpell extends Action {
               const spellCastInstance = new SpellCastInstance(this.owner, combatRound.action.target, combatRound.action.spell);
               this.owner.area.attachSpellInstance(spellCastInstance);
               spellCastInstance.init();
+              if(cost > 0) caster.subtractFP(cost);
 
               return ActionStatus.COMPLETE;
             }

@@ -343,7 +343,11 @@ export class DLGObject {
     }
   }
 
+  /** Bumped on release, so a stunt model still loading after the conversation ended does not hide items or lock the actor (critic run 4). */
+  stuntGeneration = 0;
+
   async loadStuntActor( actor: IDLGStuntActor ){
+    const generation = this.stuntGeneration;
     return new Promise<void>( (resolve, reject) => {
       let model: any;
       if(actor.participant == 'PLAYER'){
@@ -354,6 +358,7 @@ export class DLGObject {
           OdysseyModel3D.FromMDL(actorModel)
           .then((actorSuperModel: OdysseyModel3D) => {
             actor.animations = actorSuperModel.odysseyAnimations;
+            if(generation !== this.stuntGeneration){ resolve(); return; }
 
             if(this.isAnimatedCutscene)
               GameState.PartyManager.party[0].setFacing(0, true);
@@ -393,6 +398,7 @@ export class DLGObject {
             OdysseyModel3D.FromMDL(actorModel)
             .then((actorSuperModel: OdysseyModel3D) => {
               actor.animations = actorSuperModel.odysseyAnimations;
+              if(generation !== this.stuntGeneration){ resolve(); return; }
 
               if(this.isAnimatedCutscene)
                 creature.setFacing(0, true);
@@ -426,6 +432,7 @@ export class DLGObject {
   }
 
   releaseStuntActors(){
+    this.stuntGeneration++;
     while (GameState.group.stunt.children.length) {
       GameState.group.stunt.remove(GameState.group.stunt.children[0]);
     }

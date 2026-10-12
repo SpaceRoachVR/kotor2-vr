@@ -1,4 +1,8 @@
 import { shouldUpdateCompanionTemplate } from "@/module/creature/CompanionTemplateOwnership";
+import { SkillType } from "@/enums/nwscript/SkillType";
+import { readTSLRegenerationTable, tslForcePointsPerSecond, tslHitPointsPerTick, type TSLRegenerationTable } from "@/combat/TSLRegeneration";
+import { canonicalAnimationEvent, shouldPlayEngineCombatSound, type EngineCombatSoundEvent } from "@/engine/rules/EngineCombatSoundGate";
+import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
 import { GFFObject } from "@/resource/GFFObject";
 import { shouldReportMissingAnimation } from "@/module/MissingAnimationLog";
 import * as THREE from "three";
@@ -27,7 +31,7 @@ import { TalentSkill } from "@/talents/TalentSkill";
 import { TalentSpell } from "@/talents/TalentSpell";
 import { OdysseyModel3D, OdysseyObject3D } from "@/three/odyssey";
 import { OdysseyModel, OdysseyModelAnimation } from "@/odyssey";
-import { resolveEquipmentSlotRule } from "@/module/CreatureEquipmentSlots";
+import { resolveEquipmentSlotRule, equipmentSlotMasks } from "@/module/CreatureEquipmentSlots";
 import { ModuleCreatureArmorSlot } from "@/enums/module/ModuleCreatureArmorSlot";
 import { CREATURE_EQUIPMENT_PERSISTENCE_SLOTS } from "@/module/creature/CreatureEquipmentPersistence";
 import { selectCorpseLoot } from "@/module/creature/CorpseLoot";
@@ -645,11 +649,15 @@ export class ModuleCreature extends ModuleObject {
 
       this.speed += (this.getMovementSpeed() * 2.5) * this.force * delta;
 
-      if(this.speed > this.getMovementSpeed()){
-        this.speed = this.getMovementSpeed();
+      // VR stick deflection caps the speed (CreatureLocomotionAdapter).
+      const speedCap = this.getMovementSpeed() * (Number.isFinite(this.locomotionScale) ? this.locomotionScale : 1);
+      if(this.speed > speedCap){
+        this.speed = speedCap;
       }
       
-      let forceDelta = Math.max(this.force * delta, this.speed * delta);
+      // The force term is a 1 m/s floor; scaled by the VR stick so a light
+      // push can walk slower than that (critic run 16: the floor stayed ~1 m/s).
+      let forceDelta = Math.max(this.force * delta * (Number.isFinite(this.locomotionScale) ? this.locomotionScale : 1), this.speed * delta);
       let gravityDelta = -1 * delta;
       
       if(this.speed){
@@ -725,6 +733,13 @@ export class ModuleCreature extends ModuleObject {
               this.model.animateFrame = this.model.oddFrame;
             }
           }
+        }
+        // A creature in a room that is not drawn this frame poses on every
+        // other frame only, as a distant one does: 102PER poses 35 skinned
+        // droids a frame, most behind the rock (round 15 perf, sim 23 ms).
+        if(this.model.animateFrame && GameState.PartyManager.party.indexOf(this) == -1 &&
+          this.room?.model instanceof OdysseyModel3D && this.room.model.visible === false){
+          this.model.animateFrame = this.model.oddFrame;
         }
         //END: Animation Optimization
 
@@ -870,6 +885,15 @@ export class ModuleCreature extends ModuleObject {
 
     this.updateRegen(delta);
     this.updateDownedPartyMember(delta);
+    // Items hidden for a stunt are shown again by setCutsceneMode(false) from
+    // the conversation's release; a conversation that ended some other way
+    // (aborted, a module change) left them hidden while equipped (critic run
+    // 5). Once no conversation or cutscene holds this creature, show them.
+    if(this.cutsceneHiddenItemModels.length && !this.cutsceneMode && !GameState.CutsceneManager?.active
+      && GameState.Mode !== EngineMode.DIALOG){
+      for(const model of this.cutsceneHiddenItemModels) model.visible = true;
+      this.cutsceneHiddenItemModels = [];
+    }
 
     this.collisionTimer -= delta;
     if(this.collisionTimer < 0)
@@ -914,11 +938,18 @@ export class ModuleCreature extends ModuleObject {
       const screen = ModuleCreature.partyDefeatScreen.defeated(delta);
       if(screen){
         console.warn(screen === 'reopen'
-          ? '[Party] the party is still defeated; reopening Load Game'
-          : '[Party] every party member is down; opening Load Game (the game-over screen is not wired yet)');
+          ? '[Party] the party is still defeated; reopening the defeat screen'
+          : '[Party] every party member is down; opening the defeat screen');
         try{
-          GameState.MenuManager.MenuSaveLoad.mode = MenuSaveLoadMode.LOADGAME;
-          GameState.MenuManager.MenuSaveLoad.open();
+          // The retail defeat screen (Last Save / Load Game / Quit); Load Game
+          // directly only if it could not be loaded.
+          const gameOver = GameState.MenuManager.MenuGameOver;
+          if(gameOver){
+            gameOver.open();
+          }else{
+            GameState.MenuManager.MenuSaveLoad.mode = MenuSaveLoadMode.LOADGAME;
+            GameState.MenuManager.MenuSaveLoad.open();
+          }
         }catch(e){
           console.error(e);
         }
@@ -940,16 +971,66 @@ export class ModuleCreature extends ModuleObject {
     this.addHP(1 - this.getHP(), true);
   }
 
+  /** Fractional Force points carried between frames (TSL regeneration). */
+  private forceRegenCarry = 0;
+  private healthRegenCarry = 0;
+  /** Fraction of full movement speed asked for by VR locomotion (1 = run). */
+  locomotionScale = 1;
+  private regenCombatGraceSeconds = 0;
+
+  /** TSL's key/value regeneration rules; see combat/TSLRegeneration. */
+  private updateTSLRegen(delta: number, table: TSLRegenerationTable){
+    // The combat flag can drop between rounds of a running fight, and FP came
+    // back at the out-of-combat rate mid-duel (critic run 13: 5 FP in 120 s
+    // where the table allows 2; run 14 saw 10 s gaps). A fight counts until
+    // 12 s after it was last on.
+    this.regenCombatGraceSeconds = this.combatData.combatState ? 12 : Math.max(0, this.regenCombatGraceSeconds - delta);
+    const input = {
+      inCombat: this.regenCombatGraceSeconds > 0,
+      constitutionModifier: abilityModifier(this.getCON()),
+      wisdomModifier: abilityModifier(this.getWIS()),
+      treatInjuryRank: Number(this.getSkillLevel?.(SkillType.TREAT_INJURY)) || 0,
+      maxForcePoints: Number(this.getMaxFP()) || 0,
+    };
+    if(this.getFP() < this.getMaxFP()){
+      this.forceRegenCarry += tslForcePointsPerSecond(table, input) * delta;
+      const whole = Math.floor(this.forceRegenCarry);
+      if(whole >= 1){
+        this.forceRegenCarry -= whole;
+        this.addFP(whole);
+      }
+    }else{
+      this.forceRegenCarry = 0;
+    }
+    this.regenTimer -= delta;
+    if(this.regenTimer <= 0){
+      this.regenTimer = table.timeperhp > 0 ? table.timeperhp : this.regenTimerMax;
+      // Fractions carry (1.3 a tick is 4 every 3 ticks), as the FP pool does.
+      this.healthRegenCarry += tslHitPointsPerTick(table, input);
+      const hp = Math.floor(this.healthRegenCarry);
+      this.healthRegenCarry -= hp;
+      if(hp > 0 && !GameState.healthRegenDisabled && this.getHP() < this.getMaxHP()){
+        this.addHP(hp);
+      }
+    }
+  }
+
   updateRegen(delta = 0){
     // The dead do not regenerate. See updateDownedPartyMember.
     if(this.isDead()) return;
     // DisableHealthRegen(TRUE) stops vitality regeneration module-wide; force
     // regeneration is unaffected, so this gate sits on the vitality half below.
+    const regenTable = GameState.TwoDAManager.datatables.get('regeneration');
+    const tsl = readTSLRegenerationTable(regenTable?.rows);
+    if(tsl){
+      this.updateTSLRegen(delta, tsl);
+      return;
+    }
     this.regenTimer -= delta;
     if(this.regenTimer <= 0){
       this.regenTimer = this.regenTimerMax;
 
-      const regen2DA = GameState.TwoDAManager.datatables.get('regeneration').rows[this.combatData.combatState ? 0 : 1];
+      const regen2DA = regenTable.rows[this.combatData.combatState ? 0 : 1];
       if(regen2DA){
         const regen_force = parseFloat(regen2DA.forceregen);
         if(!isNaN(regen_force)){
@@ -2046,6 +2127,30 @@ export class ModuleCreature extends ModuleObject {
     return AudioPriorityGroup.NON_PLAYER_CHAT;
   }
 
+  /**
+   * The attack this creature's round is resolving: its target and whether it
+   * landed. The round's live action, not `combatData.combatAction`, which
+   * nothing assigns (critic run 9).
+   */
+  private currentAttackForSound(): { target: any; landed: boolean; critical: boolean } {
+    const action: any = this.combatRound?.action;
+    const result = action?.attackResult;
+    // No round action: a scripted attack animation, which retail voices as a
+    // hit (critic run 10: it lost its impact sound).
+    const landed = !action || result === AttackResult.HIT_SUCCESSFUL || result === AttackResult.CRITICAL_HIT || result === AttackResult.AUTOMATIC_HIT;
+    return { target: action?.target, landed, critical: result === AttackResult.CRITICAL_HIT };
+  }
+
+  private engineCombatSoundPlays(event: EngineCombatSoundEvent): boolean {
+    const attack = this.currentAttackForSound();
+    return shouldPlayEngineCombatSound({
+      event,
+      landed: attack.landed,
+      swingerIsPlayer: this === GameState.getCurrentPlayer(),
+      vrVoices: !!GameState.vrVoicesCombatImpact?.(this, attack.target),
+    });
+  }
+
   playEvent(event: THREE.Event){
     this.audioEmitter.setPosition(this.position.x, this.position.y, this.position.z);
     this.footstepEmitter.setPosition(this.position.x, this.position.y, this.position.z);
@@ -2061,7 +2166,10 @@ export class ModuleCreature extends ModuleObject {
     let footstepSoundResRef = '';
     let footstepIsLooping = false;
 
-    switch(event.event){
+    // Retail models spell events in either case: the Peragus mining droids send
+    // 'hit' and every parry and dodge sends 'contact'. Exact matching left a
+    // droid's blow and every duel clash silent (critic run 10).
+    switch(canonicalAnimationEvent(event.event)){
       case 'snd_footstep':
         if(footstepSounds){
           const isRolling = footstepSounds.isRolling();
@@ -2069,13 +2177,19 @@ export class ModuleCreature extends ModuleObject {
           footstepIsLooping = isRolling;
         }
       break;
+      // In VR the cue voices a player's miss (the whoosh) and parry; the
+      // engine played them too, so each was heard twice (critic run 8). A
+      // swing that hits keeps the engine's whoosh.
       case 'Swingshort':
+        if(!this.engineCombatSoundPlays('swing')) break;
         rhWeaponSoundResRef = rhSounds?.getSwingShortResRef() || '';
       break;
       case 'Swinglong':
+        if(!this.engineCombatSoundPlays('swing')) break;
         rhWeaponSoundResRef = rhSounds?.getSwingLongResRef() || '';
       break;
       case 'HitParry':
+        if(!this.engineCombatSoundPlays('parry')) break;
         rhWeaponSoundResRef = rhSounds?.getHitParryResRef() || '';
       break;
       case 'Contact':
@@ -2089,7 +2203,22 @@ export class ModuleCreature extends ModuleObject {
           this.combatData.combatAction.target.damage(this.combatData.combatAction.damage, this);
         }
 
-        rhWeaponSoundResRef = rhSounds?.getLeatherResRef() || '';
+        {
+          const attack = this.currentAttackForSound();
+          // The blow lands now: a blow on the VR player is voiced at this
+          // moment, damage or not (critic run 9: it waited for an HP drop or
+          // a 1.2 s timer).
+          if(attack.landed) {
+            try { GameState.onBlowLanded?.(this, attack.target, attack.critical); } catch { /* feedback only */ }
+          }
+          // Only a landed blow makes an impact; in VR one given or taken by
+          // the player is voiced by the VR cue at the target (critic run 7).
+          if(!this.engineCombatSoundPlays('hit')) break;
+        }
+        // The struck target's material, not always leather (critic run 6).
+        rhWeaponSoundResRef = impactResRef(rhSounds as any,
+          resolveVRImpactMaterialFor(this.currentAttackForSound().target),
+          Math.random() < 0.5 ? 0 : 1) || rhSounds?.getLeatherResRef() || '';
       break;
     }
 
@@ -2355,6 +2484,12 @@ export class ModuleCreature extends ModuleObject {
 
     if(this.isDead() || !this.combatData.combatState)
       return true;
+    // The character the player controls runs no party AI, as in retail (and
+    // as onBlocked already does): its end-of-round script (k_hen_combend01)
+    // cast k_sup_healing and spent the player's medpacs on its own, three in
+    // 16 s (critic run 15).
+    if(this == GameState.getCurrentPlayer())
+      return true;
     
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnEndRound];
     if(!nwscript){ return true; }
@@ -2388,7 +2523,12 @@ export class ModuleCreature extends ModuleObject {
         player.getTotalClassLevel(),
         this.challengeRating,
       );
-      if(experience > 0) GameState.PartyManager.GiveXP(experience);
+      if(experience > 0){
+        GameState.PartyManager.GiveXP(experience);
+        // Retail's Combat line (dialog.tlk 1407): "<killer> killed <victim>: <n> XP".
+        const killer: any = this.combatData?.lastDamager || this.combatData?.lastAttacker || player;
+        GameState.FeedbackMessageManager?.AddLine?.(`${killer?.getName?.() || player.getName()} killed ${this.getName()}: ${experience} XP`);
+      }
     } catch (e) {
       console.warn('ModuleCreature.awardKillExperience', this.getTag ? this.getTag() : this.id, e);
     }
@@ -2415,6 +2555,7 @@ export class ModuleCreature extends ModuleObject {
   }
 
   onAttacked(attackType: CombatActionType){
+    if(this == GameState.getCurrentPlayer()) return;
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnAttacked];
     if(!nwscript){ return; }
     const instance = nwscript.newInstance();
@@ -2427,6 +2568,7 @@ export class ModuleCreature extends ModuleObject {
       return true;
 
     this.resetExcitedDuration();
+    if(this == GameState.getCurrentPlayer()) return true;
     
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnDamaged];
     if(!nwscript){ return true; }
@@ -2927,8 +3069,49 @@ export class ModuleCreature extends ModuleObject {
     this.min1HP = bMinOneHP ? true : false;
   }
 
+  /**
+   * Current Force points, kept as HP is: `forcePoints` is the base pool,
+   * `currentForce` the current value against it, `maxForcePoints` the max.
+   * This returned the base pool, so spending or regaining Force never showed
+   * and powers were free (critic run 11).
+   */
   getFP(){
-    return this.forcePoints;
+    return (this.maxForcePoints + this.currentForce) - this.forcePoints;
+  }
+
+  /**
+   * Some retail companion UTCs store no Force points (p_kreia: Jedi Consular
+   * 3, 0/0; critic run 17), so Kreia joined unable to cast. A party member
+   * with Jedi levels and no Force pool at all gets the retail per-level pool.
+   * A Jedi level always grants at least one point, so a real 0 can't be lost.
+   */
+  ensureForcePointsFromClasses(): void {
+    if((Number(this.maxForcePoints) || 0) > 0 || (Number(this.forcePoints) || 0) > 0) return;
+    const fromClasses = this.getForcePointsFromClasses();
+    if(fromClasses > 0){
+      this.forcePoints = this.maxForcePoints = this.currentForce = fromClasses;
+    }
+  }
+
+  /**
+   * The pool retail gives a template-built companion. Allen's retail save
+   * (written by swkotor2.exe) has Kreia at 49 from a 0 base: WIS +3 per Jedi
+   * level (3 levels) plus 40 from Force Sensitive (feat 116, "grants 40
+   * additional Force Points to the character's base total"). The class Force
+   * die is rolled only at level-up (LevelUpRules), not for template levels
+   * (critic run 18: Force die + WIS gave 33).
+   */
+  getForcePointsFromClasses(): number {
+    const wis = abilityModifier(this.getWIS(false));
+    let jediLevels = 0;
+    for(const creatureClass of this.classes){
+      if((Number(creatureClass?.forcedie) || 0) <= 0) continue;
+      jediLevels += Number(creatureClass.level) || 0;
+    }
+    if(jediLevels <= 0) return 0;
+    let total = jediLevels * Math.max(0, wis);
+    try { if(this.getFeat(CombatFeatType.FORCE_SENSITIVE)) total += 40; } catch { /* no feat list */ }
+    return total;
   }
 
   getMaxFP(){
@@ -2983,11 +3166,27 @@ export class ModuleCreature extends ModuleObject {
     let armorAC = (this.equipment.ARMOR?.getACBonus() || 0);
 
     let dexBonus = Math.floor((this.getDEX() - 10) / 2);
+    // Armor caps how much Dexterity counts (baseitems.2da dexbonus; -1 = none).
+    const maxDex = Number(this.equipment.ARMOR?.getDexBonus?.());
+    if(this.equipment.ARMOR && Number.isFinite(maxDex) && maxDex >= 0) dexBonus = Math.min(dexBonus, maxDex);
+
+    // Defense from everything else worn (belts, implants, armbands, masks,
+    // gloves) and from effects - Force Armor/Shield/Aura, feat penalties
+    // like Flurry's - was never counted (critic run 3).
+    let otherAC = 0;
+    for(const key of ['HEAD', 'ARMS', 'BELT', 'IMPLANT', 'LEFTARMBAND', 'RIGHTARMBAND']){
+      const item = (this.equipment as any)[key];
+      if(item?.getACBonus) otherAC += Number(item.getACBonus()) || 0;
+    }
+    for(const effect of this.effects){
+      if(effect.type == GameEffectType.EffectACIncrease) otherAC += (effect.getInt(1) || 0);
+      else if(effect.type == GameEffectType.EffectACDecrease) otherAC -= (effect.getInt(1) || 0);
+    }
 
     // Natural defense (HK-47 has some) and the autobalance set's defense bonus,
     // which TSL adds to the class bonus.
     const naturalAC = Number.isFinite(this.naturalAC) ? this.naturalAC : 0;
-    return baseac + classBonus + armorAC + dexBonus + naturalAC + this.getAutoBalanceBonuses().defenseBonus;
+    return baseac + classBonus + armorAC + dexBonus + otherAC + naturalAC + this.getAutoBalanceBonuses().defenseBonus;
   }
 
   getAutoBalanceSaveBonus(): number {
@@ -3119,7 +3318,15 @@ export class ModuleCreature extends ModuleObject {
       finesseMelee: this.getHasFeat(CombatFeatType.FINESSE_MELEE_WEAPONS),
       finesseLightsaber: this.getHasFeat(CombatFeatType.FINESSE_LIGHTSABERS),
     });
-    return bab + ability + (weapon?.getAttackBonus?.() || 0) + this.getAutoBalanceBonuses().attackBonus;
+    // Attack effects: buffs, and the penalties feats apply to their user
+    // (Power Attack, Flurry, Rapid Shot) and that Horrified applies - all
+    // ignored before, so the penalties were free (critic run 3).
+    let effects = 0;
+    for(const effect of this.effects){
+      if(effect.type == GameEffectType.EffectAttackIncrease) effects += (effect.getInt(0) || 0);
+      else if(effect.type == GameEffectType.EffectAttackDecrease) effects -= (effect.getInt(0) || 0);
+    }
+    return bab + ability + (weapon?.getAttackBonus?.() || 0) + effects + this.getAutoBalanceBonuses().attackBonus;
   }
 
   /**
@@ -3295,8 +3502,15 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
+  /**
+   * Force power save DC as the game's own power text gives it: 5 + caster
+   * level + Wisdom modifier + Charisma modifier (critic run 15).
+   */
   getSpellSaveDC(){
-    return 10 + this.getSpellCasterLevel();
+    // Character level, as the power text says, and Force Focus (+2, Improved
+    // +3, Master +4; feat.2da 88-90), the strongest owned (critic run 16).
+    const focus = this.getHasFeat(90) ? 4 : this.getHasFeat(89) ? 3 : this.getHasFeat(88) ? 2 : 0;
+    return 5 + this.getTotalClassLevel() + abilityModifier(this.getWIS()) + abilityModifier(this.getCHA()) + focus;
   }
 
   getSpellCasterLevel(){
@@ -3578,6 +3792,24 @@ export class ModuleCreature extends ModuleObject {
     const rank = this.skills[value].rank;
     const featBonus = resolveFeatSkillBonus(value, rank, (featId) => this.getHasFeat(featId));
     return resolveEffectiveSkillRank(rank + featBonus, this.effects, value);
+  }
+
+  /**
+   * The skill total retail reports (GetSkillRank, the character sheet, the
+   * terminal counters): effective rank plus the key ability's modifier from
+   * skills.2da. Rolls that add the ability themselves (the Security unlock
+   * check adds INT) keep using getSkillLevel. Without it an INT 14 Exile's
+   * terminal read Computer 0 where d20 gives 2, and every dialogue skill
+   * check ran 1-2 points low (critic run 13).
+   */
+  getSkillTotal(value: number): number {
+    const level = this.getSkillLevel(value);
+    const row = GameState.TwoDAManager?.datatables?.get('skills')?.rows?.[value];
+    const key = String(row?.keyability ?? '').trim().toUpperCase();
+    const score = key === 'STR' ? this.getSTR() : key === 'DEX' ? this.getDEX() : key === 'CON' ? this.getCON()
+      : key === 'INT' ? this.getINT() : key === 'WIS' ? this.getWIS() : key === 'CHA' ? this.getCHA() : NaN;
+    const total = Number.isFinite(score) ? level + abilityModifier(score) : level;
+    return Math.max(0, total);
   }
 
   getHasSpell(id = 0){
@@ -3984,6 +4216,18 @@ export class ModuleCreature extends ModuleObject {
       return;
     }
 
+    // Equipping from a stack takes one off it. Equipping the stack object
+    // itself put "x3" in the hand and left the bag's entry pointing at the
+    // equipped object, so both screens edited the same item (critic run 4).
+    const heldInStack = GameState.PartyManager.party.indexOf(this as any) >= 0
+      ? GameState.InventoryManager.inventory.includes(item)
+      : this.inventory.includes(item);
+    if(Number(item.getStackSize()) > 1 && heldInStack){
+      const single = item.clone();
+      item.setStackSize(item.getStackSize() - 1);
+      item = single;
+    }
+
     this.unequipSlot(slot, true);
     item.onEquip(this);
     await item.loadModel();
@@ -4062,8 +4306,9 @@ export class ModuleCreature extends ModuleObject {
     const item = equipment[rule.key];
     if(!item){ return; }
 
+    let returnedByUnEquip: any = undefined;
     try{
-      item.onUnEquip(this);
+      returnedByUnEquip = item.onUnEquip(this);
     }catch(e){
       console.error('unequipSlot: onUnEquip threw', rule.key, e);
     }
@@ -4086,7 +4331,17 @@ export class ModuleCreature extends ModuleObject {
 
     if(returnToInventory){
       try{
-        GameState.InventoryManager.addItem(item);
+        // onUnEquip above already returned a party member's item to the party
+        // pool; adding it again doubled the stack (critic run 3). Anyone
+        // else's item goes back to their own inventory.
+        // When it merged into an identical copy already in the bag, the item
+        // itself is not in the pool, and checking for it alone added it a
+        // second time: x1 in the bag became x3 (critic run 4).
+        if(GameState.PartyManager.party.indexOf(this as any) >= 0){
+          if(!returnedByUnEquip && !GameState.InventoryManager.inventory.includes(item)) GameState.InventoryManager.addItem(item);
+        }else{
+          this.addItem(item);
+        }
       }catch(e){
         console.error('unequipSlot: returning the item to inventory threw', rule.key, e);
       }
@@ -4105,14 +4360,64 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
-  UnequipItems(){
-    //this.unequipSlot(ModuleCreatureArmorSlot.ARMOR);
-    this.unequipSlot(ModuleCreatureArmorSlot.LEFTHAND);
-    this.unequipSlot(ModuleCreatureArmorSlot.RIGHTHAND);
+  /**
+   * Takes a worn item off without returning it anywhere: the caller is moving
+   * it (GiveItem of an equipped quest item). Effects it granted go, its model
+   * is detached, and the body reloads for armour or headgear.
+   */
+  takeOffWornItem(item: ModuleItem): boolean {
+    const equipment = this.equipment as any;
+    for(const slot of equipmentSlotMasks()){
+      const rule = resolveEquipmentSlotRule(slot);
+      if(!rule || equipment[rule.key] !== item) continue;
+      try{ this.removeEffectsByCreator(item); }catch(e){ console.error('takeOffWornItem: effects', e); }
+      try{ (item as any).model?.parent?.remove((item as any).model); }catch(e){ /* detach is best effort */ }
+      equipment[rule.key] = undefined;
+      item.setPossessor(undefined);
+      if(rule.reloadModelOnUnequip) this.loadModel();
+      return true;
+    }
+    return false;
   }
 
+  /**
+   * A stunt cutscene asks for empty hands. This used to unequip both hands
+   * without returning them, and those slots destroy their item on unequip,
+   * so a party member lost their weapon to a cutscene for good (critic run
+   * 3). The hand items are now only hidden, and shown again when the
+   * cutscene releases the creature (setCutsceneMode(false)).
+   */
+  UnequipItems(){
+    for(const item of [this.equipment.LEFTHAND, this.equipment.RIGHTHAND]){
+      const model = (item as any)?.model;
+      if(model && model.visible){
+        model.visible = false;
+        this.cutsceneHiddenItemModels.push(model);
+      }
+    }
+  }
+
+  cutsceneHiddenItemModels: THREE.Object3D[] = [];
+
+  setCutsceneMode(state: boolean = false){
+    super.setCutsceneMode(state);
+    if(!state){
+      for(const model of this.cutsceneHiddenItemModels) model.visible = true;
+      this.cutsceneHiddenItemModels = [];
+    }
+  }
+
+  /**
+   * Hidden like the hand items, not unequipped: unequipping without a
+   * return dropped an NPC's mask or visor for good, and a party member's
+   * went to the bag without the cutscene giving it back (critic run 4).
+   */
   UnequipHeadItem(){
-    this.unequipSlot(ModuleCreatureArmorSlot.HEAD);
+    const model = (this.equipment.HEAD as any)?.model;
+    if(model && model.visible){
+      model.visible = false;
+      this.cutsceneHiddenItemModels.push(model);
+    }
   }
 
   GetItemInSlot(slot = 0){
@@ -4283,6 +4588,11 @@ export class ModuleCreature extends ModuleObject {
           
       if(this.template.RootNode.hasField('Gender'))
         this.gender = this.template.RootNode.getFieldByLabel('Gender').getValue();
+
+      // Unspent skill points (round 14, S2). Saved below, but never read back,
+      // so points left at character creation or a level-up were lost.
+      if(this.template.RootNode.hasField('SkillPoints'))
+        this.skillPoints = Number(this.template.RootNode.getFieldByLabel('SkillPoints').getValue()) || 0;
     
       if(this.template.RootNode.hasField('GoodEvil'))
         this.goodEvil = this.template.RootNode.getFieldByLabel('GoodEvil').getValue();
@@ -4311,6 +4621,7 @@ export class ModuleCreature extends ModuleObject {
         // arithmetic on undefined. Base is the maximum until bonuses apply.
         this.maxForcePoints = this.forcePoints || 0;
       }
+
 
       // Template saving-throw bonuses (UTC fortbonus/refbonus/willbonus) were
       // written by save() but never read back, so every creature lost them.
@@ -4425,6 +4736,9 @@ export class ModuleCreature extends ModuleObject {
     
       if(this.template.RootNode.hasField('Wis'))
         this.wis = this.template.getFieldByLabel('Wis').getValue();
+
+      // After classes, feats and WIS are read.
+      if(this.isPM) this.ensureForcePointsFromClasses();
     
       if(this.template.RootNode.hasField('Int'))
         this.int = this.template.getFieldByLabel('Int').getValue();

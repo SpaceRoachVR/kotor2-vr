@@ -22,13 +22,13 @@ No game files are included here, and none ever will be. You need your own copy o
 
 ## What works right now
 
-Everything below is built and has been through real headset testing, but "built" doesn't mean "done." I've been doing numbered test rounds in the headset (13 so far), and every round turns up new stuff.
+Everything below is built, but "built" doesn't mean "done." I test in the headset in numbered rounds (14 so far), and every round turns up new stuff. Some of what's listed has only been checked in a headset emulator since the last round; the open checklist for the next round says which.
 
 **Getting around**
 - Smooth locomotion and smooth turning by default. Snap turn, teleport and a comfort vignette are there if you want them.
 - Roomscale by default, seated works too.
 - Walk into a wall and it gently pushes you back instead of letting you clip through.
-- Comfort settings you can change from inside the headset.
+- Comfort settings you can change from inside the headset, including which hand is your weapon hand, plus a controls guide.
 
 **Combat**
 - It's still the KOTOR d20 system under the hood. Your stats decide whether you hit and how hard. Your swing decides *when* you attack. No swing, no attack.
@@ -37,33 +37,37 @@ Everything below is built and has been through real headset testing, but "built"
 - Blasters aim wherever the barrel points, with a laser sight. Pull the trigger to fire.
 - Force push and pull are hand flicks.
 - A timer in the lightsaber hilt shows when your next attack round is ready.
-- Haptics for your own rolls and for getting hit, including which side it came from.
+- You can hear and see how your rolls land: the game's own swing, impact and parry sounds for a miss, a hit and a crit, sparks on what you hit, and a buzz plus a red flash on the side you got hit from. (Controller vibration is written too, but Chrome over Virtual Desktop doesn't give the game any way to rumble the controllers.)
+- A health watch on your off-hand wrist. Look at it like a real watch.
 - An optional pause you can call up to plan a fight. It never kicks in on its own.
 - Swing at a locked door or container to bash it open.
 - Party members fight on their own when they're in range, but any orders you gave them come first.
 
 **Menus and interacting**
-- Hold X for an action wheel. Inventory, character sheet, map, party orders, comfort settings and everything else live there.
+- Press X for an action wheel (A if you set your weapon hand to left). Inventory, character sheet, map, party orders, quick save, comfort settings and everything else live there.
+- The game autosaves when you arrive somewhere new, like the original.
+- The loading screen shows in the headset while an area loads, and a party wipe brings up the original "Your entire party has been killed" screen.
 - Walk up to a door, container, mine or console and the options pop up right there. No more getting dragged across the room to use something.
 - The regular game menus float in front of you as panels.
 
 **Story stuff**
 - Dialogue happens in the world with the characters, with the text in the lower half of your view.
 - Cutscenes from places you can't see (security cameras, other rooms, logs) and the pre-rendered movies play on a big theater screen instead of yanking your head around.
-- Fades between camera cuts so it doesn't make you sick.
+- When the person you're talking to is standing right there, the conversation just happens in front of you. No camera cuts, no fades.
 
 **Performance**
-- The target is a steady 50 FPS or better on an RTX 3060 streaming to a Quest 3 over Virtual Desktop. It's hitting that now. 72 FPS is the stretch goal.
+- The target is a steady 50 FPS or better on an RTX 3060 streaming to a Quest 3 over Virtual Desktop. It hit that in one timed test, but in real play it's sitting around 32 FPS in a lot of places. That's the top thing I'm working on. 72 FPS is the stretch goal.
 
 ## What's still broken or missing
 
 Being straight with y'all, this list is long.
 
 - **You can't play the whole game yet.** Peragus (the mining station prologue) is where all the testing happens. I've got an automated run that goes almost all the way through it, but a clean start-to-finish run in the headset hasn't happened yet.
-- **Swoop racing is broken in VR.** A bunch of fixes looked good in testing and then didn't hold up in the headset.
+- **Swoop racing works now** (left stick plus leaning, hands on the handlebars), but I'm the only one who's ridden it. It needs someone else on it.
+- **No controller vibration** with Chrome over Virtual Desktop (see above).
 - **Around 40 of the game's script functions still aren't implemented.** Most are rare, but a few matter, like the dueling ring rules and some mines that get placed by scripts.
 - **No physical inventory yet.** The inventory is a floating menu for now.
-- **Memory creeps up** the more areas you load. Long sessions can get sluggish.
+- **Long sessions** used to get choppy as memory piled up. That leak is fixed in testing; it still needs a long run in the headset to confirm.
 - **The galaxy map** needs another look.
 - **Geometry fixes.** Some spots were built for a camera floating behind your shoulder, not for someone standing in them. Those need to be fixed area by area.
 - WebGL 2 mode renders a green screen. Stick with the default.

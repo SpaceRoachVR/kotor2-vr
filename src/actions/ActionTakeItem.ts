@@ -51,12 +51,16 @@ export class ActionTakeItem extends Action {
       return ActionStatus.FAILED;
     }
 
-    const removed = oTarget.removeItem(oItem, 1);
+    // ActionTakeItem takes the object, stack and all, as NWScript describes;
+    // a missing `else` here used to add it to the party pool AND the taker's
+    // own inventory (critic runs 5-6).
+    const removed = oTarget.removeItem(oItem, Math.max(1, Number(oItem.getStackSize()) || 1));
+    if(!removed) return ActionStatus.FAILED;
 
     if(GameState.PartyManager.party.indexOf(this.owner as any) >= 0){
-      GameState.InventoryManager.addItem( oItem );
-    }{
-      this.owner.addItem( oItem );
+      GameState.InventoryManager.addItem( removed );
+    }else{
+      this.owner.addItem( removed );
     }
 
     return ActionStatus.COMPLETE;

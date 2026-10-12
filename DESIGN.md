@@ -2,7 +2,7 @@
 
 A first-person, room-scale VR conversion of *Star Wars: Knights of the Old Republic II — The Sith Lords*, built on a fork of [KotOR.js](https://github.com/KobaltBlu/KotOR.js).
 
-**Status: pre-alpha. Nothing is playable yet.** This document is the design spec, written before the code. It exists so that anyone who finds this repo knows exactly what is being attempted and can tell us early if we're wrong about something.
+**Status: pre-alpha.** The Peragus prologue is broadly playable in the headset and the Telos swoop race works; nothing past that is tested. This document is the design spec, written before the code and updated as decisions change (see ROADMAP.md for current state). It exists so that anyone who finds this repo knows exactly what is being attempted and can tell us early if we're wrong about something.
 
 ---
 
@@ -14,7 +14,7 @@ The core bet: **the d20 ruleset and VR embodiment are not in conflict.** The 200
 
 **Target platform:** Windows desktop WebXR, primarily Quest 3 over Virtual
 Desktop/VDXR, with SteamVR/OpenXR profiles also required for v1. A standalone
-Quest port is not in scope.
+Quest port is not in scope for v1; it may be looked at afterwards.
 
 **Performance floor:** sustained 50 FPS minimum on an RTX 3060 and Quest 3 over
 Virtual Desktop/VDXR (wireless), with 72 Hz retained as the stretch target. The
@@ -48,7 +48,7 @@ Free movement. No round pauses outside cutscenes.
 
 **Gestures gate the roll; stats decide the outcome.** Swinging your controller doesn't deal damage directly — it *authorizes* an attack that the engine resolves with the normal d20 math. Strength, Dexterity, feats, and attacks-per-round all still matter. A player with a bad build swings just as fast and lands far less.
 
-**The swing governor.** A human can swing three times a second; a mid-level character gets one or two attacks per round. Rather than locking you out between attacks, **every swing animates and connects visually, but only swings on the round tempo roll an attack.** You never lose control of your own arm — off-tempo swings just don't do anything.
+**The swing governor.** A human can swing three times a second; a mid-level character gets one or two attacks per round. Rather than locking you out between attacks, **every swing animates and connects visually, but only swings on the round tempo roll an attack.** You never lose control of your own arm — an off-tempo swing is buffered (one pending swing) and rolls at the next round opening.
 
 **The tempo is diegetic.** A slow pulse in the lightsaber crystal tells you when your next attack is live, and it pulses faster as your attacks-per-round increases. The round timer has been running invisibly since 2004; we're just showing it to you.
 
@@ -136,12 +136,15 @@ Order-issuing stays, via the radial.
 
 ### Dialogue and cutscenes
 
-**Dialogue defaults to a curved theater surface** showing the engine-authored
-camera, with reply and skill-check controls below it. A stabilized in-world mode
-is optional and fades between discontinuous camera cuts. The tracked head is
-never directly driven by an authored camera.
+**Cutscene presentation is judged per shot, by place.** A shot of somewhere the
+player can't see (a security camera, another room, a log) and every pre-rendered
+movie plays on a curved theater screen. A conversation with someone who is
+present plays in the world, with the dialogue in the lower half of the view.
 
-**Pre-rendered movies reproject onto a curved theater screen.**
+**In-world conversations ignore authored camera cuts.** The rig stays at the
+player and the speaker talks to you; nothing fades between cuts. Fades are kept
+only for theater shots and real location changes. The tracked head is never
+directly driven by an authored camera.
 
 ### Level geometry
 
@@ -189,10 +192,12 @@ Standard KotOR.js setup — see [README.md](README.md). You need your own legall
 
 ```bash
 npm install
-npm run dev
+npm run webpack:dev
+npm run vr:play
 ```
 
-Then open `http://localhost:8080/game/?key=tsl`.
+VR runs in Chrome or Edge on Virtual Desktop's VDXR runtime (Electron has no
+WebXR). Do not use `npm run dev` — it gives a black window. See README.md.
 
 ---
 

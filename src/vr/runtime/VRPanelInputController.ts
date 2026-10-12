@@ -15,6 +15,8 @@ export interface VRPanelMenuController {
 export interface VRPanelPointerSink {
   setPointerPosition(position: THREE.Vector2 | null): void;
   activatePointer(): boolean;
+  /** Scrolls the list under the pointer by whole rows (negative is up). */
+  scrollPointer?(rows: number): boolean;
 }
 
 type PanelButton = 'select' | 'a' | 'b' | 'x' | 'y';
@@ -36,6 +38,14 @@ export class VRPanelInputController {
   private scrollAwaitingNeutral = false;
   private scrollDirection: 'up' | 'down' | null = null;
   private nextScrollMilliseconds = 0;
+  private activatedButton: PanelButton | null = null;
+
+  /** The button this controller acted on since the last call, then clears it. */
+  takeActivatedButton(): PanelButton | null {
+    const button = this.activatedButton;
+    this.activatedButton = null;
+    return button;
+  }
 
   process(
     owner: VRPanelMenuController | null,
@@ -74,6 +84,7 @@ export class VRPanelInputController {
 
     for (const button of ['select', 'a', 'b', 'x', 'y'] as const) {
       if (pressed.get(button) && !this.previousPressed.get(button)) {
+        this.activatedButton = button;
         VRPanelInputController.activate(
           owner,
           button,

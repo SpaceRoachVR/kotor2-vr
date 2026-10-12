@@ -19,6 +19,8 @@ import { exists } from "fs";
 
 const winEpoch = new Date("01-01-1601 UTC").getTime();
 
+export type SaveGameSlot = 'game' | 'autosave' | 'quicksave';
+
 /**
  * SaveGame class.
  * 
@@ -228,6 +230,7 @@ export class SaveGame {
       if(this.savenfo.RootNode.hasField('TIMESTAMP')){
         let timestamp: bigint = this.savenfo.getFieldByLabel('TIMESTAMP').getValue();
         this.TIMESTAMP = new Date(parseInt((timestamp/10000n) as any) + winEpoch);
+        this.timestampKnown = true;
       }
 
       if(this.savenfo.RootNode.hasField('PCNAME')){
@@ -329,6 +332,21 @@ export class SaveGame {
     localStorage.setItem(`${GameState.GameKey}_last_save_id`, SaveGame.saves.indexOf(this).toString());
     GameState.isLoadingSave = true;
     GameState.TutorialWindowTracker = [];
+    SaveGame.sessionLastSave = this;
+
+    // A save replaces the game in progress. Loading one during play used to
+    // add the save's items to the bag already carried (Medpac 4 -> 7 on each
+    // "Load Last Save"; round 15's tunnelers that never ran out) and kept the
+    // live player - HP, position, gear - instead of the saved one (critic run
+    // 11). The saved player is rebuilt from the save's template.
+    GameState.InventoryManager.inventory = [];
+    GameState.PartyManager.Gold = 0;
+    const stalePlayer: any = GameState.PartyManager.Player;
+    if(stalePlayer){
+      try{ stalePlayer.container?.removeFromParent?.(); }catch(e){}
+      GameState.PartyManager.Player = undefined;
+    }
+    try{ GameState.onSaveLoadStarted?.(); }catch(e){ console.error(e); }
 
     try{
       GameState.time = this.TIMEPLAYED;
@@ -878,20 +896,58 @@ export class SaveGame {
    * // Create an autosave
    * await SaveGame.SaveCurrentGame('', 1);
    */
-  static async SaveCurrentGame( name = '', replace_id = 0 ){
-    if(!GameState.module){ return; }
+  /**
+   * Resolves true when the save was written, false when it was skipped (no
+   * module, or a save already writing). Callers that report success - the
+   * VR "saved" sound - must not take a skipped save for a written one
+   * (critic run 6).
+   */
+  static async SaveCurrentGame( name = '', replace_id = 0, slot: SaveGameSlot = 'game' ): Promise<boolean> {
+    if(!GameState.module){ return false; }
+    // An autosave firing while a manual save is still writing would interleave
+    // two exports into the same game-in-progress folder.
+    if(SaveGame.saving){
+      console.warn('SaveGame.SaveCurrentGame: a save is already in progress; skipped', slot);
+      return false;
+    }
+    SaveGame.saving = true;
+    try{
+      await SaveGame.WriteCurrentGame(name, replace_id, slot);
+      return true;
+    }finally{
+      SaveGame.saving = false;
+    }
+  }
 
+  /** Whether TIMESTAMP came from the save itself rather than "now". */
+  timestampKnown = false;
+
+  /** True while SaveCurrentGame is writing. */
+  static saving = false;
+
+  /**
+   * The folder a save goes to. Retail reserves 000000 for the quicksave and
+   * 000001 for the autosave, so numbered games start at 000002 - Game1.
+   */
+  static FolderNameForSlot( slot: SaveGameSlot, replace_id = 0 ): { id: number, folder: string } {
+    if(slot === 'quicksave'){ return { id: 0, folder: '000000 - QUICKSAVE' }; }
+    if(slot === 'autosave'){ return { id: 1, folder: '000001 - AUTOSAVE' }; }
+    let save_id = replace_id >= 2 ? replace_id : Math.max(2, SaveGame.NEXT_SAVE_ID);
+    if(replace_id < 2){ SaveGame.NEXT_SAVE_ID = save_id + 1; }
+    return { id: save_id, folder: Utility.PadInt(save_id, 6)+' - Game'+(save_id-1) };
+  }
+
+  private static async WriteCurrentGame( name: string, replace_id: number, slot: SaveGameSlot ){
     GameState.MenuManager.LoadScreen.open();
     GameState.MenuManager.LoadScreen.showSavingMessage();
 
-    let save_id = replace_id >= 2 ? replace_id : SaveGame.NEXT_SAVE_ID++;
+    const { folder: save_dir_name } = SaveGame.FolderNameForSlot(slot, replace_id);
 
     //Prepare SaveGame directory
     if(!(await GameFileSystem.exists(SaveGame.base_directory))){
       await GameFileSystem.mkdir(SaveGame.base_directory);
     }
 
-    let save_dir_name = Utility.PadInt(save_id, 6)+' - Game'+(save_id-1);
     let save_dir = path.join( SaveGame.base_directory, save_dir_name );
 
     if(!(await GameFileSystem.exists(save_dir))){
@@ -915,7 +971,9 @@ export class SaveGame {
     await tga.export( path.join( save_dir, 'Screen.tga'));
 
     const newEntry = new SaveGame(save_dir_name);
-    const existingIndex = SaveGame.saves.findIndex(s => s.getSaveNumber() === save_id);
+    // Match on the folder, not the number: 000001 is both the autosave and,
+    // in older builds, the first numbered game.
+    const existingIndex = SaveGame.saves.findIndex(s => (s.folderName || '').split(/[\/]/).pop() === save_dir_name);
 
     if (existingIndex >= 0) {
       SaveGame.saves[existingIndex] = newEntry;  // overwrite case
@@ -923,6 +981,7 @@ export class SaveGame {
       SaveGame.AddSaveGame(newEntry);            // new save case
             }
     await newEntry.loadNFO();
+    SaveGame.sessionLastSave = newEntry;
     
     //Save Complete
     GameState.MenuManager.LoadScreen.setProgress(100);
@@ -958,6 +1017,10 @@ export class SaveGame {
     nfo.RootNode.addField(new GFFField(GFFDataType.BYTE, 'CHEATUSED')).value = 0;
     nfo.RootNode.addField(new GFFField(GFFDataType.BYTE, 'GAMEPLAYHINT')).value = 0;
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LASTMODULE')).value = GameState.module.filename.toUpperCase();
+    // Retail's FILETIME (100 ns since 1601). It was never written, so every
+    // save read back as "made just now" and the defeat screen's "Load Last
+    // Saved Game" followed listing order (critic run 6).
+    nfo.RootNode.addField(new GFFField(GFFDataType.DWORD64, 'TIMESTAMP')).setValue(BigInt(Date.now() - winEpoch) * 10000n);
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE1')).value = '';
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE2')).value = '';
     nfo.RootNode.addField(new GFFField(GFFDataType.CEXOSTRING, 'LIVE3')).value = '';
@@ -1161,8 +1224,20 @@ export class SaveGame {
    * SaveGame.AddSaveGame(saveGame);
    * // saveGame is now in SaveGame.saves array
    */
+  /**
+   * The save this session last loaded or wrote: "Load Last Saved Game" is where
+   * the player came from. Picking the newest timestamp loaded an older
+   * quicksave over an untimestamped save just loaded (critic run 12).
+   */
+  static sessionLastSave: SaveGame | null = null;
+
   static AddSaveGame( savegame: SaveGame ){
     if(!(savegame instanceof SaveGame)){ return; }
+    // GetSaveGames runs on every list open: listing a folder already listed
+    // added it again, and the Load list showed duplicate rows (critic run 11).
+    // Keep the listed one: its details (name, area, time) load in the
+    // background, and a fresh copy reads blank until they do.
+    if(savegame.directory && SaveGame.saves.some((s) => s.directory === savegame.directory)){ return; }
 
     const len = SaveGame.saves.push( savegame );
     const lastSave = SaveGame.saves[len - 1];

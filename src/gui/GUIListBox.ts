@@ -223,14 +223,25 @@ export class GUIListBox extends GUIControl {
   setItems(nodes: readonly any[], options: GUIListItemCallbacks & {
     getItemOptions?: (node: any, index: number) => GUIListItemCallbacks;
     selectIndex?: number;
+    /**
+     * Keep the scroll position across the rebuild (clamped to the new
+     * content). For lists rebuilt in place after a pick, like the feat grid,
+     * which otherwise jumped back to the top on every selection (round 14).
+     */
+    keepScroll?: boolean;
   } = {} as any): void {
-    const { getItemOptions, selectIndex, ...sharedOpts } = options as any;
+    const { getItemOptions, selectIndex, keepScroll, ...sharedOpts } = options as any;
+    const previousScroll = this.scroll;
     this.mutate((tx) => {
       tx.clear();
       for (let i = 0; i < nodes.length; i++) {
         tx.add(nodes[i], getItemOptions ? getItemOptions(nodes[i], i) : sharedOpts);
       }
     });
+    if (keepScroll) {
+      this.scroll = previousScroll;
+      this.updateList();
+    }
     if (typeof selectIndex === 'number' && selectIndex >= 0) {
       // Applied after commit; children are populated during mutate
       if (this.children[selectIndex]) {

@@ -350,7 +350,7 @@ export class GUICheckBox extends GUIControl{
     this.addEventListener( 'mouseMove', (e: any) => { });
 
     this.addEventListener( 'click', () =>{
-      console.log('click', this);
+      console.log('click', this.name);
       this.setValue(!this.value);
     });
 

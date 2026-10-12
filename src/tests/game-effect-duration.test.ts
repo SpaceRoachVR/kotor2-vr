@@ -291,22 +291,41 @@ describe('ModuleObject.update with expiring effects', () => {
 });
 
 describe('feat penalties applied through addEffect', () => {
-  test('a Flurry round penalty lasts one 3 second round, then leaves', () => {
+  test('a Flurry penalty lasts the round and 3 seconds after, and does not stack', () => {
     // CombatRound calls impactCaster every round a feat attack is used. The
-    // penalty used to stay forever, and its duration was ROUND_LENGTH in ms.
+    // penalty used to stay forever, then lasted only the round; the feat text
+    // says "while using this feat and for 3 seconds afterwards" (critic run 5).
     const object = host();
     object.objectType = ModuleObjectType.ModuleObject | ModuleObjectType.ModuleCreature;
+    (object as any).removeEffect = function (effect: any) {
+      const i = this.effects.indexOf(effect); if (i >= 0) this.effects.splice(i, 1);
+    };
     const flurry = Object.create(TalentFeat.prototype) as TalentFeat;
     flurry.id = 11;
 
     flurry.impactCaster(object);
+    // Another stance next round replaces Flurry's penalty, not stacks on it.
+    const powerAttack = Object.create(TalentFeat.prototype) as TalentFeat;
+    powerAttack.id = 28;
+    powerAttack.impactCaster(object);
+    expect(object.effects.filter((e: any) => e.featPenaltyId === 11)).toHaveLength(0);
     flurry.impactCaster(object);
 
-    expect(object.effects).toHaveLength(4);
-    expect(object.effects.every((e) => e.duration === CombatRound.ROUND_LENGTH / 1000)).toBe(true);
+    // A second round's penalty replaces the first: one Defense, one attack.
+    expect(object.effects).toHaveLength(2);
+    // Defense: the round and 3 s after; attack: that round only (critic run
+    // 6) - each ending a little inside its window, so the next round's roll
+    // never sees the attack penalty (critic run 7).
+    const durations = object.effects.map((e) => e.duration).sort();
+    expect(durations[0]).toBeLessThan(CombatRound.ROUND_LENGTH / 1000);
+    expect(durations[1]).toBeGreaterThan(CombatRound.ROUND_LENGTH / 1000);
+    expect(durations[1]).toBeLessThan(2 * CombatRound.ROUND_LENGTH / 1000);
+    // Stepped in frames, as the game does: gone before the next round begins.
+    for (let t = 0; t < CombatRound.ROUND_LENGTH / 1000; t += 0.05) advance(object, 0.05, 0.05);
+    expect(object.effects).toHaveLength(1);
     // An effect that removes itself shifts the next one into its slot, which
     // then misses that frame — as in ModuleCreature's loop — so allow a lap.
-    advance(object, CombatRound.ROUND_LENGTH / 1000 + 1);
+    for (let t = 0; t < CombatRound.ROUND_LENGTH / 1000; t += 0.05) advance(object, 0.05, 0.05);
     expect(object.effects).toEqual([]);
   });
 });

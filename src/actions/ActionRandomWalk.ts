@@ -42,7 +42,12 @@ export class ActionRandomWalk extends Action {
     let maxDistance = 1.5;
     let position = new THREE.Vector3();
 
-    const faces = owner.room.collisionManager.walkmesh.walkableFaces;
+    // "A random location near its current location" (nwscript): faces within
+    // 8 m. A face anywhere in a winding tunnel room was often round a corner,
+    // and droids walked into the rock trying to reach it (round 15, Q4).
+    const allFaces = owner.room.collisionManager.walkmesh.walkableFaces;
+    const near = allFaces.filter((f: any) => f.centroid && f.centroid.distanceTo(owner.position) <= 8);
+    const faces = near.length ? near : allFaces;
     const face = faces[Math.floor(Math.random()*faces.length)];
 
     if(!face){

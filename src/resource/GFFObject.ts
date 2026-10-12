@@ -539,7 +539,7 @@ export class GFFObject {
         return;
       }
 
-      console.log('Export GFF', savePath, this);
+      console.log('Export GFF', savePath);
       let fileInfo = path.parse(savePath);
 
       //Update the TemplateResRef field if it exists
@@ -552,7 +552,7 @@ export class GFFObject {
 
       let buffer = this.getExportBuffer();
 
-      console.log('Export GFF', fileInfo, this);
+      console.log('Export GFF', fileInfo);
 
       GameFileSystem.writeFile( path.join(fileInfo.dir, fileInfo.base), buffer ).then( () => {
         if(typeof onExport === 'function')

@@ -19,11 +19,14 @@ function scriptSituation(validStack: boolean): GFFStruct {
   script.addField(new GFFField(GFFDataType.CEXOSTRING, 'Name', 'test_continuation'));
   script.addField(new GFFField(GFFDataType.VOID, 'Code').setData(new Uint8Array([0x20, 0x00])));
   script.addField(new GFFField(GFFDataType.DWORD, 'CodeSize', 2));
-  script.addField(new GFFField(GFFDataType.DWORD, 'InstructionPtr', 0));
+  // A missing stack size no longer fails (critic run 16 reads it as 0 so queued
+  // actions survive a load); a missing instruction pointer still does, and it
+  // is read before the VM instance registers.
+  if(validStack) script.addField(new GFFField(GFFDataType.DWORD, 'InstructionPtr', 0));
   const stack = new GFFStruct();
   stack.addField(new GFFField(GFFDataType.INT, 'BasePointer', 0));
   stack.addField(new GFFField(GFFDataType.INT, 'StackPointer', 0));
-  if(validStack) stack.addField(new GFFField(GFFDataType.INT, 'TotalSize', 0));
+  stack.addField(new GFFField(GFFDataType.INT, 'TotalSize', 0));
   script.addField(new GFFField(GFFDataType.STRUCT, 'Stack')).addChildStruct(stack);
   parameter.addField(new GFFField(GFFDataType.STRUCT, 'Value')).addChildStruct(script);
   return parameter;

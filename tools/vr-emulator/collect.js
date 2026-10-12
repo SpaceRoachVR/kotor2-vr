@@ -188,7 +188,7 @@ async function collectVrMetrics({ url, port = 9430, saveDirectory, onProgress = 
       if (gs.Mode !== 1) gs.MenuManager.InGameOverlay.open();
       return { mode: gs.Mode, state: gs.State };
     })()`);
-    await clickButtonByText(harness, 'Enter VR (spike)');
+    await clickButtonByText(harness, 'Enter VR');
     await wait(6000);
     metrics.session = await harness.evaluate(`(() => {
       const d = window.__xrDevice;
@@ -787,7 +787,7 @@ async function collectVrMetrics({ url, port = 9430, saveDirectory, onProgress = 
       if (!hooks || !hooks.createActionWheel || !hooks.getComfortSettingsPanelContext) return { hooks: false };
       const wheel = hooks.createActionWheel(null);
       const entry = wheel && wheel.pages.flatMap((page) => page.entries)
-        .find((e) => e.label === 'Comfort Settings');
+        .find((e) => e.label === 'VR Menu');
       const activate = entry && (entry.activate || (entry.item && entry.item.activate));
       if (typeof activate !== 'function') return { hooks: true, entry: false };
       const errors = [];

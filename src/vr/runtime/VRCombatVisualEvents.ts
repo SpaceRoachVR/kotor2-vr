@@ -70,6 +70,8 @@ export interface VRCombatActorSnapshot {
   readonly attackTargetId?: number | null;
   /** Current hit points, so the player's own damage can be felt (ROADMAP 3.14). */
   readonly hitPoints?: number | null;
+  /** For the low-health warning (critic run 20). */
+  readonly maxHitPoints?: number | null;
 }
 
 export interface VRBlasterBoltEvent {

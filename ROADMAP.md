@@ -12,6 +12,9 @@ corrected 60-second raw-WebXR window delivered 51.82 FPS at a 4224 × 2304 XR
 target, p90 31.0 ms, p99 46.1 ms, and a PASS verdict. Runtime cadence is still
 reported separately and 72 Hz remains a stretch target. The older 31.96-34.96
 FPS VDXR evidence remains retained rather than rewritten.
+**Caveat (2026-09-29):** perf round P1 contradicts the PASS for real play: frames
+quantize at ~15 ms / ~31 ms and play sits on the 31 ms plateau (~32 FPS). The
+50 FPS floor is not met in real play; a Chrome trace of the plateau is next.
 
 **2026-09-09 full audit inside a presenting VR session.** All 82 campaign
 modules swept with `npm run vr:sweep -- --vr` - the first sweep run through the
@@ -264,18 +267,26 @@ pending as of this write-up:**
 
 - No grenade model shows in the off-hand while one is armed (the throw and
   damage themselves work).
-- No autosave, and no way back to the main menu after a party wipe — Load
-  Game still works as a route back in.
+- ~~No autosave~~ — autosave on area entry, DoSinglePlayerAutoSave and a
+  wheel Quick Save landed 2026-09-29 (0dad78c7; emulator round trip only,
+  not yet in the headset). Still no way back to the main menu after a party
+  wipe — Load Game still works as a route back in.
 - Some Peragus NPCs (the Maintenance Officer, Atton) request textures by a
   base resref the installed packs only ship as numbered variants
   (`pmbamc01` etc.), so they may show untextured patches.
-- No health readout is drawn in the headset view.
+- ~~No health readout~~ — an off-hand wrist plate (HP/FP) landed 2026-09-29
+  (d36e5f66), with sounds for hit/miss/critical so combat no longer rests on
+  haptics alone. Emulator only; placement needs a headset pass.
 - Grenades leave from the character's hand rather than the controller.
 - Security Tunnelers work even untrained — confirmed as intentional, not a
   defect.
 - The sustained-50 floor is not yet re-confirmed in the busier Ebon
   Hawk/Peragus rooms since the first headset session's 32–36 FPS reading;
-  still the largest open performance risk (H3).
+  still the largest open performance risk (H3). `perf-round.js trace`
+  (91e2e002) now records a Chrome trace of a headset window to find what
+  pushes frames onto the 31 ms plateau.
+- A script stuck in a loop now aborts after 5,000,000 instructions instead
+  of freezing the game (d1f31a17).
 
 Everything above is still **emulator or single-round device evidence, not a
 closed phase exit** — Phase 1's own exit criterion (Peragus completable in
@@ -459,6 +470,31 @@ party variations, residual JS growth, and sustained physical-headset memory are
 still required before treating 0.3 as closed. Methods, exact counters, known
 saved-action errors, and reproduction commands are in
 [the transition-memory report](tools/vr-emulator/memory-transition-report-2026-10-05.md).
+
+**Earlier fixes on the critic branch (2026-09-30 to 2026-10-02):**
+
+Resolved 2026-09-30 (52bd4c3e, after round 14's 55 -> 19 FPS, 0.77 -> 2.2 GB
+session). `probe-leak-cut.js --paths --snapshot` walks the whole property
+graph from `window.KotOR`, tags only the leaked models it cannot reach, and
+`heap-dominators.js` computes a dominator tree over that snapshot. Two holders:
+the cached source MDL's change-listener set (`onSourceModelChange.bind(this)`;
+54 of 80) and DevTools/CDP console retention of objects passed to
+`console.log` (22 of 80, chiefly `ModuleObject.destroy`). After the fix,
+`probe-memory-growth.js --cycles 3`: JS heap 777 -> 793 -> 854 -> 858 MB on
+101PER and 847 -> 849 -> 851 MB on 102PER (was +60-84 MB per cycle);
+leaked models per 101PER reload 52 -> ~7. Still open: renderer geometry and
+texture counters keep climbing (~+265 geometries a cycle), because models that
+are collected were never `dispose()`d; the remaining parentless copies are
+props (`plc_chunkybit*`, `plc_junkbin01`), `i_null`, weapons and kolto
+bubbles with no owner. The history below is kept as found.
+
+Update 2026-10-02. Geometry is now flat (102PER 1019 -> 1019 -> 1019 after
+`THREE.Points` disposal and `removeLight` in 07a0a53a). Textures are **counter
+drift only**: `probe-texture-leak.js` counts live `THREE.Texture` objects after a
+forced GC with `Runtime.queryObjects` and finds them flat (975 live, 185
+uploaded, across cycles) while `renderer.info.memory.textures` keeps rising.
+That counter only falls on `dispose()`; a texture collected without one stays
+counted. Not a leak. Separate stable waste: 407 copies of `cm_baremetal`.
 
 **Historical investigation below (2026-09-09; predates these fixes):**
 
@@ -1127,6 +1163,17 @@ raster plus a face dump), `walkmesh-plan.js` (height-aware face-graph
 planner; hand-picked LYT vias were off the mesh in every module), and
 `probe-eval.js <checkpoint> "<expr>"` for one-shot state questions; the
 transition trace in `walkIntoTransition` caught defect 12 in the act.
+
+### 1.13 — T3-M4 rejoins the party before he is repaired ☐ candidate fix in, awaiting round 15 (Q3)
+
+**Round 14 [Headset]:** T3 was in the party with the Exile and Atton before
+the scene that repairs him. Candidate cause: `AddCreatureToParty` added a
+second copy of an NPC already in the party when the leader was that NPC (the
+duplicate check skipped `party[0]`), and grew the party past three. `0b7065e7`
+checks every member and stops a full party growing; a recruit offered to a
+full party is made available on the party-select screen instead. Close this
+only when round 15's Q3 shows T3 joining at the right story beat, and check
+he is not offered early on the party-select screen (critic run 5).
 
 ### 1.12 — Breadth-first module sweep ✅ built and first-run verified (2026-08-29)
 
@@ -1828,7 +1875,10 @@ Every button reachable in flatscreen needs a VR route.
   VR-entry-during-movie freeze report got diagnostics rather than guessed fixes —
   static reading found the code more sound than initially suspected and couldn't
   confirm a root cause without device logs.
-- **5.2** ✅ Dialogue keeps engine camera cuts, with fade-to-black between them.
+- **5.2** ⟳ Superseded 2026-09-29 for in-world shots: in-world conversations ignore
+  authored camera cuts (rig stays at the player, no fades). Fade-to-black stays for
+  theater shots and real location changes. Originally: dialogue keeps engine camera
+  cuts, with fade-to-black between them.
   `VRCutsceneFadeHost`/`VRCutsceneFadeEnvelope`, triggered when the authored per-shot
   camera reference changes between frames.
 - **5.3** ☐ Comfort pass over the prologue's scripted sequences specifically. Not done.
@@ -1873,12 +1923,11 @@ First shippable artifact.
 - **7.4** Full playthrough.
 - **7.5** Optional AI-upscaled texture pack support — see below. Blocked on
   usage permission from the mod author.
-- **7.6** Swoop race (211TEL) playable in VR — see below. ☐ rewritten 2026-09-25, awaiting a captured headset ride; was ✗ still broken in the
-  headset as of 2026-09-21.
+- **7.6** Swoop race (211TEL) playable in VR — see below. ✅ ridden in the headset 2026-09-26 and works (bc8b8325, 3eaddf99); still needs a rider who isn't the developer.
 
 M4-78 is out of scope.
 
-### 7.6 — Swoop race playable in VR ☐ rewritten 2026-09-25, awaiting a captured headset ride
+### 7.6 — Swoop race playable in VR ✅ ridden 2026-09-26
 
 Status in one line: the controls were redesigned with Allen on 2026-09-25,
 the engine underneath was found to be wrong in seven places that no VR

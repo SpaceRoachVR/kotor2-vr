@@ -421,7 +421,7 @@ export class CharGenFeats extends GameMenu {
       if(a === b) return 0;
       return a > b ? 1 : -1;
     });
-    this.LB_FEATS.setItems(groups);
+    this.LB_FEATS.setItems(groups, { keepScroll: true });
   }
   
 }

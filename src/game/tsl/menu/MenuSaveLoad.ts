@@ -1,3 +1,4 @@
+import { EngineMode } from "@/enums/engine/EngineMode";
 import { GameState } from "@/GameState";
 import type { GUILabel, GUIListBox, GUIButton } from "@/gui";
 import { MenuSaveLoad as K1_MenuSaveLoad, NewSaveItem } from "@/game/kotor/KOTOR";
@@ -64,6 +65,8 @@ export class MenuSaveLoad extends K1_MenuSaveLoad {
             // from a menu that is actually showing.
             if (!this.bVisible || GameState.loadingModule) return;
             this.manager.ClearMenus();
+            // Loading from here on: no UpdateIngame against the disposed module.
+            GameState.SetEngineMode(EngineMode.LOADING);
             if(GameState.module){
               GameState.module.dispose();
               GameState.module = undefined;

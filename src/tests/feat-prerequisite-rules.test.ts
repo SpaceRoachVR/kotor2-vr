@@ -1,4 +1,5 @@
 import { expect, test, describe } from '@jest/globals';
+import { CombatFeatType } from '@/enums/combat/CombatFeatType';
 import {
   parseFeatPrerequisites,
   isFeatPrerequisiteMet,
@@ -120,58 +121,58 @@ describe('featPrerequisiteRules', () => {
   describe('TalentFeat stance penalties', () => {
     test('correctly calculates AC penalties for combat stances including Sniper Shot', () => {
       const flurry = new TalentFeat();
-      flurry.id = 11;
-      expect(flurry.getArmorClassPenalty()).toBe(4);
+      flurry.id = CombatFeatType.FLURRY;
+      expect(flurry.getArmorClassPenalty()).toBe(2);
 
       const impFlurry = new TalentFeat();
-      impFlurry.id = 91;
-      expect(impFlurry.getArmorClassPenalty()).toBe(2);
+      impFlurry.id = CombatFeatType.IMPROVED_FLURRY;
+      expect(impFlurry.getArmorClassPenalty()).toBe(1);
 
       const masterFlurry = new TalentFeat();
-      masterFlurry.id = 51;
-      expect(masterFlurry.getArmorClassPenalty()).toBe(1);
+      masterFlurry.id = CombatFeatType.MASTER_FLURRY;
+      expect(masterFlurry.getArmorClassPenalty()).toBe(0);
 
       const critStrike = new TalentFeat();
-      critStrike.id = 28;
+      critStrike.id = CombatFeatType.CRITICAL_STRIKE;
       expect(critStrike.getArmorClassPenalty()).toBe(5);
 
       const sniperShot = new TalentFeat();
-      sniperShot.id = 31;
+      sniperShot.id = CombatFeatType.SNIPER_SHOT;
       expect(sniperShot.getArmorClassPenalty()).toBe(5);
 
       const impSniperShot = new TalentFeat();
-      impSniperShot.id = 20;
+      impSniperShot.id = CombatFeatType.IMPROVED_SNIPER_SHOT;
       expect(impSniperShot.getArmorClassPenalty()).toBe(5);
 
       const masterSniperShot = new TalentFeat();
-      masterSniperShot.id = 77;
+      masterSniperShot.id = CombatFeatType.MASTER_SNIPER_SHOT;
       expect(masterSniperShot.getArmorClassPenalty()).toBe(5);
     });
 
     test('correctly calculates attack penalties for combat stances', () => {
       const powerAttack = new TalentFeat();
-      powerAttack.id = 8;
+      powerAttack.id = CombatFeatType.POWER_ATTACK;
       expect(powerAttack.getAttackPenalty()).toBe(3);
 
       const impPowerAttack = new TalentFeat();
-      impPowerAttack.id = 17;
+      impPowerAttack.id = CombatFeatType.IMPROVED_POWER_ATTACK;
       expect(impPowerAttack.getAttackPenalty()).toBe(3);
 
       const masterPowerAttack = new TalentFeat();
-      masterPowerAttack.id = 83;
+      masterPowerAttack.id = CombatFeatType.MASTER_POWER_ATTACK;
       expect(masterPowerAttack.getAttackPenalty()).toBe(3);
 
       const rapidShot = new TalentFeat();
-      rapidShot.id = 30;
+      rapidShot.id = CombatFeatType.RAPID_SHOT;
       expect(rapidShot.getAttackPenalty()).toBe(4);
 
       const impRapidShot = new TalentFeat();
-      impRapidShot.id = 92;
+      impRapidShot.id = CombatFeatType.IMPROVED_RAPID_SHOT;
       expect(impRapidShot.getAttackPenalty()).toBe(2);
 
       const masterRapidShot = new TalentFeat();
-      masterRapidShot.id = 21;
-      expect(masterRapidShot.getAttackPenalty()).toBe(1);
+      masterRapidShot.id = CombatFeatType.MASTER_RAPID_SHOT;
+      expect(masterRapidShot.getAttackPenalty()).toBe(0);
     });
   });
 });

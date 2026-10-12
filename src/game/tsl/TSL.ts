@@ -65,6 +65,7 @@ export { MenuUpgrade } from "@/game/tsl/menu/MenuUpgrade";
 export { MenuUpgradeItems } from "@/game/tsl/menu/MenuUpgradeItems";
 export { MenuUpgradeSelect } from "@/game/tsl/menu/MenuUpgradeSelect";
 export { MenuSwoopUp } from "@/game/tsl/menu/MenuSwoopUp";
+export { MenuGameOver } from "@/game/tsl/menu/MenuGameOver";
 export * from "@/game/tsl/minigames/mg-pazaak-config";
 
 // export as namespace TSL;

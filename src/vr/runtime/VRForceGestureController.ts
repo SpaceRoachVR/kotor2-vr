@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { handVelocity } from './XRPoseMotion';
 import { XRHandRole, XRInputFrame, XRWorldPose } from './XRTypes';
 
 export type VRForceGestureKind = 'push' | 'pull';
@@ -25,6 +26,8 @@ const DEFAULT_CONFIGURATION: VRForceGestureConfiguration = {
 export class VRForceGestureController {
   private readonly configuration: VRForceGestureConfiguration;
   private nextGestureAt = Number.NEGATIVE_INFINITY;
+  /** Last pose per hand, to measure speed when the runtime reports none. */
+  private readonly previous: Partial<Record<XRHandRole, { position: THREE.Vector3; trackingToWorld?: THREE.Matrix4; timestamp: number }>> = {};
 
   constructor(configuration: Partial<VRForceGestureConfiguration> = {}) {
     this.configuration = { ...DEFAULT_CONFIGURATION, ...configuration };
@@ -42,12 +45,22 @@ export class VRForceGestureController {
     if (!Number.isFinite(timestamp) || timestamp < 0) {
       throw new RangeError('timestamp must be finite and non-negative');
     }
-    if (!gripModifierHeld || timestamp < this.nextGestureAt) return null;
     const controller = inputFrame.hands[dominantHand];
-    const velocity = controller?.pose.linearVelocity;
-    if (!controller || controller.pose.trackingState === 'unavailable' || !velocity || !Number.isFinite(velocity.length())) {
+    if (!controller || controller.pose.trackingState === 'unavailable') {
+      delete this.previous[dominantHand];
       return null;
     }
+    // Virtual Desktop reports no pose velocity, so the flick never fired in
+    // the headset (round 15); measure it from the last frame's position.
+    let velocity = controller.pose.linearVelocity;
+    const before = this.previous[dominantHand];
+    this.previous[dominantHand] = { position: controller.pose.position.clone(), trackingToWorld: controller.pose.trackingToWorld?.clone(), timestamp };
+    if (!velocity || !Number.isFinite(velocity.lengthSq())) {
+      const dt = before ? (timestamp - before.timestamp) / 1000 : 0;
+      if (!before || !(dt > 0.001 && dt < 0.2)) return null;
+      velocity = handVelocity(before.position, before, controller.pose.position, controller.pose, dt);
+    }
+    if (!gripModifierHeld || timestamp < this.nextGestureAt) return null;
 
     const forward = new THREE.Vector3(0, 0, -1)
       .applyQuaternion(inputFrame.head.orientation)
@@ -66,6 +79,8 @@ export class VRForceGestureController {
 
   reset(): void {
     this.nextGestureAt = Number.NEGATIVE_INFINITY;
+    delete this.previous.left;
+    delete this.previous.right;
   }
 
   private static clonePose(pose: XRWorldPose): XRWorldPose {

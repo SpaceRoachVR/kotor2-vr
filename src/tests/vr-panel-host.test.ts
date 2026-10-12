@@ -41,6 +41,31 @@ describe('VRPanelHost', () => {
     expect(Math.max(...Array.from({ length: uv.count }, (_, i) => uv.getY(i)))).toBeCloseTo(1);
   });
 
+  test('follows the player when a load moves them far from the open panel (round 15)', () => {
+    const host = new VRPanelHost(new THREE.Scene(), { distanceMetres: 1.5, widthMetres: 1.6 });
+    const loadScreen = {};
+    host.present(loadScreen, pose(new THREE.Vector3(0, 0, 1.7), new THREE.Quaternion()), 1600, 900);
+    const first = host.object.position.clone();
+
+    // Looking about inside the area does not move it.
+    host.present(loadScreen, pose(new THREE.Vector3(0.5, 0.3, 1.7), new THREE.Quaternion()), 1600, 900);
+    expect(host.object.position.distanceTo(first)).toBeCloseTo(0);
+
+    // The rig is moved to the new area: the screen comes with the player.
+    host.present(loadScreen, pose(new THREE.Vector3(40, -12, 1.7), new THREE.Quaternion()), 1600, 900);
+    expect(Math.hypot(host.object.position.x - 40, host.object.position.y + 12)).toBeCloseTo(1.5);
+  });
+
+  test('a region may take only part of its enlargement (round 15)', () => {
+    const host = new VRPanelHost(new THREE.Scene(), { distanceMetres: 1.5, widthMetres: 1.6 });
+    const head = pose(new THREE.Vector3(0, 0, 1.7), new THREE.Quaternion());
+    host.present({}, head, 1600, 900, {
+      region: { uMin: 0.3, uMax: 0.7, vMin: 0, vMax: 0.5 }, regionWidthMetres: 1.28, regionEnlargeFraction: 0.5,
+    });
+    // 0.64 m wide, enlarged halfway toward 1.28 m.
+    expect(host.object.scale.x).toBeCloseTo(0.96);
+  });
+
   test('rejects an empty or out-of-range region', () => {
     const host = new VRPanelHost(new THREE.Scene());
     const head = pose(new THREE.Vector3(0, 0, 1.7), new THREE.Quaternion());
@@ -70,7 +95,7 @@ describe('VRPanelHost', () => {
     expect(host.object.scale.x).toBeCloseTo(1.6);
     expect(host.object.scale.y).toBeCloseTo(0.9);
 
-    host.present(owner, pose(new THREE.Vector3(30, 40, 5), new THREE.Quaternion()), 1600, 900);
+    host.present(owner, pose(new THREE.Vector3(11, 21, 2.2), new THREE.Quaternion()), 1600, 900);
     expect(host.object.position.x).toBeCloseTo(11.5);
     expect(host.object.position.y).toBeCloseTo(20);
   });
@@ -117,7 +142,7 @@ describe('VRPanelHost', () => {
     host.present(
       owner,
       pose(
-        new THREE.Vector3(4, 5, 1.7),
+        new THREE.Vector3(1, 2, 1.7),
         new THREE.Quaternion().setFromUnitVectors(
           new THREE.Vector3(0, 0, -1),
           new THREE.Vector3(1, 0, 0)

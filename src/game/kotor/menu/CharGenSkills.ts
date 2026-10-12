@@ -205,6 +205,8 @@ export class CharGenSkills extends GameMenu {
     for(const skill of CharGenSkills.SKILL_ROWS){
       if(creature.skills[skill.row]) creature.skills[skill.row].rank = manager[skill.field];
     }
+    // Whatever is left is banked for the next level-up, as retail does.
+    creature.skillPoints = Math.max(0, Number(manager.availSkillPoints) || 0);
   }
 
   applyRecommendedSkillAllocation(): void {

@@ -14,6 +14,11 @@
 export class PartyDefeatScreenTimer {
   /** Long enough that closing the screen does not flicker it straight back. */
   static readonly REOPEN_SECONDS = 1.5;
+  /**
+   * A beat to see the last blow land before the defeat screen; it used to
+   * snap open on the first frame the party was down (critic run 6).
+   */
+  static readonly OPEN_DELAY_SECONDS = 1.5;
 
   private shown = false;
   private inGameSeconds = 0;
@@ -25,6 +30,8 @@ export class PartyDefeatScreenTimer {
    */
   defeated(deltaSeconds: number): 'open' | 'reopen' | null {
     if (!this.shown) {
+      if (Number.isFinite(deltaSeconds) && deltaSeconds > 0) this.inGameSeconds += deltaSeconds;
+      if (this.inGameSeconds < PartyDefeatScreenTimer.OPEN_DELAY_SECONDS) return null;
       this.shown = true;
       this.inGameSeconds = 0;
       return 'open';

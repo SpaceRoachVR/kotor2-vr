@@ -1,3 +1,4 @@
+import { markVisibleInFirstPerson } from "@/vr/runtime/VRFirstPersonBody";
 import { GameEffect } from "@/effects/GameEffect";
 import { GameState } from "@/GameState";
 import { GameEffectDurationType } from "@/enums/effects/GameEffectDurationType";
@@ -146,6 +147,9 @@ export class EffectBeam extends GameEffect {
     if(!(caster?.model instanceof OdysseyModel3D) || this.model.parent === caster.model) return;
     //Add the effect to the casters model
     caster.model.add(this.model);
+    // A world effect, not part of the body: drawn even when the caster is the
+    // player and first person hides the body.
+    markVisibleInFirstPerson(this.model);
     //Set the target node of the BeamEffect emitter
     this.model.setEmitterTarget(this.object.model);
   }
