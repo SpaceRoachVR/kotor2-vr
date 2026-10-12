@@ -4026,6 +4026,8 @@ export class GameState implements EngineContext {
      * promotes the GL context and adds a button, and nothing downstream depends
      * on it. If there is no WebXR runtime it logs and does nothing.
      */
+    // The desktop window is unfocused for the whole headset session.
+    AudioEngine.keepPlayingWhenUnfocused = () => VRSpike.isPresenting;
     VRSpike.install(GameState.renderer, GameState.scene, {
 
       update: (timestamp, source) => GameState.Update(timestamp, source),

@@ -47,18 +47,23 @@ class AudioChannel {
     return this.#gainNode;
   }
 
+  /**
+   * Muting only zeroes the gain. It used to disconnect the channel and unmute
+   * reconnected it straight to the destination, so SFX and VO, which route
+   * through the reverb engine, lost the reverb on every menu and, combined with
+   * the focus handlers, were left connected to nothing: in-game audio went
+   * silent while GUI sounds still played (headset round 17).
+   */
   mute(){
     if(this.muted){ return; }
     this.muted = true;
     this.#gainNode.gain.value = 0;
-    this.getGainNode().disconnect();
   }
 
   unmute(){
     if(!this.muted){ return; }
     this.muted = false;
     this.#gainNode.gain.value = this.#gainCached;
-    this.getGainNode().connect( this.audioCtx.destination );
   }
 }
 
@@ -78,6 +83,9 @@ type BackgroundAudioType = 'BACKGROUND_MUSIC_DAY' | 'BACKGROUND_MUSIC_NIGHT' | '
 export class AudioEngine {
 
   static focused: boolean = true;
+
+  /** True while losing window focus must not pause the sound (a VR session). */
+  static keepPlayingWhenUnfocused: () => boolean = () => false;
   
   static engines: AudioEngine[] = [];
   
@@ -491,19 +499,16 @@ export class AudioEngine {
   static OnWindowFocusChange(focused: boolean){
     if(focused == AudioEngine.focused) return;
     AudioEngine.focused = focused;
-    if(!focused){
-      // Disconnect all channels
-      AudioEngine.sfxChannel.getGainNode().disconnect();
-      AudioEngine.musicChannel.getGainNode().disconnect();
-      AudioEngine.voChannel.getGainNode().disconnect();
-      AudioEngine.movieChannel.getGainNode().disconnect();
-      AudioEngine.guiChannel.getGainNode().disconnect();
-    }else{
-      AudioEngine.engines[0].reverbEngine.connectSource(AudioEngine.sfxChannel.getGainNode());
-      AudioEngine.engines[0].reverbEngine.connectSource(AudioEngine.voChannel.getGainNode());
-      AudioEngine.musicChannel.getGainNode().connect(AudioEngine.engines[0].audioCtx.destination);
-      AudioEngine.movieChannel.getGainNode().connect(AudioEngine.engines[0].audioCtx.destination);
-      AudioEngine.guiChannel.getGainNode().connect(AudioEngine.engines[0].audioCtx.destination);
+    // The desktop window loses focus whenever the player is in the headset, so
+    // this must never touch the routing (it used to disconnect every channel and
+    // rebuild a different graph on focus). Pausing the context is enough; while
+    // presenting in VR the game keeps playing, so keep the sound with it.
+    const engine = AudioEngine.engines[0];
+    if(!engine) return;
+    if(!focused && !AudioEngine.keepPlayingWhenUnfocused()){
+      engine.audioCtx.suspend().catch(() => {});
+    }else if(focused){
+      engine.audioCtx.resume().catch(() => {});
     }
   }
 
