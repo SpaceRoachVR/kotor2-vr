@@ -3279,7 +3279,7 @@ async function boot(harness, url) {
   line('  · engine booted');
 }
 
-async function newGameThroughCharacterCreation(harness) {
+async function newGameThroughCharacterCreation(harness, { classButton = 'BTN_SEL3', name = 'Exile' } = {}) {
   await waitForMenu(harness, 'MainMenu', TIMEOUTS.boot);
   line('  · main menu up');
 
@@ -3290,7 +3290,7 @@ async function newGameThroughCharacterCreation(harness) {
   // The retail pregame choices are Soldier, Scout, and Scoundrel. They have no
   // level-one Force powers; later Jedi progression is granted by the authored
   // campaign rather than character creation.
-  await clickGuiControl(harness, 'CharGenClass', 'BTN_SEL3');
+  await clickGuiControl(harness, 'CharGenClass', classButton);
   await waitForMenu(harness, 'CharGenQuickOrCustom');
   const selectedClass = await harness.evaluate('window.KotOR.GameState.CharGenManager.selectedClass');
   line(`  · class chosen (selectedClass=${selectedClass})`);
@@ -3318,10 +3318,13 @@ async function newGameThroughCharacterCreation(harness) {
     const creature = gs.CharGenManager.selectedCreature;
     if (!creature) return { ok: false, reason: 'no selectedCreature' };
     try {
-      creature.firstName = 'Exile';
+      creature.firstName = ${JSON.stringify(name)};
+      // END_BTN copies the edit box into firstName, so the typed name lives there.
+      const box = gs.MenuManager.CharGenName && gs.MenuManager.CharGenName.NAME_BOX_EDIT;
+      if (box && box.setText) box.setText(${JSON.stringify(name)});
       if (creature.template && creature.template.getFieldByLabel) {
         const field = creature.template.getFieldByLabel('FirstName');
-        if (field && field.setValue) field.setValue('Exile');
+        if (field && field.setValue) field.setValue(${JSON.stringify(name)});
       }
     } catch (error) {
       return { ok: false, reason: String(error && error.message || error) };
