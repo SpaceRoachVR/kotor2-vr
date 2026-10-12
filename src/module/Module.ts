@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { chooseLoadedPlayerCharacterRecord, isSavedControlledPlayerCharacter } from "@/managers/PlayerCharacterRecord";
 import { buildRecoveryIndex, recoverTemplateResRef, type GitInstance, type PristineInstance } from "@/module/TemplateResRefRecovery";
 import * as path from "path";
 import { AudioEmitter } from "@/audio/AudioEmitter";
@@ -303,7 +304,14 @@ export class Module {
       const playerList = ifo.getFieldByLabel('Mod_PlayerList').getChildStructs();
       if(playerList.length){
         GameState.PartyManager.PlayerTemplate = GFFObject.FromStruct(playerList[0]);
-        GameState.PartyManager.ActualPlayerTemplate = GameState.SaveGame.pc || GameState.PartyManager.PlayerTemplate;
+        const savedIsPC = isSavedControlledPlayerCharacter(
+          playerList[0].getFieldByLabel('IsPC')?.getValue(),
+          playerList[0].getFieldByLabel('Tag')?.getValue(),
+          Object.values(GameState.PartyManager.NPCS || {}).map((npc: any) => npc?.template?.RootNode?.getFieldByLabel('Tag')?.getValue()),
+        );
+        GameState.PartyManager.ActualPlayerTemplate = chooseLoadedPlayerCharacterRecord(
+          GameState.PartyManager.PlayerTemplate, savedIsPC, GameState.SaveGame.pc,
+        );
         // if(GameState.PartyManager.PlayerTemplate.getFieldByLabel('IsPC').getValue()){
         //   GameState.PartyManager.ActualPlayerTemplate = GameState.PartyManager.PlayerTemplate;
         // }else{

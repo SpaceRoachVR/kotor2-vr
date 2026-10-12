@@ -1,4 +1,5 @@
 import { GameState } from "@/GameState";
+import { refreshPlayerCharacterRecord } from "@/managers/PlayerCharacterRecord";
 import { GFFObject } from "@/resource/GFFObject";
 import { ResourceTypes } from "@/resource/ResourceTypes";
 import * as path from "path";
@@ -1696,6 +1697,14 @@ export class PartyManager {
    * @returns void
    */
   static async ExportPlayerCharacter(){
+    // Write the Exile as she is now, not as she was when the template was last
+    // captured; see PlayerCharacterRecord.
+    GameState.PartyManager.ActualPlayerTemplate = refreshPlayerCharacterRecord(
+      GameState.PartyManager.ActualPlayerTemplate,
+      GameState.PartyManager.Player,
+      GameState.PartyManager.party,
+      (e) => console.error('PartyManager.ExportPlayerCharacter: could not snapshot the Exile', e),
+    );
     if(!GameState.PartyManager.ActualPlayerTemplate){ return; }
     const gff = GameState.PartyManager.ActualPlayerTemplate;
     await gff.export( path.join( CurrentGame.gameinprogress_dir, 'pc.utc'));
