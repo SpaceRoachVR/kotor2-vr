@@ -368,30 +368,39 @@ export class ResourceLoader {
     let start = Date.now();
     console.log(`InitModuleCache: Start`);
 
-    const scope = ResourceLoader.CacheScopes[CacheScope.MODULE];
-    await Promise.all(archives.map(async (archive) => {
+    // Archives arrive in priority order - the saved module first, then the
+    // .mod, then the stock .rim - and searchModuleArchives resolves the first
+    // match. The cache has to agree. Filling it from parallel loads let
+    // whichever archive resolved last win, so a TSLRCM .mod could replace a
+    // save's own module.ifo and GIT: the player respawned at a stale
+    // position (pc.utc's) and the module's saved object state was dropped.
+    // Buffers still load in parallel; they are applied first-wins, in order.
+    const loaded = await Promise.all(archives.map(async (archive) => {
+      const entries: { resType: number, resRef: string, buffer: Uint8Array }[] = [];
       if(archive instanceof RIMObject){
         const resources = archive.resources;
         for(let i = 0; i < resources.length; i++){
           const resource = resources[i];
-          const buffer = await archive.getResourceBuffer(resource);
-          ResourceLoader.cacheScopeFor(CacheScope.MODULE, resource.resType).set(
-            resource.resRef.toLowerCase(),
-            buffer
-          );
+          entries.push({ resType: resource.resType, resRef: resource.resRef, buffer: await archive.getResourceBuffer(resource) });
         }
       }else if(archive instanceof ERFObject){
         const keyList = archive.keyList;
         for(let i = 0; i < keyList.length; i++){
           const key = keyList[i];
-          const buffer = await archive.getResourceBufferByResRef(key.resRef, key.resType);
-          ResourceLoader.cacheScopeFor(CacheScope.MODULE, key.resType).set(
-            key.resRef.toLowerCase(),
-            buffer
-          );
+          entries.push({ resType: key.resType, resRef: key.resRef, buffer: await archive.getResourceBufferByResRef(key.resRef, key.resType) });
         }
       }
+      return entries;
     }));
+    for(const entries of loaded){
+      for(const entry of entries){
+        const cache = ResourceLoader.cacheScopeFor(CacheScope.MODULE, entry.resType);
+        const resRef = entry.resRef.toLowerCase();
+        if(entry.buffer && !cache.has(resRef)){
+          cache.set(resRef, entry.buffer);
+        }
+      }
+    }
 
     let end = Date.now();
     console.log(`InitModuleCache: End - ${((end-start)/1000)}s`);
