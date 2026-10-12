@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { shouldDrawMeshNode } from "@/three/odyssey/MeshRenderRules";
 import { IOdysseyControllerGeneric } from "@/interface/odyssey/controller/IOdysseyControllerGeneric";
 import { OdysseyTexture } from "@/three/odyssey/OdysseyTexture";
 import { MDLLoader, TextureLoader } from "@/loaders";
@@ -1528,7 +1529,8 @@ export class OdysseyModel3D extends OdysseyObject3D {
         material.onBeforeCompile = odysseyOnBeforeCompile.bind(material);
       }
 
-      if(!odysseyNode.flagRender && !((odysseyNode.nodeType & OdysseyModelNodeType.AABB) == OdysseyModelNodeType.AABB)){
+      const textureOverride = (options.textureVar && options.textureVar.indexOf('****') == -1) ? options.textureVar : undefined;
+      if(!shouldDrawMeshNode(odysseyNode, (odysseyNode.nodeType & OdysseyModelNodeType.AABB) == OdysseyModelNodeType.AABB, textureOverride)){
         material.visible = false;
       }
 
