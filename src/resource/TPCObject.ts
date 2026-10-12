@@ -13,7 +13,8 @@ import {
   DXT5_BLOCK_BYTES,
   isBlockStitchable,
   stitchCompressedFrames,
-} from "@/resource/dxtBlockStitch";
+  completeMipChain,
+} from '@/resource/dxtBlockStitch';
 
 const TPCHeaderLength = 128;
 
@@ -541,6 +542,17 @@ export class TPCObject {
         _texture.image.width = texDatas.width;
         _texture.image.height = texDatas.height;
         _texture.mipmaps = texDatas.mipmaps;
+        // A chain that stops short of 1x1 makes the texture incomplete and WebGL
+        // samples it as black. Stitched animated atlases always stop short;
+        // see completeMipChain.
+        if (texDatas.mipmaps.length > 1) {
+          completeMipChain(
+            texDatas.mipmaps,
+            this.header.compressed
+              ? (this.header.encoding == ENCODING.RGB ? DXT1_BLOCK_BYTES : DXT5_BLOCK_BYTES)
+              : undefined,
+          );
+        }
       }
     // }
 

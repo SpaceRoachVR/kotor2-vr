@@ -4,6 +4,8 @@ import {
   DXT5_BLOCK_BYTES,
   compressedByteLength,
   isBlockStitchable,
+  completeMipChain,
+  fullMipLevelCount,
   stitchCompressedFrames,
 } from '@/resource/dxtBlockStitch';
 
@@ -154,5 +156,60 @@ describe('DXT block-space frame stitching', () => {
     expect(() => stitchCompressedFrames(frames, { ...layout, blockBytes: 12 })).toThrow(RangeError);
     expect(() => stitchCompressedFrames(frames, { ...layout, columns: 0 })).toThrow(RangeError);
     expect(() => stitchCompressedFrames(frames, { ...layout, columns: 2 })).toThrow(RangeError);
+  });
+});
+
+/**
+ * A stitched atlas inherits one frame's mip chain, which ends a couple of
+ * levels before 1x1. WebGL samples such a texture as black, which is why every
+ * animated screen in the game (the Ebon Hawk cockpit monitors among them) drew
+ * black.
+ */
+describe('completeMipChain', () => {
+  const chain = (w: number, h: number, levels: number, bytes: (w: number, h: number) => number) => {
+    const out = [];
+    for (let i = 0; i < levels; i++) {
+      out.push({ data: new Uint8Array(bytes(w, h)).fill(i + 1), width: w, height: h });
+      w = Math.max(1, w >> 1); h = Math.max(1, h >> 1);
+    }
+    return out;
+  };
+  const dxt5 = (w: number, h: number) => Math.max(1, Math.ceil(w / 4)) * Math.max(1, Math.ceil(h / 4)) * DXT5_BLOCK_BYTES;
+
+  test('extends a 4x4 grid of 256 frames to the full 1024 chain', () => {
+    // EBO_AScrn: 1024 atlas, frames 256, nine levels from the frames.
+    const mips = completeMipChain(chain(1024, 1024, 9, dxt5), DXT5_BLOCK_BYTES);
+    expect(fullMipLevelCount(1024, 1024)).toBe(11);
+    expect(mips).toHaveLength(11);
+    expect(mips.slice(9).map((m) => [m.width, m.height])).toEqual([[2, 2], [1, 1]]);
+    // Each added level is one block, copied from the smallest real level.
+    expect(mips[10].data).toEqual(mips[8].data.slice(0, DXT5_BLOCK_BYTES));
+  });
+
+  test('handles non-square atlases down to 1x1', () => {
+    // LEH_Scre01 in the panels mod: 4096x2048 atlas, eleven levels.
+    const mips = completeMipChain(chain(4096, 2048, 11, dxt5), DXT5_BLOCK_BYTES);
+    expect(mips).toHaveLength(13);
+    expect(mips.slice(10).map((m) => [m.width, m.height])).toEqual([[4, 2], [2, 1], [1, 1]]);
+  });
+
+  test('fills uncompressed tail levels with the first texel', () => {
+    const rgba = (w: number, h: number) => w * h * 4;
+    const mips = completeMipChain(chain(8, 8, 2, rgba));
+    expect(mips).toHaveLength(4);
+    expect(mips[3]).toEqual({ data: mips[1].data.slice(0, 4), width: 1, height: 1 });
+    expect(mips[2].data).toHaveLength(2 * 2 * 4);
+  });
+
+  test('leaves a complete chain alone', () => {
+    const full = chain(16, 16, 5, dxt5);
+    expect(completeMipChain(full, DXT5_BLOCK_BYTES)).toHaveLength(5);
+    expect(completeMipChain([], DXT5_BLOCK_BYTES)).toEqual([]);
+  });
+
+  test('DXT1 blocks are eight bytes', () => {
+    const dxt1 = (w: number, h: number) => Math.max(1, Math.ceil(w / 4)) * Math.max(1, Math.ceil(h / 4)) * DXT1_BLOCK_BYTES;
+    const mips = completeMipChain(chain(16, 16, 3, dxt1), DXT1_BLOCK_BYTES);
+    expect(mips[4].data).toHaveLength(DXT1_BLOCK_BYTES);
   });
 });

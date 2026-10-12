@@ -109,3 +109,53 @@ export function stitchCompressedFrames(
   }
   return atlas;
 }
+
+export interface MipLevel {
+  data: Uint8Array;
+  width: number;
+  height: number;
+}
+
+/** Number of levels in a full mip chain for this base size, down to 1x1. */
+export function fullMipLevelCount(width: number, height: number): number {
+  return Math.floor(Math.log2(Math.max(1, width, height))) + 1;
+}
+
+/**
+ * Extends a mip chain down to 1x1.
+ *
+ * A stitched atlas carries as many levels as one *frame* had: a 4x4 grid of
+ * 256x256 frames is a 1024x1024 atlas whose chain stops at 4x4, two levels
+ * short of 1x1. WebGL treats a mipmapped texture with a short chain as
+ * incomplete and samples it as opaque black, so every animated texture —
+ * stock or modded — drew black: the Ebon Hawk's cockpit monitors (EBO_AScrn,
+ * EBO_AScr2/3, LEH_Scre01/02) among them, which also let the untextured panel
+ * behind them show through as flat grey.
+ *
+ * The missing levels are only ever sampled from a long way off, so each one
+ * repeats the first block (compressed) or first texel (uncompressed) of the
+ * smallest real level — close to the image's average colour by then.
+ * The array is extended in place and also returned.
+ */
+export function completeMipChain(mipmaps: MipLevel[], compressedBlockBytes?: number): MipLevel[] {
+  if (!mipmaps.length) return mipmaps;
+  const full = fullMipLevelCount(mipmaps[0].width, mipmaps[0].height);
+  if (mipmaps.length >= full) return mipmaps;
+  const last = mipmaps[mipmaps.length - 1];
+  let width = last.width;
+  let height = last.height;
+  while (mipmaps.length < full) {
+    width = Math.max(1, width >> 1);
+    height = Math.max(1, height >> 1);
+    let data: Uint8Array;
+    if (compressedBlockBytes) {
+      data = last.data.slice(0, compressedBlockBytes);
+    } else {
+      const texel = last.data.slice(0, 4);
+      data = new Uint8Array(width * height * 4);
+      for (let i = 0; i < data.length; i += 4) data.set(texel, i);
+    }
+    mipmaps.push({ data, width, height });
+  }
+  return mipmaps;
+}
