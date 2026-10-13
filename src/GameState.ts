@@ -52,6 +52,7 @@ import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
 import { AutoSaveManager } from "@/engine/AutoSaveManager";
 import { classifyVRForcePower } from "@/vr/runtime/VRForcePowerClassification";
+import { measureVRSaberGripCentre } from "@/vr/runtime/VRHeldSaberGrip";
 import { resolveVRMenuRegion } from "@/vr/runtime/VRMenuRegion";
 import { CutsceneMode } from "@/enums/dialog/CutsceneMode";
 import { EngineFrameSource, shouldProcessEngineFrame } from "@/vr/XRFrameCadence";
@@ -3081,6 +3082,9 @@ const VR_HELD_CONSUMABLE_MAX_METRES = 0.11;
 /** Measured once per model: this runs every frame for the held hand. */
 const vrHeldConsumableFit = new WeakMap<THREE.Object3D, HeldItemClassFallbackTransform>();
 
+/** Measured once per lightsaber model; null for a model with no saber blade. */
+const vrHeldSaberFit = new WeakMap<THREE.Object3D, HeldItemClassFallbackTransform | null>();
+
 function resolveHeldItemClassFallback(item: VREquippedHeldItem): HeldItemClassFallbackTransform {
   const rotation = new THREE.Euler(Math.PI, 0, 0);
   const itemClass = typeof item.baseItem?.itemClass === 'string' ? item.baseItem.itemClass.trim().toLowerCase() : '';
@@ -3105,6 +3109,19 @@ function resolveHeldItemClassFallback(item: VREquippedHeldItem): HeldItemClassFa
       vrHeldConsumableFit.set(model, fit);
       return fit;
     }
+  }
+  // Lightsabers: the hand closes on the grip above the pommel, not under the
+  // emitter where the creature's hand bone holds it. The half turn maps model
+  // +Z to grip -Z, so the model's grip point lands on the grip origin with
+  // the model moved +centre along grip Z. See VRHeldSaberGrip.
+  if (model instanceof THREE.Object3D) {
+    let saberFit = vrHeldSaberFit.get(model);
+    if (saberFit === undefined) {
+      const centre = measureVRSaberGripCentre(model);
+      saberFit = centre === null ? null : { position: new THREE.Vector3(0, 0, centre), rotation, scale: 1 };
+      vrHeldSaberFit.set(model, saberFit);
+    }
+    if (saberFit) return saberFit;
   }
   return {
     position: new THREE.Vector3(0, 0, 0),

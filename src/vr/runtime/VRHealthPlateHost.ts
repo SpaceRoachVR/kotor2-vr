@@ -23,13 +23,55 @@ export interface VRPlayerVitals {
 
 const FACE_DIAMETER_METRES = 0.05;
 /**
- * Where a watch sits: behind the grip (grip -Z points out of the fist) and on
- * top of it. The glance test uses the face's real world orientation, so a
- * wrong guess here only moves it.
+ * Where the watch sits, in the hand's grip space, measured on the WebXR
+ * generic-hand model closed on the grip (left hand; the right mirrors X).
+ *
+ * The forearm leaves the fist along grip +Y, not Z: the wrist joint sits at
+ * (-0.034, 0.081, 0.015) and the mesh ends 0.105 up. Where the band sits,
+ * 9-10.5 cm up, the mesh spans x -0.053..-0.016 and z -0.007..0.045, so the
+ * wrist's middle is about (-0.033, z 0.018), and the back of the hand faces -X (the
+ * metacarpals sit at x -0.027, palm and fingers wrap the grip at x 0).
+ *
+ * Round 14's watch sat at (0, 0, 0.075) with its face up +Y: that is past the
+ * little finger, below the fist, 10.6 cm from the wrist joint (Allen, round 2:
+ * "put it on the left wrist where a watch would be").
  */
-const WATCH_LOCAL_OFFSET = new THREE.Vector3(0, 0, 0.075);
-const BAND_RADIUS_METRES = 0.032;
+const WRIST_CENTRE_LEFT = new THREE.Vector3(-0.033, 0.095, 0.018);
+/** Clears the wrist mesh: its farthest corner from the centre is 3.4 cm. */
+const BAND_RADIUS_METRES = 0.036;
 const FACE_LIFT_METRES = BAND_RADIUS_METRES + 0.004;
+
+export interface VRHealthWatchPlacement {
+  /** The band's centre on the forearm axis, in grip space. */
+  readonly centre: THREE.Vector3;
+  /** The face's centre, relative to {@link centre}. */
+  readonly faceOffset: THREE.Vector3;
+  /** The face's orientation, relative to the watch: local +Z out of the face, +Y twelve o'clock. */
+  readonly faceQuaternion: THREE.Quaternion;
+  readonly bandRadiusMetres: number;
+}
+
+/**
+ * The watch on the back of the given wrist. Pure.
+ *
+ * Face out of the back of the wrist (face +Z to grip -X on the left hand, +X
+ * on the right). Twelve o'clock (face +Y) is grip +Z, the little-finger side:
+ * with the forearm raised across the chest, palm down, that is away from the
+ * player, as on a real watch, and three o'clock points down the hand on the
+ * left wrist.
+ */
+export function resolveVRHealthWatchPlacement(hand: 'left' | 'right'): VRHealthWatchPlacement {
+  const outward = hand === 'left' ? -1 : 1;
+  const normal = new THREE.Vector3(outward, 0, 0);
+  const up = new THREE.Vector3(0, 0, 1);
+  const right = new THREE.Vector3().crossVectors(up, normal);
+  return {
+    centre: WRIST_CENTRE_LEFT.clone().setX(WRIST_CENTRE_LEFT.x * -outward),
+    faceOffset: normal.clone().multiplyScalar(FACE_LIFT_METRES),
+    faceQuaternion: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, normal)),
+    bandRadiusMetres: BAND_RADIUS_METRES,
+  };
+}
 /** Face turned toward the head more than this (cosine) to count as a glance. */
 const GLANCE_COSINE = 0.55;
 const GLANCE_MAX_DISTANCE_METRES = 0.8;
@@ -64,7 +106,11 @@ export class VRHealthPlateHost {
   private readonly toHead = new THREE.Vector3();
   private readonly worldQuaternion = new THREE.Quaternion();
 
-  constructor(handAnchor: THREE.Object3D) {
+  /**
+   * @param hand Which hand's wrist: the off hand, so the left by default and
+   *   the right when the weapon is held in the left.
+   */
+  constructor(handAnchor: THREE.Object3D, readonly hand: 'left' | 'right' = 'left') {
     if (typeof document === 'undefined') throw new Error('VR health watch requires a browser document');
     this.canvas = document.createElement('canvas');
     this.canvas.width = 256;
@@ -76,16 +122,18 @@ export class VRHealthPlateHost {
 
     this.object = new THREE.Group();
     this.object.name = 'Kotor2VR.HealthWatch';
-    this.object.position.copy(WATCH_LOCAL_OFFSET);
+    const placement = resolveVRHealthWatchPlacement(hand);
+    this.object.position.copy(placement.centre);
     this.object.visible = false;
 
-    // The band circles the forearm, which runs along the grip's Z axis; a
-    // torus lies in its XY plane, so it already wraps that axis.
+    // The band circles the forearm, which runs along grip +Y. A torus lies in
+    // its own XY plane round Z: a quarter turn about X wraps it round Y.
     this.band = new THREE.Mesh(
       new THREE.TorusGeometry(BAND_RADIUS_METRES, 0.0045, 8, 32),
       new THREE.MeshBasicMaterial({ color: 0x1b2a30 }),
     );
     this.band.name = 'Kotor2VR.HealthWatchBand';
+    this.band.rotation.set(Math.PI / 2, 0, 0);
     this.object.add(this.band);
 
     this.face = new THREE.Mesh(
@@ -98,9 +146,8 @@ export class VRHealthPlateHost {
       }),
     );
     this.face.name = 'Kotor2VR.HealthWatchFace';
-    this.face.position.set(0, FACE_LIFT_METRES, 0);
-    // Face up out of the top of the wrist.
-    this.face.rotation.set(-Math.PI / 2, 0, 0);
+    this.face.position.copy(placement.faceOffset);
+    this.face.quaternion.copy(placement.faceQuaternion);
     this.face.renderOrder = 1_000_004;
     this.object.add(this.face);
     handAnchor.add(this.object);

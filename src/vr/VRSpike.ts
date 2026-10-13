@@ -5141,7 +5141,11 @@ export class VRSpike {
     }
   }
 
-  /** HP and FP on the off-hand wrist, shown when the player glances at it. */
+  /**
+   * HP and FP on the off-hand wrist, shown when the player glances at it: the
+   * left wrist, or the right when Dominant Hand is Left (the weapon hand never
+   * wears the watch).
+   */
   private static presentHealthPlate(): void {
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
     const offHand: XRHandRole = VRSpike.dominantHand === 'right' ? 'left' : 'right';
@@ -5152,7 +5156,7 @@ export class VRSpike {
     }
     if (!VRSpike.healthPlateHost || VRSpike.healthPlateHost.object.parent !== anchor) {
       VRSpike.healthPlateHost?.dispose();
-      VRSpike.healthPlateHost = new VRHealthPlateHost(anchor);
+      VRSpike.healthPlateHost = new VRHealthPlateHost(anchor, offHand);
     }
     const head = VRSpike.camera.getWorldPosition(new THREE.Vector3());
     const vitals = VRSpike.hooks?.getPlayerVitals?.() ?? null;

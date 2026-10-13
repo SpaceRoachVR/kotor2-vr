@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as THREE from 'three';
 
 import { cueForVRCombatOutcome, describeVRCombatCue, VRCombatCueAudio } from '@/vr/runtime/VRCombatCueAudio';
-import { shouldShowVRHealthPlate, VR_HEALTH_PLATE_LOW_FRACTION } from '@/vr/runtime/VRHealthPlateHost';
+import { resolveVRHealthWatchPlacement, shouldShowVRHealthPlate, VR_HEALTH_PLATE_LOW_FRACTION } from '@/vr/runtime/VRHealthPlateHost';
 import { VRBladeSparkHost } from '@/vr/runtime/VRBladeSparkHost';
 
 // Critic review 2026-09-29: round 12 felt no haptics, so every combat result
@@ -138,4 +138,40 @@ test('your own Force power cast is announced in VR', () => {
   const game = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
   expect(game).toMatch(/classifyVRForcePower\(spell\) !== true\) return;\s+VRSpike\.presentLocalForceCast\(\);/);
   expect(describeVRCombatCue('force')[0].resref).toBe('v_useforce');
+});
+
+describe('health watch placement (on the back of the off-hand wrist)', () => {
+  // Measured on the WebXR generic left hand closed on the grip, in grip space.
+  const LEFT_WRIST_JOINT = new THREE.Vector3(-0.034, 0.081, 0.015);
+  // The mesh's cross-section 9-10.5 cm up the forearm axis, where the band sits.
+  const LEFT_WRIST_MESH = { minX: -0.053, maxX: -0.016, minZ: -0.007, maxZ: 0.045 };
+
+  test('left: centred on the wrist, past the joint toward the elbow, face out of the back of the wrist', () => {
+    const watch = resolveVRHealthWatchPlacement('left');
+    expect(watch.centre.distanceTo(LEFT_WRIST_JOINT)).toBeLessThan(0.025);
+    expect(watch.centre.y).toBeGreaterThan(LEFT_WRIST_JOINT.y);
+    const face = watch.centre.clone().add(watch.faceOffset);
+    expect(face.x).toBeLessThan(LEFT_WRIST_MESH.minX - 0.01);
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(watch.faceQuaternion);
+    expect(normal.x).toBeCloseTo(-1, 5);
+    const twelve = new THREE.Vector3(0, 1, 0).applyQuaternion(watch.faceQuaternion);
+    expect(twelve.z).toBeCloseTo(1, 5);
+  });
+
+  test('left: the band clears every corner of the wrist mesh', () => {
+    const watch = resolveVRHealthWatchPlacement('left');
+    for (const x of [LEFT_WRIST_MESH.minX, LEFT_WRIST_MESH.maxX]) {
+      for (const z of [LEFT_WRIST_MESH.minZ, LEFT_WRIST_MESH.maxZ]) {
+        expect(Math.hypot(x - watch.centre.x, z - watch.centre.z)).toBeLessThan(watch.bandRadiusMetres);
+      }
+    }
+  });
+
+  test('right (Dominant Hand: Left) mirrors it across the grip', () => {
+    const left = resolveVRHealthWatchPlacement('left');
+    const right = resolveVRHealthWatchPlacement('right');
+    expect(right.centre.x).toBeCloseTo(-left.centre.x, 5);
+    expect(right.centre.y).toBeCloseTo(left.centre.y, 5);
+    expect(new THREE.Vector3(0, 0, 1).applyQuaternion(right.faceQuaternion).x).toBeCloseTo(1, 5);
+  });
 });
