@@ -32,6 +32,15 @@ const TLK_VIEW_CREATEABLE_ITEMS = 48375;
 const TLK_BREAKDOWN_ITEM = 48380;
 const TLK_CHEMICAL_VALUE = 115432;
 const TLK_BREAKDOWN_INVENTORY_ITEMS = 115425;
+/**
+ * English texts of 48375 and 48380, for a dialog.tlk that lacks them. The
+ * GUI's own create-mode strings cannot stand in: on the breakdown screen
+ * "Create Item" would label the button that breaks an item down.
+ */
+const FALLBACK_VIEW_CREATEABLE_ITEMS = 'View Createable Items';
+const FALLBACK_BREAKDOWN_ITEM = 'Breakdown Item';
+/** Text colour of a recipe the user cannot create yet. */
+const GREYED_TEXT = 0.5;
 
 /**
  * MenuChemicals class: TSL's Lab Station ("Create New Items").
@@ -85,7 +94,7 @@ export class MenuChemicals extends GameMenu {
   private createViews: RecipeView[] = [];
   /** Breakable inventory, index-aligned with LB_INVITEMS rows. */
   private breakRows: EngineCraftingItem[] = [];
-  /** Template Cost per recipe resref, read once per open; undefined = no usable template. */
+  /** Template Cost per recipe resref, read once and kept across opens; undefined = no usable template. */
   private templateCosts = new Map<string, number | undefined>();
   /** Display items built from recipe templates, kept across opens so each is built once. */
   private displayItems = new Map<string, ModuleItem>();
@@ -158,8 +167,8 @@ export class MenuChemicals extends GameMenu {
 
   /**
    * Opens the Lab Station for `user` (the party leader when it is not a valid
-   * creature). Recipe templates are read once per open, so the session can
-   * price every recipe synchronously. Opens on the Health tab.
+   * creature). Recipe templates are read on the first open and kept, so the
+   * session can price every recipe synchronously. Opens on the Health tab.
    */
   async openFor(user?: ModuleCreature): Promise<void> {
     this.user = BitWise.InstanceOfObject(user, ModuleObjectType.ModuleCreature) ? user : undefined;
@@ -225,8 +234,11 @@ export class MenuChemicals extends GameMenu {
     return entry;
   }
 
+  /**
+   * Reads each recipe's template once for the menu's lifetime (game data does
+   * not change while the game runs), keeping its Cost and a display item.
+   */
   private async preloadTemplates(recipes: Recipe[]): Promise<void> {
-    this.templateCosts.clear();
     for(const recipe of recipes){
       const resref = recipe.resref;
       if(this.templateCosts.has(resref)) continue;
@@ -241,6 +253,9 @@ export class MenuChemicals extends GameMenu {
           item.initProperties();
           item.load();
           item.setStackSize(1);
+          // Only a picture for the recipe list: keep it out of the module's
+          // object registry, which a module load resets and re-numbers.
+          MenuChemicals.unregister(item);
           this.displayItems.set(resref, item);
         }
       } catch (e) {
@@ -253,8 +268,18 @@ export class MenuChemicals extends GameMenu {
     }
   }
 
-  /** Rebuilds the current list and the counters, selecting `selectIndex` clamped to the list. */
-  refresh(selectIndex = 0){
+  /** A display item's constructor registers it with ModuleObjectManager; undo that. */
+  private static unregister(item: ModuleItem){
+    const manager = GameState.ModuleObjectManager;
+    if(manager?.ObjectList?.get(item.id) === item) manager.RemoveObjectById(item.id);
+  }
+
+  /**
+   * Rebuilds the current list and the counters, selecting `selectIndex`
+   * clamped to the list. `keepScroll` keeps the list where it was (after
+   * Accept); tab and mode changes start at the top.
+   */
+  refresh(selectIndex = 0, keepScroll = false){
     if(!this.session || !this.LB_SHOPITEMS) return;
     this.updateModeTexts();
     this.LB_DESCRIPTION.setItem(null);
@@ -270,11 +295,10 @@ export class MenuChemicals extends GameMenu {
       this.LB_SHOPITEMS.setItems(items, {
         getItemOptions: () => ({ onClick: () => this.showSelection() }),
         selectIndex: MenuChemicals.clampIndex(selectIndex, items.length),
+        keepScroll,
       } as any);
       this.LB_SHOPITEMS.children.forEach((row: GUIControl, i: number) => {
-        if(this.createViews[i] && !this.createViews[i].creatable){
-          try { (row.children[0] as any)?.setTextColor(0.5, 0.5, 0.5); } catch (e) { /* label text not built */ }
-        }
+        if(this.createViews[i] && !this.createViews[i].creatable) MenuChemicals.greyOut(row);
       });
       this.LB_SHOPITEMS.markListRttDirty?.();
       this.LB_SHOPITEMS.show();
@@ -285,6 +309,7 @@ export class MenuChemicals extends GameMenu {
       this.LB_INVITEMS.setItems(items, {
         getItemOptions: () => ({ onClick: () => this.showSelection() }),
         selectIndex: MenuChemicals.clampIndex(selectIndex, items.length),
+        keepScroll,
       } as any);
       this.LB_INVITEMS.show();
     }
@@ -295,6 +320,32 @@ export class MenuChemicals extends GameMenu {
     this.BTN_CREATE_MINES.pulsing = !this.breakdownMode && this.category == 'mines';
     this.updateChemicals();
     this.showSelection();
+  }
+
+  /**
+   * Greys a recipe row's label for good. Painting it once is not enough:
+   * - GUIControl.update() paints a hovered, selected or pulsing control in its
+   *   defaultHighlightColor and writes that into text.color, which
+   *   resetPulse() then restores; GUIButton's hover-out paints defaultColor.
+   *   So the label's own colours are set to grey.
+   * - GUIInventoryItem's onSelect copies the row's highlight or default colour
+   *   into the label text on every select and deselect, so the grey is put
+   *   back after it.
+   */
+  private static greyOut(row: GUIControl){
+    const label = row.children[0];
+    if(!label) return;
+    const paintGrey = () => {
+      try { label.setTextColor(GREYED_TEXT, GREYED_TEXT, GREYED_TEXT); } catch (e) { /* label text not built */ }
+    };
+    label.defaultColor = label.defaultColor.clone().setRGB(GREYED_TEXT, GREYED_TEXT, GREYED_TEXT);
+    label.defaultHighlightColor = label.defaultHighlightColor.clone().setRGB(GREYED_TEXT, GREYED_TEXT, GREYED_TEXT);
+    const rowOnSelect = row.onSelect;
+    row.onSelect = function(this: unknown, ...args: unknown[]){
+      if(typeof rowOnSelect === 'function') rowOnSelect.apply(this, args);
+      paintGrey();
+    };
+    paintGrey();
   }
 
   private static clampIndex(index: number, length: number): number {
@@ -309,8 +360,8 @@ export class MenuChemicals extends GameMenu {
       if(this.guiText.title !== undefined) this.LBL_TITLE?.setText(this.guiText.title);
     }else{
       // Examine now returns to creating; Accept breaks the selected item down.
-      this.BTN_Examine.setText(this.tlk(TLK_VIEW_CREATEABLE_ITEMS) || this.guiText.accept || '');
-      this.BTN_Accept.setText(this.tlk(TLK_BREAKDOWN_ITEM) || this.guiText.examine || '');
+      this.BTN_Examine.setText(this.tlk(TLK_VIEW_CREATEABLE_ITEMS) || FALLBACK_VIEW_CREATEABLE_ITEMS);
+      this.BTN_Accept.setText(this.tlk(TLK_BREAKDOWN_ITEM) || FALLBACK_BREAKDOWN_ITEM);
       const valueLabel = this.tlk(TLK_CHEMICAL_VALUE);
       if(valueLabel) this.LBL_COST.setText(valueLabel);
       const title = this.tlk(TLK_BREAKDOWN_INVENTORY_ITEMS);
@@ -374,11 +425,11 @@ export class MenuChemicals extends GameMenu {
       if(!this.breakdownMode){
         const index = this.selectedIndex(this.LB_SHOPITEMS);
         const view = this.createViews[index];
-        if(view && await this.session.create(view.recipe)) this.refresh(index);
+        if(view && await this.session.create(view.recipe)) this.refresh(index, true);
       }else{
         const index = this.selectedIndex(this.LB_INVITEMS);
         const row = this.breakRows[index];
-        if(row && this.session.breakdown(row)) this.refresh(index);
+        if(row && this.session.breakdown(row)) this.refresh(index, true);
       }
     } finally {
       this.busy = false;

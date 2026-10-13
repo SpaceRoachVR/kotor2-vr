@@ -7,7 +7,11 @@
  * its "[Use the Lab Station now.]" reply runs k_ptar_startmed, and
  * ShowChemicalUpgradeScreen must open MenuChemicals once the conversation ends.
  * Then: create a Medpac, break one down, check the VR panel and pointer reach,
- * press Accept with nothing selected, save, reload, and check the chemicals.
+ * press Accept with nothing selected; aim the emulated right controller's ray
+ * at a greyed recipe (it stays grey under hover and selection), push the right
+ * stick over both lists (each scrolls), Accept on a scrolled list (the scroll
+ * is kept); close, run the retail k_medstation as the station's OnUsed (the
+ * screen opens with no conversation), save, reload, and check the chemicals.
  *
  *   node tools/vr-emulator/probe-lab-station.js
  *
@@ -100,7 +104,115 @@ const PAGE_HELPERS = `(() => {
       },
     };
   };
-  window.__lab = { menu, count, targetable, rowTargetable, state };
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const hand = () => window.__xrDevice?.controllers?.right;
+  const restAim = (() => { const q = hand()?.quaternion; return q ? [q.x, q.y, q.z, q.w] : [0, 0, 0, 1]; })();
+  let aim = { yaw: 0, pitch: 0 };
+  /** Turns the right controller: yaw about +Y, then pitch about +X; its ray is -Z. */
+  const setAim = (yaw, pitch) => {
+    const sy = Math.sin(yaw / 2), cy = Math.cos(yaw / 2), sp = Math.sin(pitch / 2), cp = Math.cos(pitch / 2);
+    hand().quaternion.set(cy * sp, sy * cp, -sy * sp, cy * cp);
+  };
+  /** Where the real VR ray meets the panel, in GUI units, a few frames after the last turn; null = off the panel. */
+  const readPointer = async () => {
+    await pause(150);
+    const p = K.VRSpike.latestPanelPointerPosition;
+    return p ? { x: p.x, y: p.y } : null;
+  };
+  /**
+   * Aims the controller so its ray lands on target (GUI units): Newton steps on
+   * yaw and pitch with a measured Jacobian. This is the headset's input path
+   * (VRPanelPointerHost -> LegacyGUIVRPointerAdapter -> Mouse -> hover).
+   */
+  const aimAt = async (target, tolerance = 4) => {
+    if (!hand()) return { ok: false, reason: 'no right controller' };
+    setAim(aim.yaw, aim.pitch);
+    let p = await readPointer();
+    if (!p) {
+      search: for (const pitch of [0, -0.2, 0.2, -0.4, 0.4]) {
+        for (const yaw of [0, -0.2, 0.2, -0.4, 0.4, -0.6, 0.6]) {
+          setAim(yaw, pitch); p = await readPointer();
+          if (p) { aim = { yaw, pitch }; break search; }
+        }
+      }
+      if (!p) return { ok: false, reason: 'ray never met the panel' };
+    }
+    const d = 0.01;
+    for (let i = 0; i < 15; i++) {
+      const ex = target.x - p.x, ey = target.y - p.y;
+      if (Math.hypot(ex, ey) <= tolerance) return { ok: true, pointer: p, iterations: i };
+      setAim(aim.yaw + d, aim.pitch); const py = await readPointer();
+      setAim(aim.yaw, aim.pitch + d); const pp = await readPointer();
+      if (!py || !pp) return { ok: false, reason: 'probe step left the panel', pointer: p };
+      const a = (py.x - p.x) / d, b = (pp.x - p.x) / d, c = (py.y - p.y) / d, e = (pp.y - p.y) / d;
+      const det = a * e - b * c;
+      if (Math.abs(det) < 1e-6) return { ok: false, reason: 'singular aim', pointer: p };
+      let dy = (e * ex - b * ey) / det, dp = (-c * ex + a * ey) / det;
+      const size = Math.hypot(dy, dp);
+      if (size > 0.3) { dy *= 0.3 / size; dp *= 0.3 / size; }
+      aim = { yaw: aim.yaw + dy, pitch: aim.pitch + dp };
+      setAim(aim.yaw, aim.pitch); p = await readPointer();
+      if (!p) {
+        aim = { yaw: aim.yaw - dy / 2, pitch: aim.pitch - dp / 2 };
+        setAim(aim.yaw, aim.pitch); p = await readPointer();
+        if (!p) return { ok: false, reason: 'overshot the panel' };
+      }
+    }
+    return { ok: Math.hypot(target.x - p.x, target.y - p.y) <= tolerance, pointer: p };
+  };
+  const resetAim = () => { aim = { yaw: 0, pitch: 0 }; hand()?.quaternion.set(...restAim); };
+  const boxCentre = (control) => { control.updateBounds?.(); return centre(control.box); };
+  const rowInList = (list, row) => {
+    row.updateBounds?.(); list.updateBounds?.();
+    const c = centre(row.box);
+    return c.x > list.box.min.x && c.x < list.box.max.x && c.y > list.box.min.y && c.y < list.box.max.y;
+  };
+  /** Scrolls list so row index sits inside the list's box; returns whether it does. */
+  const revealRow = (list, index) => {
+    const row = list.children[index];
+    for (const scroll of [list.scroll, 0, list.maxScroll / 2, list.maxScroll]) {
+      list.scroll = scroll; list.updateList();
+      if (rowInList(list, row)) return true;
+    }
+    return false;
+  };
+  /** The last row inside the list's box that passes accept(index), or -1. */
+  const lastVisibleRow = (list, accept) => {
+    for (let i = list.children.length - 1; i >= 0; i--) {
+      if (accept(i) && rowInList(list, list.children[i])) return i;
+    }
+    return -1;
+  };
+  const colour = (label) => ({ r: +label.text.color.r.toFixed(3), g: +label.text.color.g.toFixed(3), b: +label.text.color.b.toFixed(3) });
+  /** Text colours of label sampled over ms, so a pulse or hover paint between frames is caught. */
+  const sampleColours = async (label, ms = 900) => {
+    const samples = [];
+    for (let t = 0; t < ms; t += 90) { samples.push(colour(label)); await pause(90); }
+    return samples;
+  };
+  /** Pushes the right stick down, releases, then up, with the ray on list's centre; reads the scroll after each. */
+  const stickScroll = async (list) => {
+    const stick = hand();
+    stick.updateAxes('thumbstick', 0, 0);
+    list.scroll = 0; list.updateList();
+    const aimed = await aimAt(boxCentre(list));
+    await pause(200);
+    const hovered = g.MenuManager.hoveredGUIElement === list;
+    const before = list.scroll;
+    try {
+      stick.updateAxes('thumbstick', 0, 1); await pause(750);
+      const down = list.scroll;
+      stick.updateAxes('thumbstick', 0, 0); await pause(300);
+      const neutral = list.scroll;
+      stick.updateAxes('thumbstick', 0, -1); await pause(750);
+      const up = list.scroll;
+      return { aimed, hovered, rows: list.children.length, maxScroll: list.maxScroll, before, down, neutral, up };
+    } finally {
+      stick.updateAxes('thumbstick', 0, 0);
+    }
+  };
+  window.__lab = { menu, count, targetable, rowTargetable, state, aimAt, resetAim, boxCentre, revealRow,
+    lastVisibleRow, sampleColours, stickScroll, pause };
   return true;
 })()`;
 
@@ -274,21 +386,154 @@ async function main() {
     check('acceptWithoutSelectionIsNoop', unselected.before.chemicals === unselected.after.chemicals
       && unselected.before.medpacs === unselected.after.medpacs, unselected);
 
-    // 6. Close, save, reload: the chemicals persist.
+    const grey = (c) => Math.abs(c.r - 0.5) < 0.01 && Math.abs(c.g - 0.5) < 0.01 && Math.abs(c.b - 0.5) < 0.01;
+
+    // 5c. Final review #1: a greyed recipe stays grey under the VR ray's hover,
+    // when selected, and after the ray leaves. A creatable row is hovered first
+    // as the control: it must be painted with the highlight colour, which shows
+    // the hover path really ran.
+    const hoverGrey = await harness.evaluate(`(async()=>{const L=window.__lab,m=L.menu(),list=m.LB_SHOPITEMS,g=window.KotOR.GameState;
+      if(m.category!=='health'){m.BTN_CREATE_HEALTH.click();await L.pause(300);}
+      const greyIndex=m.createViews.findIndex(v=>!v.creatable), liveIndex=m.createViews.findIndex(v=>v.creatable);
+      if(greyIndex<0||liveIndex<0) return {greyIndex,liveIndex,reason:'need one greyed and one creatable row'};
+      const out={greyIndex,liveIndex,grey:m.createViews[greyIndex].recipe.resref,live:m.createViews[liveIndex].recipe.resref};
+      out.liveRevealed=L.revealRow(list,liveIndex);
+      const liveLabel=list.children[liveIndex].children[0];
+      out.liveAim=await L.aimAt(L.boxCentre(liveLabel));
+      out.liveHover=!!liveLabel.hover;
+      out.liveSamples=await L.sampleColours(liveLabel);
+      const h=liveLabel.defaultHighlightColor;
+      out.liveHighlight={r:+h.r.toFixed(3),g:+h.g.toFixed(3),b:+h.b.toFixed(3)};
+      out.revealed=L.revealRow(list,greyIndex);
+      const row=list.children[greyIndex],label=row.children[0];
+      out.aim=await L.aimAt(L.boxCentre(label));
+      out.hovered={label:!!label.hover,row:!!row.hover,listUnderRay:g.MenuManager.hoveredGUIElement===list};
+      out.hoverSamples=await L.sampleColours(label);
+      list.select(row);
+      out.selected=!!row.selected;
+      out.selectedSamples=await L.sampleColours(label);
+      return out;})()`, { timeoutMs: 120000 });
+    const hoverGreyPanel = await panelFor(path.join(EVIDENCE_DIR, 'lab-station-panel-hover-grey.png'));
+    hoverGrey.panelFile = hoverGreyPanel.file;
+    hoverGrey.hoverOut = await harness.evaluate(`(async()=>{const L=window.__lab,m=L.menu(),list=m.LB_SHOPITEMS;
+      const label=list.children[m.createViews.findIndex(v=>!v.creatable)].children[0];
+      list.clearSelection();
+      const aim=await L.aimAt(L.boxCentre(m.BTN_Cancel));
+      return {aim,hover:!!label.hover,samples:await L.sampleColours(label,450)};})()`, { timeoutMs: 120000 });
+    report.notes.hoverGrey = hoverGrey;
+    const painted = (hoverGrey.liveSamples || []).some((c) => !grey(c) && c.r === hoverGrey.liveHighlight.r
+      && c.g === hoverGrey.liveHighlight.g && c.b === hoverGrey.liveHighlight.b);
+    check('hoverPaintsCreatableRow', !!hoverGrey.liveAim?.ok && hoverGrey.liveHover === true && painted, hoverGrey);
+    check('greyedRowStaysGreyUnderHover', !!hoverGrey.aim?.ok && hoverGrey.revealed === true
+      && (hoverGrey.hovered?.label || hoverGrey.hovered?.row) && (hoverGrey.hoverSamples || []).every(grey), hoverGrey);
+    check('greyedRowStaysGreyWhenSelected', hoverGrey.selected === true && (hoverGrey.selectedSamples || []).every(grey), hoverGrey.selectedSamples);
+    check('greyedRowStaysGreyAfterHoverOut', !!hoverGrey.hoverOut?.aim?.ok && hoverGrey.hoverOut.hover === false
+      && hoverGrey.hoverOut.samples.every(grey), hoverGrey.hoverOut);
+
+    // 5d. Final review #3: the right stick scrolls the recipe list under the ray
+    // (the first tab whose recipes overflow the list).
+    const shopScroll = await harness.evaluate(`(async()=>{const L=window.__lab,m=L.menu();
+      for(const name of ['BTN_CREATE_HEALTH','BTN_CREATE_STIMS','BTN_CREATE_GRENADES','BTN_CREATE_MINES']){
+        m[name].click(); await L.pause(400); if(m.LB_SHOPITEMS.maxScroll>0) break; }
+      return {category:m.category,...await L.stickScroll(m.LB_SHOPITEMS)};})()`, { timeoutMs: 120000 });
+    report.notes.shopScroll = shopScroll;
+    check('stickScrollsRecipeList', !!shopScroll.aimed?.ok && shopScroll.hovered === true && shopScroll.maxScroll > 0
+      && shopScroll.down > shopScroll.before && shopScroll.neutral === shopScroll.down && shopScroll.up < shopScroll.down, shopScroll);
+
+    // 5e. Final review #2: Create on a scrolled recipe list keeps the scroll.
+    const keptCreate = await harness.evaluate(`(async()=>{const L=window.__lab,m=L.menu(),list=m.LB_SHOPITEMS,K=window.KotOR;
+      K.PartyManager.ChemicalCount=1000; m.refresh(0); await L.pause(300);
+      list.scroll=list.maxScroll; list.updateList();
+      const index=L.lastVisibleRow(list,(i)=>!!m.createViews[i]?.creatable);
+      if(index<0) return {index,maxScroll:list.maxScroll};
+      list.select(list.children[index]);
+      const before={scroll:list.scroll,chemicals:K.PartyManager.ChemicalCount,resref:m.createViews[index].recipe.resref};
+      m.BTN_Accept.click();
+      for(let i=0;i<40 && K.PartyManager.ChemicalCount===before.chemicals;i++) await L.pause(100);
+      await L.pause(300);
+      return {category:m.category,index,maxScroll:list.maxScroll,before,after:{scroll:list.scroll,
+        chemicals:K.PartyManager.ChemicalCount,selectedIndex:list.children.indexOf(list.selectedItem)}};})()`, { timeoutMs: 60000 });
+    report.notes.keptCreate = keptCreate;
+    check('scrollKeptAfterCreate', keptCreate.index >= 0 && keptCreate.before.scroll > 0 && keptCreate.after.chemicals < keptCreate.before.chemicals
+      && keptCreate.after.scroll === keptCreate.before.scroll && keptCreate.after.selectedIndex === keptCreate.index, keptCreate);
+
+    // 5f. Breakdown with a bag that overflows LB_INVITEMS (two of each of up to
+    // 12 more lab items): the stick scrolls it, and Breakdown keeps the scroll.
+    const invScroll = await harness.evaluate(`(async()=>{const L=window.__lab,m=L.menu(),K=window.KotOR,g=K.GameState,list=m.LB_INVITEMS;
+      const added=[];
+      for(const resref of m.displayItems.keys()){
+        if(added.length>=12) break;
+        if(resref===${JSON.stringify(MEDPAC)}) continue;
+        try{const buffer=await K.ResourceLoader.loadResource(2025,resref);
+          for(let n=0;n<2;n++) g.InventoryManager.addItem(new K.GFFObject(buffer));
+          added.push(resref);}catch(e){}
+      }
+      m.BTN_Examine.click(); await L.pause(400);
+      return {added,breakdownMode:m.breakdownMode,...await L.stickScroll(list)};})()`, { timeoutMs: 120000 });
+    report.notes.invScroll = invScroll;
+    check('stickScrollsBreakdownList', invScroll.breakdownMode === true && !!invScroll.aimed?.ok && invScroll.hovered === true
+      && invScroll.maxScroll > 0 && invScroll.down > invScroll.before && invScroll.up < invScroll.down, invScroll);
+    const keptBreakdown = await harness.evaluate(`(async()=>{const L=window.__lab,m=L.menu(),list=m.LB_INVITEMS,K=window.KotOR;
+      list.scroll=list.maxScroll; list.updateList();
+      const index=L.lastVisibleRow(list,(i)=>(m.breakRows[i]?.stackSize||0)>1);
+      if(index<0) return {index,maxScroll:list.maxScroll};
+      list.select(list.children[index]);
+      const before={scroll:list.scroll,chemicals:K.PartyManager.ChemicalCount,resref:m.breakRows[index].resref};
+      m.BTN_Accept.click(); await L.pause(400);
+      return {index,maxScroll:list.maxScroll,before,after:{scroll:list.scroll,chemicals:K.PartyManager.ChemicalCount,
+        selectedIndex:list.children.indexOf(list.selectedItem)}};})()`, { timeoutMs: 60000 });
+    report.notes.keptBreakdown = keptBreakdown;
+    check('scrollKeptAfterBreakdown', keptBreakdown.index >= 0 && keptBreakdown.before.scroll > 0
+      && keptBreakdown.after.chemicals > keptBreakdown.before.chemicals && keptBreakdown.after.scroll === keptBreakdown.before.scroll, keptBreakdown);
+    await harness.evaluate(`(async()=>{const L=window.__lab,m=L.menu();L.resetAim();
+      if(m.breakdownMode)m.BTN_Examine.click();await L.pause(300);return true;})()`);
+
+    // 6. Close.
     const closed = await harness.evaluate(`(async()=>{const g=window.KotOR.GameState,m=window.__lab.menu();
       m.BTN_Cancel.click();await new Promise(r=>setTimeout(r,500));
       return {visible:!!m.bVisible,mode:g.Mode,foreground:g.MenuManager.GetCurrentMenu()?.constructor?.name};})()`);
     report.notes.closed = closed;
     check('menuClosesToPlay', closed.visible === false && closed.mode === 1, closed);
+
+    // 6b. Final review #5, the path outside any conversation. 101PER's Lab
+    // Station runs a_compdlg, which always starts the help conversation. The
+    // retail k_medstation is only ShowChemicalUpgradeScreen(GetLastUsedBy())
+    // (its NCS: ACTION 330, ACTION 773; it reads no global), so it is put on
+    // this station's OnUsed for this step: using the station must open the
+    // screen for the player with no conversation at all.
+    const secondUse = await harness.evaluate(`(async()=>{const K=window.KotOR,g=K.GameState,cm=g.CutsceneManager;
+      const m=window.__lab.menu(),p=window.__labStation,pause=window.__lab.pause;
+      const script=K.NWScript.Load('k_medstation');
+      if(!script) return {loaded:false};
+      window.__labOnUsed=p.scripts['OnUsed'];
+      p.scripts['OnUsed']=script;
+      let conversationSeen=!!cm.active;
+      p.use(K.PartyManager.Player);
+      for(let i=0;i<200 && !m.bVisible;i++){ if(cm.active) conversationSeen=true; await pause(50); }
+      await pause(800);
+      if(cm.active) conversationSeen=true;
+      return {loaded:true,conversationSeen,user:m.activeUser()===K.PartyManager.Player,...window.__lab.state()};})()`, { timeoutMs: 60000 });
+    report.notes.secondUse = secondUse;
+    check('kMedstationOpensWithoutConversation', secondUse.loaded === true && secondUse.conversationSeen === false && secondUse.visible
+      && secondUse.foreground && secondUse.user && secondUse.category === 'health' && secondUse.shopRows > 0, secondUse);
+    const closedAgain = await harness.evaluate(`(async()=>{const g=window.KotOR.GameState,m=window.__lab.menu();
+      if(m.bVisible){m.BTN_Cancel.click();await new Promise(r=>setTimeout(r,500));}
+      if(window.__labOnUsed!==undefined) window.__labStation.scripts['OnUsed']=window.__labOnUsed;
+      return {visible:!!m.bVisible,mode:g.Mode};})()`);
+    report.notes.closedAgain = closedAgain;
+    check('kMedstationClosesToPlay', closedAgain.visible === false && closedAgain.mode === 1, closedAgain);
+
+    // 7. Save, reload: the chemicals persist.
     const reloaded = await harness.evaluate(`(async()=>{const K=window.KotOR;
+      const savedChemicals=K.PartyManager.ChemicalCount;
       await K.SaveGame.SaveCurrentGame('Lab Station probe',${SCRATCH_SAVE_ID});
-      const s=K.SaveGame.saves.find(s=>s.getSaveNumber()===${SCRATCH_SAVE_ID});if(!s) return {saved:false};
+      const s=K.SaveGame.saves.find(s=>s.getSaveNumber()===${SCRATCH_SAVE_ID});if(!s) return {saved:false,savedChemicals};
       K.PartyManager.ChemicalCount=0;
-      window.__memoryProbeLoad={module:'101PER',error:null};await s.load();return {saved:true,directory:s.directory};})()`, { timeoutMs: 180000 });
+      window.__memoryProbeLoad={module:'101PER',error:null};await s.load();return {saved:true,directory:s.directory,savedChemicals};})()`, { timeoutMs: 180000 });
     await harness.waitFor(landed, 300000, 500);
     reloaded.chemicals = await harness.evaluate('window.KotOR.PartyManager.ChemicalCount');
     report.notes.reload = reloaded;
-    check('chemicalsPersistAcrossSave', reloaded.saved && reloaded.chemicals === 90, reloaded);
+    check('chemicalsPersistAcrossSave', reloaded.saved && reloaded.savedChemicals > 0 && reloaded.chemicals === reloaded.savedChemicals, reloaded);
 
     report.consoleErrors = harness.consoleMessages
       .filter((m) => m.level === 'error' && /chemical|lab station|ShowChemicalUpgradeScreen/i.test(String(m.text)))
@@ -299,6 +544,8 @@ async function main() {
   } finally {
     await harness.close().catch(() => {});
     if (service) service.stop();
+    // The isolated save copy lives in an mkdtemp directory; remove it.
+    try { fs.rmSync(path.dirname(userRoot), { recursive: true, force: true }); } catch (e) { report.cleanupError = String(e); }
   }
 
   report.passed = !report.error && Object.keys(report.checks).length > 0 && Object.values(report.checks).every(Boolean);

@@ -1941,8 +1941,14 @@ First shippable artifact.
   conversation closes) and 774 `GetChemicals`. `tools/vr-emulator/probe-lab-station.js`
   drives the real 101PER Lab Station on the SpaceRoach save: OnUsed → help
   conversation → "[Use the Lab Station now.]" → screen; Medpac create 100 → 80,
-  breakdown 80 → 90 at Treat Injury 10, pointer reach of tabs/buttons/rows, a PNG of
-  the VR panel, save/reload keeps 90. 775 `GetChemicalPieceValue` stays
+  breakdown 80 → 90 at Treat Injury 10, pointer reach of tabs/buttons/rows, PNGs of
+  the VR panel, save/reload keeps the chemicals. Through the emulated right
+  controller's ray and stick (the headset's input path): a greyed recipe stays grey
+  under hover, selection and hover-out; the right stick scrolls both the recipe list
+  and an overflowing breakdown list; Create and Breakdown on a scrolled list keep the
+  scroll. The retail `k_medstation` (just `ShowChemicalUpgradeScreen(GetLastUsedBy())`,
+  no global check) run as the station's OnUsed opens the screen with no
+  conversation. 775 `GetChemicalPieceValue` stays
   unimplemented (no retail caller). Follow-up: the workbench's create/breakdown
   screen (`MenuComponent`) reuses `CraftingRules` with a second station
   (`itemcreate.2da`, value rate 0.05, Repair); the item upgrade screen
