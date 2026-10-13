@@ -52,6 +52,7 @@ import { BitWise } from "@/utility/BitWise";
 import { ActionType } from "@/enums/actions/ActionType";
 import { NWScript } from "@/nwscript/NWScript";
 import { CombatActionType, EngineDebugType, ModuleObjectScript, ModuleTriggerType, SkillType, TalkVolume } from "@/enums";
+import { talkVolumeReach } from "@/module/creature/ListenPatterns";
 import type { SWPortrait } from "@/engine/rules/SWPortrait";
 import type { IHeardString } from "@/interface/dialog/IHeardString";
 import type { SWRange } from "@/engine/rules/SWRange";
@@ -2427,65 +2428,38 @@ export class ModuleObject {
 
   speakString(str: string, volume: TalkVolume){
     //https://nwnlexicon.com/index.php?title=SpeakString
-    let notifyCreatures = false;
-    let notifyPCs = false;
-    let talkVolume = volume;
+    // Listeners match the string against their patterns without regard to
+    // case (see ListenPatterns), so the lowercased copy still fires them.
+    const reach = talkVolumeReach(volume);
+    if(!reach.creatures && !reach.party){ return; }
 
-    let range = 5;
-    switch(talkVolume){
-      case TalkVolume.TALK:
-
-      break;
-      case TalkVolume.WHISPER:
-
-      break;
-      case TalkVolume.SHOUT:
-
-      break;
-      case TalkVolume.SILENT_TALK:
-        range = 20;
-        notifyCreatures = true;
-      break;
-      case TalkVolume.SILENT_SHOUT:
-        range = 1000;
-        notifyCreatures = true;
-        notifyPCs = true;
-      break;
-    }
-
-    const rangeSquared = range * range;
-    let cDistanceSquared = 0;
-    // console.log('SpeakString', this.getName(), str, volume, range);
+    const rangeSquared = reach.range * reach.range;
     const speakString = str.toLowerCase();
+    const heardBy = new Set<ModuleObject>();
+    const deliver = (creature: ModuleObject) => {
+      if(!creature || creature == (this as any) || heardBy.has(creature) || creature.isDead()){ return; }
+      if(this.position.distanceToSquared(creature.position) > rangeSquared){ return; }
+      heardBy.add(creature);
+      creature.heardStrings.push({
+        speaker: this,
+        string: speakString,
+        volume: volume
+      });
+    };
 
-    if(notifyPCs){
-      for(let i = 0, len = GameState.PartyManager.party.length; i < len; i++){
-        const creature = GameState.PartyManager.party[i];
-        if(creature != (this as any) && !creature.isDead()){
-          cDistanceSquared = this.position.distanceToSquared(creature.position);
-          if(cDistanceSquared > rangeSquared){ continue; }
-          creature.heardStrings.push({ 
-            speaker: this, 
-            string: speakString, 
-            volume: talkVolume 
-          });
-        }
+    // Party members are creatures like any other to the retail AI, but this
+    // engine keeps them out of area.creatures.
+    if(reach.party){
+      const party = GameState.PartyManager.party;
+      for(let i = 0, len = party.length; i < len; i++){
+        deliver(party[i]);
       }
     }
 
-    if(notifyCreatures){
-      for(let i = 0, len = GameState.module.area.creatures.length; i < len; i++){
-        const creature = GameState.module.area.creatures[i];
-        if(creature != (this as any) && !creature.isDead()){
-          cDistanceSquared = this.position.distanceToSquared(creature.position);
-          if(cDistanceSquared > rangeSquared){ continue; }
-
-          creature.heardStrings.push({
-            speaker: this,
-            string: speakString, 
-            volume: talkVolume
-          });
-        }
+    if(reach.creatures){
+      const creatures = GameState.module.area.creatures;
+      for(let i = 0, len = creatures.length; i < len; i++){
+        deliver(creatures[i]);
       }
     }
   }

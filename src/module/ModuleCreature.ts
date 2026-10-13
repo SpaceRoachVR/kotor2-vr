@@ -85,6 +85,8 @@ import { describeModuleObject } from "@/utility/ModuleObjectDiagnostics";
 import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { ExperienceType } from "@/enums/engine/ExperienceType";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
+import { TalkVolume } from "@/enums/engine/TalkVolume";
+import { takeHeardShout } from "@/module/creature/ListenPatterns";
 import { resolveKillExperience } from "@/combat/killExperience";
 import {
   abilityModifier,
@@ -1082,15 +1084,11 @@ export class ModuleCreature extends ModuleObject {
     if(this.isDead())
       return;
 
-    const str = this.heardStrings[0];
-    if(!this.isListening || !str){ return;  }
-    //console.log('HeardString', this.id, str, this.isListening, this);
-
-    const pattern = this.listeningPatterns[str.string];
-    if(typeof pattern === 'undefined'){ return; }
-
-    this.heardStrings.shift();
-    this.onDialog(str.speaker, pattern);
+    // One heard string per frame. Strings no pattern matches are dropped, so
+    // they cannot hold up the shouts queued behind them.
+    const shout = takeHeardShout(this);
+    if(!shout){ return; }
+    this.onDialog(shout.speaker, shout.pattern);
   }
 
   updatePerceptionList(delta = 0){
@@ -2555,9 +2553,17 @@ export class ModuleCreature extends ModuleObject {
   }
 
   onAttacked(attackType: CombatActionType){
-    if(this == GameState.getCurrentPlayer()) return;
     const nwscript = this.scripts[ModuleObjectScript.CreatureOnAttacked];
     if(!nwscript){ return; }
+    if(this == GameState.getCurrentPlayer()){
+      // The controlled character runs no party AI scripts, but keeps
+      // the one thing retail's party-leader branch of the OnAttacked script
+      // (k_ai_master 2005) does: tell the party it was attacked, so they join
+      // the fight through GN_RespondToShout. Its SILENT_TALK repeats of the
+      // same shout reach a subset of these listeners.
+      this.speakString('GEN_I_WAS_ATTACKED', TalkVolume.SILENT_SHOUT);
+      return;
+    }
     const instance = nwscript.newInstance();
     const script_num = (GameState.PartyManager.party.indexOf(this) > -1) ? 2005 : 1005;
     instance.run(this, script_num);
