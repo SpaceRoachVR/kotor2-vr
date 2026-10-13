@@ -28,6 +28,7 @@ import { GameState } from "@/GameState";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
 import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
 import { resolveAttackRoll } from "@/combat/TSLCombatRules";
+import { buildCombatAttackPlan, countHeldCombatAttacks, selectHeldCombatAttack, type CombatAttackHand, type CombatPlannedAttack } from "@/combat/CombatAttackPlan";
 
 /** Ranks attack results so a round reports its best attack. */
 function bestAttackResult(previous: AttackResult | undefined, next: AttackResult): AttackResult {
@@ -57,6 +58,18 @@ export class CombatRound {
    * The length of a combat round in milliseconds
    */
   static ROUND_LENGTH: number = 3000;
+
+  /**
+   * Which creatures roll only the first attack of each round when it begins.
+   * Their round's other attacks (the off hand, a double-bladed weapon's second
+   * blade, Flurry / Rapid Shot's extra) wait for `resolveHeldAttack`, one per
+   * call, until the round ends; any not asked for by then are not rolled.
+   * Every roll, bonus, penalty and damage number is the one the round would
+   * have rolled at its start. Null (the default) rolls them all at once.
+   * For a front end whose player makes each attack with an input of its own.
+   */
+  static holdsLaterAttacks: ((owner: ModuleObject) => boolean) | null = null;
+
   owner: ModuleObject;
 
   roundStarted: boolean = false;
@@ -92,6 +105,14 @@ export class CombatRound {
   extraTaken: boolean = false;
 
   attackList: CombatAttackData[] = [];
+  /** This round's attacks in the order they roll (CombatAttackPlan). */
+  plannedAttacks: CombatPlannedAttack<ModuleItem>[] = [];
+  /** Which of `plannedAttacks` have been rolled. */
+  plannedAttackRolled: boolean[] = [];
+  /** Attacks rolled after the round's first, one at a time (resolveHeldAttack). */
+  heldAttacksResolved: number = 0;
+  /** The result of the attack resolveHeldAttack rolled last. */
+  lastHeldAttackResult: AttackResult | undefined = undefined;
   specialAttackList: any[] = []; // (?)
   scheduledActionList: CombatRoundAction[] = [];
   action: CombatRoundAction;
@@ -269,6 +290,11 @@ export class CombatRound {
     for(let i = 0; i < 5; i++){
       this.attackList[i].reset();
     }
+    // Attacks the round held and nobody asked for are lost with it.
+    this.plannedAttacks = [];
+    this.plannedAttackRolled = [];
+    this.heldAttacksResolved = 0;
+    this.lastHeldAttackResult = undefined;
     this.removeRoundFeatAttackPenalty();
     this.owner.onCombatRoundEnd();
   }
@@ -416,74 +442,20 @@ export class CombatRound {
     if(!combatAction.isCutsceneAttack){
       combatAction.attackResult = (hasAssuredHit) ? AttackResult.AUTOMATIC_HIT : AttackResult.MISS;
       combatAction.attackDamage = 0;
-      if(creature && !creature.isSimpleCreature()){
-        /**
-         * Unarmed Strike
-         */
-        if(!creature.equipment.RIGHTHAND && !creature.equipment.LEFTHAND){
-          this.calculateWeaponAttack(creature, undefined, ModuleCreatureArmorSlot.RIGHTHAND, combatAction);
-        }
-
-        /**
-         * Main Hand Attack
-         */
-        if(creature.equipment.RIGHTHAND){
-          this.calculateWeaponAttack(creature, creature.equipment.RIGHTHAND, ModuleCreatureArmorSlot.RIGHTHAND, combatAction);
-        }
-
-        /**
-         * Off Hand Attack
-         */
-        if(creature.equipment.LEFTHAND){
-          this.calculateWeaponAttack(creature, creature.equipment.LEFTHAND, ModuleCreatureArmorSlot.LEFTHAND, combatAction);
-        }else if(this.isDoubleBladed(creature.equipment.RIGHTHAND)){
-          // A double-bladed weapon fights as two weapons: the second blade is
-          // the off-hand attack, with the two-weapon penalties (feat.2da Two-
-          // Weapon Fighting: "a double-bladed weapon or two weapons"). It used
-          // to get one attack a round (critic runs 3 and 4).
-          this.calculateWeaponAttack(creature, creature.equipment.RIGHTHAND, ModuleCreatureArmorSlot.LEFTHAND, combatAction);
-        }
-
-        /**
-         * Additional Attacks
-         */
-        if(this.additionalAttacks > 0){
-          for(let i = 0; i < this.additionalAttacks; i++){
-            if(!creature.equipment.RIGHTHAND){ continue; }
-            this.calculateWeaponAttack(creature, creature.equipment.RIGHTHAND, ModuleCreatureArmorSlot.RIGHTHAND, combatAction);
-          }
-        }
-      }else if(creature && creature.isSimpleCreature()){
-        if(creature.equipment.CLAW1){
-          this.calculateWeaponAttack(creature, creature.equipment.CLAW1, ModuleCreatureArmorSlot.CLAW1, combatAction);
-        }
-
-        if(creature.equipment.CLAW2){
-          this.calculateWeaponAttack(creature, creature.equipment.CLAW2, ModuleCreatureArmorSlot.CLAW2, combatAction);
-        }
-
-        if(creature.equipment.CLAW3){
-          this.calculateWeaponAttack(creature, creature.equipment.CLAW3, ModuleCreatureArmorSlot.CLAW3, combatAction);
-        }
-
-        // "Simple" is the appearance's model type (S/L), not a statement that
-        // the creature fights with claws. Peragus' Damaged Mining Droids are
-        // simple and carry their Mining Laser in LEFTHAND with no claw at all,
-        // so this branch rolled zero attacks: the attack animation played every
-        // round, nothing was ever rolled, and no combat log line was ever
-        // written. Reported from the headset as "they never landed a single
-        // attack, despite their attack animation happening". A simple creature
-        // with no claw fights with whatever it holds, like anyone else.
-        if(this.currentAttack == 0){
-          if(creature.equipment.RIGHTHAND){
-            this.calculateWeaponAttack(creature, creature.equipment.RIGHTHAND, ModuleCreatureArmorSlot.RIGHTHAND, combatAction);
-          }
-          if(creature.equipment.LEFTHAND){
-            this.calculateWeaponAttack(creature, creature.equipment.LEFTHAND, ModuleCreatureArmorSlot.LEFTHAND, combatAction);
-          }
-          if(this.currentAttack == 0){
-            this.calculateWeaponAttack(creature, undefined, ModuleCreatureArmorSlot.RIGHTHAND, combatAction);
-          }
+      if(creature){
+        // Main hand, off hand (or a double-bladed weapon's second blade),
+        // then Flurry / Rapid Shot's extra: CombatAttackPlan keeps the order
+        // this method has always rolled them in.
+        this.plannedAttacks = this.buildAttackPlan(creature);
+        this.plannedAttackRolled = this.plannedAttacks.map(() => false);
+        this.heldAttacksResolved = 0;
+        this.lastHeldAttackResult = undefined;
+        const holds = this.plannedAttacks.length > 1 && CombatRound.holdsLaterAttacks?.(creature) === true;
+        const rollNow = holds ? 1 : this.plannedAttacks.length;
+        for(let i = 0; i < rollNow; i++){
+          const planned = this.plannedAttacks[i];
+          this.plannedAttackRolled[i] = true;
+          this.calculateWeaponAttack(creature, planned.weapon, planned.slot, combatAction);
         }
       }
     }
@@ -515,23 +487,106 @@ export class CombatRound {
     }else{
       //process attack results
       for(let i = 0; i < this.currentAttack; i++){
-        const attack = this.attackList[i];
-        if(!attack)
-          continue;
-
-        if(
-          attack.attackResult == AttackResult.HIT_SUCCESSFUL ||
-          attack.attackResult == AttackResult.CRITICAL_HIT ||
-          attack.attackResult == AttackResult.AUTOMATIC_HIT
-        ){
-          attack.applyDamageEffectToCreature(creature, this.action.target as ModuleCreature);
-          TextSprite3D.CreateOnObject(this.action.target, attack.getTotalDamage().toString(), TextSprite3DType.HOSTILE, 1500);
-        }else if(attack.attackResult == AttackResult.MISS){
-          TextSprite3D.CreateOnObject(this.action.target, 'miss', TextSprite3DType.NEUTRAL, 1500);
-        }
+        this.applyAttackOutcome(creature, this.attackList[i]);
       }
     }
 
+  }
+
+  /** Applies one rolled attack: its damage on a hit, the floating number or "miss". */
+  private applyAttackOutcome(creature: ModuleCreature, attack: CombatAttackData | undefined){
+    if(!attack)
+      return;
+
+    if(
+      attack.attackResult == AttackResult.HIT_SUCCESSFUL ||
+      attack.attackResult == AttackResult.CRITICAL_HIT ||
+      attack.attackResult == AttackResult.AUTOMATIC_HIT
+    ){
+      attack.applyDamageEffectToCreature(creature, this.action.target as ModuleCreature);
+      TextSprite3D.CreateOnObject(this.action.target, attack.getTotalDamage().toString(), TextSprite3DType.HOSTILE, 1500);
+    }else if(attack.attackResult == AttackResult.MISS){
+      TextSprite3D.CreateOnObject(this.action.target, 'miss', TextSprite3DType.NEUTRAL, 1500);
+    }
+  }
+
+  /** The round's attacks for `creature`, in the order they roll. */
+  buildAttackPlan(creature: ModuleCreature): CombatPlannedAttack<ModuleItem>[] {
+    const equipment = creature.equipment;
+    return buildCombatAttackPlan<ModuleItem>({
+      simple: creature.isSimpleCreature(),
+      rightHand: equipment.RIGHTHAND,
+      leftHand: equipment.LEFTHAND,
+      claws: [equipment.CLAW1, equipment.CLAW2, equipment.CLAW3],
+      rightHandDoubleBladed: this.isDoubleBladed(equipment.RIGHTHAND),
+      additionalAttacks: this.additionalAttacks,
+      // Knight Speed / Master Speed ("+1 / +2 attacks per round") are not
+      // restored yet. When they are, their count goes here.
+      speedAttacks: 0,
+      maxAttacks: this.attackList.length,
+    });
+  }
+
+  /**
+   * How many of this round's attacks are still held for `hand`
+   * (CombatRound.holdsLaterAttacks). Zero once the round has ended, its
+   * target has died, or everything has been rolled.
+   */
+  heldAttackCount(hand: CombatAttackHand): number {
+    if(!this.canResolveHeldAttack()) return 0;
+    return countHeldCombatAttacks(this.plannedAttacks, this.plannedAttackRolled, hand);
+  }
+
+  /**
+   * Rolls the next attack this round is holding for `hand`, exactly as the
+   * round would have rolled it at its start, applies it and logs it. Returns
+   * its result, or undefined when there is nothing to roll.
+   */
+  resolveHeldAttack(creature: ModuleCreature, hand: CombatAttackHand): AttackResult | undefined {
+    if(!creature || creature !== (this.owner as unknown) || !this.canResolveHeldAttack()) return undefined;
+    const index = selectHeldCombatAttack(this.plannedAttacks, this.plannedAttackRolled, hand);
+    if(index < 0) return undefined;
+    const planned = this.plannedAttacks[index];
+    const combatAction = this.action;
+    this.plannedAttackRolled[index] = true;
+    const slot = this.currentAttack;
+    this.calculateWeaponAttack(creature, planned.weapon, planned.slot, combatAction);
+    if(this.currentAttack === slot) return undefined;
+    const attack = this.attackList[slot];
+    this.applyAttackOutcome(creature, attack);
+    this.playHeldAttackReaction(creature, combatAction, attack.attackResult);
+    this.heldAttacksResolved++;
+    this.lastHeldAttackResult = attack.attackResult;
+    return attack.attackResult;
+  }
+
+  private canResolveHeldAttack(): boolean {
+    const action = this.action;
+    if(!this.roundStarted || !action || !action.resultsCalculated || action.isCutsceneAttack) return false;
+    if(action.actionType != CombatActionType.ATTACK && action.actionType != CombatActionType.ATTACK_USE_FEAT) return false;
+    const target = action.target;
+    if(!target || (typeof target.isDead === 'function' && target.isDead())) return false;
+    return this.plannedAttackRolled.some((rolled) => !rolled);
+  }
+
+  /**
+   * The target's flinch or dodge for an attack rolled after the round's first,
+   * by the rule calculateRoundAnimations uses for the round's own.
+   */
+  private playHeldAttackReaction(creature: ModuleCreature, combatAction: CombatRoundAction, result: AttackResult){
+    if(!combatAction?.target || !BitWise.InstanceOfObject(combatAction.target, ModuleObjectType.ModuleCreature)) return;
+    const target: ModuleCreature = combatAction.target as any;
+    if(target.isDead()) return;
+    if(target.animationState.index != ModuleCreatureAnimState.IDLE && target.animationState.index != ModuleCreatureAnimState.READY) return;
+    if(target.combatData.lastAttackTarget != creature || this.attacksIncludeKillingBlow()) return;
+    const hit = result == AttackResult.HIT_SUCCESSFUL || result == AttackResult.CRITICAL_HIT || result == AttackResult.AUTOMATIC_HIT;
+    if(hit){
+      target.playTwoDAAnimation( target.getDamageAnimation( combatAction.animationName ) );
+      target.animationState.index = ModuleCreatureAnimState.DAMAGE;
+    }else{
+      target.playTwoDAAnimation( target.getDodgeAnimation( combatAction.animationName ) );
+      target.animationState.index = ModuleCreatureAnimState.DODGE;
+    }
   }
 
   /**
