@@ -29,6 +29,12 @@ export class ActionMoveToPoint extends Action {
   private stuckFrom: THREE.Vector3 | null = null;
   private stuckSeconds = 0;
   private repathed = false;
+  /**
+   * With a target object: arrive once within this distance of it, wherever the
+   * destination point is. A melee attacker heads for its open spot and stops
+   * as it reaches the ring, though its target moved since. 0: off. Not saved.
+   */
+  stopWithin = 0;
 
   constructor( actionId: number = -1, groupId: number = -1 ){
     super(actionId, groupId);
@@ -74,6 +80,9 @@ export class ActionMoveToPoint extends Action {
       const distanceRT = Utility.Distance2D(this.owner.position, this.target_position);
       if( distanceRT <= range ){
         return ActionStatus.COMPLETE;
+      }
+      if( this.stopWithin > 0 && Utility.Distance2D(this.owner.position, this.target.position) <= this.stopWithin ){
+        return this.arrive();
       }
     }
 

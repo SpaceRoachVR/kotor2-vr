@@ -157,6 +157,7 @@ import { addSwoopRideListener, type SwoopRideEventType } from "@/module/minigame
 import { VRCombatSwingBuffer, VRHeldSwingLifetime, isVRCombatSwingBufferable, isVRFightOngoing } from "@/vr/runtime/VRCombatSwingBuffer";
 import { VRRecentForcePowers } from "@/vr/runtime/VRForcePowerWheelRules";
 import { AttackBarkGate, SPARSE_ATTACK_BARK_POLICY, type AttackBarkPolicy } from "@/engine/rules/AttackBarkGate";
+import type { MeleeCrowdPolicy } from "@/engine/rules/MeleeCrowdRules";
 import { VRRefusalTickThrottle, isVRRefusedInputMeaningful, type VRRefusalTickReason } from "@/vr/runtime/VRRefusalTick";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
@@ -3390,6 +3391,13 @@ export class GameState implements EngineContext {
     if (classifyVRForcePower(spell) !== true) return;
     VRSpike.presentLocalForceCast();
   };
+
+  /**
+   * How many melee attackers one defender takes at once (ActionPhysicalAttacks,
+   * MeleeCrowdRules); null or undefined: no cap, every attacker takes an open
+   * spot.
+   */
+  static meleeCrowdPolicy: ((attacker: unknown, defender: unknown) => MeleeCrowdPolicy | undefined) | null = null;
 
   /** Decides whether an attack voices its soundset line (ActionPhysicalAttacks). */
   static attackBarkGate = new AttackBarkGate();

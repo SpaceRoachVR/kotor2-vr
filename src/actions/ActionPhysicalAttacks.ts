@@ -17,6 +17,7 @@ import {
   isObjectDestructionTarget,
 } from "@/engine/interaction/ObjectLockRules";
 import { ActionApproachPolicy } from "@/engine/interaction/ActionApproachPolicy";
+import { pickMeleeSpot, planMeleeApproach } from "@/combat/meleeApproach";
 
 /**
  * ActionPhysicalAttacks class.
@@ -73,20 +74,39 @@ export class ActionPhysicalAttacks extends Action {
       return ActionStatus.FAILED;
     }else{
       let distance = Utility.Distance2D(owner.position, target.position);
+      const approachSuppressed = ActionApproachPolicy.isApproachSuppressedFor(this.owner);
+      // Melee attackers take an open spot around their target (retail); a
+      // host crowd policy may send one to another defender, or keep it off
+      // until there is room. Decided before a round begins, never during one.
+      const melee = !owner.isRangedEquipped() && BitWise.InstanceOfObject(target, ModuleObjectType.ModuleCreature);
+      const meleeStep = melee && !approachSuppressed && !owner.combatRound?.roundStarted &&
+        !(distance <= range && target.holdsMeleeSpot(owner)) ? planMeleeApproach(owner, target, this) : undefined;
+      if(meleeStep?.kind == 'retargeted' || meleeStep?.kind == 'wait'){
+        return ActionStatus.IN_PROGRESS;
+      }
       // VR owns the player's position; walking them to the target drags them
       // through the world. Actor-scoped so party and NPC movement is untouched.
-      if( distance > range &&
-        !ActionApproachPolicy.isApproachSuppressedFor(this.owner) ){
+      if( (distance > range && !approachSuppressed) || meleeStep?.kind == 'backoff' ){
 
-        // owner.openSpot = undefined;
+        owner.openSpot = undefined;
         let target_position = target.position.clone();
-        
-        /*if(!owner.isRangedEquipped()){ //MELEE
-          owner.openSpot = target.getClosesetOpenSpot(owner);
+        let stopWithin = 0;
+        let arriveWithin = range;
+
+        if(meleeStep?.kind == 'backoff'){
+          target_position.set(meleeStep.point.x, meleeStep.point.y, target_position.z);
+          arriveWithin = 0.25;
+        }else if(meleeStep?.kind == 'close'){
+          stopWithin = meleeStep.stopWithin;
+        }else if(melee){
+          owner.openSpot = pickMeleeSpot(owner, target, this);
           if(typeof owner.openSpot != 'undefined'){
             target_position.copy(owner.openSpot.targetVector);
+            // Into reach on the way: the spot sets the side it comes from.
+            stopWithin = Math.max(owner.openSpot.radius + 0.25, range - 0.1);
+            arriveWithin = 0.25;
           }
-        }*/
+        }
 
         let actionMoveToTarget = new GameState.ActionFactory.ActionMoveToPoint(this.groupId);
         actionMoveToTarget.setParameter(0, ActionParameterType.FLOAT, target_position.x);
@@ -95,21 +115,27 @@ export class ActionPhysicalAttacks extends Action {
         actionMoveToTarget.setParameter(3, ActionParameterType.DWORD, target.area.id);
         actionMoveToTarget.setParameter(4, ActionParameterType.DWORD, target.id);
         actionMoveToTarget.setParameter(5, ActionParameterType.INT, 1);
-        actionMoveToTarget.setParameter(6, ActionParameterType.FLOAT, range );
+        actionMoveToTarget.setParameter(6, ActionParameterType.FLOAT, arriveWithin );
         actionMoveToTarget.setParameter(7, ActionParameterType.INT, 0);
         actionMoveToTarget.setParameter(8, ActionParameterType.FLOAT, 30.0);
+        actionMoveToTarget.stopWithin = stopWithin;
         owner.actionQueue.addFront(actionMoveToTarget);
 
         return ActionStatus.IN_PROGRESS;
       }else{
         // VR moves the player from the stick, which sets force every frame; zeroing it here rooted a player strafing while an attack or cast waited for its round (critic run 4).
-        if(!ActionApproachPolicy.isApproachSuppressedFor(owner)){
+        if(!approachSuppressed){
           owner.force = 0;
           owner.speed = 0;
         }
 
         if(!owner.combatRound){
           return ActionStatus.FAILED;
+        }
+
+        // In reach without a spot (it started close): take one, so it counts.
+        if(melee && !target.holdsMeleeSpot(owner)){
+          owner.openSpot = target.getClosesetOpenSpot(owner);
         }
 
         const combatRound = owner.combatRound;

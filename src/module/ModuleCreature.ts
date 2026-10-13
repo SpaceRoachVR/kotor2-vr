@@ -89,6 +89,7 @@ import { TalkVolume } from "@/enums/engine/TalkVolume";
 import { takeHeardShout } from "@/module/creature/ListenPatterns";
 import { resolveKillExperience } from "@/combat/killExperience";
 import { dropStaleCombatActions } from "@/combat/staleCombatActions";
+import { meleeSpotRadius } from "@/engine/rules/MeleeCrowdRules";
 import { resolvePartyForcePool } from "@/combat/partyForcePool";
 import { pickBestTalent, pickRandomTalent, talentScriptType, TALENT_TYPE_FEAT, TALENT_TYPE_FORCE, TALENT_TYPE_SKILL } from "@/talents/talentScriptRules";
 import {
@@ -2284,54 +2285,161 @@ export class ModuleCreature extends ModuleObject {
     this.lipObject = lip;
   }
 
-  getClosesetOpenSpot(oObject: ModuleObject){
+  /**
+   * Radius of the ring of open spots `attacker` fights this creature from:
+   * this creature's personal space plus the attacker's own (appearance.2da
+   * creperspace, the space creature collision keeps), or the attacker's
+   * preferred attack distance (prefatckdist) when that is further out.
+   */
+  getMeleeSpotRadius(attacker: ModuleObject): number {
+    const own = this.creatureAppearance?.creperspace ?? 0;
+    const theirs = BitWise.InstanceOfObject(attacker, ModuleObjectType.ModuleCreature)
+      ? (attacker as ModuleCreature).creatureAppearance : undefined;
+    return Math.max(meleeSpotRadius(own, theirs?.creperspace ?? 0), theirs?.prefatckdist ?? 0);
+  }
+
+  /**
+   * Whether `claimant` still fights this creature from the spot it took: alive,
+   * here, and with its attack aimed at this creature.
+   */
+  isMeleeSpotClaimLive(claimant: ModuleObject): boolean {
+    if(!BitWise.InstanceOfObject(claimant, ModuleObjectType.ModuleCreature)) return false;
+    const c = claimant as ModuleCreature;
+    if(c.destroyed || c.isDead() || c.area !== this.area) return false;
+    if(c.combatRound?.action?.target === this) return true;
+    // Between two of its rounds the attack is not queued yet; the target of
+    // the last one still counts until the next round begins.
+    if(c.combatData?.lastAttackTarget === this) return true;
+    for(let i = 0, len = c.actionQueue.length; i < len; i++){
+      const action = c.actionQueue[i];
+      if(action && action.type == ActionType.ActionPhysicalAttacks && action.getParameter(1) === this) return true;
+    }
+    return false;
+  }
+
+  /** Frees spots whose attacker died, left, or turned to someone else. */
+  releaseStaleTargetPositions(){
+    for(let i = 0, len = this.targetPositions.length; i < len; i++){
+      const spot = this.targetPositions[i];
+      if(spot.object && !this.isMeleeSpotClaimLive(spot.object)) spot.object = undefined;
+    }
+  }
+
+  /** How many attackers hold a spot around this creature, `excluding` aside. */
+  countMeleeSpotHolders(excluding?: ModuleObject): number {
+    this.releaseStaleTargetPositions();
+    let count = 0;
+    for(let i = 0, len = this.targetPositions.length; i < len; i++){
+      const holder = this.targetPositions[i].object;
+      if(holder && holder !== excluding) count++;
+    }
+    return count;
+  }
+
+  holdsMeleeSpot(oObject: ModuleObject): boolean {
+    return this.targetPositions.some((spot) => spot.object === oObject);
+  }
+
+  /**
+   * Whether another standing body is on `point`, so `claimant` could not
+   * stand there: a companion beside this creature, or another attacker.
+   */
+  isMeleeSpotBlocked(point: THREE.Vector3, claimant: ModuleObject): boolean {
+    const own = BitWise.InstanceOfObject(claimant, ModuleObjectType.ModuleCreature)
+      ? ((claimant as ModuleCreature).creatureAppearance?.creperspace ?? 0) : 0;
+    const bodies: ModuleObject[] = (this.area?.creatures ?? []).concat(GameState.PartyManager.party);
+    for(let i = 0, len = bodies.length; i < len; i++){
+      const body = bodies[i] as ModuleCreature;
+      if(!body || body === claimant || body === this || body.destroyed || body.area !== this.area) continue;
+      if(typeof body.isDead === 'function' && body.isDead()) continue;
+      const reach = (body.creatureAppearance?.creperspace ?? 0) + own + 0.1;
+      if(Utility.Distance2D(body.position, point) < reach) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether `claimant` can walk straight from where it stands to `point`
+   * without running into another standing body, this creature included.
+   * The path planner ignores bodies, so an attacker sent for a spot behind
+   * a knot of others walked into them and stood there.
+   */
+  isMeleeApproachClear(point: THREE.Vector3, claimant: ModuleObject): boolean {
+    const own = BitWise.InstanceOfObject(claimant, ModuleObjectType.ModuleCreature)
+      ? ((claimant as ModuleCreature).creatureAppearance?.creperspace ?? 0) : 0;
+    const from = claimant.position;
+    const dx = point.x - from.x, dy = point.y - from.y;
+    const lengthSq = dx * dx + dy * dy;
+    const bodies: ModuleObject[] = (this.area?.creatures ?? []).concat(GameState.PartyManager.party);
+    for(let i = 0, len = bodies.length; i < len; i++){
+      const body = bodies[i] as ModuleCreature;
+      if(!body || body === claimant || body.destroyed || body.area !== this.area) continue;
+      if(typeof body.isDead === 'function' && body.isDead()) continue;
+      const t = lengthSq > 0 ? Math.max(0, Math.min(1, ((body.position.x - from.x) * dx + (body.position.y - from.y) * dy) / lengthSq)) : 0;
+      const gap = Math.hypot(from.x + dx * t - body.position.x, from.y + dy * t - body.position.y);
+      if(gap < (body.creatureAppearance?.creperspace ?? 0) + own) return false;
+    }
+    return true;
+  }
+
+  /**
+   * The open spot oObject fights this creature from: one of eight on a ring
+   * at getMeleeSpotRadius, the free one nearest oObject, kept while oObject
+   * holds it and nobody else stands on it. The spot follows this creature as
+   * it moves. Spots in `avoid` are passed over (one the attacker could not
+   * reach), and a spot it can walk to in a straight line comes before a
+   * nearer one behind other bodies.
+   */
+  getClosesetOpenSpot(oObject: ModuleObject, avoid?: ReadonlySet<unknown>){
     let maxDistance = Infinity;
-    let radius = this.creatureAppearance?.hitdist ?? 0;
+    const radius = this.getMeleeSpotRadius(oObject);
     let closest = undefined;
     let distance = 0;
-    let origin = this.position;
+    const origin = this.position;
 
-    let alreadyClaimedSpot = false;
+    this.releaseStaleTargetPositions();
+    for(let i = 0, len = this.targetPositions.length; i < len; i++){
+      const targetPosition = this.targetPositions[i];
+      targetPosition.radius = radius;
+      targetPosition.targetVector.x = origin.x + (targetPosition.cos * radius);
+      targetPosition.targetVector.y = origin.y + (targetPosition.sin * radius);
+      targetPosition.targetVector.z = origin.z;
+    }
 
     //Check to see if oObject already has claimed a targetPosition around this creature
     for(let i = 0, len = this.targetPositions.length; i < len; i++){
-      let targetPosition = this.targetPositions[i];
+      const targetPosition = this.targetPositions[i];
       if(targetPosition.object == oObject){
-        closest = targetPosition;
-        alreadyClaimedSpot = true;
-        break;
+        if(!avoid?.has(targetPosition) && !this.isMeleeSpotBlocked(targetPosition.targetVector, oObject)) return targetPosition;
+        targetPosition.object = undefined;
       }
     }
 
-    if(!alreadyClaimedSpot){
-      for(let i = 0, len = this.targetPositions.length; i < len; i++){
-        let targetPosition = this.targetPositions[i];
-        if(targetPosition.object == undefined){
-          //Generate the target vector for the 
-          targetPosition.targetVector.x = origin.x + (targetPosition.cos * radius);
-          targetPosition.targetVector.y = origin.y + (targetPosition.sin * radius);
-          targetPosition.targetVector.z = origin.z;
-          distance = targetPosition.targetVector.distanceTo(oObject.position);
+    for(let i = 0, len = this.targetPositions.length; i < len; i++){
+      const targetPosition = this.targetPositions[i];
+      if(targetPosition.object == undefined && !avoid?.has(targetPosition) && !this.isMeleeSpotBlocked(targetPosition.targetVector, oObject)){
+        distance = targetPosition.targetVector.distanceTo(oObject.position) +
+          (this.isMeleeApproachClear(targetPosition.targetVector, oObject) ? 0 : 100);
 
-          //is this target position is closer to oObject
-          if(distance < maxDistance){
-            //Set the current targetPosition as the current closest position
-            closest = targetPosition;
-            //Update the maxDistance
-            maxDistance = distance;
-          }
+        //is this target position is closer to oObject
+        if(distance < maxDistance){
+          //Set the current targetPosition as the current closest position
+          closest = targetPosition;
+          //Update the maxDistance
+          maxDistance = distance;
         }
       }
-      if(typeof closest != 'undefined'){
-        for(let i = 0, len = GameState.module.area.creatures.length; i < len; i++){
-          GameState.module.area.creatures[i].removeObjectFromTargetPositions(oObject);
-        }
-
-        for(let i = 0, len = GameState.PartyManager.party.length; i < len; i++){
-          GameState.PartyManager.party[i].removeObjectFromTargetPositions(oObject);
-        }
-        closest.object = oObject;
+    }
+    if(typeof closest != 'undefined'){
+      const creatures = this.area?.creatures ?? [];
+      for(let i = 0, len = creatures.length; i < len; i++){
+        creatures[i].removeObjectFromTargetPositions(oObject);
       }
+
+      for(let i = 0, len = GameState.PartyManager.party.length; i < len; i++){
+        GameState.PartyManager.party[i].removeObjectFromTargetPositions(oObject);
+      }
+      closest.object = oObject;
     }
     return closest;
   }
