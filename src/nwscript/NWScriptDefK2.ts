@@ -5583,14 +5583,26 @@ NWScriptDefK2.Actions = {
     name: 'ShowChemicalUpgradeScreen',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT ],
-    action: undefined
+    // The Lab Station. Called by the placeable's OnUsed (k_medstation) and by
+    // its help conversation's "[Use the Lab Station now.]" reply
+    // (k_ptar_startmed); in that case the screen opens once the conversation
+    // has closed, so the dialogue teardown cannot hide it.
+    action: function(this: NWScriptInstance, args: [ModuleObject]){
+      GameState.CutsceneManager.runAfterConversation(() => {
+        GameState.MenuManager.MenuChemicals.openFor(args[0] as ModuleCreature).catch((e: unknown) => {
+          console.error('ShowChemicalUpgradeScreen: the Lab Station failed to open', e);
+        });
+      });
+    }
   },
   774: {
     comment: 'FAK-OEI 12/15/2003\n774: Get the number of chemicals for an item',
     name: 'GetChemicals',
     type: NWScriptDataType.INTEGER,
     args: [],
-    action: undefined
+    action: function(this: NWScriptInstance, args: []){
+      return GameState.PartyManager.ChemicalCount || 0;
+    }
   },
   775: {
     comment: 'FAK-OEI 12/15/2003\n775: Get the number of chemicals for an item in pieces',

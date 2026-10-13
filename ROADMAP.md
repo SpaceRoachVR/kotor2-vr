@@ -1934,6 +1934,19 @@ First shippable artifact.
   (create from components/chemicals, break items down into them) has to be built,
   then made usable in VR like the other menus. Check the repair workbench
   (`ShowUpgradeScreen`) in the same pass; round 17 never reached one.
+  **◑ lab station built, emulator-verified; awaiting headset (2026-10-12).**
+  `CraftingRules` (data from `chemicalcreate.2da`), `LabStationSession`, the
+  `MenuChemicals` screen (Health/Stimulants/Mines/Grenades tabs, create,
+  breakdown), and routines 773 `ShowChemicalUpgradeScreen` (opens after the help
+  conversation closes) and 774 `GetChemicals`. `tools/vr-emulator/probe-lab-station.js`
+  drives the real 101PER Lab Station on the SpaceRoach save: OnUsed → help
+  conversation → "[Use the Lab Station now.]" → screen; Medpac create 100 → 80,
+  breakdown 80 → 90 at Treat Injury 10, pointer reach of tabs/buttons/rows, a PNG of
+  the VR panel, save/reload keeps 90. 775 `GetChemicalPieceValue` stays
+  unimplemented (no retail caller). Follow-up: the workbench's create/breakdown
+  screen (`MenuComponent`) reuses `CraftingRules` with a second station
+  (`itemcreate.2da`, value rate 0.05, Repair); the item upgrade screen
+  (`ShowUpgradeScreen`) is separate work.
 
 M4-78 is out of scope.
 
