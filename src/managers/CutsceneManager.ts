@@ -64,6 +64,9 @@ export class CutsceneManager {
 
   static paused: boolean = false;
 
+  /** Callbacks waiting for the current conversation to finish; see runAfterConversation. */
+  private static afterConversationQueue: Array<() => void> = [];
+
   static cameraState: ICameraState = {
     mode: CameraMode.DIALOG,
     cameraAngle: DLGCameraAngle.ANGLE_SPEAKER,
@@ -607,6 +610,34 @@ export class CutsceneManager {
 
     if(wasBark){
       GameState.RestoreEnginePlayMode();
+    }
+
+    this.drainAfterConversationQueue();
+  }
+
+  /**
+   * Run a callback once the current conversation has ended. Runs it right away
+   * when no conversation is active. A reply script that opens a menu (the Lab
+   * Station crafting screen) would otherwise have it hidden by the dialogue
+   * teardown.
+   */
+  static runAfterConversation(callback: () => void): void {
+    if (!this.active) {
+      callback();
+      return;
+    }
+    this.afterConversationQueue.push(callback);
+  }
+
+  private static drainAfterConversationQueue(): void {
+    const queue = this.afterConversationQueue;
+    this.afterConversationQueue = [];
+    for (const callback of queue) {
+      try {
+        callback();
+      } catch (e) {
+        console.error('CutsceneManager: after-conversation callback failed', e);
+      }
     }
   }
 
