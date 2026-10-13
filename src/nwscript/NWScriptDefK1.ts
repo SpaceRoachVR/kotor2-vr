@@ -2897,15 +2897,18 @@ NWScriptDefK1.Actions = {
     action: function(this: NWScriptInstance, args: [number, GameEffect, ModuleObject, number]){
       if(BitWise.InstanceOfObject(args[2], ModuleObjectType.ModuleObject)){
         if(args[1]){
-          args[1].setDurationType(args[0]);
-          args[1].setDuration(args[3]);
+          // Effects are values: each application gets its own copy, so one
+          // effect applied to every target of an area power reaches them all
+          // (k_sp1_generic's Force Wave pushed one trooper of four).
+          const effect: GameEffect = typeof args[1].clone === 'function' ? args[1].clone() : args[1];
+          effect.setDurationType(args[0]);
+          effect.setDuration(args[3]);
           if(args[0] == GameEffectDurationType.TEMPORARY){
             const future = GameState.module.timeManager.getFutureTimeFromSeconds(args[3]);
-            args[1].setExpireDay(future.pauseDay);
-            args[1].setExpireTime(future.pauseTime);
+            effect.setExpireDay(future.pauseDay);
+            effect.setExpireTime(future.pauseTime);
           }
-          // console.log('ApplyEffectToObject', args[2], args[1], args[0], args[3]);
-          args[2].addEffect(args[1], args[0], args[3]);
+          args[2].addEffect(effect, args[0], args[3]);
         }else{
           console.error('ApplyEffectToObject', 'Expected a GameEffect', args);
         }
