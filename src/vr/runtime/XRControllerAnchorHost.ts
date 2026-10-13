@@ -74,6 +74,8 @@ export function measureHeldItemBarrel(visual: THREE.Object3D): HeldItemBarrel | 
   let sampled = 0;
   visual.traverse((node) => {
     const mesh = node as THREE.Mesh;
+    // A hidden mesh is not part of what the player holds.
+    if (!mesh.visible) return;
     const positions = (mesh as { isMesh?: boolean }).isMesh
       ? mesh.geometry?.getAttribute?.('position')
       : undefined;
@@ -110,6 +112,20 @@ export function measureHeldItemBarrel(visual: THREE.Object3D): HeldItemBarrel | 
   return { origin, direction };
 }
 
+/** One flattened mesh and the engine mesh it mirrors. */
+interface PresentationLink {
+  readonly copy: THREE.Mesh;
+  readonly source: THREE.Mesh;
+}
+
+/** A held presentation model and what it needs to follow its source live. */
+interface PresentationClone {
+  readonly root: THREE.Group;
+  readonly source: THREE.Object3D;
+  readonly origin: THREE.Object3D;
+  readonly links: readonly PresentationLink[];
+}
+
 /**
  * Builds a render-only copy of an engine model for the hand anchor.
  *
@@ -121,20 +137,23 @@ export function measureHeldItemBarrel(visual: THREE.Object3D): HeldItemBarrel | 
  * update down with it.
  *
  * Only world-space geometry and materials matter for a held presentation
- * model, so flatten the source's visible meshes into plain meshes that share
- * (never copy) their geometry and material. Nothing engine-owned is mutated,
- * and there is no `userData` to serialize.
+ * model, so flatten the source's meshes into plain meshes that share (never
+ * copy) their geometry and material. Nothing engine-owned is mutated, and
+ * there is no `userData` to serialize.
+ *
+ * Every mesh is linked, hidden ones too, and `syncPresentationClone` copies
+ * each source mesh's live transform and visibility every frame. The copy used
+ * to be a snapshot taken at equip time, while a lightsaber sat in its `off`
+ * animation with the blades scaled to 0, so the blade never lit in the hand
+ * although the engine model played `powerup` and `powered` (Hilt, round 17).
  */
 function createPresentationClone(
   source: THREE.Object3D,
   authoredGripNode: THREE.Object3D | null
-): THREE.Object3D {
+): PresentationClone {
   const root = new THREE.Group();
-  source.updateWorldMatrix(true, true);
-  const presentationOrigin = authoredGripNode ?? source;
-  const inversePresentationMatrix = new THREE.Matrix4().copy(presentationOrigin.matrixWorld).invert();
-
-  source.traverseVisible((node) => {
+  const links: PresentationLink[] = [];
+  source.traverse((node) => {
     const mesh = node as THREE.Mesh;
     if (!(mesh as { isMesh?: boolean }).isMesh || !mesh.geometry || !mesh.material) return;
     // Share the engine's geometry/material rather than copying them: this is a
@@ -142,14 +161,39 @@ function createPresentationClone(
     // the module still renders with.
     const copy = new THREE.Mesh(mesh.geometry, mesh.material);
     copy.matrixAutoUpdate = false;
-    // Re-express each mesh relative to the authored grip (or model root) so
-    // the flattened result keeps the original internal layout at the hand.
-    copy.matrix.multiplyMatrices(inversePresentationMatrix, mesh.matrixWorld);
     copy.frustumCulled = false;
     root.add(copy);
+    links.push({ copy, source: mesh });
   });
+  const clone = { root, source, origin: authoredGripNode ?? source, links };
+  syncPresentationClone(clone);
+  return clone;
+}
 
-  return root;
+const inversePresentationMatrix = new THREE.Matrix4();
+
+/**
+ * Re-expresses each source mesh relative to the authored grip (or model root)
+ * as it is now, so the flattened copy keeps the model's internal layout and
+ * plays its animation at the hand.
+ */
+function syncPresentationClone(clone: PresentationClone): void {
+  clone.source.updateWorldMatrix(true, true);
+  inversePresentationMatrix.copy(clone.origin.matrixWorld).invert();
+  for (const { copy, source } of clone.links) {
+    copy.matrix.multiplyMatrices(inversePresentationMatrix, source.matrixWorld);
+    copy.matrixWorldNeedsUpdate = true;
+    copy.visible = isVisibleWithin(source, clone.source);
+  }
+}
+
+/** Visible, along with every ancestor up to and including `root`. */
+function isVisibleWithin(node: THREE.Object3D, root: THREE.Object3D): boolean {
+  for (let current: THREE.Object3D | null = node; current; current = current.parent) {
+    if (!current.visible) return false;
+    if (current === root) return true;
+  }
+  return true;
 }
 
 /**
@@ -171,6 +215,7 @@ export class XRControllerAnchorHost {
   private readonly heldSources: Record<XRHandRole, THREE.Object3D | null> = { left: null, right: null };
   private readonly heldDescriptorKeys: Record<XRHandRole, string | null> = { left: null, right: null };
   private readonly heldBarrels: Record<XRHandRole, HeldItemBarrel | null> = { left: null, right: null };
+  private readonly heldClones: Record<XRHandRole, PresentationClone | null> = { left: null, right: null };
   private readonly disposableGeometries: THREE.BufferGeometry[] = [];
   private readonly disposableMaterials: THREE.Material[] = [];
 
@@ -328,6 +373,14 @@ export class XRControllerAnchorHost {
       anchor.visible = !this.presentationSuppressed;
       rayAnchor.visible = !this.presentationSuppressed &&
         targetRayPose.trackingState !== 'unavailable' && this.heldVisuals[hand] === null;
+      const clone = this.heldClones[hand];
+      if (clone && anchor.visible) {
+        try {
+          syncPresentationClone(clone);
+        } catch {
+          // A model torn down mid-frame keeps its last pose; the next equip rebuilds it.
+        }
+      }
     }
     this.updateHandPoses(inputFrame);
   }
@@ -366,13 +419,16 @@ export class XRControllerAnchorHost {
     this.heldSources[hand] = descriptor?.model ?? null;
     this.heldDescriptorKeys[hand] = descriptorKey;
     this.heldBarrels[hand] = null;
+    this.heldClones[hand] = null;
     if (!descriptor) {
       this.heldVisuals[hand] = null;
       return;
     }
 
     const authoredGripNode = XRControllerAnchorHost.resolveAuthoredGripNode(descriptor);
-    const visual = createPresentationClone(descriptor.model, authoredGripNode);
+    const clone = createPresentationClone(descriptor.model, authoredGripNode);
+    this.heldClones[hand] = clone;
+    const visual = clone.root;
     visual.name = `Kotor2VR.${hand}HeldItem`;
     if (!authoredGripNode) this.applyClassFallback(visual, descriptor.classFallback);
     anchor.add(visual);

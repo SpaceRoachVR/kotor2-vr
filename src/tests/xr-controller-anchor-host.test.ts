@@ -128,6 +128,46 @@ describe('XRControllerAnchorHost', () => {
     expect(disposeMaterial).not.toHaveBeenCalled();
   });
 
+  test('the held copy follows the item model live animation, so a lightsaber lights in the hand', () => {
+    // Hilt, round 17: the copy snapshot the blades at equip time, while the
+    // saber sat in its `off` animation with the blades scaled to 0, and never
+    // looked again. The engine's model powered up; the hand kept a bare hilt.
+    const rig = new THREE.Group();
+    const host = new XRControllerAnchorHost(rig);
+    const source = new THREE.Group();
+    const grip = new THREE.Group();
+    grip.name = 'grip';
+    const hilt = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.25));
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, 1));
+    blade.position.set(0, 0, 0.6);
+    blade.scale.set(0, 0, 0);
+    const glow = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 1));
+    glow.visible = false;
+    source.add(grip, hilt, blade, glow);
+
+    host.setHeldVisual('right', { model: source, baseItemClass: 'lightsaber', authoredGripNode: grip, classFallback: {} });
+    const visual = host.getAnchor('right').getObjectByName('Kotor2VR.rightHeldItem')!;
+    const copies = visual.children as THREE.Mesh[];
+    const copyOf = (mesh: THREE.Mesh) => copies.find((copy) => copy.geometry === mesh.geometry)!;
+    const scaleOf = (copy: THREE.Mesh) => new THREE.Vector3().setFromMatrixScale(copy.matrix);
+    expect(scaleOf(copyOf(blade)).x).toBe(0);
+    expect(copyOf(glow).visible).toBe(false);
+
+    // `powerup` plays on the engine model.
+    blade.scale.set(1, 1, 1);
+    glow.visible = true;
+    host.update(inputFrame(worldPose(new THREE.Vector3(0.2, 1.2, -0.4))));
+
+    expect(scaleOf(copyOf(blade)).x).toBeCloseTo(1);
+    expect(copyOf(blade).matrix.elements[14]).toBeCloseTo(0.6);
+    expect(copyOf(glow).visible).toBe(true);
+
+    // `off` again.
+    blade.scale.set(0, 0, 0);
+    host.update(inputFrame(worldPose(new THREE.Vector3(0.2, 1.2, -0.4))));
+    expect(scaleOf(copyOf(blade)).x).toBe(0);
+  });
+
   test('does not rebuild a held presentation when an equivalent descriptor snapshot is refreshed', () => {
     const rig = new THREE.Group();
     const host = new XRControllerAnchorHost(rig);
