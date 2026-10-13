@@ -12,8 +12,8 @@ import {
   CraftingCategory, LAB_STATION, Recipe, breakdownYield, parseRecipes,
 } from "@/game/tsl/crafting/CraftingRules";
 import {
-  CraftingItem, LabStationPorts, LabStationSession, RecipeView,
-} from "@/game/tsl/crafting/LabStationSession";
+  CraftingItem, CraftingPorts, CraftingSession, RecipeView,
+} from "@/game/tsl/crafting/CraftingSession";
 
 /** A party inventory entry as the session sees it, keeping the engine item for removal. */
 interface EngineCraftingItem extends CraftingItem {
@@ -47,7 +47,7 @@ const GREYED_TEXT = 0.5;
  *
  * The party spends chemicals (PartyManager.ChemicalCount) to create the
  * recipes in chemicalcreate.2da, and breaks lab items down into chemicals.
- * The rules live in CraftingRules / LabStationSession; this class only binds
+ * The rules live in CraftingRules / CraftingSession; this class only binds
  * them to the retail chemical_p layout, following MenuStore's two-list pattern:
  * LB_SHOPITEMS lists recipes (create mode), LB_INVITEMS lists breakable
  * inventory (breakdown mode), and BTN_Examine toggles between them.
@@ -86,7 +86,7 @@ export class MenuChemicals extends GameMenu {
 
   /** The creature using the station; see activeUser(). */
   user: ModuleCreature | undefined;
-  session: LabStationSession | undefined;
+  session: CraftingSession | undefined;
   category: CategoryKey = 'health';
   breakdownMode = false;
 
@@ -175,7 +175,7 @@ export class MenuChemicals extends GameMenu {
     const table = GameState.TwoDAManager.datatables.get(LAB_STATION.recipeTable);
     const recipes = parseRecipes((table?.rows ?? {}) as any, LAB_STATION);
     await this.preloadTemplates(recipes);
-    this.session = new LabStationSession(recipes, this.createPorts(), LAB_STATION);
+    this.session = new CraftingSession(recipes, this.createPorts(), LAB_STATION);
     this.category = 'health';
     this.breakdownMode = false;
     this.open();
@@ -193,13 +193,15 @@ export class MenuChemicals extends GameMenu {
     return GameState.PartyManager.party[0] ?? GameState.PartyManager.Player;
   }
 
-  private createPorts(): LabStationPorts {
+  private createPorts(): CraftingPorts {
     return {
-      getChemicals: () => GameState.PartyManager.ChemicalCount || 0,
-      setChemicals: (n: number) => { GameState.PartyManager.ChemicalCount = Math.max(0, n); },
+      getCurrency: () => GameState.PartyManager.ChemicalCount || 0,
+      setCurrency: (n: number) => { GameState.PartyManager.ChemicalCount = Math.max(0, n); },
       skillRank: (skill: number) => this.skillRank(skill),
+      breakdownRank: () => this.skillRank(LAB_STATION.breakdownSkill),
       // Any failure resolves false so the session refunds the chemicals.
-      createItem: async (resref: string) => {
+      // The lab's recipes carry no override tag, so it is ignored here.
+      createItem: async (resref: string, _overrideTag?: string) => {
         try {
           const buffer = await ResourceLoader.loadResource(ResourceTypes['uti'], resref);
           if(!buffer) return false;
@@ -224,13 +226,17 @@ export class MenuChemicals extends GameMenu {
   private toCraftingItem(item: ModuleItem): EngineCraftingItem {
     let entry = this.craftingItems.get(item);
     if(!entry){
-      entry = { resref: '', name: '', cost: 0, stackSize: 0, moduleItem: item };
+      entry = { resref: '', name: '', cost: 0, stackSize: 0, plot: false, storePanelSort: 0, moduleItem: item };
       this.craftingItems.set(item, entry);
     }
     entry.resref = String(item.getTemplateResRef?.() || item.getTag?.() || '').toLowerCase();
     entry.name = String(item.getName?.() ?? '');
     entry.cost = Number(item.cost) || 0;
     entry.stackSize = Number(item.getStackSize?.()) || 1;
+    entry.plot = !!(item as any).plot;
+    const baseItemId = Number((item as any).baseItemId);
+    const baseItem = GameState.TwoDAManager.datatables.get('baseitems')?.rows[baseItemId];
+    entry.storePanelSort = Number(baseItem?.storepanelsort) || 0;
     return entry;
   }
 
