@@ -2,21 +2,22 @@ import type { VRCombatTempoGateReason } from './VRCombatTempoGate';
 import type { VRCombatRequiredInput } from './VRCombatIntentQueue';
 
 /**
- * One physical swing or trigger pull, held until the combat round opens.
+ * One physical swing or trigger pull, held for a moment until the player's
+ * next round is ready.
  *
- * WHY (ROADMAP 3.12)
+ * WHY
  *
- * The tempo gate refuses input while the engine owns the round, and a refused
- * swing used to be discarded. In a fight the round is running most of the
- * time, so a player swinging naturally lost most of their swings — reported
- * from headset round 5 as "rounds failed several times and did not register a
- * swing". Flatscreen lets you queue the next action while the current round
- * plays; this is the embodied equivalent.
+ * Player-paced rounds (round 18): an idle player's stroke attacks at once,
+ * and a stroke inside a running round only whooshes. The one stroke kept is
+ * the one made just before the next round is ready (the silent hold,
+ * VRRoundStrokeBudget): a fighter swinging in rhythm would otherwise lose
+ * it by a frame or two. It is never shown and never announced; if it cannot
+ * land when the round is ready, it is dropped without a word.
  *
- * It holds at most one entry, and a newer swing replaces an older one: several
- * swings during one round still mean one attack next round. It never decides
- * *what* fires — the dispatcher does that from the intent queue at release —
- * and it never releases into a different fight than the one it was aimed at.
+ * It holds at most one entry, and a newer stroke replaces an older one. It
+ * never decides *what* fires - the dispatcher does that from the intent
+ * queue at release - and it never releases into a different fight than the
+ * one it was aimed at.
  */
 export interface VRCombatBufferedSwing {
   readonly actorId: string;
@@ -45,17 +46,12 @@ export type VRCombatSwingDropReason =
   | 'target-invalid';
 
 /**
- * Gate reasons that mean "the round is busy, try again when it opens". Every
- * other refusal — no target, a dead actor — drops the swing, because nothing
- * about waiting would make it valid. (The player's own pause is not a gate
- * reason: a swing held when the game is paused keeps its place, round 17.)
+ * Gate reasons that mean "the round is busy, try again when it opens". A
+ * Force power or grenade committed then is scheduled into the round rather
+ * than refused (isVRForceCastSchedulable). Every other refusal - no target, a
+ * dead actor - means waiting would not make it valid.
  */
 const BUFFERABLE_REASONS: ReadonlySet<VRCombatTempoGateReason> = new Set<VRCombatTempoGateReason>([
-  // The engine holds a round paused for the whole of an attack
-  // (ActionPhysicalAttacks pauses it ROUND_LENGTH) and for half a round when
-  // the creature is attacked, so in a real fight almost every swing between
-  // round openings lands here. Not buffering it threw those swings away
-  // (critic run 3); the player's own pause is EngineState.PAUSED, not this.
   'round-paused',
   'round-active',
   'scheduled-action-pending',
@@ -69,12 +65,10 @@ export function isVRCombatSwingBufferable(reason: VRCombatTempoGateReason): bool
 export class VRCombatSwingBuffer {
   private pending: VRCombatBufferedSwing | null = null;
 
-  /** Holds `swing`, replacing any earlier one. Returns false for a refusal that must not wait. */
-  offer(swing: VRCombatBufferedSwing, reason: VRCombatTempoGateReason): boolean {
-    if (!isVRCombatSwingBufferable(reason)) return false;
+  /** Holds `swing` for the next round, replacing any earlier one. */
+  hold(swing: VRCombatBufferedSwing): void {
     validateSwing(swing);
     this.pending = Object.freeze({ ...swing });
-    return true;
   }
 
   get hasPending(): boolean {
@@ -130,52 +124,30 @@ export class VRCombatSwingBuffer {
 
 const EMPTY = Object.freeze({ state: 'empty' as const });
 
-/** How long after its round opens a held swing may still release. */
-export const VR_HELD_SWING_OPENING_GRACE_SECONDS = 0.5;
-/** Two rounds: a backstop for a round that never opens at all. */
-export const VR_HELD_SWING_MAX_HELD_SECONDS = 6;
-
-export type VRHeldSwingExpiry = 'opening-passed' | 'opening-missed' | 'held-too-long';
-
 /**
- * How long a held swing lives (round 17, locked): it belongs to the next
- * round opening only. It releases within 0.5 s of that opening, or it drops.
- *
- * Counting missed openings let it outlive its moment: a round that opens with
- * the target out of reach never closes, so the swing waited for the 6 s cap
- * and fired 4.6 s after its stroke the moment the player stepped back in
- * (Tempo exp6). A stroke made then would be a new swing; this one is stale.
- *
- * Game time only. The caller does not advance it while the game is paused,
- * so a swing made before a pause keeps its place (round 17, locked).
+ * How long a held stroke has waited (round 18, the silent hold). It is held
+ * only when the next round is a moment away, so it normally lands within a
+ * frame or two of being held; this is the backstop for a round that did not
+ * become ready after all. Game time only: the caller does not advance it
+ * while the game is paused, so a stroke made before a pause keeps its place.
  */
 export class VRHeldSwingLifetime {
-  private wasOpen = false;
-  private openSeconds = 0;
-  private heldSeconds = 0;
+  private heldMs = 0;
 
-  /** A newer swing replaced the held one: its own next opening counts. */
-  restart(): void {
-    this.wasOpen = false;
-    this.openSeconds = 0;
-    this.heldSeconds = 0;
+  constructor(private readonly maxHeldMs: number) {
+    if (!Number.isFinite(maxHeldMs) || maxHeldMs <= 0) throw new TypeError('A held stroke needs a positive lifetime.');
   }
 
-  /**
-   * One running game frame on which the held swing did not release. Returns
-   * why it expires, or null while it may still release.
-   */
-  advance(roundOpen: boolean, deltaSeconds: number): VRHeldSwingExpiry | null {
+  /** A newer stroke replaced the held one. */
+  restart(): void {
+    this.heldMs = 0;
+  }
+
+  /** One running game frame on which the held stroke did not land. True once it has waited too long. */
+  advance(deltaSeconds: number): boolean {
     const seconds = Number.isFinite(deltaSeconds) && deltaSeconds > 0 ? deltaSeconds : 0;
-    this.heldSeconds += seconds;
-    if (this.wasOpen && !roundOpen) return 'opening-missed';
-    if (roundOpen) {
-      if (this.wasOpen) this.openSeconds += seconds;
-      if (this.openSeconds >= VR_HELD_SWING_OPENING_GRACE_SECONDS) return 'opening-passed';
-    }
-    this.wasOpen = roundOpen;
-    if (this.heldSeconds >= VR_HELD_SWING_MAX_HELD_SECONDS) return 'held-too-long';
-    return null;
+    this.heldMs += seconds * 1000;
+    return this.heldMs >= this.maxHeldMs;
   }
 }
 
@@ -189,7 +161,7 @@ export interface VRFightStateInput {
 }
 
 /**
- * Whether the fight a held swing was made in is still on. The player's own
+ * Whether the fight is still on (and so whether a held stroke may still land). The player's own
  * combat flag is not enough: in a group fight it drops between the player's
  * rounds while hostiles shoot the companions, and every held trigger pull was
  * thrown away as "combat ended", slowing the cadence from 3 s to 4 s (round

@@ -27,9 +27,9 @@ const context = (
 });
 
 describe("VRCombatSwingBuffer", () => {
-  it("holds a swing refused because the round is busy and releases it once", () => {
+  it("holds a stroke and releases it once", () => {
     const buffer = new VRCombatSwingBuffer();
-    expect(buffer.offer(swing(), "round-active")).toBe(true);
+    buffer.hold(swing());
     expect(buffer.hasPending).toBe(true);
 
     expect(buffer.release(context())).toEqual({ state: "released", swing: swing() });
@@ -38,7 +38,7 @@ describe("VRCombatSwingBuffer", () => {
   });
 
   it.each(["round-paused", "round-active", "scheduled-action-pending", "player-action-committed"] as const)(
-    "buffers %s",
+    "a Force power committed during %s waits for the round",
     (reason) => expect(isVRCombatSwingBufferable(reason)).toBe(true),
   );
 
@@ -48,25 +48,23 @@ describe("VRCombatSwingBuffer", () => {
     "target-unavailable",
     "combat-round-unavailable",
     "engine-extra-attack-window",
-  ] as const)("does not buffer %s", (reason) => {
-    const buffer = new VRCombatSwingBuffer();
-    expect(buffer.offer(swing(), reason)).toBe(false);
-    expect(buffer.hasPending).toBe(false);
+  ] as const)("%s is not a busy round", (reason) => {
+    expect(isVRCombatSwingBufferable(reason)).toBe(false);
   });
 
-  it("keeps only the latest swing: several swings in one round are one attack", () => {
+  it("keeps only the latest stroke: several strokes are one attack", () => {
     const buffer = new VRCombatSwingBuffer();
-    buffer.offer(swing({ targetId: "1" }), "round-active");
-    buffer.offer(swing({ targetId: "2" }), "round-active");
-    buffer.offer(swing({ targetId: "3" }), "round-active");
+    buffer.hold(swing({ targetId: "1" }));
+    buffer.hold(swing({ targetId: "2" }));
+    buffer.hold(swing({ targetId: "3" }));
 
     const released = buffer.release(context());
     expect(released).toEqual({ state: "released", swing: swing({ targetId: "3" }) });
   });
 
-  it("never releases at a new enemy after the buffered target died", () => {
+  it("never releases at a new enemy after the held target died", () => {
     const buffer = new VRCombatSwingBuffer();
-    buffer.offer(swing({ targetId: "42" }), "round-active");
+    buffer.hold(swing({ targetId: "42" }));
 
     const released = buffer.release(context({ isTargetLive: (id) => id !== "42" }));
     expect(released).toEqual({ state: "dropped", reason: "target-invalid" });
@@ -79,13 +77,13 @@ describe("VRCombatSwingBuffer", () => {
     ["the end of combat", { inCombat: false }, "combat-ended"],
   ] as const)("drops on %s", (_name, overrides, reason) => {
     const buffer = new VRCombatSwingBuffer();
-    buffer.offer(swing(), "round-active");
+    buffer.hold(swing());
     expect(buffer.release(context(overrides))).toEqual({ state: "dropped", reason });
   });
 
-  it("invalidates a stale swing without waiting for the round to open", () => {
+  it("invalidates a stale stroke without waiting for the round", () => {
     const buffer = new VRCombatSwingBuffer();
-    buffer.offer(swing(), "round-active");
+    buffer.hold(swing());
 
     expect(buffer.invalidate(context())).toBeNull();
     expect(buffer.hasPending).toBe(true);
@@ -95,70 +93,53 @@ describe("VRCombatSwingBuffer", () => {
 
   it("does not hold a Force gesture, which has its own queue route", () => {
     const buffer = new VRCombatSwingBuffer();
-    expect(() => buffer.offer(swing({ input: "directional-force-gesture" }), "round-active"))
-      .toThrow(TypeError);
+    expect(() => buffer.hold(swing({ input: "directional-force-gesture" }))).toThrow(TypeError);
   });
 
-  it("stores a copy, so a caller mutating its event cannot retarget the swing", () => {
+  it("stores a copy, so a caller mutating its event cannot retarget the stroke", () => {
     const buffer = new VRCombatSwingBuffer();
     const event = { ...swing() } as { -readonly [K in keyof VRCombatBufferedSwing]: VRCombatBufferedSwing[K] };
-    buffer.offer(event, "round-active");
+    buffer.hold(event);
     event.targetId = "99";
     expect(buffer.peek()?.targetId).toBe("42");
   });
 });
 
 /**
- * Round 17 (Tempo finding 1, locked by Allen): a held swing belongs to the
- * next round opening only. It releases within 0.5 s of that opening or drops;
- * it never fires on stepping back into reach seconds later. Game time only:
- * a pause neither ages it nor clears it.
+ * Round 18 (the silent hold): a stroke is held only when the next round is a
+ * moment away. Game time only: a pause neither ages it nor clears it.
  */
 describe("VRHeldSwingLifetime", () => {
-  const frames = (lifetime: VRHeldSwingLifetime, roundOpen: boolean, seconds: number, step = 1 / 30) => {
-    let expired: ReturnType<VRHeldSwingLifetime["advance"]> = null;
-    for (let t = 0; t < seconds - 1e-9 && !expired; t += step) expired = lifetime.advance(roundOpen, step);
+  const frames = (lifetime: VRHeldSwingLifetime, seconds: number, step = 1 / 30) => {
+    let expired = false;
+    for (let t = 0; t < seconds - 1e-9 && !expired; t += step) expired = lifetime.advance(step);
     return expired;
   };
 
-  it("lives through the busy round that held it", () => {
-    const lifetime = new VRHeldSwingLifetime();
-    expect(frames(lifetime, false, 2.9)).toBeNull();
+  it("lives for its short hold", () => {
+    expect(frames(new VRHeldSwingLifetime(600), 0.55)).toBe(false);
   });
 
-  it("drops 0.5 s after the opening when it could not release (out of reach at the opening)", () => {
-    const lifetime = new VRHeldSwingLifetime();
-    frames(lifetime, false, 1.5);
-    expect(frames(lifetime, true, 0.45)).toBeNull();
-    expect(frames(lifetime, true, 0.1)).toBe("opening-passed");
+  it("drops, silently, once it has waited too long", () => {
+    expect(frames(new VRHeldSwingLifetime(600), 0.65)).toBe(true);
   });
 
-  it("drops when the opening closes again without it", () => {
-    const lifetime = new VRHeldSwingLifetime();
-    frames(lifetime, false, 1);
-    frames(lifetime, true, 0.2);
-    expect(lifetime.advance(false, 1 / 30)).toBe("opening-missed");
-  });
-
-  it("never outlives two rounds, even if no round ever opens", () => {
-    const lifetime = new VRHeldSwingLifetime();
-    expect(frames(lifetime, false, 6.1)).toBe("held-too-long");
-  });
-
-  it("restarts for a newer swing", () => {
-    const lifetime = new VRHeldSwingLifetime();
-    frames(lifetime, false, 1);
-    frames(lifetime, true, 0.4);
+  it("restarts for a newer stroke", () => {
+    const lifetime = new VRHeldSwingLifetime(600);
+    frames(lifetime, 0.5);
     lifetime.restart();
-    expect(frames(lifetime, false, 2)).toBeNull();
-    expect(frames(lifetime, true, 0.45)).toBeNull();
+    expect(frames(lifetime, 0.5)).toBe(false);
   });
 
   it("ignores a non-finite or negative frame time", () => {
-    const lifetime = new VRHeldSwingLifetime();
-    expect(lifetime.advance(true, Number.NaN)).toBeNull();
-    expect(lifetime.advance(true, -5)).toBeNull();
-    expect(lifetime.advance(true, Number.POSITIVE_INFINITY)).toBeNull();
+    const lifetime = new VRHeldSwingLifetime(600);
+    expect(lifetime.advance(Number.NaN)).toBe(false);
+    expect(lifetime.advance(-5)).toBe(false);
+    expect(lifetime.advance(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+
+  it("needs a positive lifetime", () => {
+    expect(() => new VRHeldSwingLifetime(0)).toThrow(TypeError);
   });
 });
 

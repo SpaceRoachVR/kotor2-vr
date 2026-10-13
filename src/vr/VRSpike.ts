@@ -442,13 +442,11 @@ export interface VRSpikeHooks {
    * `getCombatContext`.
    */
   /**
-   * ROADMAP 3.12 — services the one-swing buffer once per frame. `released`
-   * is true on the frame a buffered swing was dispatched; `armed` while one
-   * is still waiting for the round to open.
+   * Services the player's round once per frame (round 18: player-paced
+   * rounds). `released` is true on the frame a silently held stroke landed;
+   * `armed` while one is still held for the round a moment away.
    */
   serviceCombatSwingBuffer?: () => { readonly released: boolean; readonly armed: boolean } | null;
-  /** Whether a swing is held for the next round, without servicing the buffer (Part F: amber at the stroke). */
-  isCombatSwingHeld?: () => boolean;
   /** Whether the game is paused for any reason, the VR Menu's own pause included. */
   isEnginePaused?: () => boolean;
   /**
@@ -2810,14 +2808,9 @@ export class VRSpike {
           }
         }
       } catch { /* notice only */ }
-      // A swing held for the next round survives the pause, and the hilt
-      // keeps saying so in amber (round 17, locked). The buffer is asked,
-      // not serviced: paused, it neither ages nor fires.
-      let heldSwing = false;
-      try {
-        heldSwing = VRSpike.hooks?.serviceCombatSwingBuffer?.()?.armed === true;
-      } catch { /* the hilt only */ }
-      VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout, heldSwing,
+      // A stroke held for the next round survives the pause, unseen (round
+      // 18: the hold is silent). Paused, it neither ages nor fires.
+      VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout,
         context.roundAttackPips ?? null);
       VRSpike.updateCombatTargetHighlight();
       VRSpike.roundReadyLatched = false;
@@ -2844,7 +2837,6 @@ export class VRSpike {
       context.tempoReadiness ?? 0,
       context.inCombat,
       context.stanceReadout,
-      swingBuffer?.armed === true,
       context.roundAttackPips ?? null,
     );
     VRSpike.updateCombatTargetHighlight();
@@ -2982,12 +2974,6 @@ export class VRSpike {
         VRSpike.voiceStrokes(offhandEvents, timestamp);
       } else {
         VRSpike.offhandCombatInputController.reset();
-      }
-      // A stroke held for the next round turns the hilt amber this frame,
-      // not on the next one (Part F, decision 4: amber at the stroke).
-      if (events.length && swingBuffer?.armed !== true && VRSpike.hooks?.isCombatSwingHeld?.() === true) {
-        VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout, true,
-          context.roundAttackPips ?? null);
       }
     } catch (error) {
       if (!VRSpike.combatInputErrorReported) {
@@ -3171,7 +3157,6 @@ export class VRSpike {
     tempoReadiness: number,
     inCombat: boolean,
     stanceReadout = '',
-    swingArmed = false,
     roundAttackPips: import('./runtime/VRRoundStrokeBudget').VRRoundAttackPips | null = null,
   ): void {
     VRSpike.lastCombatWeaponMode = weaponMode;
@@ -3192,9 +3177,9 @@ export class VRSpike {
     if (!VRSpike.hiltTimerHost) {
       VRSpike.hiltTimerHost = new VRHiltTimerHost(gripAnchor);
     }
-    VRSpike.hiltTimerHost.present(Number.isFinite(tempoReadiness)
-      ? Math.min(1, Math.max(0, tempoReadiness))
-      : 0, swingArmed, roundAttackPips);
+    // Round 18: a quiet glow while the next round is ready in a fight, not a
+    // clock to wait on - a stroke begins the round.
+    VRSpike.hiltTimerHost.present(inCombat === true && Number.isFinite(tempoReadiness) && tempoReadiness >= 1, roundAttackPips);
 
     // Same grip anchor as the ring, so the upcoming player-selected action
     // belongs to the equipped weapon rather than a screen-space HUD.

@@ -956,8 +956,9 @@ describe('VRSpike XR loop ownership', () => {
     };
     let paused = true;
     const swings: unknown[] = [];
-    // Round 17 (locked): a swing held for the next round survives the pause,
-    // and the hilt shows it held in amber while paused.
+    // A stroke held for the next round survives the pause (round 17); round
+    // 18 makes that hold silent, so the paused hilt shows no amber and the
+    // round is not serviced while paused.
     const bufferServiced = jest.fn(() => ({ released: false, armed: true }));
     const hilt = jest.spyOn(VRSpike as any, 'updateHiltTimer').mockImplementation(() => undefined);
     VRSpike.hooks = {
@@ -976,8 +977,8 @@ describe('VRSpike XR loop ownership', () => {
     try {
       (VRSpike as any).processCombatInput(1_000);
       expect(swings).toHaveLength(0);
-      expect(bufferServiced).toHaveBeenCalledTimes(1);
-      expect(hilt).toHaveBeenLastCalledWith('melee-one-handed', 0, true, '', true, null);
+      expect(bufferServiced).not.toHaveBeenCalled();
+      expect(hilt).toHaveBeenLastCalledWith('melee-one-handed', 0, true, '', null);
 
       paused = false;
       // A swing is two fast samples within 120 ms (critic run 15).
