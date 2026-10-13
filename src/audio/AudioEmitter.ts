@@ -79,6 +79,16 @@ export class AudioEmitter {
 
   disabled: boolean = false;
 
+  /**
+   * Bumped whenever a sound that is still loading must not start any more:
+   * a newer playSound, stop() or destroy(). playSound awaits the file before
+   * it starts the source, and a stop or a second play inside that window used
+   * to be lost - the late source then looped with nothing left to stop it.
+   */
+  playGeneration: number = 0;
+  /** The resref a playSound call is still loading, so a repeat call can see it coming. */
+  pendingSoundName: string = '';
+
   constructor (audioEngine: AudioEngine, channel: AudioEngineChannel = AudioEngineChannel.SFX) {
     this.isDestroyed = false;
 
@@ -167,6 +177,10 @@ export class AudioEmitter {
     for(let i = 0; i < this.sounds.length; i++){
       await this.loadSounds(i);
     }
+    // The owner went away (a module change) while the sounds loaded.
+    if(this.isDestroyed){
+      return;
+    }
     if(this.isActive){
       this.start();
     }
@@ -241,6 +255,10 @@ export class AudioEmitter {
         return;
       }
 
+      if(this.isDestroyed){
+        return;
+      }
+
       this.ffsounds.push(sound);
 
       sound.buffer = buffer;
@@ -250,7 +268,13 @@ export class AudioEmitter {
       sound.onended = () => {
         sound.disconnect();
         sound.stop(0);
-        this.ffsounds.splice(this.ffsounds.indexOf(sound), 1);
+        const index = this.ffsounds.indexOf(sound);
+        if(index >= 0){
+          this.ffsounds.splice(index, 1);
+        }
+        if(this.isDestroyed){
+          this.disconnectWhenSilent();
+        }
       }
       return sound;
     }catch(e){
@@ -262,7 +286,10 @@ export class AudioEmitter {
 
   async playSound(resRef = ''): Promise<AudioBufferSourceNode>{
     if(resRef == '****' || !resRef?.length){ return; }
+    if(this.isDestroyed){ return; }
     this.disposeCurrentSound();
+    const generation = ++this.playGeneration;
+    this.pendingSoundName = '';
 
     //attempt to load from the buffer cache
     if(this.buffers.has(resRef)){
@@ -276,10 +303,18 @@ export class AudioEmitter {
     }
     
     //load from disk
+    this.pendingSoundName = resRef;
     try{
       const data = await AudioLoader.LoadSound(resRef);
       try{
         const buffer = await this.addSound(resRef, data);
+        // A newer play, a stop or a destroy came while this one loaded: it
+        // must not start now (a looping footstep would never be stopped).
+        if(this.isDestroyed || generation !== this.playGeneration){
+          return;
+        }
+        this.pendingSoundName = '';
+        this.disposeCurrentSound();
         this.currentSound = this.engine.audioCtx.createBufferSource();
         this.currentSound.buffer = buffer;
         (this.currentSound as any).name = resRef;
@@ -293,6 +328,9 @@ export class AudioEmitter {
       }
     }catch(e){
       console.log('AudioEmitter', 'Sound not found', resRef);
+    }
+    if(generation === this.playGeneration){
+      this.pendingSoundName = '';
     }
   }
 
@@ -316,6 +354,9 @@ export class AudioEmitter {
       const data = await AudioLoader.LoadStreamWave(resRef);
       try{
         const buffer = await this.addSound(resRef, data);
+        if(this.isDestroyed){
+          return;
+        }
         this.stop();
         this.currentSound = this.engine.audioCtx.createBufferSource();
         this.currentSound.buffer = buffer;
@@ -378,7 +419,7 @@ export class AudioEmitter {
   }
 
   isPlayingSound(resRef: string): boolean {
-    return this.getCurrentSoundName() == resRef;
+    return this.getCurrentSoundName() == resRef || (!!resRef && this.pendingSoundName == resRef);
   }
 
   playNextSound(): void {
@@ -473,7 +514,11 @@ export class AudioEmitter {
 
     if(this.isDestroyed)
       return;
-    
+
+    // A sound still loading must not start after the stop.
+    this.playGeneration++;
+    this.pendingSoundName = '';
+
     if(!this.currentSound){
       return;
     }
@@ -500,12 +545,47 @@ export class AudioEmitter {
     }
   }
 
+  /**
+   * Destroying the owner (a creature, a sound object, a whole module on a
+   * transition) used to leave its sources playing and connected: every
+   * looping sound of every area left behind kept going, a rolling droid's
+   * wheel loop included. Loops stop now and nothing pending may start;
+   * a one-shot already playing (a door's destroyed sound) is left to finish,
+   * and the emitter's nodes are let go once it has.
+   */
   destroy(): void {
     this.buffers.clear();
     this.interationCount = 0;
+    this.playGeneration++;
+    this.pendingSoundName = '';
+    // A loop, or a sound object's playlist (its area is going away), stops.
+    if(this.currentSound && (this.currentSound.loop || this.sounds.length)){
+      this.disposeCurrentSound();
+    }
+    for(const sound of [...this.ffsounds]){
+      if(sound.loop){
+        try{ sound.disconnect(); sound.stop(0); }catch(e){ /* already stopped */ }
+        this.ffsounds.splice(this.ffsounds.indexOf(sound), 1);
+      }
+    }
     this.isDestroyed = true;
+    if(this.currentSound){
+      const sound = this.currentSound;
+      sound.onended = () => {
+        if(this.currentSound === sound){ this.currentSound = null; }
+        this.disconnectWhenSilent();
+      };
+    }
+    this.disconnectWhenSilent();
     if(!this.engine){ return; }
     this.engine.removeEmitter(this);
+  }
+
+  /** After destroy, once nothing is left playing, detach the emitter from the mix. */
+  private disconnectWhenSilent(): void {
+    if(this.currentSound || this.ffsounds.length){ return; }
+    try{ this.mainNode?.disconnect(); }catch(e){ /* not connected */ }
+    try{ this.gainNode?.disconnect(); }catch(e){ /* not connected */ }
   }
 
 }
