@@ -89,10 +89,16 @@ export function canCreate(recipe: Recipe, userRank: number, value: number, chemi
   return userRank >= recipe.requiredRank && chemicals >= value;
 }
 
-/** Chemicals returned for breaking an item down: at least 1, then 5% of value per rank, capped at rank 20. */
+/**
+ * Chemicals returned for breaking an item down, per the spec:
+ * rank < 1 ? 1 : floor(value * min(rank, 20) * 0.05). A low-value item at a
+ * low rank can yield 0. Dividing by 20 is the same 5% without 0.05's binary
+ * rounding error.
+ */
 export function breakdownYield(value: number, breakdownRank: number): number {
-  const rank = Math.min(Math.max(breakdownRank, 0), BREAKDOWN_RANK_CAP);
-  return Math.max(1, Math.floor((value * rank) / BREAKDOWN_RANK_CAP));
+  if (!(breakdownRank >= 1)) return 1;
+  const rank = Math.min(breakdownRank, BREAKDOWN_RANK_CAP);
+  return Math.floor((value * rank) / BREAKDOWN_RANK_CAP);
 }
 
 /** Only items the lab can make can be broken down. */

@@ -40,6 +40,11 @@ describe('lab station crafting rules', () => {
     expect(breakdownYield(75, 20)).toBe(75);
     expect(breakdownYield(75, 25)).toBe(75);
   });
+  test('breakdown yield follows the spec exactly: only rank below 1 is floored at 1', () => {
+    expect(breakdownYield(3, 1)).toBe(0);  // floor(3 x 1 x 0.05)
+    expect(breakdownYield(0, 5)).toBe(0);
+    expect(breakdownYield(0, 0)).toBe(1);
+  });
   test('breakable only for lab recipes, case-insensitively', () => {
     expect(isBreakable('G_I_MEDEQPMNT01', recipes)).toBe(true);
     expect(isBreakable('hk_part', recipes)).toBe(false);
