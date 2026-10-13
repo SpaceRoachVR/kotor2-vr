@@ -1,6 +1,7 @@
 import type { VRCombatCuePlayOptions } from "@/vr/runtime/VRCombatCueAudio";
 import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
 import { describeVRCombatVoicingSounds, describeVRPlayerBarks, pickVRBark, resolveVRCriticalImpact, VRStrokeWhooshPicker, type VRCombatBarkKind, type VRStrokeShape } from "@/vr/runtime/VRCombatVoicing";
+import { resolveVRPlayerDisabledLabel, type VRDisabledEffect } from '@/vr/runtime/VRPlayerDisabledState';
 import { SSFType } from "@/enums/resource/SSFType";
 import * as THREE from "three";
 import {
@@ -1234,34 +1235,26 @@ function resolveVRBoltImpact(weapon: any, material: string): string {
 }
 
 /**
- * Why the player cannot act, if an effect holds them: stunned, knocked down,
- * paralysed, choked, held, frightened, asleep. Any source - Force Stun, a
- * stun grenade, Horror, a feat - not only the feat stun (critic run 7).
+ * Why the player cannot act, if an effect holds them (the VR notice); the
+ * rule is resolveVRPlayerDisabledLabel's.
  */
 function resolveVRPlayerDisabledState(): string | null {
   const player: any = GameState.getCurrentPlayer();
   if (!player || !Array.isArray(player.effects)) return null;
-  // Cutscene holds use the same states (EffectCutSceneParalyze on Peragus's
-  // T3 hand-over): no plate over a scene (critic run 8).
-  if (GameState.Mode === EngineMode.DIALOG || GameState.CutsceneManager?.active || player.cutsceneMode) return null;
+  const effects: VRDisabledEffect[] = [];
   for (const effect of player.effects) {
     if (!effect) continue;
-    if (effect.type === GameEffectType.EffectKnockdown) return 'Knocked down';
-    if (effect.type === GameEffectType.EffectSetState) {
-      switch (Number(effect.getInt?.(0))) {
-        case 1: return 'Confused';
-        case 2: return 'Frightened';
-        case 3: case 4: return 'Stunned';
-        case 5: return 'Paralysed';
-        case 6: return 'Asleep';
-        case 7: return 'Choked';
-        case 8: return 'Horrified';
-        case 9: return 'Knocked back';
-        case 10: return 'Held';
-      }
+    if (effect.type === GameEffectType.EffectKnockdown) effects.push({ kind: 'knockdown' });
+    else if (effect.type === GameEffectType.EffectSetState) {
+      effects.push({ kind: 'set-state', state: Number(effect.getInt?.(0)), cutscene: Number(effect.getInt?.(1)) === 1 });
     }
   }
-  return null;
+  return resolveVRPlayerDisabledLabel({
+    mode: GameState.Mode === EngineMode.INGAME ? 'ingame' : GameState.Mode === EngineMode.MINIGAME ? 'minigame' : 'other',
+    loading: !!GameState.loadingModule,
+    scene: GameState.Mode === EngineMode.DIALOG || !!GameState.CutsceneManager?.active || !!player.cutsceneMode,
+    effects,
+  });
 }
 
 /** Every sound the player's own fights can use now, for preloading. */
@@ -4535,6 +4528,18 @@ export class GameState implements EngineContext {
       resolveCombatBark: (creatureId, kind) => resolveVRCombatBark(creatureId, kind),
       getCombatCuePreloadSounds: () => resolveVRCombatPreloadSounds(),
       getPlayerDisabledState: () => resolveVRPlayerDisabledState(),
+      // TEMPORARY (round 18, issue 6): see VRSpike.logTheaterShotTemp.
+      describeCutsceneShot: () => {
+        const cs: any = GameState.CutsceneManager;
+        const state: any = cs?.cameraState;
+        const who = (o: any) => o
+          ? `${o.tag || o.getTag?.() || '?'}#${o.id}@(${Number(o.position?.x).toFixed(1)},${Number(o.position?.y).toFixed(1)},${Number(o.position?.z).toFixed(1)}) room=${o.room?.roomName ?? '-'}`
+          : '-';
+        const entry: any = cs?.currentEntry;
+        return `dlg=${cs?.dialog?.resref ?? '?'} angle=${entry?.cameraAngle ?? '?'} camId=${entry?.cameraID ?? '-'}` +
+          ` vfx=${GameState.VideoEffectManager?.videoEffectId ?? '?'} speaker=${who(state?.speaker?.participant)}` +
+          ` listener=${who(state?.listener?.participant)} owner=${who(cs?.owner)}`;
+      },
       getPlayerVitals: () => {
         const actor = GameState.getCurrentPlayer() as ModuleCreature | undefined;
         if (!actor || typeof actor.getHP !== 'function' || typeof actor.getMaxHP !== 'function') return null;

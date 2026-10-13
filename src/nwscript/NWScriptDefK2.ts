@@ -5007,7 +5007,10 @@ NWScriptDefK2.Actions = {
     type: NWScriptDataType.OBJECT,
     args: [ NWScriptDataType.INTEGER, NWScriptDataType.LOCATION ],
     action: function(this: NWScriptInstance, args: [number, EngineLocation]){
-      const template = GameState.PartyManager.NPCS[args[0]]?.template;
+      // "from the list of available creatures": a slot that holds a template
+      // but is not available spawns nothing.
+      const slot = GameState.PartyManager.NPCS[args[0]];
+      const template = slot?.available ? slot.template : undefined;
       if(!template){ return undefined; }
       const partyMember = new GameState.Module.ModuleArea.ModuleCreature(template);
       args[1].area.attachObject(partyMember);
@@ -6333,8 +6336,7 @@ NWScriptDefK2.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [ NWScriptDataType.INTEGER ],
     action: function(this: NWScriptInstance, args: [number]){
-      GameState.PartyManager.RemoveNPCById(args[0], true);
-      return 1;
+      return GameState.PartyManager.RemoveNPCFromPartyToBase(args[0]) ? NW_TRUE : NW_FALSE;
     }	
   },
   847: {

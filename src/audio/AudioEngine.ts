@@ -343,6 +343,8 @@ export class AudioEngine {
       [rotation.x, rotation.y, rotation.z]
     );
 
+    this.logAudioCensusTemp(delta);
+
     //Handle the background music loop
     if(this.areaMusicLoaded && this.bgmState == BackgroundMusicState.ENDED && this.bgmMode == BackgroundMusicMode.AREA){
       if(this.bgmTimer > 0 && AudioEngine.loopBGM){
@@ -355,6 +357,38 @@ export class AudioEngine {
       }
     }
 
+  }
+
+  /**
+   * TEMPORARY (headset round 18, "audio glitches start on the bridge of the
+   * Peragus facility"): every 30 s, how many emitters are live and how many
+   * loops they hold, plus the ambient beds and music, so the next headset log
+   * shows whether sources pile up. Remove once that is settled.
+   */
+  private audioCensusTimer = 0;
+  private logAudioCensusTemp(delta: number): void {
+    this.audioCensusTimer += delta;
+    if(this.audioCensusTimer < 30){ return; }
+    this.audioCensusTimer = 0;
+    try{
+      let playing = 0;
+      let loops = 0;
+      let oneShots = 0;
+      for(const emitter of this.emitters){
+        if(emitter.currentSound){
+          playing++;
+          if(emitter.currentSound.loop){ loops++; }
+        }
+        oneShots += emitter.ffsounds?.length ?? 0;
+      }
+      const bed = (e: AmbientAudioEmitter) => e?.playing ? (e.name || '?') : '-';
+      console.info(`[audio TEMP r18] emitters=${this.emitters.length} playing=${playing} loops=${loops} oneShots=${oneShots}` +
+        ` bedDay=${bed(this.ambientAudioDayEmitter)} bedNight=${bed(this.ambientAudioNightEmitter)}` +
+        ` musicDay=${bed(this.areaMusicDayAudioEmitter)} musicNight=${bed(this.areaMusicNightAudioEmitter)}` +
+        ` battle=${bed(this.battleMusicAudioEmitter)} dialog=${bed(this.dialogMusicAudioEmitter)} ctx=${this.audioCtx?.state}`);
+    }catch(e){
+      console.warn('[audio TEMP r18] census failed', e);
+    }
   }
 
   addEmitter(emitter: AudioEmitter){

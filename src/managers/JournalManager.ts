@@ -10,6 +10,7 @@ import { JournalCategory } from "@/engine/JournalCategory";
 import { JournalEntry } from "@/engine/JournalEntry";
 import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { GameState } from "@/GameState";
+import { resolveJournalQuestUpdate } from "@/engine/JournalQuestUpdateRules";
 
 /**
  * JournalManager class.
@@ -75,14 +76,16 @@ export class JournalManager {
    */
   static AddJournalQuestEntry(szPlotID: string = '', state: number = 0, allowOverrideHigher: boolean = false): boolean {
     if(JournalManager.GetCategoryByTag(szPlotID)){
-      GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.JOURNAL_ENTRY_ADDED);
       let entry = JournalManager.GeJournalEntryByTag(szPlotID);
+      const update = resolveJournalQuestUpdate(entry ? entry.state : undefined, state, allowOverrideHigher);
+      // An unchanged or refused state is a no-op, and silent: 106PER's
+      // JournalRescue trigger re-adds RescuePC 10 every heartbeat.
+      if(!update.changed){
+        return true;
+      }
+      GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.JOURNAL_ENTRY_ADDED);
       if(entry){
-        if(entry.state > state && allowOverrideHigher){
-          entry.state = state;
-        }else {
-          entry.state = state;
-        }
+        entry.state = update.state;
         // entry.date; //TODO
         // entry.time ; //TODO
         entry.load();

@@ -681,6 +681,37 @@ export class PartyManager {
     PartyManager.RemoveCurrentMemberByNPCId(npcId);
   }
 
+  /**
+   * RemoveNPCFromPartyToBase (nwscript 846): "Will remove the CNPC from the 3
+   * person party, and remove him/her from the area, effectively sending the
+   * CNPC back to the base. The CNPC data is still stored in the party table,
+   * and calling this function will not destroy the CNPC in any way."
+   *
+   * The creature leaves the world; what it is now (levels, inventory, HP) is
+   * kept as its party-table template, and it stays available, so a later
+   * SpawnAvailableNPC brings back the same character. Returns TRUE for
+   * success, FALSE when the NPC is not in the party.
+   */
+  static RemoveNPCFromPartyToBase(npcId = 0): boolean {
+    const member = PartyManager.GetPartyMemberByNPCId(npcId);
+    if(!member || PartyManager.party.indexOf(member) == -1){
+      return false;
+    }
+    // Never strand the party without a leader.
+    if(PartyManager.party[0] === member && PartyManager.party.indexOf(PartyManager.Player) > 0){
+      PartyManager.MakePlayerLeader(false);
+    }
+    if(PartyManager.NPCS[npcId]){
+      try{
+        PartyManager.NPCS[npcId].template = member.save();
+      }catch(e){
+        console.error('RemoveNPCFromPartyToBase: could not store the NPC', npcId, e);
+      }
+    }
+    PartyManager.RemoveNPCById(npcId, false);
+    return true;
+  }
+
   static GetPartyMemberByNPCId(npcId = 0){
     for(let i = 0; i < PartyManager.party.length; i++){
       const pm = PartyManager.party[i];
