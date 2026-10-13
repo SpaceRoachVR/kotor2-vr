@@ -11,14 +11,6 @@ import {
   resolveDanglyWindPower,
 } from "@/three/odyssey/windPowerContext";
 
-function disposeChunkMaterials(materials: THREE.Material | THREE.Material[] | null, sourceModel: OdysseyModel3D | null): void {
-  if (!materials) return;
-  for (const material of Array.isArray(materials) ? materials : [materials]) {
-    sourceModel?.disposeMaterial(material);
-    material.dispose();
-  }
-}
-
 /**
  * OdysseyEmitter3D class.
  * 
@@ -42,6 +34,7 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
   private static _v3D = new THREE.Vector3();
   private static _quat = new THREE.Quaternion();
   private static _mat4 = new THREE.Matrix4();
+  private static _chunkToLocal = new THREE.Matrix4();
 
   static BirthTime: number = 1;
   static PlaneGeometry: THREE.PlaneGeometry = new THREE.PlaneGeometry(1, 1, 1, 1);
@@ -807,6 +800,12 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
       // if(this.node.renderMode !== 'Linked' && this.node.flags.affectedByWind){
       //   this.applyWindForces(delta);
       // }
+      // A P2P chunk emitter still has to place its chunks: returning before
+      // this left every instance at the emitter origin at full size, a lump
+      // that hung where the effect was cast (v_drdexpld_01's droid parts).
+      if(this._isChunkEmitter && this._chunkLoaded){
+        this.updateChunkInstances();
+      }
       return;
     }
 
@@ -1825,9 +1824,8 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
     if(this._chunkGeometry){
       this._chunkGeometry.dispose();
     }
-    if(this._chunkMaterial){
-      disposeChunkMaterials(this._chunkMaterial, this._chunkSourceModel);
-    }
+    // The chunk material is the source model's own; disposing the source
+    // releases it.
     this._chunkSourceModel?.dispose();
     this._chunkSourceModel = null;
     this._chunkMesh = null;
@@ -1877,27 +1875,15 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
         if(foundGeom) return;
         if(child instanceof THREE.Mesh && child.geometry){
           foundGeom = child.geometry.clone();
-          // Material.clone() deep-copies userData through JSON.stringify, and
-          // this engine keeps a back-reference to the owning model there
-          // (userData.textureOwnerModel), which is circular. Every chunk
-          // emitter — junk bins, chunky bits, kolto bubbles — failed with
-          // "Converting circular structure to JSON" and drew nothing, logging a
-          // 16-line trace each time. The clone does not need that reference.
+          // Draw with the source mesh's own material(s), not a copy. The
+          // source's textures are still queued at this point; the texture
+          // loader fills in the source material, so a clone taken now never
+          // got its texture and every chunk drew untextured (the droid parts
+          // of v_drdexpld_01, texture fx_expparts). The source model is held
+          // for the emitter's lifetime and releases these materials itself.
           const sources = Array.isArray(child.material) ? child.material : [child.material];
-          if (!sources.length) throw new Error('Chunk source mesh has no material');
-          const clones: THREE.Material[] = [];
-          // Assign before cloning so partial arrays are owned if a clone fails.
-          foundMat = clones;
-          for (const source of sources) {
-            const userData = source.userData;
-            source.userData = {};
-            try {
-              clones.push(source.clone());
-            } finally {
-              source.userData = userData;
-            }
-          }
-          if (!Array.isArray(child.material)) foundMat = clones[0];
+          if (!sources.length || sources.some((source) => !source)) throw new Error('Chunk source mesh has no material');
+          foundMat = child.material;
         }
       });
 
@@ -1911,6 +1897,10 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
         Math.max(this.maxParticleCount, 1)
       );
       this._chunkMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      // Instances start as identity matrices: an unborn chunk would draw at
+      // the emitter origin until its first update.
+      const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
+      for(let i = 0; i < this._chunkMesh.count; i++) this._chunkMesh.setMatrixAt(i, hidden);
       this._chunkMesh.renderOrder = this.node.renderOrder || 0;
       this._chunkMesh.frustumCulled = false;
       this._chunkLoaded = true;
@@ -1930,7 +1920,7 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
       // or an unattached GPU resource behind.
       if (!adopted) {
         foundGeom?.dispose();
-        disposeChunkMaterials(foundMat, sourceModel);
+        // foundMat is the source model's own material; the source releases it.
         sourceModel?.dispose();
       }
     }
@@ -1947,6 +1937,12 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
     const mat = this._chunkMatrix;
     const count = Math.min(this.offsets.count, this._chunkMesh.count);
     let visibleCount = 0;
+    // Normal and Motion_Blur particles are spawned at world positions (see
+    // getRandomPosition; the points shader draws them with the view matrix
+    // alone), but the chunk mesh is a child of this emitter, so its instances
+    // are emitter-local: bring each world placement back into local space.
+    const worldSpace = this.node.renderMode == 'Normal' || this.node.renderMode == 'Motion_Blur';
+    const toLocal = worldSpace ? OdysseyEmitter3D._chunkToLocal.copy(this.matrixWorld).invert() : null;
 
     for(let i = 0; i < count; i++){
       const alive = this.props.getZ(i) === 1;
@@ -1979,6 +1975,7 @@ export class OdysseyEmitter3D extends OdysseyObject3D {
       mat.makeRotationZ(rot);
       mat.scale(OdysseyEmitter3D._v3A.set(scaleVal, scaleVal, scaleVal));
       mat.setPosition(px, py, pz);
+      if(toLocal) mat.premultiply(toLocal);
 
       this._chunkMesh.setMatrixAt(i, mat);
       visibleCount++;
