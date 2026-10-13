@@ -227,6 +227,7 @@ import {
 import { canAttemptSecurityUnlock } from "@/engine/interaction/ObjectLockRules";
 
 import { buildPartySwitchEntries, nextPartyCycleEntry } from "@/vr/runtime/VRPartySwitchRules";
+import { decideVRKnockoutControl } from "@/vr/runtime/VRKnockoutControlRules";
 import { VRCutsceneMoveHold } from "@/vr/runtime/VRCutsceneMoveHold";
 export interface GameStateInitializeOptions {
   Game: GameEngineType,
@@ -1185,7 +1186,9 @@ function resolveVRCombatBark(creatureId: string | number, kind: VRCombatBarkKind
     const isPlayer = creature === GameState.getCurrentPlayer();
     let resref = '';
     if (creature.ssf && typeof creature.ssf.GetSoundResRef === 'function') {
-      const types = kind === 'pain' ? [SSFType.PAIN_1, SSFType.PAIN_2] : [kind === 'low-health' ? SSFType.LOW_HEALTH : SSFType.CRITICAL_HIT];
+      const types = kind === 'pain' ? [SSFType.PAIN_1, SSFType.PAIN_2]
+        : kind === 'select' ? [SSFType.SELECT_1, SSFType.SELECT_2, SSFType.SELECT_3]
+        : [kind === 'low-health' ? SSFType.LOW_HEALTH : SSFType.CRITICAL_HIT];
       resref = pickVRBark(types.map((t) => String(creature.ssf.GetSoundResRef(t) ?? '').replace(/\0.*$/g, '')));
     } else if (isPlayer) {
       resref = pickVRBark(describeVRPlayerBarks(kind, Number(creature.getGender?.() ?? 0)));
@@ -1745,6 +1748,112 @@ function isVRFightOnFor(actor: ModuleCreature | null | undefined): boolean {
   } catch { /* the flag alone */ }
   vrFightOnMemo = { actor, at: now, value };
   return value;
+}
+
+/**
+ * Who VR controls across knockouts and leader switches (Part H). See
+ * VRKnockoutControlRules: control leaves a downed member for the nearest
+ * standing one, and comes back to the Exile when she is up and the fight is
+ * over. Every change of body, by Y, the wheel or a knockout, fades through
+ * black, names the new body and plays its retail select line.
+ */
+const vrLeaderControl = {
+  actor: null as ModuleCreature | null,
+  module: null as unknown,
+  downSeconds: 0,
+  knockoutSwitched: false,
+  seatPending: false,
+};
+
+function updateVRLeaderControl(delta: number): void {
+  const actor = GameState.getCurrentPlayer() as ModuleCreature | undefined;
+  if (!VRSpike.isPresenting || !actor || GameState.Mode !== EngineMode.INGAME) {
+    vrLeaderControl.actor = actor ?? null;
+    vrLeaderControl.module = GameState.module;
+    vrLeaderControl.downSeconds = 0;
+    return;
+  }
+  if (actor !== vrLeaderControl.actor) {
+    // A module load builds a new player object too: that is not a switch.
+    const switched = !!vrLeaderControl.actor && vrLeaderControl.module === GameState.module;
+    vrLeaderControl.actor = actor;
+    vrLeaderControl.module = GameState.module;
+    vrLeaderControl.downSeconds = 0;
+    if (actor.isPlayer) vrLeaderControl.knockoutSwitched = false;
+    if (switched) {
+      presentVRLeaderSwitch(actor);
+      vrLeaderControl.seatPending = true;
+    }
+  }
+  if (vrLeaderControl.seatPending && actor.model) {
+    vrLeaderControl.seatPending = false;
+    seatVRLeaderClear(actor);
+  }
+  if (GameState.State === EngineState.PAUSED) return;
+  const downed = (creature: ModuleCreature) => typeof creature.isDead === 'function' && creature.isDead();
+  vrLeaderControl.downSeconds = downed(actor) ? vrLeaderControl.downSeconds + Math.max(0, Number(delta) || 0) : 0;
+  const member = (creature: ModuleCreature) => ({
+    npcId: creature.isPlayer ? -1 : (Number.isInteger(creature.npcId) ? creature.npcId : -2),
+    isExile: !!creature.isPlayer,
+    downed: downed(creature),
+    distance: Math.hypot(creature.position.x - actor.position.x, creature.position.y - actor.position.y),
+  });
+  const others = GameState.PartyManager.party
+    .filter((creature) => creature && creature !== actor && creature.position && creature.area === actor.area)
+    .map(member)
+    .filter((entry) => entry.npcId >= -1);
+  const decision = decideVRKnockoutControl({
+    controlled: member(actor),
+    others,
+    fightOn: isVRFightOnFor(actor),
+    knockoutSwitched: vrLeaderControl.knockoutSwitched,
+    controlledDownSeconds: vrLeaderControl.downSeconds,
+  });
+  try {
+    if (decision.kind === 'switch') {
+      console.info(`[VR party] ${actor.getName()} is down: control passes to NPC ${decision.npcId}`);
+      GameState.PartyManager.SwitchPlayerCharacter(decision.npcId, true);
+      vrLeaderControl.knockoutSwitched = decision.npcId !== -1;
+    } else if (decision.kind === 'return') {
+      console.info('[VR party] the fight is over: control returns to the Exile');
+      GameState.PartyManager.SwitchPlayerCharacter(-1, true);
+      vrLeaderControl.knockoutSwitched = false;
+    }
+  } catch (error) {
+    console.error('[VR party] knockout control switch rejected', error);
+  }
+}
+
+function presentVRLeaderSwitch(actor: ModuleCreature): void {
+  const name = actor.isPlayer ? (GameState.PartyManager.ActualPlayerName || actor.getName()) : actor.getName();
+  VRSpike.presentLeaderSwitch(`Now: ${String(name || '').trim() || 'party member'}`, Number.isFinite(actor.id) ? actor.id : null);
+}
+
+/**
+ * Anchor's option C1: the head lands at least 0.5 m clear of other bodies.
+ * The body taken over is where it stood, so this only moves it when another
+ * body is closer than that (a duplicate, or a companion pressed against it).
+ */
+function seatVRLeaderClear(actor: ModuleCreature): void {
+  const clearance = 0.5;
+  const bodies: ModuleCreature[] = (GameState.module?.area?.creatures ?? []).concat(GameState.PartyManager.party);
+  let nearest: ModuleCreature | null = null;
+  let nearestDistance = Infinity;
+  for (const body of bodies) {
+    if (!body || body === actor || body.destroyed || !body.position || body.area !== actor.area) continue;
+    const distance = Math.hypot(body.position.x - actor.position.x, body.position.y - actor.position.y);
+    if (distance < nearestDistance) { nearest = body; nearestDistance = distance; }
+  }
+  if (!nearest || nearestDistance >= clearance) return;
+  const away = actor.position.clone().sub(nearest.position);
+  away.z = 0;
+  if (away.lengthSq() < 1e-6) away.set(1, 0, 0);
+  away.normalize().multiplyScalar(clearance - nearestDistance + 0.05);
+  const wanted = actor.position.clone().add(away);
+  const seat = actor.area?.getNearestWalkablePoint?.(wanted, actor.getHitDistance?.() ?? 0.4) ?? null;
+  if (!seat || Math.hypot(seat.x - nearest.position.x, seat.y - nearest.position.y) < clearance) return;
+  actor.position.set(seat.x, seat.y, seat.z);
+  console.info(`[VR party] seated ${actor.getName()} ${clearance} m clear of ${nearest.getName()}`);
 }
 
 function dispatchVRDirectionalForceGesture(
@@ -2898,6 +3007,7 @@ function buildVRPartySwitchEntries() {
     npcId: Number.isInteger(member.npcId) ? member.npcId : -1,
     isPlayer: !!member.isPlayer,
     portrait: member.getPortraitResRef() || undefined,
+    downed: typeof member.isDead === 'function' && member.isDead(),
   }));
   return buildPartySwitchEntries(candidates, GameState.PartyManager.ActualPlayerName, GameState.PartyManager.ActualPlayerPortrait || undefined);
 }
@@ -6215,6 +6325,7 @@ export class GameState implements EngineContext {
   static UpdateIngame(delta: number = 0){
     //Get Selectable Objects In Range
     GameState.ModuleObjectManager.TickSelectableObjects(delta);
+    updateVRLeaderControl(delta);
 
     //Update Mode Camera
     //Make sure we are using the follower camera while ingame

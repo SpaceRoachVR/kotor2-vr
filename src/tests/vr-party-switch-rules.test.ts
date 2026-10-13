@@ -70,6 +70,23 @@ describe('nextPartyCycleEntry (the Y button)', () => {
     expect(nextPartyCycleEntry([], -1)).toBeNull();
   });
 
+  test('a knocked-out member is passed over (Hive: Y put you in Kreia at -9 HP)', () => {
+    const downedAtton = { ...atton, downed: true };
+    const fromExile = nextPartyCycleEntry(entriesWhen([exile, downedAtton, kreia]), -1);
+    expect(fromExile?.npcId).toBe(6);
+    // Kreia in control, the Exile down: Atton next, never the Exile.
+    const downedExile = { ...exile, downed: true };
+    expect(nextPartyCycleEntry(entriesWhen([kreia, atton, downedExile]), 6)?.npcId).toBe(0);
+    // Everyone else down: nobody to switch to.
+    expect(nextPartyCycleEntry(entriesWhen([kreia, downedAtton, downedExile]), 6)).toBeNull();
+  });
+
+  test('the Y button sees who is down', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
+    const builder = source.slice(source.indexOf('function buildVRPartySwitchEntries() {'), source.indexOf('function snapshotVRPartyMembers()'));
+    expect(builder).toContain('downed: typeof member.isDead === \'function\' && member.isDead(),');
+  });
+
   test('the Y button uses the fixed order, not the first entry', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
     const start = source.indexOf('cyclePartyLeader: () => {');

@@ -19,6 +19,8 @@ export interface PartySwitchCandidate {
   readonly npcId: number;
   readonly isPlayer: boolean;
   readonly portrait?: string;
+  /** Knocked out (0 HP or less) until the fight ends. */
+  readonly downed?: boolean;
 }
 
 export interface PartySwitchEntry {
@@ -27,6 +29,8 @@ export interface PartySwitchEntry {
   readonly icon?: string;
   /** The SwitchPlayerCharacter argument: an NPC slot, or -1 for the Exile. */
   readonly npcId: number;
+  /** Knocked out: the Y button passes them over. */
+  readonly downed?: boolean;
 }
 
 /** The entry id the Exile is offered under while a companion is possessed. */
@@ -47,19 +51,21 @@ export function buildPartySwitchEntries(
       label: member.name,
       ...(member.portrait ? { icon: member.portrait } : {}),
       npcId: member.npcId,
+      ...(member.downed ? { downed: true } : {}),
     });
   }
   // The Exile only while they are actually in the party as a follower (a
   // leader switch keeps them). In a scripted possession - the 001EBO prologue
   // as T3 - they are not, and offering them built a second Exile who joined
   // the prologue for good (headset round 16).
-  const exileFollowing = party.slice(1).some((member) => !!member?.isPlayer);
+  const exileFollowing = party.slice(1).find((member) => !!member?.isPlayer);
   if (leader && !leader.isPlayer && exileFollowing && typeof playerName === 'string' && playerName.trim().length > 0) {
     entries.push({
       id: PLAYER_SWITCH_ENTRY_ID,
       label: playerName.trim(),
       ...(playerPortrait ? { icon: playerPortrait } : {}),
       npcId: -1,
+      ...(exileFollowing.downed ? { downed: true } : {}),
     });
   }
   return entries;
@@ -74,13 +80,17 @@ export function buildPartySwitchEntries(
  * first and the Exile last, so with Atton and Kreia in the party the button
  * bounced Atton -> Kreia -> Atton and could never hand control back to the
  * Exile (headset round P1).
+ *
+ * A knocked-out member is passed over: Y could put you in Kreia at -9 HP,
+ * lying on the floor, for 13 s while the Sith kept hitting her (Hive, run 1).
  */
 export function nextPartyCycleEntry(
   entries: readonly PartySwitchEntry[],
   controlledNpcId: number,
 ): PartySwitchEntry | null {
   if (!Array.isArray(entries) || entries.length === 0) return null;
-  const order = [...entries].sort((a, b) => a.npcId - b.npcId);
+  const order = entries.filter((entry) => !entry.downed).sort((a, b) => a.npcId - b.npcId);
+  if (order.length === 0) return null;
   const current = Number.isInteger(controlledNpcId) ? controlledNpcId : -1;
   return order.find((entry) => entry.npcId > current) ?? order[0];
 }
