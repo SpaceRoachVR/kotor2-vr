@@ -1,11 +1,22 @@
 export interface VRCombatTargetLockConfiguration {
   aimLossGraceMilliseconds?: number;
   switchDwellMilliseconds?: number;
+  /**
+   * When the barrel is at least this many degrees closer to the new candidate
+   * than to the locked target, the switch is immediate; the dwell is only for
+   * bodies that overlap from where the player stands.
+   */
+  clearSwitchMarginDegrees?: number;
 }
 
 export interface VRCombatTargetLockUpdate {
   candidateTargetId?: string;
   nowMilliseconds: number;
+  /**
+   * The barrel's angle to each target this frame, by id. Omitted, every
+   * switch waits out the dwell.
+   */
+  aimOffsetsDegrees?: ReadonlyMap<string, number>;
 }
 
 export interface VRCombatTargetLockSnapshot {
@@ -17,6 +28,7 @@ export interface VRCombatTargetLockSnapshot {
 
 const DEFAULT_AIM_LOSS_GRACE_MILLISECONDS = 500;
 const DEFAULT_SWITCH_DWELL_MILLISECONDS = 180;
+const DEFAULT_CLEAR_SWITCH_MARGIN_DEGREES = 3;
 
 /**
  * Converts validated aim candidates into a stable combat soft-lock. It has no
@@ -26,6 +38,7 @@ const DEFAULT_SWITCH_DWELL_MILLISECONDS = 180;
 export class VRCombatTargetLock {
   private readonly aimLossGraceMilliseconds: number;
   private readonly switchDwellMilliseconds: number;
+  private readonly clearSwitchMarginDegrees: number;
   private lockedTargetId: string | undefined;
   private pendingTargetId: string | undefined;
   private lockExpiresAtMilliseconds: number | undefined;
@@ -39,6 +52,10 @@ export class VRCombatTargetLock {
     this.switchDwellMilliseconds = validateDuration(
       configuration.switchDwellMilliseconds ?? DEFAULT_SWITCH_DWELL_MILLISECONDS,
       "switchDwellMilliseconds",
+    );
+    this.clearSwitchMarginDegrees = validateDuration(
+      configuration.clearSwitchMarginDegrees ?? DEFAULT_CLEAR_SWITCH_MARGIN_DEGREES,
+      "clearSwitchMarginDegrees",
     );
   }
 
@@ -65,6 +82,11 @@ export class VRCombatTargetLock {
       this.lockExpiresAtMilliseconds = nowMilliseconds + this.aimLossGraceMilliseconds;
       this.pendingTargetId = undefined;
       this.pendingSinceMilliseconds = undefined;
+      return this.getSnapshot();
+    }
+
+    if (this.isClearlyCloser(candidateTargetId, update.aimOffsetsDegrees)) {
+      this.acquire(candidateTargetId, nowMilliseconds);
       return this.getSnapshot();
     }
 
@@ -104,6 +126,20 @@ export class VRCombatTargetLock {
     this.pendingTargetId = undefined;
     this.pendingSinceMilliseconds = undefined;
     this.lockExpiresAtMilliseconds = nowMilliseconds + this.aimLossGraceMilliseconds;
+  }
+
+  /**
+   * Snap shots went to the old target for 400 ms after the barrel had plainly
+   * moved to a new one (Bolt, round 17). The dwell exists for two bodies that
+   * overlap from where the player stands, not for a deliberate move.
+   */
+  private isClearlyCloser(candidateTargetId: string, offsets: ReadonlyMap<string, number> | undefined): boolean {
+    if (!offsets || !this.lockedTargetId) return false;
+    const candidate = offsets.get(candidateTargetId);
+    if (candidate === undefined || !Number.isFinite(candidate)) return false;
+    const locked = offsets.get(this.lockedTargetId);
+    if (locked === undefined || !Number.isFinite(locked)) return true;
+    return locked - candidate >= this.clearSwitchMarginDegrees;
   }
 
   private isLockExpired(nowMilliseconds: number): boolean {

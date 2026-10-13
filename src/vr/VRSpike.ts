@@ -27,7 +27,7 @@ import { VRKeyboardInputController } from "./runtime/VRKeyboardInputController";
 import { VR_KEYBOARD_DONE_KEY } from "./runtime/VRKeyboardLayout";
 import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatInputController";
 import { VRCombatTargetLock } from "./runtime/VRCombatTargetLock";
-import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
+import { isVRWeaponHandOnTarget, VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
 import { VRForceCastGesture, VRForceCastGestureController } from "./runtime/VRForceCastGestureController";
 import { VRConsumableUseGesture, VRConsumableUseGestureController } from "./runtime/VRConsumableUseGestureController";
 import { VRRadialControllerEffect, VRRadialMenuController } from "./runtime/VRRadialMenuController";
@@ -54,7 +54,7 @@ import { VRWeaponStanceHost } from "./runtime/VRWeaponStanceHost";
 import { VRCombatTargetHighlightHost, type VRCombatTargetHighlight } from "./runtime/VRCombatTargetHighlightHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
-  resolveVRCombatAimedTargetId,
+  measureVRCombatAim,
   type VRCombatAimCandidate,
 } from "./runtime/VRCombatAimResolver";
 import {
@@ -510,6 +510,8 @@ export interface VRSpikeHooks {
   } | null;
   /** Current world reticle target for the headset-readable name label. */
   getWorldTargetIndicator?: () => VRWorldTargetIndicator | null;
+  /** Hides the engine's cursor brackets on non-hostile creatures while in combat. */
+  hideCombatNonHostileReticles?: () => void;
 }
 
 /** How long B must be held to cancel combat; a tap is Pause (round 15, PF4). */
@@ -802,6 +804,8 @@ export class VRSpike {
   private static readonly haptics = new VRHapticFeedback();
   private static radialMenuHost: VRRadialMenuHost | null = null;
   private static readonly radialRayHand = new VRPointerHandResolver();
+  /** The hand whose menu button opened the wheel; its ray owns the hover. */
+  private static radialOpenerHand: XRHandRole | null = null;
   private static radialOpeningHeadPose: XRWorldPose | null = null;
   private static radialMenuPressedLastFrame = false;
   private static comfortSettingsHost: VRComfortSettingsHost | null = null;
@@ -2511,18 +2515,21 @@ export class VRSpike {
    * cache would have to be invalidated on every spawn, death and module load.
    */
   private static resolveAimedCombatTargetId(): number | null {
+    VRSpike.combatAimOffsetsDegrees.clear();
     const rayPose = VRSpike.latestInputFrame?.hands[VRSpike.dominantHand]?.targetRayPose;
     if (!rayPose || !isUsableXRPose(rayPose)) return null;
     try {
       const context = VRSpike.hooks?.getCombatAimCandidates?.() ?? null;
       if (!context || !context.candidates.length) return null;
-      return resolveVRCombatAimedTargetId({
+      const aim = measureVRCombatAim({
         rayPose,
         actorPosition: context.actorPosition,
         candidates: context.candidates,
         maxRangeMetres: context.maxRangeMetres,
         aimAssistRadiusMetres: VRSpike.COMBAT_AIM_ASSIST_RADIUS_METRES,
       });
+      for (const [id, offset] of aim.offsetsDegrees) VRSpike.combatAimOffsetsDegrees.set(String(id), offset);
+      return aim.targetId;
     } catch {
       // Aim resolution must never break the frame loop; no target is the
       // honest outcome and the player can step closer.
@@ -2530,15 +2537,24 @@ export class VRSpike {
     }
   }
 
-  /** Interaction aim first, then combat reach. See `resolveAimedCombatTargetId`. */
+  /** The barrel's angle to each in-range hostile, from the last combat aim. */
+  private static readonly combatAimOffsetsDegrees = new Map<string, number>();
+
+  /**
+   * A hostile under the barrel first, then the interaction ray.
+   *
+   * The interaction ray used to win whenever it hit anything alive, so the
+   * Remote or a companion a metre in front took the aim from the trooper
+   * behind: the lock stayed on the old target, every shot went there, and a
+   * queued power could not be cast (Bolt, round 17). Corpses did the same
+   * (critic run 19). A hostile in combat range under the barrel now outranks
+   * any non-hostile hit; a door or companion still answers when no hostile is.
+   */
   private static resolveAimedTargetIdForCombat(): number | null {
     const aimed = VRSpike.resolveAimedTargetId();
-    // A corpse under the ray (lootable, so the interaction ray takes it) hid
-    // the live droid behind it: 0 of 6 swings registered (critic run 19).
-    let dead = false;
-    try { dead = aimed !== null && VRSpike.hooks?.isDeadCreature?.(aimed) === true; } catch { dead = false; }
-    if (aimed !== null && !dead) return aimed;
-    return VRSpike.resolveAimedCombatTargetId() ?? aimed;
+    const hostile = VRSpike.resolveAimedCombatTargetId();
+    if (hostile !== null) return hostile;
+    return aimed;
   }
 
   private static parseModuleObjectTargetId(id: string | null): number | null {
@@ -2707,6 +2723,7 @@ export class VRSpike {
     const lock = VRSpike.combatTargetLock.update({
       candidateTargetId: candidateContext?.nominatedTargetId ?? undefined,
       nowMilliseconds: timestamp,
+      aimOffsetsDegrees: VRSpike.combatAimOffsetsDegrees,
     });
     const lockedTargetId = VRSpike.parseModuleObjectTargetId(lock.lockedTargetId);
     // Re-resolve the soft lock even during aim-loss grace. The original
@@ -3125,7 +3142,10 @@ export class VRSpike {
 
   private static processForceInput(
     timestamp: number,
-    combatContext?: { onDirectionalForceGesture?(gesture: VRForceGesture): boolean },
+    combatContext?: {
+      onDirectionalForceGesture?(gesture: VRForceGesture): boolean;
+      readonly nominatedTargetAimPoint?: THREE.Vector3 | null;
+    },
   ): boolean {
     const inputFrame = VRSpike.latestInputFrame;
     const session = VRSpike.session;
@@ -3153,6 +3173,9 @@ export class VRSpike {
       // frame's melee input when the gesture was actually spent on a queued
       // Push/Pull; otherwise the same motion must still land as a swing.
       if (combatContext?.onDirectionalForceGesture) {
+        // The weapon hand must be on the locked target (locked by Allen,
+        // 2026-10-13); a flick with the hand turned away is a swing, not a push.
+        if (!VRSpike.isWeaponHandOnLockedTarget(inputFrame, combatContext.nominatedTargetAimPoint)) return false;
         return combatContext.onDirectionalForceGesture(gesture) === true;
       }
       legacyContext?.onForceGesture(gesture);
@@ -3164,6 +3187,16 @@ export class VRSpike {
       }
       return false;
     }
+  }
+
+  /** The weapon hand's ray within the Force cone of the locked target's aim point. */
+  private static isWeaponHandOnLockedTarget(
+    inputFrame: XRInputFrame,
+    targetPoint: THREE.Vector3 | null | undefined,
+  ): boolean {
+    const onTarget = isVRWeaponHandOnTarget(inputFrame.hands[VRSpike.dominantHand]?.targetRayPose, targetPoint);
+    if (!onTarget) console.info('[VR force] gesture refused: weapon hand off the locked target');
+    return onTarget;
   }
 
   /**
@@ -3195,6 +3228,9 @@ export class VRSpike {
         VRSpike.forceCastGestureController.reset();
         return false;
       }
+      // F14: the lock outlives the aim by 2.5 s, and a thrust with the sword
+      // at the floor cast on it. The weapon hand must be on the target.
+      if (!VRSpike.isWeaponHandOnLockedTarget(inputFrame, context.nominatedTargetAimPoint)) return false;
       return context.onForceCastGesture(gesture) === true;
     } catch (error) {
       if (!VRSpike.forceGestureErrorReported) {
@@ -3260,9 +3296,10 @@ export class VRSpike {
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['global', 'radial-wheel'])
       );
-      const menuPressed = actions.some((action) =>
+      const menuAction = actions.find((action) =>
         action.action === SemanticXRAction.Menu && action.hand !== VRSpike.dominantHand && action.pressed
       );
+      const menuPressed = menuAction !== undefined;
       // No hand filter: the binding table already scopes radial-wheel Select to
       // 'either', and the wheel's ray follows whichever hand aims at it. Testing
       // for 'left' here re-imposed the very restriction the binding drops.
@@ -3287,18 +3324,22 @@ export class VRSpike {
         const aimedTargetId = lockedTargetId ?? VRSpike.resolveAimedTargetIdForCombat();
         openingMenu = VRSpike.hooks?.createActionWheel?.(aimedTargetId) ?? null;
         VRSpike.radialFrozenTargetId = openingMenu ? aimedTargetId : null;
+        if (openingMenu && (menuAction?.hand === 'left' || menuAction?.hand === 'right')) {
+          VRSpike.radialOpenerHand = menuAction.hand;
+        }
       }
       VRSpike.radialMenuPressedLastFrame = menuPressed;
 
       const host = VRSpike.radialMenuHost;
       // Either hand may aim at the wheel. Binding the ray to one controller is
       // invisible to the player, so the other hand reads as a dead pointer.
-      const wheelSelectHand = actions.find((action) =>
-        action.action === SemanticXRAction.Select && action.pressed
-      )?.hand ?? null;
+      // But with both rays on it, the hand that opened it owns the hover, and
+      // whichever trigger is pulled picks what is highlighted: the weapon ray
+      // passing through the wheel took the highlight while the opener's
+      // trigger picked another wedge (Bolt and Anchor, round 17).
+      const opener: XRHandRole = VRSpike.radialOpenerHand ?? (VRSpike.dominantHand === 'right' ? 'left' : 'right');
       const rayResolution = wasOpen && host
-        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose),
-          wheelSelectHand === 'left' || wheelSelectHand === 'right' ? wheelSelectHand : null)
+        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose), null, opener)
         : null;
       if (!rayResolution) VRSpike.radialRayHand.reset();
       const rayHit = rayResolution?.hit ?? null;
@@ -5062,6 +5103,7 @@ export class VRSpike {
   }
 
   private static renderWorldTargetLabel(): void {
+    try { VRSpike.hooks?.hideCombatNonHostileReticles?.(); } catch { /* presentation only */ }
     const worldScene = VRSpike.scene;
     const menu = VRSpike.hooks?.getPanelContext?.().menu ?? null;
     const indicator = menu

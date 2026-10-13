@@ -90,6 +90,7 @@ import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
 import {
   describeVRCreaturePromptAction,
   hasCreatureWorldPromptAction,
+  isVRCombatNamePlateHidden,
   readVRCreaturePromptState,
 } from "@/vr/runtime/VRCreaturePromptRules";
 import {
@@ -4942,6 +4943,9 @@ export class GameState implements EngineContext {
         // A corpse is not a target: its name plate and brackets stayed up
         // after the kill (critic runs 11-12).
         if (typeof (object as any).isDead === 'function' && (object as any).isDead()) return null;
+        // In a fight only hostiles keep a plate (locked by Allen, 2026-10-13).
+        if (isVRCombatNamePlateHidden(GameState.getCurrentPlayer(), object as any,
+          (object.objectType & ModuleObjectType.ModuleCreature) !== 0)) return null;
         const position = reticle.getWorldPosition(new THREE.Vector3());
         return {
           id: String(object.id),
@@ -4953,6 +4957,23 @@ export class GameState implements EngineContext {
           name: resolveDisplayName(object.getName?.()) || 'Object',
           position,
         };
+      },
+      // The engine hovers the nearest interactable when nothing is selected,
+      // which mid-firefight is usually the Remote or a companion: its cyan
+      // brackets stayed up after its prompt and plate were dropped. In a fight
+      // only hostiles keep brackets (locked by Allen, 2026-10-13).
+      hideCombatNonHostileReticles: () => {
+        const cursor = GameState.CursorManager;
+        const actor = GameState.getCurrentPlayer();
+        const pairs: [ModuleObject | undefined, THREE.Object3D | undefined][] = [
+          [cursor.hoveredObject, cursor.reticle],
+          [cursor.selectedObject, cursor.reticle2],
+        ];
+        for (const [object, reticle] of pairs) {
+          if (!object || !reticle?.visible) continue;
+          if (isVRCombatNamePlateHidden(actor, object as any,
+            (object.objectType & ModuleObjectType.ModuleCreature) !== 0)) reticle.visible = false;
+        }
       },
       getWorldContext: () => {
         const area = GameState.module?.area;

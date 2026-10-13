@@ -22,6 +22,35 @@ const DEFAULT_CONFIGURATION: VRForceGestureConfiguration = {
   cooldownMilliseconds: 650,
 };
 
+/**
+ * How far off the locked target the weapon hand may point for a Force
+ * gesture to release. Locked by Allen (2026-10-13): the 2.5 s lock stays for
+ * the ring and the wheel, but a cast needs the weapon on the target.
+ */
+export const VR_FORCE_WEAPON_AIM_CONE_DEGREES = 30;
+
+/**
+ * Whether the weapon hand's ray points within `coneDegrees` of the target.
+ *
+ * The lock outlives the aim by 2.5 s so a swing crossing the target keeps it,
+ * and a thrust 1.2 s after the sword went to the floor cast Stun Droid on it
+ * (F14); a push flick with the hand turned 90 degrees away still pushed the
+ * locked trooper (Bolt, round 17, findings 3 and 4). Both gestures now ask
+ * this first. No target or no usable ray refuses.
+ */
+export function isVRWeaponHandOnTarget(
+  rayPose: XRWorldPose | null | undefined,
+  targetPoint: THREE.Vector3 | null | undefined,
+  coneDegrees: number = VR_FORCE_WEAPON_AIM_CONE_DEGREES,
+): boolean {
+  if (!rayPose || !targetPoint || rayPose.trackingState === 'unavailable') return false;
+  const toTarget = targetPoint.clone().sub(rayPose.position);
+  if (!Number.isFinite(toTarget.lengthSq()) || toTarget.lengthSq() < 1e-8) return false;
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(rayPose.orientation);
+  if (!Number.isFinite(forward.lengthSq()) || forward.lengthSq() < 1e-8) return false;
+  return THREE.MathUtils.radToDeg(forward.angleTo(toTarget)) <= coneDegrees;
+}
+
 /** Recognizes deliberate grip-modified forward/backward Force flicks. */
 export class VRForceGestureController {
   private readonly configuration: VRForceGestureConfiguration;

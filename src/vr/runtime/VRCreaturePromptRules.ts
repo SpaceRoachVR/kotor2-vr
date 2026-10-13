@@ -37,10 +37,18 @@ export interface VRCreaturePromptState {
   readonly isUseable: boolean;
   /** Whether the creature carries anything to take; only read for corpses. */
   readonly hasLoot: boolean;
+  /**
+   * The actor driving the prompt is in combat. Locked by Allen (2026-10-13):
+   * in a fight no creature offers Talk or Use, so no companion, Remote or
+   * corpse prompt (or its name plate) floats in the line of fire; "Talk:
+   * Remote" and "Talk: Bao-Dur" sat centre-view in a 4-trooper firefight
+   * (Anchor, round 17, finding 3). Hostiles never had a prompt.
+   */
+  readonly actorInCombat?: boolean;
 }
 
 export function hasCreatureWorldPromptAction(state: VRCreaturePromptState): boolean {
-  if (!state || state.isSelf) return false;
+  if (!state || state.isSelf || state.actorInCombat === true) return false;
   if (state.isDead) return state.isUseable === true && state.hasLoot === true;
   if (state.isHostile) return false;
   return state.hasConversation === true;
@@ -78,6 +86,7 @@ export function readVRCreaturePromptState(
       const held = target.hasInventory?.();
       return typeof held === 'number' ? held > 0 : held === true;
     }),
+    actorInCombat: safeFlag(() => (actor as { combatData?: { combatState?: unknown } } | null)?.combatData?.combatState),
   };
 }
 
@@ -103,6 +112,25 @@ export function describeVRCreaturePromptAction(
     // A corpse routes to actionUseObject — it is being searched, not spoken to.
     label: state.isDead ? `Use: ${displayName}` : `Talk: ${displayName}`,
   };
+}
+
+/**
+ * Whether the world target name plate must stay hidden for `target`.
+ *
+ * Locked by Allen (2026-10-13): while the actor is in combat only hostile
+ * creatures carry a plate. The prompt route already drops non-hostile
+ * candidates in combat (`actorInCombat`); this covers the engine-cursor
+ * fallback, which names whatever was last hovered or selected.
+ */
+export function isVRCombatNamePlateHidden(
+  actor: unknown,
+  target: { isHostile?: (actor: unknown) => unknown } | null | undefined,
+  targetIsCreature: boolean,
+): boolean {
+  if (!target || !targetIsCreature || (target as unknown) === actor) return false;
+  const inCombat = safeFlag(() => (actor as { combatData?: { combatState?: unknown } } | null)?.combatData?.combatState);
+  if (!inCombat) return false;
+  return !safeFlag(() => target.isHostile?.(actor));
 }
 
 function safeFlag(read: () => unknown): boolean {

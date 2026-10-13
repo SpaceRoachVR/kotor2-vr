@@ -4,6 +4,7 @@ import * as path from 'path';
 import {
   describeVRCreaturePromptAction,
   hasCreatureWorldPromptAction,
+  isVRCombatNamePlateHidden,
   readVRCreaturePromptState,
   VRCreaturePromptState,
 } from '@/vr/runtime/VRCreaturePromptRules';
@@ -39,6 +40,16 @@ describe('hasCreatureWorldPromptAction', () => {
   // and attack routing; a Talk prompt would offer an affordance combat overrides.
   test('declines a living hostile even when it has a conversation', () => {
     expect(hasCreatureWorldPromptAction(state({ isHostile: true }))).toBe(false);
+  });
+
+  // Locked by Allen, 2026-10-13: in a fight, party members and non-hostiles
+  // offer no Talk/Use prompt (and so no name plate). "Talk: Remote" and
+  // "Talk: Bao-Dur" floated centre-view in a 4-trooper firefight and took the
+  // trigger (Anchor finding 3).
+  test('offers nothing for any creature while the actor is in combat', () => {
+    expect(hasCreatureWorldPromptAction(state({ actorInCombat: true }))).toBe(false);
+    expect(hasCreatureWorldPromptAction(state({ actorInCombat: true, isDead: true }))).toBe(false);
+    expect(hasCreatureWorldPromptAction(state({ actorInCombat: false }))).toBe(true);
   });
 
   test('declines a living creature with no conversation', () => {
@@ -88,7 +99,14 @@ describe('readVRCreaturePromptState', () => {
       isUseable: true,
       hasConversation: true,
       hasLoot: true,
+      actorInCombat: false,
     });
+  });
+
+  test('reads whether the actor is in combat', () => {
+    expect(readVRCreaturePromptState({ combatData: { combatState: true } }, {}).actorInCombat).toBe(true);
+    expect(readVRCreaturePromptState({ combatData: { combatState: false } }, {}).actorInCombat).toBe(false);
+    expect(readVRCreaturePromptState(null, {}).actorInCombat).toBe(false);
   });
 
   test('an item count of zero is no loot', () => {
@@ -121,6 +139,7 @@ describe('readVRCreaturePromptState', () => {
       isUseable: false,
       hasConversation: false,
       hasLoot: false,
+      actorInCombat: false,
     });
   });
 
@@ -175,6 +194,31 @@ describe('the real 001EBO creatures', () => {
   });
 });
 
+describe('isVRCombatNamePlateHidden', () => {
+  const actor = { combatData: { combatState: true } };
+  const creature = (hostile: boolean) => ({ isHostile: () => hostile });
+
+  test('in combat a companion or other non-hostile shows no plate', () => {
+    expect(isVRCombatNamePlateHidden(actor, creature(false), true)).toBe(true);
+  });
+
+  test('hostile plates stay', () => {
+    expect(isVRCombatNamePlateHidden(actor, creature(true), true)).toBe(false);
+  });
+
+  test('out of combat nothing changes', () => {
+    expect(isVRCombatNamePlateHidden({ combatData: { combatState: false } }, creature(false), true)).toBe(false);
+  });
+
+  test('doors and placeables keep their plates', () => {
+    expect(isVRCombatNamePlateHidden(actor, creature(false), false)).toBe(false);
+  });
+
+  test('the actor itself is never hidden by this rule', () => {
+    expect(isVRCombatNamePlateHidden(actor, actor as never, true)).toBe(false);
+  });
+});
+
 /**
  * The wiring. GameState cannot be imported here — its module graph reaches the
  * whole engine — so these pin the two edits that make the rule reachable.
@@ -186,6 +230,16 @@ describe('GameState world-prompt wiring', () => {
     const body = source.slice(source.search(/function isStructurallyValidVRWorldPromptTarget/));
     const method = body.slice(0, body.indexOf('\n}'));
     expect(method).toContain('ModuleObjectType.ModuleCreature');
+  });
+
+  test('the world target plate hides non-hostile creatures in combat', () => {
+    const body = source.slice(source.indexOf('getWorldTargetIndicator: () => {'));
+    expect(body.slice(0, body.indexOf('getWorldContext:'))).toContain('isVRCombatNamePlateHidden(');
+  });
+
+  test('the engine cursor brackets hide on non-hostile creatures in combat', () => {
+    const body = source.slice(source.indexOf('hideCombatNonHostileReticles: () => {'));
+    expect(body.slice(0, body.indexOf('getWorldContext:'))).toContain('isVRCombatNamePlateHidden(');
   });
 
   test('a qualifying creature contributes a prompt action', () => {

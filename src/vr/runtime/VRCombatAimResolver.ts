@@ -70,18 +70,49 @@ const DEFAULT_TARGET_RADIUS_METRES = 0.5;
 const AIM_TARGET_HEIGHT_METRES = 0.9;
 
 /**
- * Nearest hostile along the aim ray that is also inside combat range, or null.
+ * Two hostiles whose barrel offsets differ by less than this overlap as far as
+ * a hand can tell; between those the nearer one along the ray wins, so the
+ * front droid of two standing in line is still the one acted on.
+ */
+export const VR_COMBAT_AIM_OVERLAP_DEGREES = 3;
+
+export interface VRCombatAimMeasurement {
+  /** The hostile the barrel is on, or null. */
+  readonly targetId: number | null;
+  /**
+   * Angle, in degrees, between the aim ray and every in-range hostile's body,
+   * whether or not the ray hits it. The target lock reads these to tell a
+   * deliberate move onto a new target from two bodies overlapping.
+   */
+  readonly offsetsDegrees: ReadonlyMap<number, number>;
+}
+
+/**
+ * The hostile under the barrel that is also inside combat range, or null.
  *
  * Range is measured across the ground rather than along the ray, matching
  * `isWithinVRCombatRange` exactly — the two must agree, or the wheel would
  * offer an attack that `getCombatContext` then refuses to nominate.
  */
 export function resolveVRCombatAimedTargetId(request: VRCombatAimRequest): number | null {
+  return measureVRCombatAim(request).targetId;
+}
+
+/**
+ * Among the hostiles the (assisted) ray hits, the one with the smallest angle
+ * to the barrel wins; within `VR_COMBAT_AIM_OVERLAP_DEGREES` of that, the
+ * nearest along the ray. The aim-assist sphere is wide enough that at 9 m a
+ * barrel on one trooper also grazes its neighbour, and nearest-along-the-ray
+ * alone handed the shot to whichever stood a step closer (Bolt, round 17).
+ */
+export function measureVRCombatAim(request: VRCombatAimRequest): VRCombatAimMeasurement {
+  const offsetsDegrees = new Map<number, number>();
+  const none = (): VRCombatAimMeasurement => ({ targetId: null, offsetsDegrees });
   const { rayPose, actorPosition, candidates, maxRangeMetres } = request;
   if (!Number.isFinite(maxRangeMetres) || maxRangeMetres <= 0) {
     throw new RangeError('maxRangeMetres must be finite and positive');
   }
-  if (!rayPose || !actorPosition || !Array.isArray(candidates)) return null;
+  if (!rayPose || !actorPosition || !Array.isArray(candidates)) return none();
 
   const assist = request.aimAssistRadiusMetres ?? 0;
   if (!Number.isFinite(assist) || assist < 0) {
@@ -89,15 +120,13 @@ export function resolveVRCombatAimedTargetId(request: VRCombatAimRequest): numbe
   }
 
   const origin = new THREE.Vector3().copy(rayPose.position);
-  if (!isFiniteVector(origin)) return null;
+  if (!isFiniteVector(origin)) return none();
   const direction = new THREE.Vector3(0, 0, -1)
     .applyQuaternion(rayPose.orientation)
     .normalize();
-  if (!isFiniteVector(direction) || direction.lengthSq() <= Number.EPSILON) return null;
+  if (!isFiniteVector(direction) || direction.lengthSq() <= Number.EPSILON) return none();
 
-  let bestId: number | null = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-
+  const hits: { id: number; distance: number; offset: number }[] = [];
   for (const candidate of candidates) {
     if (!candidate || !Number.isInteger(candidate.id) || !candidate.position) continue;
     if (!isFiniteVector(candidate.position)) continue;
@@ -119,16 +148,25 @@ export function resolveVRCombatAimedTargetId(request: VRCombatAimRequest): numbe
       candidate.position.y,
       candidate.position.z + AIM_TARGET_HEIGHT_METRES,
     );
+    const toCentre = centre.clone().sub(origin);
+    const offset = toCentre.lengthSq() > 1e-8
+      ? THREE.MathUtils.radToDeg(toCentre.angleTo(direction))
+      : 0;
+    if (Number.isFinite(offset)) offsetsDegrees.set(candidate.id, offset);
 
     const distance = intersectRaySphere(origin, direction, centre, radius);
-    if (distance === null) continue;
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestId = candidate.id;
-    }
+    if (distance === null || !Number.isFinite(offset)) continue;
+    hits.push({ id: candidate.id, distance, offset });
   }
+  if (!hits.length) return none();
 
-  return bestId;
+  const bestOffset = Math.min(...hits.map((hit) => hit.offset));
+  let best: { id: number; distance: number } | null = null;
+  for (const hit of hits) {
+    if (hit.offset > bestOffset + VR_COMBAT_AIM_OVERLAP_DEGREES) continue;
+    if (!best || hit.distance < best.distance) best = hit;
+  }
+  return { targetId: best ? best.id : null, offsetsDegrees };
 }
 
 /**

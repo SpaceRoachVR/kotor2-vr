@@ -1629,9 +1629,39 @@ describe('VRSpike XR loop ownership', () => {
 
     const consumed = (VRSpike as any).processForceInput(50_000, {
       onDirectionalForceGesture: (gesture: unknown) => { offered.push(gesture); return false; },
+      // The weapon ray (-Z) points at the target: the Force cone gate passes.
+      nominatedTargetAimPoint: new THREE.Vector3(0, 0, -4),
     });
 
     expect(offered).toEqual([expect.objectContaining({ kind: 'push' })]);
+    expect(consumed).toBe(false);
+  });
+
+  test('a push flick with the weapon hand turned away from the locked target is not offered (Bolt finding 4)', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    buttons[1] = { pressed: true, touched: true, value: 1 };
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    const turnedRight = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+    (VRSpike as any).latestInputFrame = {
+      head: { position: new THREE.Vector3(), orientation: new THREE.Quaternion(), trackingState: 'tracked' },
+      hands: {
+        right: {
+          pose: { position: new THREE.Vector3(), orientation: turnedRight, linearVelocity: new THREE.Vector3(0, 0, -2), trackingState: 'tracked' },
+          targetRayPose: { position: new THREE.Vector3(), orientation: turnedRight, trackingState: 'tracked' },
+        },
+      },
+    };
+    const offered: unknown[] = [];
+    (VRSpike as any).forceGestureController.reset?.();
+
+    const consumed = (VRSpike as any).processForceInput(60_000, {
+      onDirectionalForceGesture: (gesture: unknown) => { offered.push(gesture); return true; },
+      nominatedTargetAimPoint: new THREE.Vector3(0, 0, -4),
+    });
+
+    expect(offered).toEqual([]);
     expect(consumed).toBe(false);
   });
 
@@ -1685,6 +1715,19 @@ describe('VRSpike XR loop ownership', () => {
     (VRSpike as any).processCombatInput(1_000);
 
     expect(casts).toEqual([expect.objectContaining({ kind: 'cast', hand: 'left', towardTarget: true })]);
+  });
+
+  test('a palm thrust with the weapon pointed at the floor does not cast (F14)', () => {
+    const casts: unknown[] = [];
+    castFrame(new THREE.Vector3(0, 0, -2));
+    // The sword hangs straight down: its ray is 90 degrees off the target.
+    const down = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+    (VRSpike as any).latestInputFrame.hands.right.targetRayPose.orientation = down;
+    castHooks((gesture) => { casts.push(gesture); return true; });
+
+    (VRSpike as any).processCombatInput(1_000);
+
+    expect(casts).toEqual([]);
   });
 
   test('an off-hand thrust with the grip held is a two-handed swing claim, not a cast', () => {
@@ -2552,6 +2595,37 @@ describe('VRSpike XR loop ownership', () => {
 
       expect(activate).toHaveBeenCalledTimes(1);
     }
+  });
+
+  test('with both rays on the wheel, the hand that opened it drives the hover and the pick (Bolt finding 5)', () => {
+    // The weapon ray passes through the wheel while aimed at the enemy. The
+    // hover followed it ("Items") while the left trigger picked the left
+    // ray's wedge ("Force Powers"): the highlight lied about the pick.
+    const left = jest.fn();
+    const right = jest.fn();
+    const input = installRadialInput();
+    const host = installRadialHost();
+    host.resolveRay.mockImplementation((pose: unknown) =>
+      pose === input.leftTargetRayPose ? { kind: 'entry', index: 0 }
+        : pose === input.rightTargetRayPose ? { kind: 'entry', index: 1 } : null);
+    const wheel = actionWheel(left);
+    (wheel.pages[0].entries as any[]).push({
+      kind: 'action', id: 'right-action', label: 'Right Action', revalidate: () => true, activate: right,
+    });
+    VRSpike.hooks = basicHooks({ createActionWheel: () => wheel });
+
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+    (VRSpike as any).processRadialMenuInput();
+    const hovered = (VRSpike as any).radialMenuController.presentation?.hoveredId ?? null;
+    expect(hovered).toBe('test-action');
+
+    // Either trigger picks what is highlighted.
+    input.rightButtons[0] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+
+    expect(left).toHaveBeenCalledTimes(1);
+    expect(right).not.toHaveBeenCalled();
   });
 
   test('confirms the current ray hit once and clears the host before engine activation', () => {
