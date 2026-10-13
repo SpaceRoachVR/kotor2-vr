@@ -6955,7 +6955,7 @@ NWScriptDefK1.Actions = {
     action: function(this: NWScriptInstance, args: [ModuleObject, number]){
       if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleArea)){
         const audioEngine = AudioEngine.GetAudioEngine();
-        audioEngine.ambientAudioDayEmitter.setVolume(args[1] / 100);
+        audioEngine.ambientAudioNightEmitter.setVolume(args[1] / 100);
       }
     }
   },

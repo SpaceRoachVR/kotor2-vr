@@ -62,6 +62,8 @@ import { IVISRoom } from "@/interface/module/IVISRoom";
 import { BackgroundMusicMode } from "@/enums/audio/BackgroundMusicMode";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { detachPartyForModuleTransition } from "@/module/transition/detachPartyForModuleTransition";
+import { resolveAreaAmbientSlot } from "@/engine/AreaAmbientRules";
+
 
 type AreaScriptKeys = 'OnEnter'|'OnExit'|'OnHeartbeat'|'OnUserDefined';
 
@@ -790,14 +792,23 @@ export class ModuleArea extends ModuleObject {
     }
   }
 
-  ambientSoundPlay(){
+  /** The ambient emitter for the area's time of day: only one bed plays. */
+  activeAmbientEmitter(){
     const audioEngine = AudioEngine.GetAudioEngine();
-    audioEngine.ambientAudioDayEmitter.play();
+    return resolveAreaAmbientSlot(this) == 'night'
+      ? audioEngine.ambientAudioNightEmitter
+      : audioEngine.ambientAudioDayEmitter;
+  }
+
+  ambientSoundPlay(){
+    // The bed loops, as it does when the area loads.
+    this.activeAmbientEmitter().play(true);
   }
 
   ambientSoundStop(){
     const audioEngine = AudioEngine.GetAudioEngine();
     audioEngine.ambientAudioDayEmitter.stop();
+    audioEngine.ambientAudioNightEmitter.stop();
   }
 
   async ambientSoundDaySet(index: number){
@@ -815,7 +826,11 @@ export class ModuleArea extends ModuleObject {
       try{
         const data = await AudioLoader.LoadAmbientSound(ambientDay.resource);
         audioEngine.setAudioBuffer('AMBIENT_DAY', data.buffer as ArrayBuffer, ambientDay.resource);
-        audioEngine.ambientAudioDayEmitter.play(true);
+        // Day and night both used to start, doubling the bed (most areas name
+        // the same one twice).
+        if(resolveAreaAmbientSlot(this) == 'day'){
+          audioEngine.ambientAudioDayEmitter.play(true);
+        }
       }catch(e){
         // Named, and at warn level. It logged the whole 2DA row, so the report
         // read "Ambient Audio not found Object" and identified nothing. The
@@ -841,7 +856,9 @@ export class ModuleArea extends ModuleObject {
       try{
         const data = await AudioLoader.LoadAmbientSound(ambientDay.resource);
         audioEngine.setAudioBuffer('AMBIENT_NIGHT', data.buffer as ArrayBuffer, ambientDay.resource);
-        audioEngine.ambientAudioNightEmitter.play(true);
+        if(resolveAreaAmbientSlot(this) == 'night'){
+          audioEngine.ambientAudioNightEmitter.play(true);
+        }
       }catch(e){
         console.warn('Ambient audio not found:', ambientDay.resource, '- the area plays without it');
       } 
