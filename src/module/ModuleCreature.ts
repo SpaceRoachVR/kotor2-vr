@@ -1556,6 +1556,12 @@ export class ModuleCreature extends ModuleObject {
 
     if(this.excitedDuration > 0){
       this.excitedDuration -= (1000 * delta);
+      // Entering combat readies the weapon: a lightsaber ignites when the
+      // fight starts for its wielder (attacked, casting, or attacking), not
+      // only at its first physical attack roll. It powered up solely in
+      // CombatRound.calculateAttackDamage, so a wielder that opened with a
+      // Force power, or was attacked first, fought with an unlit blade.
+      if(!this.combatData.combatState) this.weaponPowered(true);
       this.combatData.combatState = true;
     }
 
