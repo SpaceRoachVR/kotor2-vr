@@ -89,6 +89,7 @@ export function snapshotVRActionMenuPanelEntries<TActor extends object, TTarget 
         // powers, so each entry also says whether it is one by the Abilities
         // screen's rule. See VRActionWheelEngineAction.isForcePower.
         isForcePower: classifyVRForcePower(entry.talent, dependencies.logger),
+        ...readVRSpellId(entry.talent),
         ...(typeof dependencies.isEntryUnavailable === 'function'
           ? { isUnavailable: () => dependencies.isEntryUnavailable!(snapshot.actor, entry) }
           : {}),
@@ -196,4 +197,11 @@ function reportMalformedSourceOnce(
   } catch {
     // Diagnostics must not make a malformed optional entry fatal.
   }
+}
+
+/** A spell entry's spells.2da row, for the wheel's droid-only and recent rules (Part F). */
+function readVRSpellId(talent: unknown): { readonly spellId?: number } {
+  if (classifyVRForcePower(talent) === undefined) return {};
+  const id = Number((talent as { id?: unknown }).id);
+  return Number.isInteger(id) && id >= 0 ? { spellId: id } : {};
 }

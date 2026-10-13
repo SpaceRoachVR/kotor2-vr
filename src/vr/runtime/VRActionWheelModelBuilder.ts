@@ -5,6 +5,7 @@ import {
   VRRadialContentItem,
   VRRadialMenuDefinition,
 } from './VRRadialMenuModel';
+import { isVRDroidOnlyForcePower, orderVRForcePowersByRecent } from './VRForcePowerWheelRules';
 
 export interface VRActionWheelEngineAction {
   readonly id: string;
@@ -22,6 +23,8 @@ export interface VRActionWheelEngineAction {
    * attacks such as droid shock arm show up under the force powers tab".
    */
   readonly isForcePower?: boolean;
+  /** The spells.2da row of a spell entry; absent for anything else. */
+  readonly spellId?: number;
   /**
    * Which `ActionMenuManager` panel this came from. Carried through because the
    * panel *is* the categorisation (ROADMAP 4.8): `UpdateActionMenus` puts Attack
@@ -83,6 +86,13 @@ export interface VRActionWheelBuildContext {
    * combat top level is exactly six items and never paginates.
    */
   readonly targetIsHostileCreature: boolean;
+  /**
+   * Part F (decision 8): the hostile target is a droid. Droid-only Force
+   * powers are offered only then; see VRForcePowerWheelRules.
+   */
+  readonly targetIsDroid?: boolean;
+  /** Spell ids of the powers used lately, most recent first: they lead the Force page. */
+  readonly recentForcePowerSpellIds?: readonly number[];
   readonly partyMembers: readonly VRActionWheelPartyMember[];
   /**
    * ROADMAP 3.21 — "Party → Attack My Target". Present only while the aimed
@@ -182,11 +192,14 @@ export function buildVRActionWheel(context: VRActionWheelBuildContext): VRRadial
     ...targetSpellActions.filter(isAbility),
   ];
   reportMissingAttacksOnce(hostile, context, attackActions.length);
-  const forcePowerActions = [
-    ...targetSpellActions.filter((action) => !isAbility(action)),
+  // Droid-only powers only at a droid; recently used powers first, so they
+  // are on page 1 (Part F, decision 8 of 2026-10-13).
+  const forcePowerActions = orderVRForcePowersByRecent([
+    ...targetSpellActions.filter((action) => !isAbility(action))
+      .filter((action) => context.targetIsDroid === true || !isVRDroidOnlyForcePower(action.spellId)),
     ...actionsFromPanel(context.selfActions, FORCE_POWER_PANEL_INDEX)
       .filter((action) => !isAbility(action)),
-  ];
+  ], context.recentForcePowerSpellIds);
 
   // Weapon swap without opening the equipment screen — reported as "there is
   // no quick and reliable way to weapon swap without opening the menu". Mid
