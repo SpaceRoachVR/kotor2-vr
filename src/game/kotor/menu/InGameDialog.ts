@@ -11,6 +11,8 @@ const LETTERBOX_HEIGHT = 100;
 
 /** Gap between the spoken line and the reply list in the VR world layout, in GUI pixels. */
 const VR_WORLD_MESSAGE_GAP = 12;
+/** Gap kept between the spoken line and the canvas edge. */
+const MESSAGE_EDGE_MARGIN = 8;
 /** Horizontal breathing room either side of the dialogue in the VR world crop. */
 const VR_WORLD_REGION_MARGIN = 48;
 /** Breathing room above the spoken line and below the last reply. */
@@ -244,27 +246,54 @@ export class InGameDialog extends GameMenu {
     }
   }
 
+  /** Where the text mesh sits relative to the label widget (y, GUI units). */
+  private getMessageTextOffsetY(): number {
+    const widget = this.LBL_MESSAGE.widget;
+    let offset = 0;
+    let node: THREE.Object3D | null = this.LBL_MESSAGE.text.mesh;
+    for (; node && node !== widget; node = node.parent) {
+      offset += node.position.y;
+    }
+    // Not attached under the widget yet: the label lays text out from its top.
+    return node === widget ? offset : this.LBL_MESSAGE.extent.height / 2;
+  }
+
   updateTextPosition(isListening: boolean = false) {
     this.lastTextListening = isListening;
     if (typeof this.LBL_MESSAGE.text.geometry !== 'undefined') {
       this.LBL_MESSAGE.text.geometry.computeBoundingBox();
       let bb = this.LBL_MESSAGE.text.geometry.boundingBox;
-      let height = Math.abs(bb.min.y) + Math.abs(bb.max.y);
       let width = Math.abs(bb.min.x) + Math.abs(bb.max.x);
+      // The text is not centred on the widget: its geometry hangs down from
+      // y = 0 and the mesh sits half the label's height above the widget, so a
+      // long line grows downward from a fixed top. Placing the widget as if the
+      // text were centred put the cinematic caption's first line on the top
+      // edge of the image (cut off in the theater) and ran long world-dialogue
+      // lines off the bottom of the panel (headset round 17).
+      const viewportHeight = GameState.ResolutionManager.getViewportHeight();
+      const offset = this.getMessageTextOffsetY();
+      const textTop = offset + bb.max.y;
+      const textBottom = offset + bb.min.y;
+      const edge = viewportHeight / 2 - MESSAGE_EDGE_MARGIN;
+      let y: number;
       if (isListening) {
-        this.LBL_MESSAGE.widget.position.y = -GameState.ResolutionManager.getViewportHeight() / 2 + 50;
+        // Centred 50 above the bottom edge, never past it.
+        y = Math.max(-viewportHeight / 2 + 50 - (textTop + textBottom) / 2, -edge - textBottom);
       } else if (this.vrWorldLayout) {
         // Directly above the reply list, and never above the middle of the
         // canvas: the VR panel shows only the lower half.
         const repliesTop = this.LB_REPLIES.widget.position.y + this.LB_REPLIES.extent.height / 2;
-        this.LBL_MESSAGE.widget.position.y = Math.min(
-          repliesTop + VR_WORLD_MESSAGE_GAP + height / 2,
-          -height / 2 - VR_WORLD_MESSAGE_GAP,
+        y = Math.min(
+          repliesTop + VR_WORLD_MESSAGE_GAP - textBottom,
+          -VR_WORLD_MESSAGE_GAP - textTop,
         );
+        y = Math.max(y, -edge - textBottom);
       } else {
-        this.LBL_MESSAGE.widget.position.y = GameState.ResolutionManager.getViewportHeight() / 2 - 50;
+        // Centred 50 below the top edge, never past it.
+        y = Math.min(viewportHeight / 2 - 50 - (textTop + textBottom) / 2, edge - textTop);
       }
-      this.LBL_MESSAGE.box = new THREE.Box2(new THREE.Vector2(this.LBL_MESSAGE.widget.position.x - width / 2, this.LBL_MESSAGE.widget.position.y - height / 2), new THREE.Vector2(this.LBL_MESSAGE.widget.position.x + width / 2, this.LBL_MESSAGE.widget.position.y + height / 2));
+      this.LBL_MESSAGE.widget.position.y = y;
+      this.LBL_MESSAGE.box = new THREE.Box2(new THREE.Vector2(this.LBL_MESSAGE.widget.position.x - width / 2, y + textBottom), new THREE.Vector2(this.LBL_MESSAGE.widget.position.x + width / 2, y + textTop));
     }
   }
 
