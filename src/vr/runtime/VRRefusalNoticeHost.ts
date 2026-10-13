@@ -37,8 +37,10 @@ export function describeVRRefusal(shape: string): string | null {
   if (s.includes('no locked hostile') || s.includes('no target')) return 'No target';
   if (s.includes('quick save failed')) return 'Save failed';
   if (s.includes('quick save')) return "Can't save now";
-  if (s.includes('swing target lost')) return 'Target lost';
-  if (s.includes('swing expired')) return 'Swing expired';
+  // A swing or stroke that does nothing shows no text (round 18: "Swing
+  // expired" and "Target lost" broke immersion). It whooshes, or at most
+  // plays the soft refused tick.
+  if (s.includes('swing') || s.includes('stroke')) return null;
   if (s.includes('target gone')) return 'Target gone';
   if (s.includes('item unavailable')) return 'Item no longer in your pack';
   if (s.includes('item cast rejected')) return "Couldn't use that";

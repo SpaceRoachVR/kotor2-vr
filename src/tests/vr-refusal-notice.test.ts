@@ -12,7 +12,9 @@ describe('refusals say why', () => {
     expect(describeVRRefusal('refused: no locked hostile')).toBe('No target');
     expect(describeVRRefusal('refused: quick save')).toBe("Can't save now");
     expect(describeVRRefusal('refused: quick save failed')).toBe('Save failed');
-    expect(describeVRRefusal('refused: swing target lost')).toBe('Target lost');
+    // Round 18: a stroke that does nothing shows no text.
+    expect(describeVRRefusal('refused: swing target lost')).toBeNull();
+    expect(describeVRRefusal('refused: swing expired')).toBeNull();
     expect(describeVRRefusal('cancelled: armed item no longer in the inventory')).toBe('Item no longer in your pack');
   });
 

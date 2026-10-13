@@ -5,19 +5,22 @@ const RING_SIZE_METRES = 0.05;
 const RING_LOCAL_OFFSET = new THREE.Vector3(0, 0, -0.12);
 
 /**
- * Diegetic round-timer indicator (ROADMAP 3.5): a small ring on the weapon
- * hilt itself rather than a HUD element, filling as the next roll-eligible
- * swing/shot becomes available. Presented as a child of the right-hand
+ * Diegetic round indicator (ROADMAP 3.5): a small ring on the weapon hilt
+ * itself rather than a HUD element. Presented as a child of the right-hand
  * controller anchor so it tracks the weapon with no extra per-frame
  * transform work.
+ *
+ * Round 18 (player-paced rounds): it is a quiet "ready" glow, not a clock to
+ * wait on. The player's stroke begins the round, so while the next round is
+ * ready in a fight the ring glows softly; while a round runs it is gone,
+ * apart from the T-B pips for attacks the round still holds.
  */
 export class VRHiltTimerHost {
   readonly object: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private readonly canvas: HTMLCanvasElement;
   private readonly context: CanvasRenderingContext2D;
   private readonly texture: THREE.CanvasTexture;
-  private lastDrawnReadiness = -1;
-  private lastDrawnArmed = false;
+  private lastDrawnReady: boolean | null = null;
   private lastDrawnPips = '';
 
   constructor(private readonly handAnchor: THREE.Object3D) {
@@ -48,32 +51,28 @@ export class VRHiltTimerHost {
   }
 
   /**
-   * `readiness` is clamped to [0, 1]; hides the ring entirely at 1 (ready,
-   * nothing to show). `armed` (ROADMAP 3.12) draws a full amber ring while a
-   * buffered swing waits for the round to open. `pips` (T-B) are the attacks
-   * the running round still holds: white for the weapon hand, violet for the
-   * off hand's weapon.
+   * `ready` draws the soft glow (the next round is ready, in a fight). `pips`
+   * (T-B) are the attacks the running round still holds: white for the
+   * weapon hand, violet for the off hand's weapon. Neither: hidden.
    */
-  present(readiness: number, armed = false, pips: VRRoundAttackPips | null = null): void {
-    const clamped = Number.isFinite(readiness) ? Math.min(1, Math.max(0, readiness)) : 1;
+  present(ready: boolean, pips: VRRoundAttackPips | null = null): void {
     const attackPips = normalizeVRRoundAttackPips(pips);
     const pipsKey = `${attackPips.main}/${attackPips.off}`;
-    if (clamped >= 1 && !armed && pipsKey === '0/0') {
+    if (ready !== true && pipsKey === '0/0') {
       this.object.visible = false;
       return;
     }
     this.object.visible = true;
-    if (armed === this.lastDrawnArmed && pipsKey === this.lastDrawnPips &&
-      Math.abs(clamped - this.lastDrawnReadiness) < 0.02) return;
-    this.lastDrawnReadiness = clamped;
-    this.lastDrawnArmed = armed;
+    if (ready === this.lastDrawnReady && pipsKey === this.lastDrawnPips) return;
+    this.lastDrawnReady = ready === true;
     this.lastDrawnPips = pipsKey;
-    this.draw(clamped, armed, attackPips);
+    this.draw(ready === true, attackPips);
   }
 
   /** What the ring shows now, for probes. */
-  get drawnState(): Readonly<{ visible: boolean; readiness: number; armed: boolean; pips: string }> {
-    return { visible: this.object.visible, readiness: this.lastDrawnReadiness, armed: this.lastDrawnArmed, pips: this.lastDrawnPips };
+  get drawnState(): Readonly<{ visible: boolean; ready: boolean; pips: string }> {
+    const visible = this.object.visible;
+    return { visible, ready: visible && this.lastDrawnReady === true, pips: visible ? this.lastDrawnPips : '0/0' };
   }
 
   clear(): void {
@@ -87,31 +86,23 @@ export class VRHiltTimerHost {
     this.texture.dispose();
   }
 
-  private draw(readiness: number, armed: boolean, pips: VRRoundAttackPips): void {
+  private draw(ready: boolean, pips: VRRoundAttackPips): void {
     const size = this.canvas.width;
     const center = size / 2;
     const radius = size * 0.4;
     this.context.clearRect(0, 0, size, size);
 
-    this.context.strokeStyle = 'rgba(40, 40, 40, 0.65)';
-    this.context.lineWidth = size * 0.12;
-    this.context.beginPath();
-    this.context.arc(center, center, radius, 0, Math.PI * 2);
-    this.context.stroke();
-
-    // An armed swing keeps the countdown visible, drawn in amber, with an
-    // amber centre dot for "a swing is waiting". A full amber ring hid how
-    // long the wait was (critic run 4).
-    this.context.strokeStyle = armed ? '#ffb347' : readiness >= 1 ? '#5cffb1' : '#62e8ff';
-    this.context.lineWidth = size * 0.12;
-    this.context.beginPath();
-    this.context.arc(center, center, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * readiness);
-    this.context.stroke();
-    if (armed) {
-      this.context.fillStyle = '#ffb347';
+    if (ready) {
+      // Quiet: a thin, soft-edged green ring at low strength, no countdown.
+      this.context.save();
+      this.context.shadowColor = 'rgba(92, 255, 177, 0.55)';
+      this.context.shadowBlur = size * 0.12;
+      this.context.strokeStyle = 'rgba(92, 255, 177, 0.42)';
+      this.context.lineWidth = size * 0.07;
       this.context.beginPath();
-      this.context.arc(center, center, size * 0.14, 0, Math.PI * 2);
-      this.context.fill();
+      this.context.arc(center, center, radius, 0, Math.PI * 2);
+      this.context.stroke();
+      this.context.restore();
     }
     // One dot per attack the round still holds, in a row under the centre:
     // a stroke spends the leftmost of its hand's colour.

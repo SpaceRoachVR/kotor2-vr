@@ -13,7 +13,10 @@ export type VRRefusalTickReason =
   | 'force-gesture-off-target'
   | 'trigger-cannot-serve-head'
   | 'queue-full'
-  | 'pull-did-nothing';
+  | 'pull-did-nothing'
+  // A swing or shot at a target out of weapon reach (round 18: it used to
+  // say "Too far: step in"; a stroke that does nothing shows no text).
+  | 'stroke-out-of-reach';
 
 /** No two refusal ticks closer than this, whatever their reasons. */
 export const VR_REFUSAL_TICK_MIN_GAP_MS = 700;

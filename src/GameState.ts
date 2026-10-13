@@ -156,7 +156,7 @@ function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
   }
   return vrSwoopGripPoses;
 }
-import { VRCombatTempoGate, type VRCombatTempoGateReason, resolveVRRoundReadiness, resolveVRRoundOpen, VRRoundReadinessLatch } from "@/vr/runtime/VRCombatTempoGate";
+import { VRCombatTempoGate, type VRCombatTempoGateReason } from "@/vr/runtime/VRCombatTempoGate";
 import { addSwoopRideListener, type SwoopRideEventType } from "@/module/minigame/SwoopRideEvents";
 import { VRCombatSwingBuffer, VRHeldSwingLifetime, isVRCombatSwingBufferable, isVRFightOngoing } from "@/vr/runtime/VRCombatSwingBuffer";
 import { VRRecentForcePowers } from "@/vr/runtime/VRForcePowerWheelRules";
@@ -173,7 +173,7 @@ import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 import { CombatActionType } from "@/enums/combat/CombatActionType";
 import { CombatRoundAction } from "@/combat/CombatRoundAction";
 import { CombatRound } from "@/combat/CombatRound";
-import { resolveVRRoundStroke, normalizeVRRoundAttackPips, NO_VR_ROUND_ATTACK_PIPS, type VRRoundAttackPips, type VRStrokeHand } from "@/vr/runtime/VRRoundStrokeBudget";
+import { resolveVRRoundStroke, resolveVRPlayerRoundUntilReadyMs, shouldTakeOverVRPlayerRound, normalizeVRRoundAttackPips, NO_VR_ROUND_ATTACK_PIPS, VR_SILENT_HOLD_MAX_MILLISECONDS, type VRRoundAttackPips, type VRStrokeHand } from "@/vr/runtime/VRRoundStrokeBudget";
 import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
 import {
   buildVRActionWheel,
@@ -473,8 +473,12 @@ const vrCreatureLocomotionAdapter = new CreatureLocomotionAdapter<ModuleCreature
   retainVRInPlaceSkillActionsWhileMoving,
 );
 let vrCombatIssuedTargetId: number | null = null;
-/** When a stroke last dispatched the attack that opens the player's round (T-B). */
-let vrRoundOpeningDispatchedAt: number | null = null;
+/**
+ * Player-paced rounds (round 18): when the player's own last round began, in
+ * game time (GameState.time, which stops while the game is paused), and the
+ * round action that began it. The next round is available 3 s after it.
+ */
+let vrOwnRound: { actorId: number; beganAtMs: number; action: unknown } | null = null;
 /** Phase G1: the object id VR last selected through CursorManager, if any. */
 let vrCursorSelectedTargetId: number | null = null;
 let vrCursorSelectionErrorReported = false;
@@ -824,14 +828,10 @@ function getVRActionIcon(entry: VRActionMenuEntry): string | undefined {
 
 const vrCombatIntentQueue = new VRCombatIntentQueue();
 const vrCombatTempoGate = new VRCombatTempoGate();
-/** ROADMAP 3.12 — one swing held while the round is busy. */
+/** Round 18 — the one stroke silently held for a round a moment away. */
 const vrCombatSwingBuffer = new VRCombatSwingBuffer();
-const vrRoundReadinessLatch = new VRRoundReadinessLatch();
-/**
- * A held swing belongs to the next round opening only: it releases within
- * 0.5 s of it or drops (round 17, locked). Game time, so a pause keeps it.
- */
-const vrHeldSwingLifetime = new VRHeldSwingLifetime();
+/** The held stroke lands within a frame or two, or drops silently. Game time, so a pause keeps it. */
+const vrHeldSwingLifetime = new VRHeldSwingLifetime(VR_SILENT_HOLD_MAX_MILLISECONDS);
 /** The grenade last scheduled into a round, re-armed if the round rejects it. */
 let vrLastThrownGrenade: { actorId: number; sourceKey: string; itemId: unknown } | null = null;
 const vrArmedGrenadeState = new VRArmedGrenadeState();
@@ -955,7 +955,7 @@ function resetVREmbodiedCombatState(): void {
   vrCombatQueueActorId = null;
   vrCombatQueueWeaponSignature = null;
   vrCombatIssuedTargetId = null;
-  vrRoundOpeningDispatchedAt = null;
+  vrOwnRound = null;
 }
 
 function observeVREmbodiedCombatActor(actor: ModuleCreature): void {
@@ -1399,7 +1399,7 @@ function getVREmbodiedTempoResult(
       roundPaused: round.roundPaused === true,
       scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
       playerActionCommitted: round.action !== undefined,
-      // A round's later attacks are spent by resolveVRRoundStrokeBudget
+      // A round's later attacks are spent by resolveVRPlayerStroke
       // before the gate is asked; the gate never opens for them, so a held
       // extra can never also take the intent queue's head.
       additionalActionWindowOpen: false,
@@ -1439,6 +1439,7 @@ function dispatchVREmbodiedCombatInput(
   actor: ModuleCreature,
   targetId: string | null,
   input: VRCombatRequiredInput,
+  fromHold = false,
 ): boolean {
   const head = vrCombatIntentQueue.getHead();
   // A trigger pull with a trigger-cast Force power at the head casts it,
@@ -1447,47 +1448,46 @@ function dispatchVREmbodiedCombatInput(
   if (input === 'dominant-trigger' && head?.kind === 'force-power' && head.requiredInput === 'dominant-trigger') {
     return dispatchVRForceCastGesture(actor, targetId);
   }
-  // T-B: a stroke inside the player's own round spends the round's next held
-  // attack (Flurry / Rapid Shot's extra, a second blade), or does nothing when
-  // the round has none left and is still young - a brisk return to guard
-  // used to be held for the next opening and bought an attack every round.
-  const budget = resolveVRRoundStrokeBudget(actor, targetId, 'main');
-  if (budget === 'spent') return true;
-  if (budget === 'absorbed') return false;
+  // Player-paced rounds (round 18): an idle player's stroke begins the round
+  // at once. Inside a running round a stroke spends the round's next held
+  // attack (T-B: Flurry / Rapid Shot's extra, a second blade) or only
+  // whooshes; one made a moment before the next round is ready is held for
+  // it, silently. Nothing about a stroke that does nothing is shown.
+  const decision = resolveVRPlayerStroke(actor, targetId, 'main');
+  if (decision === 'spent') return true;
+  if (decision === 'whoosh') return false;
   const initialTarget = resolveVRLiveCombatTarget(actor, targetId);
   const headLabel = head ? `${head.label}(${head.requiredInput},${head.weaponSignature})` : 'none';
-  // One physical swing is one attack. The controller emits one event per
-  // stroke, so every event here is a stroke of its own: a fast backhand
-  // after the stroke just taken is held for the next round like any other.
-  // A 600 ms window here used to drop it silently, and the next round sat
-  // idle (round 17: 8 of 8 forehand-backhand pairs gave one attack).
-  const nowMs = performance.now();
-  const tempo = getVREmbodiedTempoResult(actor, initialTarget);
-  if (!tempo.eligible) {
-    // ROADMAP 3.12: a swing made while the round is busy waits for it to open
-    // instead of being thrown away. Only a swing at a live target in reach is
-    // held; the buffer itself refuses reasons that waiting cannot fix.
-    if (initialTarget && (input === 'dominant-swing' || input === 'dominant-trigger') &&
-      vrCombatSwingBuffer.offer({
+  if (decision === 'hold') {
+    if (initialTarget && (input === 'dominant-swing' || input === 'dominant-trigger')) {
+      vrCombatSwingBuffer.hold({
         actorId: String(actor.id),
         targetId: String(initialTarget.id),
         input,
         weaponSignature: resolveVRCombatWeaponSignature(actor),
-      }, tempo.reason)) {
+      });
       vrHeldSwingLifetime.restart();
-      return false;
+      reportVRRoundStrokeOnce('held', 'the next round is a moment away');
     }
+    return false;
+  }
+  // A duel partner's attack begins the player's round too and holds it for
+  // half a round. The player's 3 s are up, so the stroke ends that borrowed
+  // round and begins the player's own - but only for a stroke that can land.
+  if (initialTarget) takeOverVRPlayerRoundIfBorrowed(actor);
+  const tempo = getVREmbodiedTempoResult(actor, initialTarget);
+  if (!tempo.eligible) {
     let distance = 'n/a';
     try {
       const locked = resolveVRLockedHostile(actor, targetId);
       if (locked) distance = distanceVRCombat2D(actor, locked).toFixed(1);
     } catch { /* diagnostic only */ }
-    // Out of reach said nothing (critic run 18: a swing at a droid 2.9 m
-    // away, reach 2.5, was refused silently).
-    if ((input === 'dominant-swing' || input === 'dominant-trigger') && /unavailable|range|reach/i.test(String(tempo.reason))
-      && distance !== 'n/a' && Number(distance) > Number(resolveVRCombatRange(actor)) && nowMs - vrSwingTooFarNoticeAt > 3000) {
-      vrSwingTooFarNoticeAt = nowMs;
-      try { VRSpike.showNotice(`Too far: step in (${distance} m)`, 1500); } catch { /* notice only */ }
+    // Out of reach: the soft refused tick, no text (round 18: "Too far: step
+    // in" was a notice for a stroke that does nothing). A held stroke that
+    // finds its target gone says nothing at all.
+    if (!fromHold && (input === 'dominant-swing' || input === 'dominant-trigger') && distance !== 'n/a' &&
+      Number(distance) > Number(resolveVRCombatRange(actor))) {
+      tickVRRefusal('stroke-out-of-reach');
     }
     reportVRSwingOutcomeOnce(
       `refused input=${input} reason=${tempo.reason} head=${head ? head.label : 'none'}`,
@@ -1527,7 +1527,6 @@ function dispatchVREmbodiedCombatInput(
     result.state === 'intent-skipped-invalid' || result.state === 'deferred-input-mismatch' ||
     result.state === 'deferred-weapon-mismatch') {
     vrCombatIssuedTargetId = initialTarget.id;
-    vrRoundOpeningDispatchedAt = nowMs;
     return true;
   }
   return false;
@@ -1535,46 +1534,126 @@ function dispatchVREmbodiedCombatInput(
 
 const reportedVRRoundStrokes = new Set<string>();
 
+function vrGameNowMs(): number {
+  const seconds = Number(GameState.time);
+  return Number.isFinite(seconds) ? seconds * 1000 : 0;
+}
+
 /**
- * T-B (locked decision 2): each retail attack of a round needs its own
- * stroke. The engine round holds the player's later attacks
- * (CombatRound.holdsLaterAttacks); a stroke at the round's own target spends
- * the next one its hand can make. With nothing left and the round still
- * young, the stroke is absorbed: its whoosh plays, nothing rolls, and it is
- * not held for the next opening. 'pass' leaves the stroke to the usual
- * route: open a round, or wait for the next opening.
+ * Notes when the player's own round began. Run every VR combat frame: a round
+ * the player began runs on the player's own pause (an attack, a Force power,
+ * a grenade or a medpac), with a new round action each time.
  */
-function resolveVRRoundStrokeBudget(
+function observeVRPlayerRound(actor: ModuleCreature): void {
+  const round = actor.combatRound;
+  if (!round) return;
+  if (vrOwnRound && vrOwnRound.actorId !== actor.id) vrOwnRound = null;
+  if (round.roundStarted === true && round.roundPaused === true && round.roundPausedBy === actor &&
+    round.action !== undefined && round.action !== vrOwnRound?.action) {
+    const into = Number(round.pauseLength) - Number(round.pauseTimer);
+    vrOwnRound = {
+      actorId: actor.id,
+      beganAtMs: vrGameNowMs() - (Number.isFinite(into) && into > 0 ? into : 0),
+      action: round.action,
+    };
+  }
+}
+
+interface VRPlayerRoundState {
+  /** How long until the player may begin the next round; 0 is now. */
+  readonly untilReadyMs: number;
+  /** Something of the player's own is committed for the coming round, not yet begun. */
+  readonly openingPending: boolean;
+  /** The engine round is running on the player's own pause. */
+  readonly pausedBySelf: boolean;
+}
+
+function resolveVRPlayerRoundState(actor: ModuleCreature): VRPlayerRoundState {
+  observeVRPlayerRound(actor);
+  const round = actor.combatRound;
+  if (!round) return { untilReadyMs: 0, openingPending: false, pausedBySelf: false };
+  const pausedBySelf = round.roundStarted === true && round.roundPaused === true && round.roundPausedBy === actor;
+  const scheduled = Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0;
+  return {
+    untilReadyMs: resolveVRPlayerRoundUntilReadyMs({
+      ownPauseRemainingMs: pausedBySelf ? Number(round.pauseTimer) : null,
+      sinceOwnRoundBeganMs: vrOwnRound && vrOwnRound.actorId === actor.id ? vrGameNowMs() - vrOwnRound.beganAtMs : null,
+    }),
+    openingPending: scheduled > 0 || (round.roundStarted !== true && round.action !== undefined),
+    pausedBySelf,
+  };
+}
+
+/**
+ * Ends a round a duel partner began on the player (ActionPhysicalAttacks'
+ * dueling branch holds it for half a round) once the player's own 3 s are
+ * up, so the player's next action begins at once instead of waiting it out.
+ * The player's own round is never cut short. Ending it runs no script for the
+ * controlled character (ModuleCreature.onCombatRoundEnd).
+ */
+function takeOverVRPlayerRoundIfBorrowed(actor: ModuleCreature): boolean {
+  const round = actor.combatRound;
+  if (!round) return false;
+  const state = resolveVRPlayerRoundState(actor);
+  if (!shouldTakeOverVRPlayerRound({ roundStarted: round.roundStarted === true, pausedBySelf: state.pausedBySelf, untilReadyMs: state.untilReadyMs })) {
+    return false;
+  }
+  const by: any = round.roundPausedBy;
+  reportVRRoundStrokeOnce('took over a borrowed round', `paused by ${by?.getTag?.() ?? 'nobody'} left=${Math.round(Number(round.pauseTimer))} ms`);
+  round.endCombatRound();
+  return true;
+}
+
+/**
+ * Player-paced rounds (round 18) and T-B (locked decision 2): the stroke
+ * opens the player's round when it is ready; inside a running round it
+ * spends the next held attack its hand can make (CombatRound.holdsLaterAttacks,
+ * at the round's own target) or does nothing; a moment before the next round
+ * it is held for it.
+ */
+function resolveVRPlayerStroke(
   actor: ModuleCreature,
   targetId: string | null,
   hand: VRStrokeHand,
-): 'spent' | 'absorbed' | 'pass' {
+): 'spent' | 'whoosh' | 'hold' | 'open' {
   const round = actor.combatRound;
-  if (!round) return hand === 'off' ? 'absorbed' : 'pass';
+  if (!round) return hand === 'off' ? 'whoosh' : 'open';
   const target = resolveVRLiveCombatTarget(actor, targetId);
   const atRoundTarget = !!target && round.action?.target === target;
-  const nowMs = performance.now();
-  const ownRoundRunning = round.roundStarted === true && round.action !== undefined;
-  const openingPending = !round.roundStarted &&
-    (round.action !== undefined || (Array.isArray(round.scheduledActionList) && round.scheduledActionList.length > 0));
+  const state = resolveVRPlayerRoundState(actor);
   const decision = resolveVRRoundStroke({
     hand,
-    heldAttacks: atRoundTarget ? round.heldAttackCount(hand) : 0,
-    ownRoundRemainingMs: ownRoundRunning
-      ? Math.max(0, round.roundPaused ? Number(round.pauseTimer) : Number(round.roundLength) - Number(round.timer))
-      : null,
-    openingAgeMs: openingPending && vrRoundOpeningDispatchedAt !== null ? nowMs - vrRoundOpeningDispatchedAt : null,
+    heldAttacks: atRoundTarget && typeof round.heldAttackCount === 'function' ? round.heldAttackCount(hand) : 0,
+    untilReadyMs: state.untilReadyMs,
+    openingPending: state.openingPending,
   });
+  reportVRNearReadyStroke(hand, decision, state.untilReadyMs);
   if (decision === 'spend') {
     const result = round.resolveHeldAttack(actor, hand);
     reportVRRoundStrokeOnce(`spent hand=${hand}`, `result=${result} left main=${round.heldAttackCount('main')} off=${round.heldAttackCount('off')}`);
-    return result === undefined ? 'absorbed' : 'spent';
+    return result === undefined ? 'whoosh' : 'spent';
   }
-  if (decision === 'absorb') {
-    reportVRRoundStrokeOnce(`absorbed hand=${hand}`, ownRoundRunning ? 'round has no attack left for this hand' : 'no round of its own');
-    return 'absorbed';
+  if (decision === 'whoosh') {
+    reportVRRoundStrokeOnce(`whoosh hand=${hand}`, state.openingPending
+      ? 'the coming round has its action'
+      : `round has no attack left for this hand; ready in ${Math.round(state.untilReadyMs)} ms`);
+    return 'whoosh';
   }
-  return 'pass';
+  return decision;
+}
+
+/**
+ * TEMPORARY (headset round 18, the silent hold): every weapon-hand stroke
+ * that comes within 800 ms of the next round being ready, with how early it
+ * was and what it did, so the headset's own timing can settle
+ * VR_SILENT_HOLD_MILLISECONDS (tuned on emulator strokes: 48-280 ms early).
+ * At most 40 a session.
+ */
+let vrNearReadyStrokesReported = 0;
+function reportVRNearReadyStroke(hand: VRStrokeHand, decision: string, untilReadyMs: number): void {
+  if (hand !== 'main' || !(untilReadyMs > 0) || untilReadyMs > 800 || vrNearReadyStrokesReported >= 40) return;
+  vrNearReadyStrokesReported += 1;
+  console.info(`[VR combat stroke] TEMPORARY near-ready ${decision} early=${Math.round(untilReadyMs)} ms`);
 }
 
 function reportVRRoundStrokeOnce(shape: string, detail: string): void {
@@ -1593,22 +1672,19 @@ function dispatchVROffhandCombatInput(actor: ModuleCreature, targetId: string | 
   const round = actor.combatRound;
   const target = resolveVRLiveCombatTarget(actor, targetId);
   const offHeld = !!round && !!target && round.action?.target === target ? round.heldAttackCount('off') : 0;
-  if (input === 'stroke' || offHeld > 0) return resolveVRRoundStrokeBudget(actor, targetId, 'off');
+  if (input === 'stroke' || offHeld > 0) return resolveVRPlayerStroke(actor, targetId, 'off') === 'spent' ? 'spent' : 'absorbed';
   // A pull with no off-hand attack to spend: either trigger opens a round,
-  // or late in one waits for the next opening, as before - but never takes
-  // an attack the round holds for the weapon hand.
+  // or is held a moment for the next one, as the weapon hand's would be -
+  // but never takes an attack the round holds for the weapon hand.
   if (round && round.heldAttackCount('main') > 0) return 'absorbed';
+  const state = resolveVRPlayerRoundState(actor);
   const asWeaponHand = resolveVRRoundStroke({
     hand: 'main',
     heldAttacks: 0,
-    ownRoundRemainingMs: round && round.roundStarted === true && round.action !== undefined
-      ? Math.max(0, round.roundPaused ? Number(round.pauseTimer) : Number(round.roundLength) - Number(round.timer))
-      : null,
-    openingAgeMs: round && !round.roundStarted && vrRoundOpeningDispatchedAt !== null &&
-      (round.action !== undefined || (Array.isArray(round.scheduledActionList) && round.scheduledActionList.length > 0))
-      ? performance.now() - vrRoundOpeningDispatchedAt : null,
+    untilReadyMs: state.untilReadyMs,
+    openingPending: state.openingPending,
   });
-  return asWeaponHand === 'absorb' ? 'absorbed' : 'pass';
+  return asWeaponHand === 'whoosh' ? 'absorbed' : 'pass';
 }
 
 /** The round's held attacks at its own, still-live target, for the hilt pips. */
@@ -1624,8 +1700,6 @@ function resolveVRRoundAttackPips(actor: ModuleCreature): VRRoundAttackPips {
  * player outside VR, rolls the whole round at once (retail).
  */
 CombatRound.holdsLaterAttacks = (owner) => VRSpike.isPresenting === true && owner === GameState.getCurrentPlayer();
-
-let vrSwingTooFarNoticeAt = Number.NEGATIVE_INFINITY;
 
 /**
  * ROADMAP 3.16 — the space a melee swing must pass through to count: a
@@ -1752,82 +1826,69 @@ const VR_COMBAT_TARGET_DEFAULT_RADIUS_METRES = 0.5;
 const reportedVRSwingBufferDrops = new Set<string>();
 
 /**
- * ROADMAP 3.12. Run once per VR frame: drops a buffered swing that can no
- * longer be valid, and dispatches it the moment the round opens. Returns
- * whether a swing was released this frame (the headset pulses for it) and
- * whether one is still waiting (the hilt shows it as armed).
+ * Run once per VR frame. Notes the player's round, starts an action the
+ * player committed (a Force power, grenade or medpac) that waits behind a
+ * duel partner's borrowed pause once the player's 3 s are up, and lands a
+ * silently held stroke the moment the player's next round is ready. Returns
+ * whether a stroke was released this frame (the headset pulses for it) and
+ * whether one is still held.
  *
- * Round 17 (locked): the held swing belongs to the next round opening only.
- * It releases within 0.5 s of that opening, or drops with the soft refused
- * tick; stepping back into reach later never fires it. A pause - the B tap or
- * the VR Menu's - keeps it, and the hilt keeps showing it held.
+ * Round 18 (player-paced rounds + silent hold): a held stroke is never shown
+ * and never announced. If it cannot land - its target died or was lost, the
+ * fight ended, the round did not become ready - it is dropped without a word.
+ * A pause - the B tap or the VR Menu's - keeps it.
  */
 function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean; armed: boolean } {
-  if (!vrCombatSwingBuffer.hasPending) return { released: false, armed: false };
+  observeVRPlayerRound(actor);
   // Paused, nothing ages and nothing fires: a stroke made before pausing is
-  // intent, as a retail queued action is (it used to be cleared here, in
-  // code a B pause never reached, while the hilt said nothing was held).
-  if (GameState.State === EngineState.PAUSED) return { released: false, armed: true };
+  // intent, as a retail queued action is.
+  if (GameState.State === EngineState.PAUSED) return { released: false, armed: vrCombatSwingBuffer.hasPending };
+  const round = actor.combatRound;
+  if (round && Array.isArray(round.scheduledActionList) && round.scheduledActionList.length > 0) {
+    takeOverVRPlayerRoundIfBorrowed(actor);
+  }
+  if (!vrCombatSwingBuffer.hasPending) return { released: false, armed: false };
   const pendingBefore = vrCombatSwingBuffer.peek();
   const lockedTargetLive = (targetId: string) => resolveVRLockedHostile(actor, targetId) !== null;
   const context = {
     actorId: String(actor.id),
     weaponSignature: resolveVRCombatWeaponSignature(actor),
     // The fight decides, not the player's own flag: in a group fight it drops
-    // between the player's rounds while hostiles shoot the companions, and
-    // every held trigger pull was dropped as "combat ended" (round 17, Tempo
-    // exp9: cadence 4.0 s instead of 3.0 s).
+    // between the player's rounds while hostiles shoot the companions (round
+    // 17, Tempo exp9).
     inCombat: isVRFightOngoing({
       actorInCombat: actor.combatData?.combatState === true,
       lockedTargetLive: !!pendingBefore && lockedTargetLive(pendingBefore.targetId),
       hostileEngagedWithParty: isVRHostileEngagedWithParty(actor),
     }),
-    // Alive and still locked, not "inside weapon reach this frame": a target
-    // stepping a few centimetres past reach dropped the waiting swing
-    // (critic run 4). Reach is the release's business, inside its 0.5 s.
+    // Alive and still locked, not "inside weapon reach this frame".
     isTargetLive: lockedTargetLive,
   };
   const dropped = vrCombatSwingBuffer.invalidate(context);
   if (dropped) {
-    // Only a lock that was lost is worth the refusal sound. The target dying
-    // (your first swing killed it) is a success, and a weapon swap or a
-    // leader change is the player's own doing (critic run 5: a kill sounded
-    // like "no").
-    // Looked up by id, not among the selectable: a living droid behind a
-    // pillar is not selectable, and read as dead (critic run 6).
-    const lost: any = GameState.ModuleObjectManager.GetObjectById?.(Number(pendingBefore?.targetId));
-    const targetDied = !lost || (typeof lost.isDead === 'function' && lost.isDead());
-    if (dropped === 'target-invalid' && !targetDied) {
-      signalVRRefusal('refused: swing target lost');
-    }
-    if (!reportedVRSwingBufferDrops.has(dropped)) {
-      reportedVRSwingBufferDrops.add(dropped);
-      console.info(`[VR combat swing] buffered swing dropped: ${dropped}`);
-    }
+    reportVRSwingBufferDropOnce(dropped);
     return { released: false, armed: false };
   }
-  const pending = vrCombatSwingBuffer.peek();
-  const target = pending ? resolveVRLiveCombatTarget(actor, pending.targetId) : null;
-  if (getVREmbodiedTempoResult(actor, target).eligible) {
+  const state = resolveVRPlayerRoundState(actor);
+  if (state.untilReadyMs <= 0 && !state.openingPending) {
     const release = vrCombatSwingBuffer.release(context);
     if (release.state !== 'released') return { released: false, armed: false };
-    const released = dispatchVREmbodiedCombatInput(actor, release.swing.targetId, release.swing.input);
+    const released = dispatchVREmbodiedCombatInput(actor, release.swing.targetId, release.swing.input, true);
+    if (!released) reportVRSwingBufferDropOnce('could not land');
     return { released, armed: vrCombatSwingBuffer.hasPending };
   }
-  const round = actor.combatRound;
-  const expired = vrHeldSwingLifetime.advance(resolveVRRoundOpen(round ? {
-    roundStarted: round.roundStarted === true,
-    roundPaused: round.roundPaused === true,
-    playerActionCommitted: round.action !== undefined,
-    scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
-  } : null), Number(GameState.delta));
-  if (expired) {
+  if (vrHeldSwingLifetime.advance(Number(GameState.delta))) {
     vrCombatSwingBuffer.clear();
-    console.info(`[VR combat swing] held swing expired: ${expired}`);
-    signalVRRefusal('refused: swing expired');
+    reportVRSwingBufferDropOnce('held too long');
     return { released: false, armed: false };
   }
   return { released: false, armed: true };
+}
+
+function reportVRSwingBufferDropOnce(reason: string): void {
+  if (reportedVRSwingBufferDrops.has(reason)) return;
+  reportedVRSwingBufferDrops.add(reason);
+  console.info(`[VR combat swing] held stroke dropped silently: ${reason}`);
 }
 
 /**
@@ -4769,14 +4830,11 @@ export class GameState implements EngineContext {
         const target = isVRCombatTarget(actor, candidate) && isWithinVRCombatLockRange(actor, candidate)
           ? candidate
           : null;
-        const tempo = getVREmbodiedTempoResult(actor, target);
-        const round = actor.combatRound;
-        const roundOpen = resolveVRRoundOpen(round ? {
-          roundStarted: round.roundStarted === true,
-          roundPaused: round.roundPaused === true,
-          playerActionCommitted: round.action !== undefined,
-          scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
-        } : null);
+        // Player-paced rounds (round 18): the player's next round is ready
+        // 3 s after the last one began, whatever the aim. The hilt shows it as
+        // a quiet glow, not a clock to wait on: a stroke begins it.
+        const playerRound = resolveVRPlayerRoundState(actor);
+        const roundReady = playerRound.untilReadyMs <= 0 && !playerRound.openingPending;
         const queuedIntent = vrCombatIntentQueue.getHead();
         // The fight decides, not the player's own flag (Part F, decision 1):
         // the flag drops between rounds in a group fight, and the ring read
@@ -4798,14 +4856,10 @@ export class GameState implements EngineContext {
             ...vrCombatIntentQueue.getSnapshot().entries.map((entry) => entry.label),
             ...resolveVRScheduledItemLabels(actor),
           ]),
-          roundOpen: fightOn && roundOpen,
-          tempoReadiness: vrRoundReadinessLatch.apply(resolveVRRoundReadiness({
-            eligible: tempo.eligible,
-            hasTarget: target !== null,
-            inCombat: fightOn,
-            roundOpen,
-            round: actor.combatRound ?? null,
-          }), roundOpen, fightOn, actor, actor.combatRound?.action),
+          roundOpen: fightOn && roundReady,
+          // 1 is ready (the glow, in a fight), 0 is a round running. Out of a
+          // fight there is no round and nothing to show.
+          tempoReadiness: !fightOn || roundReady ? 1 : 0,
           allowDominantTrigger: queuedIntent?.requiredInput === 'dominant-trigger',
           onCombatSwing: (event) => {
             if (event.actorId !== String(actor.id)) return;
@@ -4908,7 +4962,6 @@ export class GameState implements EngineContext {
           bash: () => dispatchVRWeaponBash(actor, resolved.target.id),
         };
       },
-      isCombatSwingHeld: () => vrCombatSwingBuffer.hasPending,
       serviceCombatSwingBuffer: () => {
         const actor = GameState.getCurrentPlayer();
         if (!actor) {
