@@ -800,6 +800,8 @@ export class VRSpike {
   private static readonly haptics = new VRHapticFeedback();
   private static radialMenuHost: VRRadialMenuHost | null = null;
   private static readonly radialRayHand = new VRPointerHandResolver();
+  /** The hand whose menu button opened the wheel; its ray owns the hover. */
+  private static radialOpenerHand: XRHandRole | null = null;
   private static radialOpeningHeadPose: XRWorldPose | null = null;
   private static radialMenuPressedLastFrame = false;
   private static comfortSettingsHost: VRComfortSettingsHost | null = null;
@@ -3231,9 +3233,10 @@ export class VRSpike {
         XRGamepadReader.read(Array.from(session.inputSources ?? [])),
         new Set(['global', 'radial-wheel'])
       );
-      const menuPressed = actions.some((action) =>
+      const menuAction = actions.find((action) =>
         action.action === SemanticXRAction.Menu && action.hand !== VRSpike.dominantHand && action.pressed
       );
+      const menuPressed = menuAction !== undefined;
       // No hand filter: the binding table already scopes radial-wheel Select to
       // 'either', and the wheel's ray follows whichever hand aims at it. Testing
       // for 'left' here re-imposed the very restriction the binding drops.
@@ -3258,18 +3261,22 @@ export class VRSpike {
         const aimedTargetId = lockedTargetId ?? VRSpike.resolveAimedTargetIdForCombat();
         openingMenu = VRSpike.hooks?.createActionWheel?.(aimedTargetId) ?? null;
         VRSpike.radialFrozenTargetId = openingMenu ? aimedTargetId : null;
+        if (openingMenu && (menuAction?.hand === 'left' || menuAction?.hand === 'right')) {
+          VRSpike.radialOpenerHand = menuAction.hand;
+        }
       }
       VRSpike.radialMenuPressedLastFrame = menuPressed;
 
       const host = VRSpike.radialMenuHost;
       // Either hand may aim at the wheel. Binding the ray to one controller is
       // invisible to the player, so the other hand reads as a dead pointer.
-      const wheelSelectHand = actions.find((action) =>
-        action.action === SemanticXRAction.Select && action.pressed
-      )?.hand ?? null;
+      // But with both rays on it, the hand that opened it owns the hover, and
+      // whichever trigger is pulled picks what is highlighted: the weapon ray
+      // passing through the wheel took the highlight while the opener's
+      // trigger picked another wedge (Bolt and Anchor, round 17).
+      const opener: XRHandRole = VRSpike.radialOpenerHand ?? (VRSpike.dominantHand === 'right' ? 'left' : 'right');
       const rayResolution = wasOpen && host
-        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose),
-          wheelSelectHand === 'left' || wheelSelectHand === 'right' ? wheelSelectHand : null)
+        ? VRSpike.radialRayHand.resolve(inputFrame, (pose) => host.resolveRay(pose), null, opener)
         : null;
       if (!rayResolution) VRSpike.radialRayHand.reset();
       const rayHit = rayResolution?.hit ?? null;

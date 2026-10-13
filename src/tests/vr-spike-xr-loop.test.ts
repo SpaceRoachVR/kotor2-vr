@@ -2538,6 +2538,37 @@ describe('VRSpike XR loop ownership', () => {
     }
   });
 
+  test('with both rays on the wheel, the hand that opened it drives the hover and the pick (Bolt finding 5)', () => {
+    // The weapon ray passes through the wheel while aimed at the enemy. The
+    // hover followed it ("Items") while the left trigger picked the left
+    // ray's wedge ("Force Powers"): the highlight lied about the pick.
+    const left = jest.fn();
+    const right = jest.fn();
+    const input = installRadialInput();
+    const host = installRadialHost();
+    host.resolveRay.mockImplementation((pose: unknown) =>
+      pose === input.leftTargetRayPose ? { kind: 'entry', index: 0 }
+        : pose === input.rightTargetRayPose ? { kind: 'entry', index: 1 } : null);
+    const wheel = actionWheel(left);
+    (wheel.pages[0].entries as any[]).push({
+      kind: 'action', id: 'right-action', label: 'Right Action', revalidate: () => true, activate: right,
+    });
+    VRSpike.hooks = basicHooks({ createActionWheel: () => wheel });
+
+    input.leftButtons[4] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+    (VRSpike as any).processRadialMenuInput();
+    const hovered = (VRSpike as any).radialMenuController.presentation?.hoveredId ?? null;
+    expect(hovered).toBe('test-action');
+
+    // Either trigger picks what is highlighted.
+    input.rightButtons[0] = pressedButton();
+    (VRSpike as any).processRadialMenuInput();
+
+    expect(left).toHaveBeenCalledTimes(1);
+    expect(right).not.toHaveBeenCalled();
+  });
+
   test('confirms the current ray hit once and clears the host before engine activation', () => {
     const activate = jest.fn();
     const input = installRadialInput();
