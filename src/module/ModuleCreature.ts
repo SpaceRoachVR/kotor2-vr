@@ -40,18 +40,26 @@ import { MenuSaveLoadMode } from "@/enums/gui/MenuSaveLoadMode";
 /** How long nobody standing must be in combat before a downed party member gets up. */
 const DOWNED_PARTY_REVIVE_DELAY_SECONDS = 3;
 
+/** How near the party a hostile in combat keeps the party's battle on. */
+const PARTY_BATTLE_RANGE_METRES = 20;
+
 /**
- * A creature outside the party still fighting it: in combat, alive, with its
- * attack aimed at a party member. Its own combat flag alone is not enough
- * (a hostile in combat with someone else is not this party's battle).
+ * A creature outside the party still fighting it: alive and in combat, with
+ * its attack aimed at a party member, or hostile to one within
+ * PARTY_BATTLE_RANGE_METRES (between two targets it aims at nobody: the Sith
+ * that downed the Exile had no target for 3 s, and she got up in front of it).
+ * A creature in combat with someone else, far off, is not this party's battle.
  */
-function isFightingParty(creature: any, party: readonly unknown[]): boolean {
+function isFightingParty(creature: any, party: readonly any[]): boolean {
   if(!creature || party.includes(creature) || creature.destroyed) return false;
   if(typeof creature.isDead !== 'function' || creature.isDead()) return false;
   if(creature.combatData?.combatState !== true) return false;
-  return party.includes(creature.combatRound?.action?.target) ||
+  if(party.includes(creature.combatRound?.action?.target) ||
     party.includes(creature.combatData?.lastAttackTarget) ||
-    party.includes(creature.combatData?.lastAttemptedAttackTarget);
+    party.includes(creature.combatData?.lastAttemptedAttackTarget)) return true;
+  return party.some((member) => member && member.area === creature.area && member.position &&
+    typeof creature.isHostile === 'function' && creature.isHostile(member) &&
+    Math.hypot(member.position.x - creature.position.x, member.position.y - creature.position.y) <= PARTY_BATTLE_RANGE_METRES);
 }
 
 function isKnockoutEligible(creature: any): boolean {

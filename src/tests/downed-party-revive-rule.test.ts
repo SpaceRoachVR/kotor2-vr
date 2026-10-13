@@ -18,5 +18,8 @@ describe('a downed party member stays down while the party is still being fought
     expect(rule).toContain("if(creature.combatData?.combatState !== true) return false;");
     expect(rule).toContain('party.includes(creature.combatRound?.action?.target)');
     expect(rule).toContain('party.includes(creature.combatData?.lastAttackTarget)');
+    // Between two targets: hostile to a party member nearby still counts.
+    expect(rule).toContain("typeof creature.isHostile === 'function' && creature.isHostile(member) &&");
+    expect(source).toContain('const PARTY_BATTLE_RANGE_METRES = 20;');
   });
 });
