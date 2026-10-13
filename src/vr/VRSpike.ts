@@ -72,6 +72,8 @@ import { VRCombatCueAudio, cueForVRCombatOutcome, type VRCombatCue, type VRComba
 import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateHost";
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
 import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
+import { VRHurtPresentationGate } from "./runtime/VRHurtPresentationGate";
+import { shouldVoiceTargetPain, strokeWhooshCoversMiss, type VRCombatBarkKind } from "./runtime/VRCombatVoicing";
 import { VRRefusalNoticeHost, describeVRRefusal } from "./runtime/VRRefusalNoticeHost";
 import { VRPauseIndicatorHost } from "./runtime/VRPauseIndicatorHost";
 import type { VRHapticPattern } from "./runtime/VRHapticFeedback";
@@ -217,6 +219,8 @@ export interface VRSpikeHooks {
   getPlayerDisabledState?: () => string | null;
   /** The attacker's own weaponsounds.2da sounds for a cue, and where it happened. */
   resolveCombatCueSounds?: (attackerId: string | number, targetId: string | number, cue: VRCombatCue) => VRCombatCuePlayOptions | null;
+  /** A creature's own retail soundset line (Part D): the PC's in the head, anyone else's at them. */
+  resolveCombatBark?: (creatureId: string | number, kind: VRCombatBarkKind) => VRCombatCuePlayOptions | null;
   /** The controlled character's HP and FP, for the wrist plate. */
   getPlayerVitals?: () => VRPlayerVitals | null;
   setComfortSettings?: (patch: Partial<VRComfortSettings>) => void;
@@ -344,6 +348,8 @@ export interface VRSpikeHooks {
     readonly snapshots: readonly VRCombatActorSnapshot[];
     /** The player's weapon report, for the bolts VR draws on their behalf. */
     playLocalShotSound?(): void;
+    /** Anyone else's weapon report, at the shooter (Spark Finding 3: enemy fire was silent). */
+    playShotSound?(actorId: number): void;
   } | null;
   getCombatContext?: (aimedTargetId: number | null) => {
     readonly actorId: string;
@@ -724,6 +730,10 @@ export class VRSpike {
   private static readonly attackResultObserver = new VRCombatAttackResultObserver();
   private static bladeSparkHost: VRBladeSparkHost | null = null;
   private static readonly damageTracker = new VRDamageFeedbackTracker();
+  /** Part D1: a hit on the player is shown when the blow lands, not at the roll. */
+  private static readonly hurtGate = new VRHurtPresentationGate({ boltTravelMs: BOLT_TRAVEL_MS });
+  /** The hit points the player is shown while a hit is held (null: live). */
+  private static shownHitPoints: number | null = null;
   private static damageFlashHost: VRDamageFlashHost | null = null;
   private static combatCueAudio: VRCombatCueAudio | null = null;
   private static readonly panelStickScroll = new VRPanelStickScroll();
@@ -1314,6 +1324,8 @@ export class VRSpike {
     VRSpike.bladeSparkHost?.dispose();
     VRSpike.bladeSparkHost = null;
     VRSpike.damageTracker.reset();
+    VRSpike.hurtGate.reset();
+    VRSpike.shownHitPoints = null;
     VRSpike.damageFlashHost?.dispose();
     VRSpike.damageFlashHost = null;
     VRSpike.healthPlateHost?.dispose();
@@ -2824,6 +2836,7 @@ export class VRSpike {
       });
       VRSpike.reportSwingMisses();
       for (const event of events) context.onCombatSwing(event);
+      VRSpike.voiceStrokes(events, timestamp);
     } catch (error) {
       if (!VRSpike.combatInputErrorReported) {
         VRSpike.combatInputErrorReported = true;
@@ -4622,6 +4635,7 @@ export class VRSpike {
               VRSpike.ensureBladeSparkHost(worldScene).spark(bladePoint, nowMs, BOLT_TRAVEL_MS);
             }
             if (VRSpike.session && isLocalShot) context.playLocalShotSound?.();
+            else if (VRSpike.session) context.playShotSound?.(event.actorId);
           } else {
             if (!VRSpike.droidExplosionHost) {
               VRSpike.droidExplosionHost = new VRDroidExplosionHost(worldScene);
@@ -4655,32 +4669,22 @@ export class VRSpike {
     worldScene: THREE.Object3D,
     nowMs: number,
   ): void {
-    VRSpike.voiceUnhurtHitOnPlayer(nowMs);
     const events = VRSpike.attackResultObserver.observe(snapshots);
+    VRSpike.lastLocalActorId = localActorId;
     const session = VRSpike.session;
     if (!session) return;
     for (const event of events) {
-      // ROADMAP 3.14: remember who last hit the player, so the hit-point drop
-      // that follows can be shown on the right side.
-      if (localActorId !== null && event.targetId === localActorId) {
-        VRSpike.lastAttackOnPlayer = { attackerId: event.attackerId, targetId: event.targetId };
-        if (HIT_ATTACK_RESULTS.has(event.attackResult)) {
-          VRSpike.pendingHitOnPlayer = {
-            atMs: nowMs, critical: event.attackResult === CRITICAL_ATTACK_RESULT,
-            attackerId: event.attackerId, targetId: event.targetId,
-          };
-        }
-
-      }
+      // Part D1: a hit on the player is held until the attacker's blade
+      // lands (its Hit event) or its bolt arrives; the HP the engine took at
+      // the roll is shown then, with the hurt cue and the red edge.
       if (localActorId !== null && event.targetId === localActorId && HIT_ATTACK_RESULTS.has(event.attackResult)) {
         const attacker = snapshots.find((snapshot) => snapshot.id === event.attackerId);
-        if (attacker?.position) {
-          VRSpike.damageTracker.recordAttack({
-            attackerPosition: attacker.position,
-            critical: event.attackResult === CRITICAL_ATTACK_RESULT,
-            timestampMs: nowMs,
-          });
-        }
+        VRSpike.hurtGate.recordHit({
+          attackerId: event.attackerId,
+          critical: event.attackResult === CRITICAL_ATTACK_RESULT,
+          ranged: attacker?.attackIsRanged === true,
+          nowMs,
+        });
       }
       const feedback = resolveVRCombatFeedback({
         attackerId: event.attackerId,
@@ -4694,9 +4698,18 @@ export class VRSpike {
       VRSpike.playHapticSequence(session, VRSpike.dominantHand, feedback.pulses, feedback.gapMs, delayMs);
       // Heard and seen as well as felt: round 12 felt no haptics at all.
       const cue = cueForVRCombatOutcome(feedback.outcome);
-      if (cue) {
+      const meleeMissAfterStroke = cue === 'miss' && feedback.role === 'attacker' &&
+        snapshots.find((snapshot) => snapshot.id === event.attackerId)?.attackIsRanged !== true &&
+        strokeWhooshCoversMiss(VRSpike.lastStrokeWhooshAt, nowMs);
+      if (cue && !meleeMissAfterStroke) {
         const placed = VRSpike.hooks?.resolveCombatCueSounds?.(event.attackerId, event.targetId, cue) ?? null;
         VRSpike.playCombatCue(cue, delayMs, false, placed);
+      }
+      // Part D: a blow that lands gets the struck creature's own pain bark
+      // (on some hits), and a critical the PC's critical-hit line.
+      if (feedback.role === 'attacker' && (feedback.outcome === 'hit' || feedback.outcome === 'critical')) {
+        if (feedback.outcome === 'critical') VRSpike.playBark(event.attackerId, 'critical');
+        if (shouldVoiceTargetPain(feedback.outcome === 'critical')) VRSpike.playBark(event.targetId, 'pain');
       }
       if (feedback.role === 'attacker' && (feedback.outcome === 'hit' || feedback.outcome === 'critical')) {
         const attacker = snapshots.find((snapshot) => snapshot.id === event.attackerId);
@@ -4722,16 +4735,29 @@ export class VRSpike {
 
     const local = localActorId === null ? undefined : snapshots.find((snapshot) => snapshot.id === localActorId);
     const head = VRSpike.latestInputFrame?.head;
+    const gated = VRSpike.hurtGate.update(typeof local?.hitPoints === 'number' ? local.hitPoints : null, nowMs);
+    VRSpike.shownHitPoints = VRSpike.hurtGate.holding ? gated.displayedHitPoints : null;
+    for (const landed of gated.released) {
+      // ROADMAP 3.14: who landed it, so the drop is shown on their side.
+      VRSpike.lastAttackOnPlayer = { attackerId: landed.attackerId, targetId: localActorId as number };
+      const attacker = snapshots.find((snapshot) => snapshot.id === landed.attackerId);
+      if (landed.amount > 0 && attacker?.position) {
+        VRSpike.damageTracker.recordAttack({ attackerPosition: attacker.position, critical: landed.critical, timestampMs: nowMs });
+      } else if (landed.amount <= 0) {
+        // A blow a shield absorbed: no HP drop to voice it, so it sounds here.
+        VRSpike.playHurtCue(landed.attackerId, localActorId as number, landed.critical);
+      }
+    }
     const damage = VRSpike.damageTracker.observe({
       actorId: local ? localActorId : null,
-      hitPoints: typeof local?.hitPoints === 'number' ? local.hitPoints : null,
+      hitPoints: gated.displayedHitPoints,
       playerPosition: local?.position ?? null,
       headForward: head ? new THREE.Vector3(0, 0, -1).applyQuaternion(head.orientation) : null,
       nowMs,
     });
     // Already down before this drop: no hurt sound, haptics or flash over
     // the defeat screen (critic run 14: two hurt cues after death).
-    const hp = typeof local?.hitPoints === 'number' ? local.hitPoints : null;
+    const hp = gated.displayedHitPoints;
     const wasDown = VRSpike.lastLocalHitPoints !== null && VRSpike.lastLocalHitPoints <= 0;
     // Below a quarter of the pool, once per drop: only the wrist number said
     // so (critic run 20). A notice and a pulse in both hands.
@@ -4741,6 +4767,8 @@ export class VRSpike {
       if (low && !VRSpike.lowHealthWarned) {
         VRSpike.lowHealthWarned = true;
         VRSpike.showNotice(`Low health: ${hp} / ${maxHp}`, 2500);
+        // Its sound: the PC's own low-health line (Spark Finding 7).
+        VRSpike.playBark(localActorId as number, 'low-health');
         try {
           VRSpike.pulseHand('left', { durationMs: 160, amplitude: 0.8 });
           VRSpike.pulseHand('right', { durationMs: 160, amplitude: 0.8 });
@@ -4771,11 +4799,13 @@ export class VRSpike {
     // the damage (a blaster, a grenade, a Force power, poison). Voicing it
     // from the attacker's Hit event left every ranged hit silent: retail
     // ranged attack animations have no Hit event (critic run 10).
-    VRSpike.pendingHitOnPlayer = null;
     const hurtCue = damage.critical ? 'hurt-critical' : 'hurt';
     const lastHit = VRSpike.lastAttackOnPlayer;
     VRSpike.playCombatCue(hurtCue, 0, false,
       lastHit ? VRSpike.hooks?.resolveCombatCueSounds?.(lastHit.attackerId, lastHit.targetId, hurtCue) ?? null : null);
+    // Part D: the PC's own pain grunt, in the head - never the sound of
+    // the player's own hits (Spark Finding 1).
+    if (VRSpike.lastLocalActorId !== null) VRSpike.playBark(VRSpike.lastLocalActorId, 'pain');
 
     const comfort = VRSpike.hooks?.getComfortSettings?.() ?? DEFAULT_COMFORT_SETTINGS;
     if (comfort.damageFlashEnabled === false || !VRSpike.camera) return;
@@ -4893,23 +4923,43 @@ export class VRSpike {
   }
 
   /** A combat result you can hear, unless Combat Sounds is off. */
-  /**
-   * A hit on the player that the HP drop has not voiced yet. Damage is applied
-   * with the roll, so a hit that takes HP is voiced within a frame or two; one
-   * that takes none (a shield) is voiced 0.3 s after the roll.
-   */
-  private static pendingHitOnPlayer: { atMs: number; critical: boolean; attackerId: string | number; targetId: string | number } | null = null;
-  private static voiceUnhurtHitOnPlayer(nowMs: number): void {
-    const pending = VRSpike.pendingHitOnPlayer;
-    if (!pending || nowMs - pending.atMs < 300) return;
-    VRSpike.pendingHitOnPlayer = null;
-    VRSpike.playHurtCue(pending.attackerId, pending.targetId, pending.critical);
+  /** An attack animation's Hit event: a held hit on the player from that attacker lands (Part D1). */
+  static noteBlowLanded(attackerId: string | number): void {
+    VRSpike.hurtGate.noteBlowLanded(attackerId);
   }
 
   /** A blow on the player: the attacker's weapon on the player's material. */
   static playHurtCue(attackerId: string | number, targetId: string | number, critical: boolean): void {
     const cue = critical ? 'hurt-critical' : 'hurt';
     VRSpike.playCombatCue(cue, 0, false, VRSpike.hooks?.resolveCombatCueSounds?.(attackerId, targetId, cue) ?? null);
+    VRSpike.playBark(targetId, 'pain');
+  }
+
+  /** A creature's own retail soundset line, when it has one (Part D). */
+  private static playBark(creatureId: string | number, kind: VRCombatBarkKind): void {
+    const placed = VRSpike.hooks?.resolveCombatBark?.(creatureId, kind) ?? null;
+    if (placed?.sounds?.length) VRSpike.playCombatCue(kind === 'pain' && creatureId === VRSpike.lastLocalActorId ? 'pain' : 'bark', 0, false, placed);
+  }
+
+  /** The controlled creature's id, for the PC's own barks. */
+  private static lastLocalActorId: number | null = null;
+  /** When the last stroke's whoosh played (XR frame time). */
+  private static lastStrokeWhooshAt: number | null = null;
+
+  /**
+   * One whoosh per physical stroke, at the hand, in the weapon's own retail
+   * swing sound: the hidden body's whooshes no longer play (Spark Finding 4),
+   * so a hit is whoosh-then-impact, as in retail.
+   */
+  private static voiceStrokes(events: readonly VRCombatSwingEvent[], timestamp: number): void {
+    for (const event of events) {
+      if (event.input !== 'dominant-swing' || event.weaponMode === 'blaster') continue;
+      const placed = VRSpike.hooks?.resolveCombatCueSounds?.(event.actorId, event.actorId, 'whoosh') ?? null;
+      const hand = VRSpike.controllerAnchorHost?.getAnchor(event.hand) ?? null;
+      const at = hand ? hand.getWorldPosition(new THREE.Vector3()) : null;
+      VRSpike.playCombatCue('whoosh', 0, false, { sounds: placed?.sounds, position: at });
+      VRSpike.lastStrokeWhooshAt = timestamp;
+    }
   }
 
   /** Who last attacked the player, so the hurt cue uses their weapon. */
@@ -4948,7 +4998,10 @@ export class VRSpike {
       VRSpike.healthPlateHost = new VRHealthPlateHost(anchor);
     }
     const head = VRSpike.camera.getWorldPosition(new THREE.Vector3());
-    VRSpike.healthPlateHost.present(VRSpike.hooks?.getPlayerVitals?.() ?? null, head);
+    const vitals = VRSpike.hooks?.getPlayerVitals?.() ?? null;
+    // While a hit is held (Part D1) the wrist shows HP from before it.
+    VRSpike.healthPlateHost.present(vitals && VRSpike.shownHitPoints !== null
+      ? { ...vitals, hitPoints: VRSpike.shownHitPoints } : vitals, head);
   }
 
   private static ensureBladeSparkHost(worldScene: THREE.Object3D): VRBladeSparkHost {

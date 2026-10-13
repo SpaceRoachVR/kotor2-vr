@@ -9,9 +9,11 @@
  *
  * - Hit: only a blow that landed makes an impact; in VR a blow given or
  *   taken by the player is voiced by the VR cue at the target instead.
- * - Swing: a swing that hits keeps its whoosh. A player's own missed swing
- *   is voiced by the VR miss cue. An enemy's missed swing at the player has
- *   no VR cue, so it keeps the engine's whoosh (critic run 9).
+ * - Swing: an NPC's swing keeps its whoosh, hit or miss (an enemy's missed
+ *   swing at the player has no other cue, critic run 9). The player's own
+ *   swings are voiced by VR, which plays one whoosh at the physical stroke:
+ *   the hidden body's whooshes trailed every landed hit by 0.3-1.3 s and
+ *   read as misses (combat redesign, Spark Finding 4).
  * - Parry: VR voices a parry the player gives or takes.
  */
 export type EngineCombatSoundEvent = 'swing' | 'parry' | 'hit';
@@ -31,7 +33,7 @@ export function shouldPlayEngineCombatSound(input: EngineCombatSoundInput): bool
     case 'hit':
       return input.landed && !input.vrVoices;
     case 'swing':
-      return input.landed || !(input.vrVoices && input.swingerIsPlayer);
+      return !(input.vrVoices && input.swingerIsPlayer);
     case 'parry':
       return !input.vrVoices;
   }

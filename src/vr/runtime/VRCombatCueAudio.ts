@@ -14,7 +14,10 @@
  * - miss: the swing whoosh (cb_sw_*); a blaster miss, a bolt striking metal
  * - hit: the weapon's flesh impact (cb_ht_*leth1); a critical plays it twice
  * - parried / deflected: the retail parry sounds (cb_pa_*)
- * - hurt: a body impact on the player
+ * - hurt: a body impact on the player, heard at the attacker, with
+ *   - pain: the PC's own pain grunt (p_plyermw_hit*), in the head
+ * - bark: a creature's own soundset line (pain, low health, critical)
+ * - whoosh: the weapon's swing, at the hand, on the physical stroke
  * - force: the retail Force-use sound (v_useforce)
  * - ready / refused / saved: the retail interface sounds gui_actqueue,
  *   gui_error and gui_complete
@@ -22,7 +25,7 @@
  * The roll is untouched; this only presents a result the engine has decided.
  */
 
-export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready' | 'refused' | 'saved' | 'neck-zone';
+export type VRCombatCue = 'miss' | 'hit' | 'critical' | 'parried' | 'deflected' | 'hurt' | 'hurt-critical' | 'force' | 'ready' | 'refused' | 'saved' | 'neck-zone' | 'pain' | 'bark' | 'whoosh';
 
 /** Which weapon family picks the sound; null when nothing is equipped or known. */
 export type VRCombatCueWeapon = 'melee' | 'ranged' | 'unarmed';
@@ -82,6 +85,12 @@ export function describeVRCombatCue(cue: VRCombatCue, weapon: VRCombatCueWeapon 
     case 'saved': return [sound('gui_complete')];
     // The armed item reached the neck: hold it there to use it.
     case 'neck-zone': return [sound('gui_invselect', 0, 0.8)];
+    // The PC's pain grunt (dialog.tlk 37416, the PC soundset's PAIN_1).
+    // GameState picks the PC's own take by gender.
+    case 'pain': return [sound('p_plyermw_hit1')];
+    // A soundset line: always given by the caller, which knows whose.
+    case 'bark': return [];
+    case 'whoosh': return [sound(MISS[weapon === 'ranged' ? 'melee' : weapon], 0, 0.8)];
     default: return [];
   }
 }
@@ -178,7 +187,7 @@ export class VRCombatCueAudio {
   /** Every default cue sound, for preloading. */
   static defaultSounds(): string[] {
     const all = new Set<string>();
-    for (const cue of ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical', 'force', 'ready', 'refused', 'saved', 'neck-zone'] as const) {
+    for (const cue of ['miss', 'hit', 'critical', 'parried', 'deflected', 'hurt', 'hurt-critical', 'force', 'ready', 'refused', 'saved', 'neck-zone', 'pain', 'whoosh'] as const) {
       for (const weapon of ['melee', 'ranged', 'unarmed'] as const) {
         for (const s of describeVRCombatCue(cue, weapon)) all.add(s.resref);
       }

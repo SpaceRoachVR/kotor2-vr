@@ -20,7 +20,10 @@ describe('engine combat sounds', () => {
     expect(shouldPlayEngineCombatSound({ ...vr, event: 'parry' })).toBe(false);
     expect(shouldPlayEngineCombatSound({ ...vr, event: 'swing', landed: false, swingerIsPlayer: true })).toBe(false);
     expect(shouldPlayEngineCombatSound({ ...vr, event: 'swing', landed: false, swingerIsPlayer: false })).toBe(true);
-    expect(shouldPlayEngineCombatSound({ ...vr, event: 'swing', landed: true, swingerIsPlayer: true })).toBe(true);
+    // Part D (Spark Finding 4): the hidden body's whooshes trailed every
+    // landed hit and read as misses. VR plays one whoosh at the stroke.
+    expect(shouldPlayEngineCombatSound({ ...vr, event: 'swing', landed: true, swingerIsPlayer: true })).toBe(false);
+    expect(shouldPlayEngineCombatSound({ ...vr, event: 'swing', landed: true, swingerIsPlayer: false })).toBe(true);
   });
   test('the gates read the round\'s live action, not the unassigned field', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'module', 'ModuleCreature.ts'), 'utf8');

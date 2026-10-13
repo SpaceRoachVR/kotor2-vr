@@ -1,5 +1,7 @@
 import type { VRCombatCuePlayOptions } from "@/vr/runtime/VRCombatCueAudio";
 import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
+import { describeVRCombatVoicingSounds, describeVRPlayerBarks, pickVRBark, resolveVRCriticalImpact, type VRCombatBarkKind } from "@/vr/runtime/VRCombatVoicing";
+import { SSFType } from "@/enums/resource/SSFType";
 import * as THREE from "three";
 import {
   AppearanceManager, AutoPauseManager, TLKManager, CharGenManager, CheatConsoleManager, CameraShakeManager, ConfigManager, CursorManager, DialogMessageManager,
@@ -1111,6 +1113,17 @@ function resolveVRCombatCueSounds(attackerId: string | number, targetId: string 
     // A melee miss is the attacker's whoosh, at the attacker; a missed bolt
     // strikes past the target, so it is heard there (critic run 8).
     let position = cue === 'miss' && attacker?.position && !weapon?.baseItem?.rangedWeapon ? chest(attacker) : chest(target);
+    // A blow on the player is heard where it came from (Part D, Spark
+    // Finding 1): a melee impact at the attacker, a bolt's 1 m from the
+    // player toward the shooter. The PC's pain grunt is the in-head part.
+    if ((cue === 'hurt' || cue === 'hurt-critical') && attacker?.position) {
+      if (!weapon?.baseItem?.rangedWeapon) position = chest(attacker);
+      else {
+        const dx = attacker.position.x - target.position.x, dy = attacker.position.y - target.position.y;
+        const len = Math.hypot(dx, dy) || 1;
+        position = { x: target.position.x + dx / len, y: target.position.y + dy / len, z: target.position.z + 1.0 };
+      }
+    }
     // A missed bolt strikes past the target: 1.5 m beyond it along the shot.
     if (cue === 'miss' && weapon?.baseItem?.rangedWeapon && attacker?.position) {
       const dx = target.position.x - attacker.position.x, dy = target.position.y - attacker.position.y;
@@ -1135,14 +1148,45 @@ function resolveVRCombatCueSounds(attackerId: string | number, targetId: string 
     // Both impact variants together: heavier than a hit, and nothing to do
     // with the parry clang (critic run 7: a crit sounded like a parry).
     else if (critical) resrefs = [impactResRef(sounds, material, 0)];
-    else if (cue === 'miss') resrefs = [String(sounds.swingShort0 || '')];
+    else if (cue === 'miss' || cue === 'whoosh') resrefs = [String(sounds.swingShort0 || '')];
     else if (cue === 'parried') resrefs = [String(parrySounds?.parry0 || '')];
     resrefs = resrefs.filter(Boolean);
     if (!resrefs.length) return { position };
+    // A saber critical is retail's heavy saber impact, not the hit re-pitched (Part D).
+    const saberCritical = cue === 'critical' ? resolveVRCriticalImpact(resrefs[0]) : null;
+    if (saberCritical) return { position, sounds: [{ resref: saberCritical, at: 0, gain: 1.15 }] };
     return {
       position,
       // A critical: louder and pitched down, one sample (critic run 8).
       sounds: resrefs.map((resref) => critical ? { resref, at: 0, gain: 1.35, rate: 0.85 } : { resref, at: 0, gain: 1 }),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A creature's own retail soundset line for a combat moment (Part D): its
+ * SSF's PAIN_1/PAIN_2, LOW_HEALTH or CRITICAL_HIT. The controlled creature is
+ * heard in the head; a PC with no SSF (retail TSL has none) uses the PC
+ * soundset's lines from dialog.tlk, by gender. Anyone else is heard at them.
+ */
+function resolveVRCombatBark(creatureId: string | number, kind: VRCombatBarkKind): VRCombatCuePlayOptions | null {
+  try {
+    const creature: any = GameState.ModuleObjectManager.GetObjectById?.(Number(creatureId));
+    if (!creature?.position) return null;
+    const isPlayer = creature === GameState.getCurrentPlayer();
+    let resref = '';
+    if (creature.ssf && typeof creature.ssf.GetSoundResRef === 'function') {
+      const types = kind === 'pain' ? [SSFType.PAIN_1, SSFType.PAIN_2] : [kind === 'low-health' ? SSFType.LOW_HEALTH : SSFType.CRITICAL_HIT];
+      resref = pickVRBark(types.map((t) => String(creature.ssf.GetSoundResRef(t) ?? '').replace(/\0.*$/g, '')));
+    } else if (isPlayer) {
+      resref = pickVRBark(describeVRPlayerBarks(kind, Number(creature.getGender?.() ?? 0)));
+    }
+    if (!resref) return null;
+    return {
+      position: isPlayer ? null : { x: creature.position.x, y: creature.position.y, z: creature.position.z + 1.0 },
+      sounds: [{ resref, at: 0, gain: 1 }],
     };
   } catch {
     return null;
@@ -1213,6 +1257,7 @@ function resolveVRCombatPreloadSounds(): string[] {
       if (row?.[key]) out.add(String(row[key]));
     }
   }
+  for (const resref of describeVRCombatVoicingSounds()) out.add(resref);
   for (const family of ['blast', 'medbl', 'hvybl']) {
     for (const suffix of ['leth1', 'metal', 'arm1', 'clth1']) out.add(`cb_ht_${family}${suffix}`);
   }
@@ -3298,7 +3343,12 @@ export class GameState implements EngineContext {
   /** A save is being loaded: VR combat state (queue, armed items) belongs to the old game. */
   static onSaveLoadStarted: (() => void) | null = () => resetVREmbodiedCombatState();
 
-  static onBlowLanded: ((attacker: unknown, target: unknown, critical: boolean) => void) | null = () => {};
+  static onBlowLanded: ((attacker: unknown, target: unknown, critical: boolean) => void) | null = (attacker, target) => {
+    // Part D1: a hit on the VR player is shown when the blade lands.
+    if (!VRSpike.isPresenting || target !== GameState.getCurrentPlayer()) return;
+    const id = (attacker as { id?: unknown } | null)?.id;
+    if (typeof id === 'number') VRSpike.noteBlowLanded(id);
+  };
 
   /** The player was stunned or knocked down: say so in VR (critic run 6). */
   static onPlayerDisabled: ((target: unknown, what: string, seconds: number) => void) | null = (target, what) => {
@@ -4130,6 +4180,7 @@ export class GameState implements EngineContext {
           : null;
       },
       resolveCombatCueSounds: (attackerId, targetId, cue) => resolveVRCombatCueSounds(attackerId, targetId, cue),
+      resolveCombatBark: (creatureId, kind) => resolveVRCombatBark(creatureId, kind),
       getCombatCuePreloadSounds: () => resolveVRCombatPreloadSounds(),
       getPlayerDisabledState: () => resolveVRPlayerDisabledState(),
       getPlayerVitals: () => {
@@ -4284,6 +4335,12 @@ export class GameState implements EngineContext {
           snapshots,
           playLocalShotSound: () => {
             if (localActor) playVRBlasterShotSound(localActor);
+          },
+          playShotSound: (actorId: number) => {
+            const shooter = GameState.ModuleObjectManager.GetObjectById?.(actorId) as ModuleCreature | undefined;
+            if (!shooter?.position) return;
+            shooter.audioEmitter?.setPosition(shooter.position.x, shooter.position.y, shooter.position.z + 1.0);
+            playVRBlasterShotSound(shooter);
           },
         };
       },
