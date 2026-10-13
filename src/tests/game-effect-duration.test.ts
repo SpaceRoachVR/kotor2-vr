@@ -313,20 +313,53 @@ describe('feat penalties applied through addEffect', () => {
 
     // A second round's penalty replaces the first: one Defense, one attack.
     expect(object.effects).toHaveLength(2);
-    // Defense: the round and 3 s after; attack: that round only (critic run
-    // 6) - each ending a little inside its window, so the next round's roll
-    // never sees the attack penalty (critic run 7).
-    const durations = object.effects.map((e) => e.duration).sort();
-    expect(durations[0]).toBeLessThan(CombatRound.ROUND_LENGTH / 1000);
-    expect(durations[1]).toBeGreaterThan(CombatRound.ROUND_LENGTH / 1000);
-    expect(durations[1]).toBeLessThan(2 * CombatRound.ROUND_LENGTH / 1000);
-    // Stepped in frames, as the game does: gone before the next round begins.
-    for (let t = 0; t < CombatRound.ROUND_LENGTH / 1000; t += 0.05) advance(object, 0.05, 0.05);
-    expect(object.effects).toHaveLength(1);
+    // Defense: the round and 3 s after, ending a little inside that window.
+    const defense = object.effects.find((e: any) => e.featPenaltyRoundOnly !== true)!;
+    expect(defense.duration).toBeGreaterThan(CombatRound.ROUND_LENGTH / 1000);
+    expect(defense.duration).toBeLessThan(2 * CombatRound.ROUND_LENGTH / 1000);
+    // Attack: "all attacks that round". It belongs to the round and ends with
+    // it; its timer is a backstop that outlasts the round, so an attack the
+    // round rolls at 2.9 s still takes the -4 (an attack at 2.6 s used to roll
+    // without it).
+    const attack = object.effects.find((e: any) => e.featPenaltyRoundOnly === true)!;
+    expect(attack.duration).toBeGreaterThan(CombatRound.ROUND_LENGTH / 1000);
+    expect(attack.duration).toBeLessThan(2 * CombatRound.ROUND_LENGTH / 1000);
+    for (let t = 0; t < 2.9; t += 0.05) advance(object, 0.05, 0.05);
+    expect(object.effects).toContain(attack);
+    // The round ends: the attack penalty goes with it, the Defense one stays.
+    (object as any).combatData = {};
+    (object as any).onCombatRoundEnd = (): void => undefined;
+    new CombatRound(object).endCombatRound();
+    expect(object.effects).toEqual([defense]);
+    // Stepped in frames, as the game does: the Defense penalty runs out too.
     // An effect that removes itself shifts the next one into its slot, which
     // then misses that frame — as in ModuleCreature's loop — so allow a lap.
     for (let t = 0; t < CombatRound.ROUND_LENGTH / 1000; t += 0.05) advance(object, 0.05, 0.05);
     expect(object.effects).toEqual([]);
+  });
+
+  test("a round begun again by a duel partner does not renew the feat's penalty", () => {
+    // ActionPhysicalAttacks: the duel's master begins its partner's round as
+    // well. With Flurry taking the partner's round, that renewed the -4 a
+    // second time and it carried into the partner's next, plain round
+    // (Tempo run 2: +7 instead of +11; reproduced 2 of 2 with the Sith as master).
+    const object = host();
+    object.objectType = ModuleObjectType.ModuleObject | ModuleObjectType.ModuleCreature;
+    (object as any).equipment = { RIGHTHAND: {} };
+    (object as any).combatData = {};
+    const impactCaster = jest.fn();
+    const round = new CombatRound(object);
+    round.action = {
+      actionType: 11, // CombatActionType.ATTACK_USE_FEAT
+      featId: 11,
+      feat: { impactCaster, impactTarget: jest.fn() },
+      target: { combatRound: {} },
+    } as any;
+    round.beginCombatRound();
+    round.beginCombatRound();
+    expect(impactCaster).toHaveBeenCalledTimes(1);
+    // Flurry's extra attack is still counted once.
+    expect(round.additionalAttacks).toBe(1);
   });
 });
 

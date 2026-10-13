@@ -19,12 +19,19 @@ import { readFeatClassColumn, readGrantedFeatLevel } from '@/talents/featClassCo
 // The feat text: the Defense penalty lasts "while using this feat and for 3
 // seconds afterwards" (the round, 3 s, plus 3 s); the attack penalty applies
 // to "all attacks that round" only (critic runs 5-6).
-// Both expire a little inside the round: an effect ending exactly at 3.0 s
-// was still present when the next round rolled its attacks that frame
-// (critic run 7). Critical Strike / Sniper Shot lower Defense only "when
-// used" - that round - so only Flurry and Rapid Shot carry it 3 s past.
+// The Defense penalties expire a little inside their window: an effect
+// ending exactly at 3.0 s was still present when the next round rolled its
+// attacks that frame (critic run 7). Critical Strike / Sniper Shot lower
+// Defense only "when used" - that round - so only Flurry and Rapid Shot carry
+// it 3 s past.
+// The attack penalty belongs to the round that used the feat: CombatRound
+// removes it when that round ends (featPenaltyRoundOnly). Its timer is only a
+// backstop, longer than a round, so an attack the round rolls late in its 3 s
+// still takes the penalty. A timer inside the round could neither: an attack
+// at 2.6 s rolled without it, and a round that began again (a duel partner's
+// round) carried it into the next, plain round (+7 instead of +11).
 const FEAT_DEFENSE_PENALTY_DURATION = 5.5;
-const FEAT_ATTACK_PENALTY_DURATION = 2.5;
+const FEAT_ATTACK_PENALTY_DURATION = 3.5;
 const FEAT_ROUND_ONLY_DEFENSE_DURATION = 2.5;
 
 /**
@@ -292,6 +299,7 @@ export class TalentFeat extends TalentObject {
       attackDecreaseEffect.setDuration(FEAT_ATTACK_PENALTY_DURATION);
       attackDecreaseEffect.setInt(0, attackPenalty);
       (attackDecreaseEffect as any).featPenaltyId = this.id;
+      (attackDecreaseEffect as any).featPenaltyRoundOnly = true;
       object.addEffect(attackDecreaseEffect);
     }
   }

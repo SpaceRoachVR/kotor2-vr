@@ -30,6 +30,12 @@ export class CombatRoundAction {
   isCutsceneAttack: boolean = false;
 
   resultsCalculated: boolean = false;
+  /**
+   * The feat's caster/target impact has been applied for this action. A duel
+   * partner's round begins this round a second time; the feat's penalties
+   * must not be applied again then.
+   */
+  featImpacted: boolean = false;
   attackAnimation: number = 10001;
   attackResult: AttackResult = AttackResult.MISS;
   attackDamage: number = 0;

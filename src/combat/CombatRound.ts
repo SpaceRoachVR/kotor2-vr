@@ -192,8 +192,14 @@ export class CombatRound {
       ){
         this.spellCastRound = true;
       }else if(this.action.actionType == CombatActionType.ATTACK_USE_FEAT){
-        this.action.feat.impactCaster(owner);
-        this.action.feat.impactTarget(this.action.target);
+        // Once per action: a duel partner's round begins this round again
+        // mid-way, and re-applying the feat there renewed Flurry's -4 so that
+        // it outlived the round into the next, plain one.
+        if(!this.action.featImpacted){
+          this.action.featImpacted = true;
+          this.action.feat.impactCaster(owner);
+          this.action.feat.impactTarget(this.action.target);
+        }
         switch(this.action.featId){
           case CombatFeatType.FLURRY:
           case CombatFeatType.IMPROVED_FLURRY:
@@ -263,7 +269,20 @@ export class CombatRound {
     for(let i = 0; i < 5; i++){
       this.attackList[i].reset();
     }
+    this.removeRoundFeatAttackPenalty();
     this.owner.onCombatRoundEnd();
+  }
+
+  /**
+   * Flurry, Rapid Shot and Power Attack lower "all attacks that round": the
+   * attack penalty a feat round applied ends with the round.
+   */
+  removeRoundFeatAttackPenalty(){
+    const owner = this.owner;
+    const effects = Array.isArray(owner?.effects) ? owner.effects : [];
+    for(const effect of [...effects]){
+      if((effect as any)?.featPenaltyRoundOnly === true) owner.removeEffect(effect);
+    }
   }
 
   /**
