@@ -77,3 +77,17 @@ describe('ActionPhysicalAttacks wiring', () => {
     expect(inReach).toContain('combatRound.calculateAttackDamage(owner, combatRound.action);');
   });
 });
+
+describe('VR crowd cap', () => {
+  const source = fs.readFileSync(path.join(process.cwd(), 'src/GameState.ts'), 'utf8');
+
+  test('in VR a party member takes at most 3 melee attackers; the rest go elsewhere or wait 3 m off', () => {
+    expect(source).toContain('const VR_MELEE_ATTACKERS_PER_PARTY_MEMBER = 3;');
+    expect(source).toContain('const VR_MELEE_CROWD_HOLD_METRES = 3;');
+    const policy = source.slice(source.indexOf('static meleeCrowdPolicy:'), source.indexOf('static attackBarkGate'));
+    expect(policy).toContain('if (!VRSpike.isPresenting) return undefined;');
+    // Only defenders in the party are capped, and only against outsiders.
+    expect(policy).toContain('if (!party.includes(defender) || party.includes(attacker)) return undefined;');
+    expect(policy).toContain('alternatives: party');
+  });
+});

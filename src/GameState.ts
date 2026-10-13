@@ -2886,6 +2886,11 @@ function distance2D(first: THREE.Vector3, second: THREE.Vector3): number {
   return Math.hypot(first.x - second.x, first.y - second.y);
 }
 
+/** Decision 5 of 2026-10-13: a party member takes at most this many melee attackers at once in VR. */
+const VR_MELEE_ATTACKERS_PER_PARTY_MEMBER = 3;
+/** Where a melee attacker waiting for room stands, metres from its target. */
+const VR_MELEE_CROWD_HOLD_METRES = 3;
+
 function buildVRPartySwitchEntries() {
   const candidates = GameState.PartyManager.party.map((member) => ({
     id: String(member.id),
@@ -3394,10 +3399,19 @@ export class GameState implements EngineContext {
 
   /**
    * How many melee attackers one defender takes at once (ActionPhysicalAttacks,
-   * MeleeCrowdRules); null or undefined: no cap, every attacker takes an open
-   * spot.
+   * MeleeCrowdRules); undefined: no cap, every attacker takes an open spot.
+   * In VR four or five troopers crowded one party member at arm's length and
+   * filled the view (Anchor, Hive run 2): at most 3 melee attackers per party
+   * member; the rest switch to the least crowded member or wait 3 m off
+   * (decision 5 of 2026-10-13). Positioning only: rolls and ranged attackers
+   * are untouched.
    */
-  static meleeCrowdPolicy: ((attacker: unknown, defender: unknown) => MeleeCrowdPolicy | undefined) | null = null;
+  static meleeCrowdPolicy: ((attacker: unknown, defender: unknown) => MeleeCrowdPolicy | undefined) | null = (attacker, defender) => {
+    if (!VRSpike.isPresenting) return undefined;
+    const party: unknown[] = GameState.PartyManager?.party ?? [];
+    if (!party.includes(defender) || party.includes(attacker)) return undefined;
+    return { maxAttackers: VR_MELEE_ATTACKERS_PER_PARTY_MEMBER, holdDistance: VR_MELEE_CROWD_HOLD_METRES, alternatives: party };
+  };
 
   /** Decides whether an attack voices its soundset line (ActionPhysicalAttacks). */
   static attackBarkGate = new AttackBarkGate();
