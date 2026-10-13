@@ -45,6 +45,7 @@ import { TalkVolume } from "@/enums/engine/TalkVolume";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
 import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
 import { DLGNode } from "@/resource/DLGNode";
+import { talentScriptType } from "@/talents/talentScriptRules";
 
 /**
  * NWScriptDefK1 class.
@@ -4634,8 +4635,9 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [NWScriptDataType.TALENT],
     action: function(this: NWScriptInstance, args: [TalentObject]){
+      // TALENT_TYPE_* (FORCE 0, FEAT 1, SKILL 2), not the engine's flags.
       if(typeof args[0] == 'object'){
-        return args[0].objectType || 0;
+        return Math.max(0, talentScriptType(args[0]));
       }else{
         return 0;
       }
