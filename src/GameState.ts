@@ -4528,6 +4528,18 @@ export class GameState implements EngineContext {
       resolveCombatBark: (creatureId, kind) => resolveVRCombatBark(creatureId, kind),
       getCombatCuePreloadSounds: () => resolveVRCombatPreloadSounds(),
       getPlayerDisabledState: () => resolveVRPlayerDisabledState(),
+      // TEMPORARY (round 18, issue 6): see VRSpike.logTheaterShotTemp.
+      describeCutsceneShot: () => {
+        const cs: any = GameState.CutsceneManager;
+        const state: any = cs?.cameraState;
+        const who = (o: any) => o
+          ? `${o.tag || o.getTag?.() || '?'}#${o.id}@(${Number(o.position?.x).toFixed(1)},${Number(o.position?.y).toFixed(1)},${Number(o.position?.z).toFixed(1)}) room=${o.room?.roomName ?? '-'}`
+          : '-';
+        const entry: any = cs?.currentEntry;
+        return `dlg=${cs?.dialog?.resref ?? '?'} angle=${entry?.cameraAngle ?? '?'} camId=${entry?.cameraID ?? '-'}` +
+          ` vfx=${GameState.VideoEffectManager?.videoEffectId ?? '?'} speaker=${who(state?.speaker?.participant)}` +
+          ` listener=${who(state?.listener?.participant)} owner=${who(cs?.owner)}`;
+      },
       getPlayerVitals: () => {
         const actor = GameState.getCurrentPlayer() as ModuleCreature | undefined;
         if (!actor || typeof actor.getHP !== 'function' || typeof actor.getMaxHP !== 'function') return null;

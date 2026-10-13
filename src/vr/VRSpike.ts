@@ -217,6 +217,8 @@ export interface VRSpikeHooks {
   getCombatCuePreloadSounds?: () => string[];
   /** Why the player cannot act right now (stunned, knocked down, ...), or null. */
   getPlayerDisabledState?: () => string | null;
+  /** TEMPORARY (round 18, issue 6): who the current dialogue shot frames, for the theater log. */
+  describeCutsceneShot?: () => string;
   /** The attacker's own weaponsounds.2da sounds for a cue, and where it happened. */
   resolveCombatCueSounds?: (attackerId: string | number, targetId: string | number, cue: VRCombatCue, stroke?: VRStrokeShape) => VRCombatCuePlayOptions | null;
   /** A creature's own retail soundset line (Part D): the PC's in the head, anyone else's at them. */
@@ -4499,6 +4501,12 @@ export class VRSpike {
           } finally {
             restoreBody();
           }
+          // Sampled a few refreshes into the shot: the cut frame itself can
+          // precede the room pass for the new camera.
+          if (cameraCut) VRSpike.theaterSampleCountdownTemp = 6;
+          if (VRSpike.theaterSampleCountdownTemp > 0 && --VRSpike.theaterSampleCountdownTemp === 0) {
+            VRSpike.logTheaterShotTemp(renderer, worldCamera);
+          }
         } finally {
           VRSpike.movieHost.object.visible = movieVisible;
           if (VRSpike.panelHost) VRSpike.panelHost.object.visible = panelVisible;
@@ -4529,6 +4537,40 @@ export class VRSpike {
     } catch (error) {
       VRSpike.movieHost?.clear();
       console.error('[VRSpike] cutscene theater presentation rejected', error);
+    }
+  }
+
+  /**
+   * TEMPORARY (round 18, issue 6): the T3-M4 comm video at the Peragus
+   * administration computer showed as a black box in the headset and rendered
+   * correctly under the emulator. One line per shot says what the theater
+   * frame actually held (how dark a 5x5 sample of it is) and who the shot was
+   * framing, so the next headset run can tell an empty frame from a camera in
+   * the wrong place. Remove once that is settled.
+   */
+  private static theaterSampleCountdownTemp = 0;
+  private static logTheaterShotTemp(renderer: THREE.WebGLRenderer, worldCamera: THREE.Camera): void {
+    try {
+      const target = VRSpike.movieHost?.renderTarget;
+      if (!target || target.width < 5 || target.height < 5) return;
+      const pixel = new Uint8Array(4);
+      let dark = 0;
+      let lumSum = 0;
+      for (let ix = 1; ix <= 5; ix++) {
+        for (let iy = 1; iy <= 5; iy++) {
+          renderer.readRenderTargetPixels(target,
+            Math.floor(target.width * ix / 6), Math.floor(target.height * iy / 6), 1, 1, pixel);
+          const lum = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
+          lumSum += lum;
+          if (lum < 8) dark++;
+        }
+      }
+      const p = worldCamera.getWorldPosition(new THREE.Vector3());
+      console.info(`[VR theater TEMP r18] cam=(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)})` +
+        ` dark=${dark}/25 meanLum=${(lumSum / 25).toFixed(0)} target=${target.width}x${target.height}` +
+        ` ${VRSpike.hooks?.describeCutsceneShot?.() ?? ''}`);
+    } catch (error) {
+      console.warn('[VR theater TEMP r18] sample failed', error);
     }
   }
 
