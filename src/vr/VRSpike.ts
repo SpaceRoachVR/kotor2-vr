@@ -27,7 +27,7 @@ import { VRKeyboardInputController } from "./runtime/VRKeyboardInputController";
 import { VR_KEYBOARD_DONE_KEY } from "./runtime/VRKeyboardLayout";
 import { VRCombatInputController, VRCombatSwingEvent } from "./runtime/VRCombatInputController";
 import { VRCombatTargetLock } from "./runtime/VRCombatTargetLock";
-import { VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
+import { isVRWeaponHandOnTarget, VRForceGesture, VRForceGestureController } from "./runtime/VRForceGestureController";
 import { VRForceCastGesture, VRForceCastGestureController } from "./runtime/VRForceCastGestureController";
 import { VRConsumableUseGesture, VRConsumableUseGestureController } from "./runtime/VRConsumableUseGestureController";
 import { VRRadialControllerEffect, VRRadialMenuController } from "./runtime/VRRadialMenuController";
@@ -3077,7 +3077,10 @@ export class VRSpike {
 
   private static processForceInput(
     timestamp: number,
-    combatContext?: { onDirectionalForceGesture?(gesture: VRForceGesture): boolean },
+    combatContext?: {
+      onDirectionalForceGesture?(gesture: VRForceGesture): boolean;
+      readonly nominatedTargetAimPoint?: THREE.Vector3 | null;
+    },
   ): boolean {
     const inputFrame = VRSpike.latestInputFrame;
     const session = VRSpike.session;
@@ -3105,6 +3108,9 @@ export class VRSpike {
       // frame's melee input when the gesture was actually spent on a queued
       // Push/Pull; otherwise the same motion must still land as a swing.
       if (combatContext?.onDirectionalForceGesture) {
+        // The weapon hand must be on the locked target (locked by Allen,
+        // 2026-10-13); a flick with the hand turned away is a swing, not a push.
+        if (!VRSpike.isWeaponHandOnLockedTarget(inputFrame, combatContext.nominatedTargetAimPoint)) return false;
         return combatContext.onDirectionalForceGesture(gesture) === true;
       }
       legacyContext?.onForceGesture(gesture);
@@ -3116,6 +3122,16 @@ export class VRSpike {
       }
       return false;
     }
+  }
+
+  /** The weapon hand's ray within the Force cone of the locked target's aim point. */
+  private static isWeaponHandOnLockedTarget(
+    inputFrame: XRInputFrame,
+    targetPoint: THREE.Vector3 | null | undefined,
+  ): boolean {
+    const onTarget = isVRWeaponHandOnTarget(inputFrame.hands[VRSpike.dominantHand]?.targetRayPose, targetPoint);
+    if (!onTarget) console.info('[VR force] gesture refused: weapon hand off the locked target');
+    return onTarget;
   }
 
   /**
@@ -3147,6 +3163,9 @@ export class VRSpike {
         VRSpike.forceCastGestureController.reset();
         return false;
       }
+      // F14: the lock outlives the aim by 2.5 s, and a thrust with the sword
+      // at the floor cast on it. The weapon hand must be on the target.
+      if (!VRSpike.isWeaponHandOnLockedTarget(inputFrame, context.nominatedTargetAimPoint)) return false;
       return context.onForceCastGesture(gesture) === true;
     } catch (error) {
       if (!VRSpike.forceGestureErrorReported) {
