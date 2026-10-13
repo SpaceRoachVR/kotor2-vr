@@ -53,8 +53,11 @@ const PROFILES = Object.freeze({
   '601DAN': { level: 14, active: [6, 9], roster: [0, 1, 6, 8, 9], armor: 'a_robe_08', weapon: 'g_w_lghtsbr03',
     extras: { HEAD: 'a_helmet_23', ARMS: 'a_gloves_22' }, gold: 6000,
     supplies: [['g_i_medeqpmnt02', 12], ['g_i_adrnaline002', 3], ['g_i_cmbtshot002', 3], ['g_i_secspike02', 3], ['g_w_fraggren01', 5], ['g_w_iongren01', 5], ['g_i_drdrepeqp002', 3], ['g_i_parts01', 10]] },
+  // The module entry sits ~4 m from tr_ehawk_custom, the "board the Ebon Hawk"
+  // trigger that sends the leader to 003EBO; retail arrives from that cutscene
+  // instead. Start in the camp clearing (WP_PC_1), ~24 m from the trigger.
   '401DXN': { level: 16, active: [1, 9], roster: [0, 1, 6, 8, 9], armor: 'a_robe_13', weapon: 'g_w_lghtsbr03',
-    extras: { HEAD: 'a_helmet_23', ARMS: 'a_gloves_22' }, gold: 8000,
+    extras: { HEAD: 'a_helmet_23', ARMS: 'a_gloves_22' }, gold: 8000, arriveAt: ['WP_PC_1', 'WP_PC_2', 'WP_Kreia_1'],
     supplies: [['g_i_medeqpmnt02', 12], ['g_i_medeqpmnt03', 3], ['g_i_adrnaline005', 3], ['g_i_cmbtshot002', 3], ['g_i_secspike02', 3], ['g_w_fraggren01', 5], ['g_w_iongren01', 5], ['g_i_parts01', 10]] },
   '501OND': { level: 17, active: [2, 6], roster: [0, 1, 2, 6, 8, 9], armor: 'a_robe_13', weapon: 'g_w_lghtsbr03',
     extras: { HEAD: 'a_helmet_23', ARMS: 'a_gloves_22' }, gold: 10000,
@@ -137,8 +140,9 @@ const IDENTITY_SAMPLE = `(()=>{const K=window.KotOR,p=K.PartyManager.Player;retu
   head:p?.equipment.HEAD?.tag,arms:p?.equipment.ARMS?.tag,gold:K.PartyManager.Gold,
   inventory:K.GameState.InventoryManager.getNonQuestInventory?.().length ?? K.GameState.InventoryManager.items?.length};})()`;
 
-const BAG_SAMPLE = `(()=>{const out={};for(const it of window.KotOR.GameState.InventoryManager.items||[]){
-  const r=String(it.templateResRef||it.resref||'').toLowerCase();out[r]=(out[r]||0)+(Number(it.stackSize)||1);}return out;})()`;
+const BAG_SAMPLE = `(()=>{const out={};for(const it of window.KotOR.GameState.InventoryManager.inventory||[]){
+  const r=String(it.getTemplateResRef?.()||it.templateResRef||it.tag||'?').toLowerCase();
+  out[r]=(out[r]||0)+(Number(it.getStackSize?.())||1);}return out;})()`;
 
 /** Each supply exactly as profiled, and no spare copy of the player's worn gear. */
 function validateBag(bag, profile) {
@@ -149,7 +153,30 @@ function validateBag(bag, profile) {
   for (const resref of [profile.armor, profile.weapon, ...Object.values(profile.extras || {})]) {
     if (bag[resref]) problems.push(`spare worn item ${resref} x${bag[resref]}`);
   }
-  if (problems.length) throw new Error('Bag does not match the profile: ' + problems.join(', '));
+  if (problems.length) throw new Error('Bag does not match the profile: ' + problems.join(', ') + ' — bag ' + JSON.stringify(bag));
+}
+
+/** Jumps the party onto the profile's waypoints, as ActionJumpToPoint does. */
+async function placeParty(harness, waypoints) {
+  return harness.evaluate(`(()=>{const K=window.KotOR,gs=K.GameState,pm=K.PartyManager,tags=${JSON.stringify(waypoints)};
+    const placed=[];
+    pm.party.forEach((p,i)=>{
+      const wp=gs.module.area.waypoints.find(w=>String(w.tag).toLowerCase()===tags[Math.min(i,tags.length-1)].toLowerCase());
+      if(!wp) throw new Error('Missing waypoint '+tags[i]);
+      p.clearAllActions?.();
+      p.setPosition(wp.position.clone());
+      p.collisionManager.groundFace=undefined; p.collisionManager.lastGroundFace=undefined;
+      p.collisionManager.findWalkableFace();
+      placed.push({tag:p.tag||'player',x:+p.position.x.toFixed(1),y:+p.position.y.toFixed(1)});
+    });
+    return placed;})()`);
+}
+
+/** Thirty seconds in the world after a reload: a save must not leave its module on its own. */
+async function validateStays(harness, destination) {
+  await new Promise(r => setTimeout(r, 30000));
+  const module = await harness.evaluate(`String(window.KotOR.GameState.module?.filename||'').toUpperCase()`);
+  if (module !== destination.module) throw new Error(`${destination.name} left for ${module} within 30 s of loading`);
 }
 
 function validateIdentity(identity) {
@@ -226,6 +253,7 @@ async function main() {
         Object.assign(loadout, await configureProfile(harness, d.module, { partyOnly: true }));
         before = await settleMenus(harness, d);
       }
+      if (loadout.arriveAt) loadout.placed = await placeParty(harness, loadout.arriveAt);
       validateBag(await harness.evaluate(BAG_SAMPLE), loadout);
       const prepared = await harness.evaluate(EQUIPPED_PARTY_SAMPLE);
       validateEquippedParty(prepared, loadout, loadout.active);
@@ -237,6 +265,7 @@ async function main() {
         return {directory:s.directory,saveName:s.getSaveName()};})()`, { timeoutMs: 180000 });
       await loadSave(harness, metadata.directory, d.module);
       const after = await settleMenus(harness, d);
+      await validateStays(harness, d);
       const reloaded = await harness.evaluate(EQUIPPED_PARTY_SAMPLE);
       validateEquippedParty(reloaded, loadout, loadout.active);
       validateRestoredProgress(reloaded, prepared);
