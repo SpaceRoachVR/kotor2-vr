@@ -105,8 +105,12 @@ export class VRHurtPresentationGate {
     if (hit) hit.landed = true;
   }
 
-  /** Feed the live hit points every frame. */
-  update(liveHitPoints: number | null, nowMs: number): VRHurtGateUpdate {
+  /**
+   * Feed the live hit points every frame, and the maximum when known: a heal
+   * while a hit is held (a medpac, Force heal) can cover what it took, and
+   * the shown HP never goes above the maximum.
+   */
+  update(liveHitPoints: number | null, nowMs: number, maxHitPoints: number | null = null): VRHurtGateUpdate {
     if (liveHitPoints === null || !Number.isFinite(liveHitPoints)) {
       this.reset();
       return { displayedHitPoints: null, released: [] };
@@ -141,6 +145,14 @@ export class VRHurtPresentationGate {
       }
     }
     this.pending = kept;
+    if (maxHitPoints !== null && Number.isFinite(maxHitPoints)) {
+      let excess = liveHitPoints + kept.reduce((sum, hit) => sum + hit.amount, 0) - maxHitPoints;
+      for (let i = kept.length - 1; i >= 0 && excess > 0; i -= 1) {
+        const cut = Math.min(kept[i].amount, excess);
+        kept[i].amount -= cut;
+        excess -= cut;
+      }
+    }
     const held = kept.reduce((sum, hit) => sum + hit.amount, 0);
     return { displayedHitPoints: liveHitPoints + held, released };
   }

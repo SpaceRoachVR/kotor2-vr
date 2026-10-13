@@ -4735,7 +4735,8 @@ export class VRSpike {
 
     const local = localActorId === null ? undefined : snapshots.find((snapshot) => snapshot.id === localActorId);
     const head = VRSpike.latestInputFrame?.head;
-    const gated = VRSpike.hurtGate.update(typeof local?.hitPoints === 'number' ? local.hitPoints : null, nowMs);
+    const gated = VRSpike.hurtGate.update(typeof local?.hitPoints === 'number' ? local.hitPoints : null, nowMs,
+      typeof local?.maxHitPoints === 'number' ? local.maxHitPoints : null);
     VRSpike.shownHitPoints = VRSpike.hurtGate.holding ? gated.displayedHitPoints : null;
     for (const landed of gated.released) {
       // ROADMAP 3.14: who landed it, so the drop is shown on their side.

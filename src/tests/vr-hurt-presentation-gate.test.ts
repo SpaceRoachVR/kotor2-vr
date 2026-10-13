@@ -87,6 +87,16 @@ describe('hurt on the blow', () => {
     expect(g.holding).toBe(false);
   });
 
+  test('a heal while a hit is held covers it, and the shown HP never passes the maximum', () => {
+    const g = gate();
+    g.recordHit({ attackerId: 7, critical: false, ranged: false, nowMs: 100 });
+    expect(g.update(51, 100, 80).displayedHitPoints).toBe(80);
+    // A medpac to full while the blade is still coming.
+    expect(g.update(80, 300, 80).displayedHitPoints).toBe(80);
+    g.noteBlowLanded(7);
+    expect(g.update(80, 900, 80).released).toEqual([{ attackerId: 7, critical: false, amount: 0, reason: 'blow' }]);
+  });
+
   test('a load or party swap (no HP) drops whatever was held', () => {
     const g = gate();
     g.recordHit({ attackerId: 7, critical: false, ranged: false, nowMs: 100 });
