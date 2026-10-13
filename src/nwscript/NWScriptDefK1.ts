@@ -936,14 +936,12 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.VOID,
     args: [NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [ModuleObject]){
+      // The named creature only. Retail party AI calls this on itself
+      // (CancelCombat(OBJECT_SELF) in k_inc_generic) when it has nothing to
+      // fight; reaching the whole party dropped the leader's and every other
+      // member's combat on each companion's round end.
       if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)){
-        if(GameState.PartyManager.party.indexOf(args[0] as ModuleCreature) >= 0){
-          for(let i = 0, len = GameState.PartyManager.party.length; i < len; i++){
-            GameState.PartyManager.party[i].cancelCombat();
-          }
-        }else{
-          (args[0] as ModuleCreature).cancelCombat();
-        }
+        (args[0] as ModuleCreature).cancelCombat();
       }
     }
   },
