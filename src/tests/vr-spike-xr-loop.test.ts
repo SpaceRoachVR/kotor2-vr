@@ -977,7 +977,7 @@ describe('VRSpike XR loop ownership', () => {
       (VRSpike as any).processCombatInput(1_000);
       expect(swings).toHaveLength(0);
       expect(bufferServiced).toHaveBeenCalledTimes(1);
-      expect(hilt).toHaveBeenLastCalledWith('melee-one-handed', 0, true, '', true);
+      expect(hilt).toHaveBeenLastCalledWith('melee-one-handed', 0, true, '', true, null);
 
       paused = false;
       // A swing is two fast samples within 120 ms (critic run 15).

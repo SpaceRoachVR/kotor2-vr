@@ -91,6 +91,24 @@ describe("VRCombatAttackResultObserver", () => {
     expect(observer.observe([snapshot({ attackResultsCalculated: true })])).toEqual([]);
   });
 
+  it("reports each attack a stroke rolls later in the same round (T-B)", () => {
+    const observer = new VRCombatAttackResultObserver();
+    observer.observe([snapshot()]);
+    // The opening stroke: the round's first attack, a miss.
+    expect(observer.observe([snapshot({ attackResultsCalculated: true, attackResult: 2, heldAttacksResolved: 0 })]))
+      .toHaveLength(1);
+    // A second stroke spends Flurry's extra: a hit, reported as itself, not as
+    // the round's best-so-far.
+    expect(observer.observe([snapshot({ attackResultsCalculated: true, attackResult: 1, heldAttacksResolved: 1, lastHeldAttackResult: 1 })]))
+      .toEqual([{ attackerId: PLAYER, targetId: ENEMY, attackResult: 1, ranged: false, targetIsCreature: true }]);
+    expect(observer.observe([snapshot({ attackResultsCalculated: true, attackResult: 1, heldAttacksResolved: 1, lastHeldAttackResult: 1 })]))
+      .toEqual([]);
+    // A new round starts the count again without replaying anything.
+    observer.observe([snapshot({ attackResultsCalculated: false, heldAttacksResolved: 0 })]);
+    expect(observer.observe([snapshot({ attackResultsCalculated: true, attackResult: 2, heldAttacksResolved: 0 })]))
+      .toHaveLength(1);
+  });
+
   it("skips INVALID and ATTACK_FAILED", () => {
     for (const attackResult of [0, 6]) {
       const observer = new VRCombatAttackResultObserver();

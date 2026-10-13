@@ -72,6 +72,12 @@ export interface VRCombatActorSnapshot {
   readonly hitPoints?: number | null;
   /** For the low-health warning (critic run 20). */
   readonly maxHitPoints?: number | null;
+  /**
+   * T-B: attacks of this round rolled after its first, one per stroke
+   * (`CombatRound.heldAttacksResolved`), and the last one's own result.
+   */
+  readonly heldAttacksResolved?: number;
+  readonly lastHeldAttackResult?: number;
 }
 
 export interface VRBlasterBoltEvent {
@@ -220,6 +226,7 @@ const NON_ATTACK_RESULTS: ReadonlySet<number> = new Set([0, 6]);
 
 export class VRCombatAttackResultObserver {
   private readonly calculated = new Map<number, boolean>();
+  private readonly heldResolved = new Map<number, number>();
 
   observe(snapshots: readonly VRCombatActorSnapshot[]): VRCombatAttackResultEvent[] {
     const events: VRCombatAttackResultEvent[] = [];
@@ -230,6 +237,23 @@ export class VRCombatAttackResultObserver {
       const now = !!snapshot.attackResultsCalculated;
       const previous = this.calculated.get(snapshot.id);
       this.calculated.set(snapshot.id, now);
+      const held = Number.isInteger(snapshot.heldAttacksResolved) ? snapshot.heldAttacksResolved as number : 0;
+      const heldBefore = this.heldResolved.get(snapshot.id);
+      this.heldResolved.set(snapshot.id, held);
+      // T-B: a later attack of a round already reported - its own result.
+      if (previous === true && now && heldBefore !== undefined && held > heldBefore) {
+        const result = snapshot.lastHeldAttackResult;
+        if (Number.isInteger(result) && !NON_ATTACK_RESULTS.has(result as number)) {
+          events.push({
+            attackerId: snapshot.id,
+            targetId: resolveTargetId(snapshot),
+            attackResult: result as number,
+            ranged: !!snapshot.attackIsRanged,
+            targetIsCreature: snapshot.attackTargetIsCreature !== false,
+          });
+        }
+        continue;
+      }
       if (previous !== false || !now) continue;
       if (!Number.isInteger(snapshot.attackResult) || NON_ATTACK_RESULTS.has(snapshot.attackResult)) continue;
       events.push({
@@ -241,13 +265,17 @@ export class VRCombatAttackResultObserver {
       });
     }
     for (const id of Array.from(this.calculated.keys())) {
-      if (!seen.has(id)) this.calculated.delete(id);
+      if (!seen.has(id)) {
+        this.calculated.delete(id);
+        this.heldResolved.delete(id);
+      }
     }
     return events;
   }
 
   reset(): void {
     this.calculated.clear();
+    this.heldResolved.clear();
   }
 }
 
