@@ -2645,7 +2645,10 @@ describe('VRSpike XR loop ownership', () => {
   test('continues locomotion while an open wheel suppresses interaction and combat', () => {
     const input = installRadialInput();
     installRadialHost();
-    VRSpike.hooks = basicHooks({ createActionWheel: () => actionWheel() });
+    // The wheel does not stop the game: a held swing is still released or
+    // aged at its round opening behind it (round 17).
+    const serviceCombatSwingBuffer = jest.fn(() => ({ released: false, armed: true }));
+    VRSpike.hooks = basicHooks({ createActionWheel: () => actionWheel(), serviceCombatSwingBuffer } as never);
     input.leftButtons[4] = pressedButton();
     (VRSpike as any).processRadialMenuInput();
 
@@ -2669,6 +2672,7 @@ describe('VRSpike XR loop ownership', () => {
     expect(locomotion).toHaveBeenCalledTimes(1);
     expect(interaction).not.toHaveBeenCalled();
     expect(combat).not.toHaveBeenCalled();
+    expect(serviceCombatSwingBuffer).toHaveBeenCalledTimes(1);
     expect(clearTargets).toHaveBeenCalled();
     expect(cancelInteraction).toHaveBeenCalled();
     expect(promptHost.clear).toHaveBeenCalled();

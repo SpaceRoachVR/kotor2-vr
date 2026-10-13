@@ -1443,6 +1443,7 @@ export class VRSpike {
         VRSpike.captureWeaponActionLatch();
         VRSpike.interactionTargetSet.clear();
         VRSpike.interactionSystem.cancelTransientState();
+        if (!lifecycleSuspendsGameplayInput) VRSpike.serviceHeldSwingBehindWheel();
       } else if (!lifecycleSuspendsGameplayInput) {
         VRSpike.processCombatCancel();
         // Phase G: the engine overlay is the interaction surface. It still runs
@@ -2627,6 +2628,23 @@ export class VRSpike {
       if (!VRSpike.combatCancelErrorReported) {
         VRSpike.combatCancelErrorReported = true;
         console.error('[VRSpike] combat cancel rejected', error);
+      }
+    }
+  }
+
+  /**
+   * The action wheel does not stop the game, so a held swing's round can open
+   * behind it. The swing must still release at that opening or drop within
+   * 0.5 s of it (round 17, locked); unserviced, it waited for the wheel to
+   * close and released a second or more late (Telos probe: a 4.3 s gap).
+   */
+  private static serviceHeldSwingBehindWheel(): void {
+    try {
+      VRSpike.hooks?.serviceCombatSwingBuffer?.();
+    } catch (error) {
+      if (!VRSpike.combatInputErrorReported) {
+        VRSpike.combatInputErrorReported = true;
+        console.error('[VRSpike] combat swing buffer rejected', error);
       }
     }
   }
