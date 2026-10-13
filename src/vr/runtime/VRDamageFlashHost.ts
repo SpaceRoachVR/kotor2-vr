@@ -5,8 +5,10 @@ import type { VRDamageSide } from './VRDamageFeedback';
  * A red wash at the edge of the view on the side a hit came from
  * (ROADMAP 3.14). A sibling of `VRComfortVignetteHost`: the same head-locked
  * plane just in front of the eyes, but one per side so a hit from the left
- * reads on the left. Front, behind and unattributed hits light both edges.
- * Only opacity changes per frame.
+ * reads on the left. Front and unattributed hits light both edges; a hit
+ * from behind lights both edges and the lower rim, a shape of its own
+ * (Anchor Finding 1: behind looked exactly like front). Only opacity changes
+ * per frame.
  */
 
 const FLASH_DISTANCE_METRES = 0.12;
@@ -16,7 +18,7 @@ const PEAK_OPACITY = 0.45;
 const CRITICAL_PEAK_OPACITY = 0.8;
 const UNATTRIBUTED_PEAK_OPACITY = 0.3;
 
-type Edge = 'left' | 'right';
+type Edge = 'left' | 'right' | 'bottom';
 
 interface EdgeState {
   readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
@@ -39,6 +41,7 @@ export class VRDamageFlashHost {
     this.edges = {
       left: this.createEdge('left', createTexture('left')),
       right: this.createEdge('right', createTexture('right')),
+      bottom: this.createEdge('bottom', createTexture('bottom')),
     };
   }
 
@@ -46,7 +49,9 @@ export class VRDamageFlashHost {
     const peak = side === 'unknown'
       ? UNATTRIBUTED_PEAK_OPACITY
       : critical ? CRITICAL_PEAK_OPACITY : PEAK_OPACITY;
-    const edges: Edge[] = side === 'left' ? ['left'] : side === 'right' ? ['right'] : ['left', 'right'];
+    const edges: Edge[] = side === 'left' ? ['left']
+      : side === 'right' ? ['right']
+        : side === 'behind' ? ['left', 'right', 'bottom'] : ['left', 'right'];
     for (const edge of edges) {
       const state = this.edges[edge];
       state.peak = Math.max(peak, this.currentOpacity(state, nowMs));
@@ -120,7 +125,9 @@ function createEdgeTexture(edge: Edge): THREE.Texture | null {
   if (!context) return null;
   const gradient = edge === 'left'
     ? context.createLinearGradient(0, 0, 128, 0)
-    : context.createLinearGradient(256, 0, 128, 0);
+    : edge === 'right'
+      ? context.createLinearGradient(256, 0, 128, 0)
+      : context.createLinearGradient(0, 256, 0, 128);
   gradient.addColorStop(0, 'rgba(190, 0, 12, 1)');
   gradient.addColorStop(0.55, 'rgba(160, 0, 10, 0.35)');
   gradient.addColorStop(1, 'rgba(120, 0, 8, 0)');

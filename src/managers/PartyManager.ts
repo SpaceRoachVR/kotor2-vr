@@ -1696,11 +1696,15 @@ export class PartyManager {
   /**
    * Give XP to the player
    * @param nXP - The amount of XP to give
+   * @param notify - Raise the plot-XP notice (and its chime). Kill experience
+   *   does not: retail reports it on the Combat log only.
    * @returns void
    */
-  static GiveXP(nXP = 0){
+  static GiveXP(nXP = 0, notify = true){
     this.Player.experience += nXP;
-    GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.PLOT_XP_RECEIVED);
+    if(notify){
+      GameState.UINotificationManager.EnableUINotificationIconType(UIIconTimerType.PLOT_XP_RECEIVED);
+    }
   }
 
   /**

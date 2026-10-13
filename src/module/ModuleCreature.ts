@@ -2522,7 +2522,9 @@ export class ModuleCreature extends ModuleObject {
         this.challengeRating,
       );
       if(experience > 0){
-        GameState.PartyManager.GiveXP(experience);
+        // Retail reports kill experience on the Combat log only; the plot-XP
+        // notice and its chime are for plot rewards.
+        GameState.PartyManager.GiveXP(experience, false);
         // Retail's Combat line (dialog.tlk 1407): "<killer> killed <victim>: <n> XP".
         const killer: any = this.combatData?.lastDamager || this.combatData?.lastAttacker || player;
         GameState.FeedbackMessageManager?.AddLine?.(`${killer?.getName?.() || player.getName()} killed ${this.getName()}: ${experience} XP`);

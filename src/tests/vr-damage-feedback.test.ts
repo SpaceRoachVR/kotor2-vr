@@ -101,4 +101,23 @@ describe("VRDamageFlashHost", () => {
     critical.update(1_000);
     expect(edges(critical).left.material.opacity).toBeGreaterThan(normal);
   });
+
+  // Anchor Finding 1 / Spark Finding 9: behind looked exactly like front.
+  it("gives a hit from behind its own shape: the lower rim lights as well", () => {
+    const rim = (host: VRDamageFlashHost) => host.object.getObjectByName("Kotor2VR.DamageFlash.bottom") as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+    const behind = new VRDamageFlashHost(new THREE.Object3D(), () => null);
+    behind.flash("behind", false, 1_000);
+    behind.update(1_000);
+    expect(rim(behind).visible).toBe(true);
+    expect(edges(behind).left.visible).toBe(true);
+    expect(edges(behind).right.visible).toBe(true);
+    for (const side of ["front", "left", "right", "unknown"] as const) {
+      const host = new VRDamageFlashHost(new THREE.Object3D(), () => null);
+      host.flash(side, false, 1_000);
+      host.update(1_000);
+      expect([side, rim(host).visible]).toEqual([side, false]);
+    }
+    behind.update(1_500);
+    expect(rim(behind).visible).toBe(false);
+  });
 });

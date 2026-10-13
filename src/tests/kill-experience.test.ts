@@ -65,3 +65,20 @@ test('a fractional cell is truncated, so experience stays a whole number', () =>
 
   expect(resolveKillExperience(rows, 1, 1)).toBe(125);
 });
+
+/**
+ * Retail's HUD has two experience notices, plot (LBL_PLOTXP) and stealth
+ * (LBL_STEALTHXP), and its kill reward is a Combat-log line (dialog.tlk
+ * 1407). Paying kill XP through the plot-XP route lit the plot notice and
+ * played the journal chime (gui_quest) on every kill.
+ */
+test('kill experience is paid without the plot-XP notice', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const creature = fs.readFileSync(path.join(__dirname, '..', 'module', 'ModuleCreature.ts'), 'utf8');
+  const award = creature.slice(creature.indexOf('  awardKillExperience(){'));
+  const body = award.slice(0, award.indexOf('\n  }\n'));
+  expect(body).toContain('GameState.PartyManager.GiveXP(experience, false);');
+  const party = fs.readFileSync(path.join(__dirname, '..', 'managers', 'PartyManager.ts'), 'utf8');
+  expect(party).toMatch(/static GiveXP\(nXP = 0, notify = true\)\{[\s\S]*?if\(notify\)\{\s*GameState\.UINotificationManager\.EnableUINotificationIconType\(UIIconTimerType\.PLOT_XP_RECEIVED\);/);
+});
