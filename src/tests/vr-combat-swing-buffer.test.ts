@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   VRCombatSwingBuffer,
+  VRHeldSwingLifetime,
   isVRCombatSwingBufferable,
+  isVRFightOngoing,
   type VRCombatBufferedSwing,
   type VRCombatSwingBufferReleaseContext,
 } from "@/vr/runtime/VRCombatSwingBuffer";
@@ -103,5 +105,75 @@ describe("VRCombatSwingBuffer", () => {
     buffer.offer(event, "round-active");
     event.targetId = "99";
     expect(buffer.peek()?.targetId).toBe("42");
+  });
+});
+
+/**
+ * Round 17 (Tempo finding 1, locked by Allen): a held swing belongs to the
+ * next round opening only. It releases within 0.5 s of that opening or drops;
+ * it never fires on stepping back into reach seconds later. Game time only:
+ * a pause neither ages it nor clears it.
+ */
+describe("VRHeldSwingLifetime", () => {
+  const frames = (lifetime: VRHeldSwingLifetime, roundOpen: boolean, seconds: number, step = 1 / 30) => {
+    let expired: ReturnType<VRHeldSwingLifetime["advance"]> = null;
+    for (let t = 0; t < seconds - 1e-9 && !expired; t += step) expired = lifetime.advance(roundOpen, step);
+    return expired;
+  };
+
+  it("lives through the busy round that held it", () => {
+    const lifetime = new VRHeldSwingLifetime();
+    expect(frames(lifetime, false, 2.9)).toBeNull();
+  });
+
+  it("drops 0.5 s after the opening when it could not release (out of reach at the opening)", () => {
+    const lifetime = new VRHeldSwingLifetime();
+    frames(lifetime, false, 1.5);
+    expect(frames(lifetime, true, 0.45)).toBeNull();
+    expect(frames(lifetime, true, 0.1)).toBe("opening-passed");
+  });
+
+  it("drops when the opening closes again without it", () => {
+    const lifetime = new VRHeldSwingLifetime();
+    frames(lifetime, false, 1);
+    frames(lifetime, true, 0.2);
+    expect(lifetime.advance(false, 1 / 30)).toBe("opening-missed");
+  });
+
+  it("never outlives two rounds, even if no round ever opens", () => {
+    const lifetime = new VRHeldSwingLifetime();
+    expect(frames(lifetime, false, 6.1)).toBe("held-too-long");
+  });
+
+  it("restarts for a newer swing", () => {
+    const lifetime = new VRHeldSwingLifetime();
+    frames(lifetime, false, 1);
+    frames(lifetime, true, 0.4);
+    lifetime.restart();
+    expect(frames(lifetime, false, 2)).toBeNull();
+    expect(frames(lifetime, true, 0.45)).toBeNull();
+  });
+
+  it("ignores a non-finite or negative frame time", () => {
+    const lifetime = new VRHeldSwingLifetime();
+    expect(lifetime.advance(true, Number.NaN)).toBeNull();
+    expect(lifetime.advance(true, -5)).toBeNull();
+    expect(lifetime.advance(true, Number.POSITIVE_INFINITY)).toBeNull();
+  });
+});
+
+/**
+ * Round 17 (Tempo finding 2): in a group fight the player's own combat flag
+ * drops between its rounds while hostiles shoot the companions, and the held
+ * swing was thrown away as "combat ended". The fight decides, not the flag.
+ */
+describe("isVRFightOngoing", () => {
+  it.each([
+    [{ actorInCombat: true, lockedTargetLive: false, hostileEngagedWithParty: false }, true],
+    [{ actorInCombat: false, lockedTargetLive: true, hostileEngagedWithParty: false }, true],
+    [{ actorInCombat: false, lockedTargetLive: false, hostileEngagedWithParty: true }, true],
+    [{ actorInCombat: false, lockedTargetLive: false, hostileEngagedWithParty: false }, false],
+  ] as const)("%o -> %s", (input, expected) => {
+    expect(isVRFightOngoing(input)).toBe(expected);
   });
 });

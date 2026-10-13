@@ -106,10 +106,57 @@ const WINDOWED_SAME_HEADING_DOT = 0.35;
 const WINDOWED_MINIMUM_ARC_METRES = 0.12;
 /** After a swing, motion this far against its heading (cos ~107 degrees) ... */
 const WINDOWED_REVERSAL_DOT = -0.3;
-/** ... within this long is the recovery stroke. */
+/** ... within this long of the hand coming to rest is the recovery stroke. */
 const WINDOWED_RECOVERY_MS = 1500;
-/** ... unless it is at least this fraction of the stroke's peak speed: a backhand. */
+/**
+ * ... unless it is a deliberate backhand: at least this fast between two
+ * poses, and at least this fraction of the stroke's own peak measured the
+ * same way. Against a windowed peak (an average) a brisk 1.2-1.5 m/s return
+ * cleared the fraction and bought a second attack (round-17 F4).
+ */
+const WINDOWED_BACKHAND_MINIMUM_SPEED = 1.8;
 const WINDOWED_BACKHAND_SPEED_FRACTION = 0.6;
+/** Slower than this between poses, the hand has come to rest after a stroke. */
+const WINDOWED_REST_SPEED = 0.4;
+/**
+ * A pose the runtime keeps showing for this long is a hand at rest. A shorter
+ * repeat is a stale frame: the hand was moving and the runtime had nothing new.
+ */
+const WINDOWED_REST_HOLD_MS = 200;
+/**
+ * One-handed, the blade is sampled too, so a wrist-led stroke counts (round 17,
+ * finding 5: 10 cm of hand, a 100 degree sweep, 0 of 8). The tip moves faster
+ * than the hand for the same effort, so it needs this many times the speed...
+ */
+const WINDOWED_TIP_SPEED_FACTOR = 2;
+/**
+ * ... a real arc of blade, and a little hand travel: a wrist flick sweeps the
+ * tip 0.7 m with 3 cm of hand, then comes back (F6 must stay a non-stroke).
+ */
+const WINDOWED_MINIMUM_TIP_ARC_METRES = 0.3;
+const WINDOWED_MINIMUM_TIP_STROKE_HAND_ARC_METRES = 0.06;
+
+/** One distinct pose in the windowed history. */
+interface WindowedSample {
+  /** When this pose first arrived. */
+  readonly t: number;
+  /** When it last arrived: a runtime repeats a pose it has nothing newer for. */
+  seen: number;
+  readonly position: THREE.Vector3;
+  /** The blade sample point, one-handed only. */
+  readonly tip: THREE.Vector3 | null;
+  readonly trackingToWorld?: THREE.Matrix4;
+}
+
+/**
+ * When the hand was at a sample. Its first arrival, unless the runtime showed
+ * it long enough to mean the hand was resting there: then its last. Moving
+ * the time forward on every repeat (the old rule) halved the time a slow
+ * drift took between poses, doubling its speed into a swing (round-17 F5b).
+ */
+function windowedSampleTime(sample: WindowedSample): number {
+  return sample.seen - sample.t >= WINDOWED_REST_HOLD_MS ? sample.seen : sample.t;
+}
 
 const DEFAULT_CONFIGURATION: VRCombatInputConfiguration = {
   minimumSwingSpeedMetresPerSecond: 0.8,
@@ -228,7 +275,15 @@ export class VRCombatInputController {
     const windowed = this.configuration.minimumFastSamples >= 2 && (grip || !runtimeVelocity);
     const handsMoving = !grip || Math.max(handSpeed, offhandSpeed) >= this.configuration.minimumSwingSpeedMetresPerSecond / 3;
     const windowedFast = windowed
-      ? this.resolveWindowedFast(grip ? samplePoint : dominantPose.position, dominantPose, context.timestamp, !!grip)
+      ? this.resolveWindowedFast(
+        grip ? samplePoint : dominantPose.position,
+        // One-handed, the blade is sampled as well as the hand, along the
+        // same direction the contact test and the blade sparks use.
+        grip ? null : dominantPose.position.clone().addScaledVector(
+          new THREE.Vector3(0, 0, -1).applyQuaternion(
+            (inputFrame.hands[context.dominantHand]?.targetRayPose ?? dominantPose).orientation),
+          this.configuration.bladeSampleDistanceMetres),
+        dominantPose, context.timestamp, !!grip)
       : false;
     const fast = (windowed
       ? windowedFast && handsMoving
@@ -431,21 +486,31 @@ export class VRCombatInputController {
   private previousOffhandPose: XRWorldPose | null = null;
 
   /** Distinct dominant-hand poses (newest last), for windowed speed. */
-  private readonly poseHistory: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 }[] = [];
+  private readonly poseHistory: WindowedSample[] = [];
   /** Times of distinct poses that were fast over their window. */
   private readonly fastPoseTimes: number[] = [];
   /** Unit play-space heading of each fast pose, parallel to fastPoseTimes. */
   private readonly fastPoseDirections: THREE.Vector3[] = [];
-  /** Heading and time of the latest pose that confirmed a swing (recovery lockout). */
+  /** Heading of the latest pose that confirmed a swing (recovery lockout). */
   private lastSwingHeading: THREE.Vector3 | null = null;
   /** One event per stroke: the stroke being measured, and the last one that swung. */
   private windowedStrokeId = 0;
   private windowedStrokeEmitted = -1;
-  private lastSwingMotionAt = Number.NEGATIVE_INFINITY;
-  private lastSwingPeakSpeed = 0;
-  private strokePeakSpeed = 0;
+  /**
+   * The recovery lockout counts from here: the moment the hand came to rest
+   * after the last swing. Until it has, this follows the moving hand, so a
+   * long follow-through does not use the lockout up (round-17 F5b).
+   */
+  private recoveryFrom = Number.NEGATIVE_INFINITY;
+  private awaitingRest = false;
+  /** The stroke that passed as a deliberate backhand inside the lockout. */
+  private backhandStrokeId = -1;
+  private backhandPending = false;
+  /** Peak pose-to-pose speeds of the last swing and of the stroke being measured. */
+  private lastSwingPeak = { hand: 0, tip: 0 };
+  private strokePeak = { hand: 0, tip: 0 };
   /** The window start each fast pose was measured from, parallel to fastPoseTimes. */
-  private readonly fastPoseStarts: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 }[] = [];
+  private readonly fastPoseStarts: WindowedSample[] = [];
   private windowedGripped = false;
 
   /**
@@ -460,8 +525,17 @@ export class VRCombatInputController {
    * fast samples close enough together. Over a window a pop out and back
    * nets to nothing, a pop that stays put is one fast pose, and repeated
    * poses neither count nor reset anything.
+   *
+   * One-handed, `tip` is a point along the blade, measured alongside the
+   * hand: either can make the stroke (round 17, finding 5).
    */
-  private resolveWindowedFast(point: THREE.Vector3, pose: XRWorldPose, now: number, gripped: boolean): boolean {
+  private resolveWindowedFast(
+    point: THREE.Vector3,
+    tip: THREE.Vector3 | null,
+    pose: XRWorldPose,
+    now: number,
+    gripped: boolean,
+  ): boolean {
     // One history per mode: switching between one hand and two must not
     // compare a hand position with a blade tip.
     if (gripped !== this.windowedGripped) {
@@ -473,26 +547,70 @@ export class VRCombatInputController {
     }
     const history = this.poseHistory;
     const last = history[history.length - 1];
+    let handStep = 0;
+    let tipStep = 0;
+    let stepFromRest = false;
     if (last) {
       const moved = playSpaceDelta(last.position, last, point, pose).length();
-      // A repeated pose: no new motion, but the hand was there until now, so
-      // a swing from rest measures from this frame, not from when it stopped.
-      if (moved < 0.001) { last.t = now; return false; }
+      const tipMoved = tip && last.tip ? playSpaceDelta(last.tip, last, tip, pose).length() : 0;
+      if (moved < 0.001 && tipMoved < 0.001) {
+        // A repeated pose: nothing new. Its time stays when it first came;
+        // only a pose shown long enough counts as the hand at rest there.
+        last.seen = now;
+        if (this.awaitingRest) {
+          if (now - last.t >= WINDOWED_REST_HOLD_MS) this.awaitingRest = false;
+          else this.recoveryFrom = now;
+        }
+        return false;
+      }
+      // Leaving a rest, the hand set off at some moment after it was last
+      // seen there: the step speed is unknown, and is not used.
+      stepFromRest = last.seen - last.t >= WINDOWED_REST_HOLD_MS;
+      const stepSeconds = (now - windowedSampleTime(last)) / 1000;
+      if (stepSeconds > 0 && !stepFromRest) {
+        handStep = moved / stepSeconds;
+        tipStep = tipMoved / stepSeconds;
+      }
     }
-    while (history.length && now - history[0].t > 300) history.shift();
-    let reference: { t: number; position: THREE.Vector3; trackingToWorld?: THREE.Matrix4 } | undefined;
+    if (this.awaitingRest) {
+      if (last && !stepFromRest && Math.max(handStep, tipStep / WINDOWED_TIP_SPEED_FACTOR) < WINDOWED_REST_SPEED) {
+        this.awaitingRest = false;
+      } else {
+        this.recoveryFrom = now;
+      }
+    }
+    while (history.length && now - windowedSampleTime(history[0]) > 300) history.shift();
+    let reference: WindowedSample | undefined;
     for (let i = history.length - 1; i >= 0; i--) {
-      if (now - history[i].t >= 60) { reference = history[i]; break; }
+      if (now - windowedSampleTime(history[i]) >= 60) { reference = history[i]; break; }
     }
-    if (!reference || now - reference.t > 250) {
-      reference = history.find((entry) => now - entry.t >= 15 && now - entry.t <= 250);
+    if (!reference || now - windowedSampleTime(reference) > 250) {
+      reference = history.find((entry) => {
+        const age = now - windowedSampleTime(entry);
+        return age >= 15 && age <= 250;
+      });
     }
-    history.push({ t: now, position: point.clone(), trackingToWorld: pose.trackingToWorld?.clone() });
+    history.push({
+      t: now, seen: now, position: point.clone(), tip: tip ? tip.clone() : null,
+      trackingToWorld: pose.trackingToWorld?.clone(),
+    });
     if (!reference) return false;
-    const seconds = (now - reference.t) / 1000;
-    const displacement = playSpaceDelta(reference.position, reference, point, pose);
-    const speed = displacement.length() / seconds;
-    if (speed > MAX_HAND_SPEED_METRES_PER_SECOND || speed < this.configuration.minimumSwingSpeedMetresPerSecond) return false;
+    const seconds = (now - windowedSampleTime(reference)) / 1000;
+    const handDisplacement = playSpaceDelta(reference.position, reference, point, pose);
+    const handSpeed = handDisplacement.length() / seconds;
+    if (handSpeed > MAX_HAND_SPEED_METRES_PER_SECOND) return false;
+    const tipDisplacement = tip && reference.tip ? playSpaceDelta(reference.tip, reference, tip, pose) : null;
+    const tipSpeed = tipDisplacement ? tipDisplacement.length() / seconds : 0;
+    const minimum = this.configuration.minimumSwingSpeedMetresPerSecond;
+    // The hand leads when it is fast; otherwise the blade may.
+    const channel: 'hand' | 'tip' | null = handSpeed >= minimum ? 'hand'
+      : tipDisplacement && tipSpeed >= minimum * WINDOWED_TIP_SPEED_FACTOR &&
+        tipSpeed <= MAX_HAND_SPEED_METRES_PER_SECOND * WINDOWED_TIP_SPEED_FACTOR ? 'tip'
+        : null;
+    if (!channel) return false;
+    const displacement = channel === 'hand' ? handDisplacement : tipDisplacement!;
+    const step = channel === 'hand' ? handStep : tipStep;
+    const speedScale = channel === 'hand' ? 1 : WINDOWED_TIP_SPEED_FACTOR;
     while (this.fastPoseTimes.length && now - this.fastPoseTimes[0] > 250) {
       this.fastPoseTimes.shift();
       this.fastPoseDirections.shift();
@@ -503,20 +621,28 @@ export class VRCombatInputController {
     // heading: the fast poses that confirm it must point within ~70 degrees
     // of each other, and it must cover a real arc (an 8 cm jab swung).
     const direction = displacement.clone().normalize();
-    // The return stroke: for a second after a recognised swing, motion back
-    // the way it came is recovery, not a new swing (critic runs 17-18: out
-    // 0.77 m in 260 ms, back 0.62 m in 700 ms bought a second attack).
-    // A deliberate backhand is as fast as the stroke it answers; a recovery
-    // is much slower (critic run 19: forehand/backhand once a second lost
-    // every other stroke, while a held follow-through returned at 1.4 m/s
-    // after a 3 m/s slash and still bought a second attack).
-    if (this.lastSwingHeading && now - this.lastSwingMotionAt < WINDOWED_RECOVERY_MS &&
-      direction.dot(this.lastSwingHeading) < WINDOWED_REVERSAL_DOT &&
-      speed < this.lastSwingPeakSpeed * WINDOWED_BACKHAND_SPEED_FRACTION) {
-      return false;
-    }
+    // The return stroke: until 1.5 s after the hand comes to rest following a
+    // recognised swing, motion back the way it came is recovery, not a new
+    // swing (critic runs 17-18: out 0.77 m in 260 ms, back 0.62 m in 700 ms
+    // bought a second attack). A deliberate backhand is as fast as the stroke
+    // it answers; a recovery is much slower. Both are measured pose to pose:
+    // the windowed peak averaged the stroke down, and a brisk return cleared
+    // 60% of it (round 17, F4: 10 strokes gave 11 attacks).
     const previous = this.fastPoseDirections[this.fastPoseDirections.length - 1];
-    if (previous && previous.dot(direction) < WINDOWED_SAME_HEADING_DOT) {
+    const continuesStroke = !!previous && previous.dot(direction) >= WINDOWED_SAME_HEADING_DOT;
+    // A backhand already accepted keeps its later, slowing poses: at 17 fps a
+    // 260 ms backhand has three or four, and only its middle is at full speed.
+    const acceptedBackhand = continuesStroke && this.backhandStrokeId === this.windowedStrokeId;
+    if (this.lastSwingHeading && now - this.recoveryFrom < WINDOWED_RECOVERY_MS &&
+      direction.dot(this.lastSwingHeading) < WINDOWED_REVERSAL_DOT && !acceptedBackhand) {
+      const peak = this.lastSwingPeak[channel];
+      if (stepFromRest || step < WINDOWED_BACKHAND_MINIMUM_SPEED * speedScale ||
+        step < peak * WINDOWED_BACKHAND_SPEED_FRACTION) {
+        return false;
+      }
+      if (!continuesStroke) this.backhandPending = true;
+    }
+    if (previous && !continuesStroke) {
       this.fastPoseTimes.length = 0;
       this.fastPoseDirections.length = 0;
       this.fastPoseStarts.length = 0;
@@ -524,19 +650,34 @@ export class VRCombatInputController {
     // A new stroke begins when no fast pose of the last one is left.
     if (this.fastPoseTimes.length === 0) {
       this.windowedStrokeId += 1;
-      this.strokePeakSpeed = 0;
+      this.strokePeak = { hand: 0, tip: 0 };
     }
-    this.strokePeakSpeed = Math.max(this.strokePeakSpeed, speed);
+    if (this.backhandPending) {
+      this.backhandPending = false;
+      this.backhandStrokeId = this.windowedStrokeId;
+    }
+    this.strokePeak = {
+      hand: Math.max(this.strokePeak.hand, Math.min(handStep, MAX_HAND_SPEED_METRES_PER_SECOND)),
+      tip: Math.max(this.strokePeak.tip, Math.min(tipStep, MAX_HAND_SPEED_METRES_PER_SECOND * WINDOWED_TIP_SPEED_FACTOR)),
+    };
     this.fastPoseTimes.push(now);
     this.fastPoseDirections.push(direction);
     this.fastPoseStarts.push(reference);
     if (this.fastPoseTimes.length < 2) return false;
-    // The arc from where this run of fast poses began.
+    // The arc from where this run of fast poses began: the hand's, or the
+    // blade's with a little hand travel behind it (a wrist-led stroke, not a
+    // flick of the wrist alone).
     const start = this.fastPoseStarts[0];
-    if (playSpaceDelta(start.position, start, point, pose).length() < WINDOWED_MINIMUM_ARC_METRES) return false;
+    const handArc = playSpaceDelta(start.position, start, point, pose).length();
+    const tipArc = tip && start.tip ? playSpaceDelta(start.tip, start, tip, pose).length() : 0;
+    if (handArc < WINDOWED_MINIMUM_ARC_METRES &&
+      !(tipArc >= WINDOWED_MINIMUM_TIP_ARC_METRES && handArc >= WINDOWED_MINIMUM_TIP_STROKE_HAND_ARC_METRES)) {
+      return false;
+    }
     this.lastSwingHeading = direction.clone();
-    this.lastSwingMotionAt = now;
-    this.lastSwingPeakSpeed = this.strokePeakSpeed;
+    this.lastSwingPeak = { ...this.strokePeak };
+    this.recoveryFrom = now;
+    this.awaitingRest = true;
     return true;
   }
   private lastFastAt = Number.NEGATIVE_INFINITY;
@@ -567,9 +708,10 @@ export class VRCombatInputController {
     this.fastPoseDirections.length = 0;
     this.fastPoseStarts.length = 0;
     this.lastSwingHeading = null;
-    this.lastSwingMotionAt = Number.NEGATIVE_INFINITY;
-    this.lastSwingPeakSpeed = 0;
-    this.strokePeakSpeed = 0;
+    this.recoveryFrom = Number.NEGATIVE_INFINITY;
+    this.awaitingRest = false;
+    this.lastSwingPeak = { hand: 0, tip: 0 };
+    this.strokePeak = { hand: 0, tip: 0 };
     this.previousPose = null;
     this.previousSamplePoint = null;
     this.previousTimestamp = null;

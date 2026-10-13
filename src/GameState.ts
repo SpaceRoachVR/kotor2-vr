@@ -151,7 +151,7 @@ function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
 }
 import { VRCombatTempoGate, type VRCombatTempoGateReason, resolveVRRoundReadiness, resolveVRRoundOpen, VRRoundReadinessLatch } from "@/vr/runtime/VRCombatTempoGate";
 import { addSwoopRideListener, type SwoopRideEventType } from "@/module/minigame/SwoopRideEvents";
-import { VRCombatSwingBuffer, isVRCombatSwingBufferable } from "@/vr/runtime/VRCombatSwingBuffer";
+import { VRCombatSwingBuffer, VRHeldSwingLifetime, isVRCombatSwingBufferable, isVRFightOngoing } from "@/vr/runtime/VRCombatSwingBuffer";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
@@ -796,17 +796,10 @@ const vrCombatTempoGate = new VRCombatTempoGate();
 const vrCombatSwingBuffer = new VRCombatSwingBuffer();
 const vrRoundReadinessLatch = new VRRoundReadinessLatch();
 /**
- * Round openings a held swing has let pass. It is for the next opening: one
- * that passes with the swing still held (the target out of reach) is missed,
- * and a second miss drops it with a notice. Counted in openings, not wall
- * time, so a chained round (a medpac scheduled into it) or a pause does not
- * eat it (critic run 6).
+ * A held swing belongs to the next round opening only: it releases within
+ * 0.5 s of it or drops (round 17, locked). Game time, so a pause keeps it.
  */
-let vrSwingBufferMissedOpenings = 0;
-let vrSwingBufferRoundWasOpen = false;
-const VR_SWING_BUFFER_MAX_MISSED_OPENINGS = 2;
-let vrSwingBufferHeldSeconds = 0;
-const VR_SWING_BUFFER_MAX_HELD_SECONDS = 6;
+const vrHeldSwingLifetime = new VRHeldSwingLifetime();
 /** The grenade last scheduled into a round, re-armed if the round rejects it. */
 let vrLastThrownGrenade: { actorId: number; sourceKey: string; itemId: unknown } | null = null;
 const vrArmedGrenadeState = new VRArmedGrenadeState();
@@ -1349,7 +1342,6 @@ function dispatchVREmbodiedCombatInput(
   actor: ModuleCreature,
   targetId: string | null,
   input: VRCombatRequiredInput,
-  fromSwingBuffer = false,
 ): boolean {
   const head = vrCombatIntentQueue.getHead();
   // A trigger pull with a trigger-cast Force power at the head casts it,
@@ -1360,20 +1352,12 @@ function dispatchVREmbodiedCombatInput(
   }
   const initialTarget = resolveVRLiveCombatTarget(actor, targetId);
   const headLabel = head ? `${head.label}(${head.requiredInput},${head.weaponSignature})` : 'none';
-  // One physical swing is one attack. The detector reports a swing every
-  // 120 ms while the blade is fast, so a 400 ms swing sent three or four;
-  // the first attacked and a later one was held for the next round, which
-  // then rolled a second attack with no input (critic runs 15-16). Swing
-  // events within 600 ms of one that was taken belong to the same swing.
+  // One physical swing is one attack. The controller emits one event per
+  // stroke, so every event here is a stroke of its own: a fast backhand
+  // after the stroke just taken is held for the next round like any other.
+  // A 600 ms window here used to drop it silently, and the next round sat
+  // idle (round 17: 8 of 8 forehand-backhand pairs gave one attack).
   const nowMs = performance.now();
-  // Fixed from the swing that was taken. Restarting it on every event (run
-  // 17's fix for a slow sweep rolling twice) let continuous swinging hold it
-  // shut: swinging harder gave fewer attacks (critic run 18). The controller
-  // now emits one event per stroke, which is what fixes the slow sweep.
-  // A held swing released when the round opens IS the swing that started the
-  // window: refusing it lost every stroke made in the last ~0.6 s before the
-  // round opened, silently (critic run 20, FL3).
-  if (input === 'dominant-swing' && !fromSwingBuffer && nowMs - vrSwingTakenAt < 600) return false;
   const tempo = getVREmbodiedTempoResult(actor, initialTarget);
   if (!tempo.eligible) {
     // ROADMAP 3.12: a swing made while the round is busy waits for it to open
@@ -1386,10 +1370,7 @@ function dispatchVREmbodiedCombatInput(
         input,
         weaponSignature: resolveVRCombatWeaponSignature(actor),
       }, tempo.reason)) {
-      vrSwingBufferMissedOpenings = 0;
-      vrSwingBufferRoundWasOpen = false;
-      vrSwingBufferHeldSeconds = 0;
-      if (input === 'dominant-swing') vrSwingTakenAt = nowMs;
+      vrHeldSwingLifetime.restart();
       return false;
     }
     let distance = 'n/a';
@@ -1436,16 +1417,12 @@ function dispatchVREmbodiedCombatInput(
     result.state === 'intent-skipped-invalid' || result.state === 'deferred-input-mismatch' ||
     result.state === 'deferred-weapon-mismatch') {
     vrCombatIssuedTargetId = initialTarget.id;
-    if (input === 'dominant-swing' && !fromSwingBuffer) vrSwingTakenAt = nowMs; // the buffered stroke already started it
     return true;
   }
   return false;
 }
 
 let vrSwingTooFarNoticeAt = Number.NEGATIVE_INFINITY;
-
-/** When a physical swing last started or was held for an attack (ms). */
-let vrSwingTakenAt = Number.NEGATIVE_INFINITY;
 
 /**
  * ROADMAP 3.16 — the space a melee swing must pass through to count: a
@@ -1558,52 +1535,37 @@ const reportedVRSwingBufferDrops = new Set<string>();
  * longer be valid, and dispatches it the moment the round opens. Returns
  * whether a swing was released this frame (the headset pulses for it) and
  * whether one is still waiting (the hilt shows it as armed).
+ *
+ * Round 17 (locked): the held swing belongs to the next round opening only.
+ * It releases within 0.5 s of that opening, or drops with the soft refused
+ * tick; stepping back into reach later never fires it. A pause - the B tap or
+ * the VR Menu's - keeps it, and the hilt keeps showing it held.
  */
 function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean; armed: boolean } {
   if (!vrCombatSwingBuffer.hasPending) return { released: false, armed: false };
-  // A swing held through a pause would fire on resume with nobody asking.
-  if (GameState.State === EngineState.PAUSED) {
-    // A swing held through a pause would fire on resume with nobody asking,
-    // so the pause clears it - and now says so (critic run 7: it was silent,
-    // and a comment claimed otherwise).
-    vrCombatSwingBuffer.clear();
-    try { VRSpike.showNotice('Held swing cleared'); } catch { /* feedback only */ }
-    return { released: false, armed: false };
-  }
+  // Paused, nothing ages and nothing fires: a stroke made before pausing is
+  // intent, as a retail queued action is (it used to be cleared here, in
+  // code a B pause never reached, while the hilt said nothing was held).
+  if (GameState.State === EngineState.PAUSED) return { released: false, armed: true };
+  const pendingBefore = vrCombatSwingBuffer.peek();
+  const lockedTargetLive = (targetId: string) => resolveVRLockedHostile(actor, targetId) !== null;
   const context = {
     actorId: String(actor.id),
     weaponSignature: resolveVRCombatWeaponSignature(actor),
-    inCombat: actor.combatData?.combatState === true,
+    // The fight decides, not the player's own flag: in a group fight it drops
+    // between the player's rounds while hostiles shoot the companions, and
+    // every held trigger pull was dropped as "combat ended" (round 17, Tempo
+    // exp9: cadence 4.0 s instead of 3.0 s).
+    inCombat: isVRFightOngoing({
+      actorInCombat: actor.combatData?.combatState === true,
+      lockedTargetLive: !!pendingBefore && lockedTargetLive(pendingBefore.targetId),
+      hostileEngagedWithParty: isVRHostileEngagedWithParty(actor),
+    }),
     // Alive and still locked, not "inside weapon reach this frame": a target
     // stepping a few centimetres past reach dropped the waiting swing
-    // (critic run 4). Out of reach it stays armed; the release below still
-    // needs reach, so it fires when the target is back in it.
-    isTargetLive: (targetId: string) => resolveVRLockedHostile(actor, targetId) !== null,
+    // (critic run 4). Reach is the release's business, inside its 0.5 s.
+    isTargetLive: lockedTargetLive,
   };
-  // A held swing is for the next round, not any later one (critic run 5),
-  // counted in round openings it lets pass (see vrSwingBufferMissedOpenings).
-  const round = actor.combatRound;
-  const roundOpenNow = resolveVRRoundOpen(round ? {
-    roundStarted: round.roundStarted === true,
-    roundPaused: round.roundPaused === true,
-    playerActionCommitted: round.action !== undefined,
-    scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
-  } : null);
-  if (vrSwingBufferRoundWasOpen && !roundOpenNow) vrSwingBufferMissedOpenings++;
-  vrSwingBufferRoundWasOpen = roundOpenNow;
-  // An open round with the target out of reach never closes, so the count
-  // alone never ran out and the swing fired whenever the droid came back
-  // (critic run 7). Game time held also counts: two rounds' worth, measured
-  // only while the game runs (a pause clears the swing above).
-  vrSwingBufferHeldSeconds += Math.max(0, Number(GameState.delta) || 0);
-  if (vrSwingBufferMissedOpenings >= VR_SWING_BUFFER_MAX_MISSED_OPENINGS ||
-    vrSwingBufferHeldSeconds >= VR_SWING_BUFFER_MAX_HELD_SECONDS) {
-    vrCombatSwingBuffer.clear();
-    console.info('[VR combat swing] held swing expired');
-    signalVRRefusal('refused: swing expired');
-    return { released: false, armed: false };
-  }
-  const pendingBefore = vrCombatSwingBuffer.peek();
   const dropped = vrCombatSwingBuffer.invalidate(context);
   if (dropped) {
     // Only a lock that was lost is worth the refusal sound. The target dying
@@ -1625,13 +1587,43 @@ function serviceVRCombatSwingBuffer(actor: ModuleCreature): { released: boolean;
   }
   const pending = vrCombatSwingBuffer.peek();
   const target = pending ? resolveVRLiveCombatTarget(actor, pending.targetId) : null;
-  if (!getVREmbodiedTempoResult(actor, target).eligible) {
-    return { released: false, armed: true };
+  if (getVREmbodiedTempoResult(actor, target).eligible) {
+    const release = vrCombatSwingBuffer.release(context);
+    if (release.state !== 'released') return { released: false, armed: false };
+    const released = dispatchVREmbodiedCombatInput(actor, release.swing.targetId, release.swing.input);
+    return { released, armed: vrCombatSwingBuffer.hasPending };
   }
-  const release = vrCombatSwingBuffer.release(context);
-  if (release.state !== 'released') return { released: false, armed: false };
-  const released = dispatchVREmbodiedCombatInput(actor, release.swing.targetId, release.swing.input, true);
-  return { released, armed: vrCombatSwingBuffer.hasPending };
+  const round = actor.combatRound;
+  const expired = vrHeldSwingLifetime.advance(resolveVRRoundOpen(round ? {
+    roundStarted: round.roundStarted === true,
+    roundPaused: round.roundPaused === true,
+    playerActionCommitted: round.action !== undefined,
+    scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
+  } : null), Number(GameState.delta));
+  if (expired) {
+    vrCombatSwingBuffer.clear();
+    console.info(`[VR combat swing] held swing expired: ${expired}`);
+    signalVRRefusal('refused: swing expired');
+    return { released: false, armed: false };
+  }
+  return { released: false, armed: true };
+}
+
+/**
+ * A live hostile inside lock range that is fighting a party member: attacking
+ * one, or attacked by one. Keeps a held swing alive between the player's own
+ * rounds in a group fight (see isVRFightOngoing).
+ */
+function isVRHostileEngagedWithParty(actor: ModuleCreature): boolean {
+  const party: readonly unknown[] = Array.isArray(GameState.PartyManager?.party) ? GameState.PartyManager.party : [];
+  const creatures: readonly ModuleCreature[] = GameState.module?.area?.creatures ?? [];
+  for (const creature of creatures) {
+    if (!isVRCombatTarget(actor, creature) || !isWithinVRCombatLockRange(actor, creature)) continue;
+    const combat = creature.combatData;
+    if (!combat || combat.combatState !== true) continue;
+    if (party.includes(combat.lastAttackTarget) || party.includes(combat.lastAttacker)) return true;
+  }
+  return false;
 }
 
 function dispatchVRDirectionalForceGesture(
@@ -4163,6 +4155,9 @@ export class GameState implements EngineContext {
       // the game behind itself too; that is its own and is not reported here,
       // so it neither shows the pause plate nor gets resumed by the wheel.
       isPaused: () => GameState.State === EngineState.PAUSED && !vrComfortSettingsPausedByVR,
+      // Any pause, the VR Menu's included: a B press that begins in it is
+      // never a combat cancel (round 17, R4).
+      isEnginePaused: () => GameState.State === EngineState.PAUSED,
       setPaused: (paused: boolean) => {
         if (vrComfortSettingsPausedByVR) return;
         GameState.State = paused ? EngineState.PAUSED : EngineState.RUNNING;
