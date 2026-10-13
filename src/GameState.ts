@@ -90,6 +90,7 @@ import { resolveDisplayName } from "@/vr/runtime/resolveDisplayName";
 import {
   describeVRCreaturePromptAction,
   hasCreatureWorldPromptAction,
+  isVRCombatNamePlateHidden,
   readVRCreaturePromptState,
 } from "@/vr/runtime/VRCreaturePromptRules";
 import {
@@ -4947,6 +4948,9 @@ export class GameState implements EngineContext {
         // A corpse is not a target: its name plate and brackets stayed up
         // after the kill (critic runs 11-12).
         if (typeof (object as any).isDead === 'function' && (object as any).isDead()) return null;
+        // In a fight only hostiles keep a plate (locked by Allen, 2026-10-13).
+        if (isVRCombatNamePlateHidden(GameState.getCurrentPlayer(), object as any,
+          (object.objectType & ModuleObjectType.ModuleCreature) !== 0)) return null;
         const position = reticle.getWorldPosition(new THREE.Vector3());
         return {
           id: String(object.id),
