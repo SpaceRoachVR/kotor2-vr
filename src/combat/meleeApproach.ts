@@ -74,6 +74,9 @@ export function planMeleeApproach(owner: ModuleCreature, target: ModuleCreature,
     const round = owner.combatRound;
     if(round?.action && round.action.target === target) round.action.target = next;
     target.removeObjectFromTargetPositions(owner);
+    // Counted on its new defender at once, so two attackers switching in the
+    // same frame cannot both take its last place.
+    owner.openSpot = next.getClosesetOpenSpot(owner);
     return { kind: 'retargeted' };
   }
   const holdDistance = Math.max(0, Number(policy.holdDistance) || 0);

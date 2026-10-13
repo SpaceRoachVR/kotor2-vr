@@ -2352,15 +2352,25 @@ export class ModuleCreature extends ModuleObject {
     }
   }
 
-  /** How many attackers hold a spot around this creature, `excluding` aside. */
+  /**
+   * How many melee attackers fight this creature, `excluding` aside: those
+   * holding a spot around it, and any in reach fighting it without one (every
+   * spot was blocked when it came).
+   */
   countMeleeSpotHolders(excluding?: ModuleObject): number {
     this.releaseStaleTargetPositions();
-    let count = 0;
+    const counted = new Set<ModuleObject>();
     for(let i = 0, len = this.targetPositions.length; i < len; i++){
       const holder = this.targetPositions[i].object;
-      if(holder && holder !== excluding) count++;
+      if(holder && holder !== excluding) counted.add(holder);
     }
-    return count;
+    const creatures = this.area?.creatures ?? [];
+    for(let i = 0, len = creatures.length; i < len; i++){
+      const c = creatures[i];
+      if(!c || c === excluding || c === this || counted.has(c) || c.isRangedEquipped()) continue;
+      if(Utility.Distance2D(c.position, this.position) <= 2.5 && this.isMeleeSpotClaimLive(c)) counted.add(c);
+    }
+    return counted.size;
   }
 
   holdsMeleeSpot(oObject: ModuleObject): boolean {
