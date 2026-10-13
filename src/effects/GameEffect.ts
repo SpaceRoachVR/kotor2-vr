@@ -6,6 +6,7 @@ import { GFFDataType } from "@/enums/resource/GFFDataType";
 import type { Module, ModuleObject } from "@/module";
 import { GFFField } from "@/resource/GFFField";
 import { GFFStruct } from "@/resource/GFFStruct";
+import { copyEffectValue } from "@/effects/copyEffectValue";
 
 function getGameState(): any {
   try {
@@ -76,6 +77,14 @@ export class GameEffect {
 
     this.initialized = true;
     return this;
+  }
+
+  /**
+   * An unapplied copy of this effect. NWScript effects are values: a script
+   * applying one effect to several objects gives each object its own copy.
+   */
+  clone(): this {
+    return copyEffectValue(this, (value) => value instanceof GameEffect);
   }
 
   loadModel(){

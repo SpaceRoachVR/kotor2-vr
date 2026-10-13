@@ -5,6 +5,7 @@ import { GameState } from "@/GameState";
 import { BitWise } from "@/utility/BitWise";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { GameEffect } from "@/effects/GameEffect";
+import { forcePushDirection } from "@/effects/forcePushDirection";
 
 /**
  * EffectForcePushed class.
@@ -46,8 +47,10 @@ export class EffectForcePushed extends GameEffect {
 
       if(!this.getInt(0)){
 
-        const fpDirX = -Math.cos(this.object.facing + Math.PI/2);
-        const fpDirY = -Math.sin(this.object.facing + Math.PI/2);
+        // Away from whoever pushed: a target facing elsewhere (at a companion
+        // behind the caster) was thrown back along its own facing, toward the
+        // caster. Its facing remains the fallback with no creator to push from.
+        const [fpDirX, fpDirY] = forcePushDirection(this.object.position, this.creator?.position, this.object.facing);
         let fPushDistance = 5.0;
         this.setFloat(0, this.object.position.x + (fPushDistance * fpDirX));
         this.setFloat(1, this.object.position.y + (fPushDistance* fpDirY));

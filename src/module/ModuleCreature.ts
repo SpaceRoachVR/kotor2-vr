@@ -88,6 +88,9 @@ import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { TalkVolume } from "@/enums/engine/TalkVolume";
 import { takeHeardShout } from "@/module/creature/ListenPatterns";
 import { resolveKillExperience } from "@/combat/killExperience";
+import { dropStaleCombatActions } from "@/combat/staleCombatActions";
+import { resolvePartyForcePool } from "@/combat/partyForcePool";
+import { pickBestTalent, pickRandomTalent, talentScriptType, TALENT_TYPE_FEAT, TALENT_TYPE_FORCE, TALENT_TYPE_SKILL } from "@/talents/talentScriptRules";
 import {
   abilityModifier,
   isAutoBalanceSet,
@@ -1189,6 +1192,10 @@ export class ModuleCreature extends ModuleObject {
     // this.combatData.update(delta);
     this.combatRound.update(delta);
 
+    // An unstarted action on a target that died, was destroyed or is in
+    // another area would block every later action of this creature.
+    dropStaleCombatActions(this.combatRound, this.area);
+
     if(this.combatData.lastAttackTarget instanceof ModuleObject && this.combatData.lastAttackTarget.isDead()){
       this.combatData.clearTarget(this.combatData.lastAttackTarget);
     }
@@ -1632,26 +1639,22 @@ export class ModuleCreature extends ModuleObject {
   useTalent(talent: TalentObject, oTarget: ModuleObject): Action {
     let action: Action;
     if(talent instanceof TalentObject){
-      const combatAction = new CombatRoundAction();
-      switch(talent.objectType){
-        case 1: //FEAT
-          combatAction.actionType = CombatActionType.ATTACK_USE_FEAT;
-          combatAction.target = oTarget;
-          combatAction.setFeat(talent as TalentFeat);
-          this.combatRound.addAction(combatAction);
+      // objectType holds TalentObjectType flags, not TALENT_TYPE_* values:
+      // switching on 0/1/2 matched nothing, so no talent was ever used. The
+      // talent schedules its own combat round (and the ActionCombat to run it).
+      switch(talentScriptType(talent)){
+        case TALENT_TYPE_FEAT:
+          (talent as TalentFeat).useTalentOnObject(oTarget, this);
         break;
-        case 2: //SKILL
+        case TALENT_TYPE_SKILL:
           if(talent.id == 6){ //Security
             action = new GameState.ActionFactory.ActionUnlockObject();
             action.setParameter(0, ActionParameterType.DWORD, oTarget.id || ModuleObjectConstant.OBJECT_INVALID);
             this.actionQueue.add(action);
           }
         break;
-        case 0: //SPELL
-          combatAction.actionType = CombatActionType.CAST_SPELL;
-          combatAction.setSpell(talent as TalentSpell);
-          combatAction.target = oTarget;
-          this.combatRound.addAction(combatAction);
+        case TALENT_TYPE_FORCE:
+          (talent as TalentSpell).useTalentOnObject(oTarget, this);
         break;
       }
     }
@@ -3092,12 +3095,23 @@ export class ModuleCreature extends ModuleObject {
    * 3, 0/0; critic run 17), so Kreia joined unable to cast. A party member
    * with Jedi levels and no Force pool at all gets the retail per-level pool.
    * A Jedi level always grants at least one point, so a real 0 can't be lost.
+   * A member with no Force-die class level has no pool at all, whatever its
+   * template stores (p_baodur.utc: ForcePoints 48; retail shows 0 / 0).
    */
   ensureForcePointsFromClasses(): void {
-    if((Number(this.maxForcePoints) || 0) > 0 || (Number(this.forcePoints) || 0) > 0) return;
-    const fromClasses = this.getForcePointsFromClasses();
-    if(fromClasses > 0){
-      this.forcePoints = this.maxForcePoints = this.currentForce = fromClasses;
+    let forceClassLevels = 0;
+    for(const creatureClass of this.classes){
+      if((Number(creatureClass?.forcedie) || 0) <= 0) continue;
+      forceClassLevels += Number(creatureClass.level) || 0;
+    }
+    const pool = resolvePartyForcePool({
+      maxForcePoints: this.maxForcePoints,
+      forcePoints: this.forcePoints,
+      forceClassLevels,
+      poolFromClasses: forceClassLevels > 0 ? this.getForcePointsFromClasses() : 0,
+    });
+    if(pool !== undefined){
+      this.forcePoints = this.maxForcePoints = this.currentForce = pool;
     }
   }
 
@@ -3859,12 +3873,13 @@ export class ModuleCreature extends ModuleObject {
   hasTalent(talent: TalentObject){
     //console.log('hasTalent', talent);
     if(typeof talent != 'undefined'){
-      switch(talent.objectType){
-        case 0: //Force / Spell
+      // objectType holds TalentObjectType flags, not TALENT_TYPE_* values.
+      switch(talentScriptType(talent)){
+        case TALENT_TYPE_FORCE:
           return this.getHasSpell(talent.id) ? true : false;
-        case 1: //Feat
+        case TALENT_TYPE_FEAT:
           return this.getHasFeat(talent.id) ? true : false;
-        case 2: //Skill
+        case TALENT_TYPE_SKILL:
           return this.getHasSkill(talent.id) ? true : false;
       }
     }
@@ -3919,21 +3934,15 @@ export class ModuleCreature extends ModuleObject {
 
   getRandomTalent(category = 0, category2 = 0){
 
-    let talents = this.getTalents().filter( (talent: TalentObject) => talent.category == category || talent.category == category2 );
-    let talent = talents[Math.floor(Math.random()*talents.length)];
-    //console.log('getRandomTalent', talent);
-    return talent;
+    // nInclusion (passed as category2) is not a category: matching it drew
+    // category-0 skills for an attack (Kreia using Stealth on a trooper).
+    return pickRandomTalent(this.getTalents(), category);
 
   }
 
   getTalentBest(nCategory = 0, nCRMax = 0, nInclusion = 0, nExcludeType = -1, nExcludeId = -1){
-    let talents = this.getTalents().filter( (talent: TalentObject) => ( talent.category > -1 && ( (talent.category & nCategory) == nCategory ) && talent.maxCR <= nCRMax ) );
-    talents.sort((a: TalentObject, b: TalentObject) => (a.maxCR > b.maxCR) ? 1 : -1);
-    //console.log('getTalentBest', talents);
-    if(talents.length){
-      return talents[0];
-    }
-    return undefined;
+    // Closest to nCRMax without going over (nwscript.nss 308), not the lowest.
+    return pickBestTalent(this.getTalents(), nCategory, nCRMax, nExcludeType, nExcludeId);
   }
 
   isSimpleCreature(){

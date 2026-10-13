@@ -45,6 +45,7 @@ import { TalkVolume } from "@/enums/engine/TalkVolume";
 import { FeedbackMessageEntry } from "@/engine/FeedbackMessageEntry";
 import { FeebackMessageColor } from "@/enums/engine/FeedbackMessageColor";
 import { DLGNode } from "@/resource/DLGNode";
+import { talentScriptType } from "@/talents/talentScriptRules";
 
 /**
  * NWScriptDefK1 class.
@@ -936,14 +937,12 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.VOID,
     args: [NWScriptDataType.OBJECT],
     action: function(this: NWScriptInstance, args: [ModuleObject]){
+      // The named creature only. Retail party AI calls this on itself
+      // (CancelCombat(OBJECT_SELF) in k_inc_generic) when it has nothing to
+      // fight; reaching the whole party dropped the leader's and every other
+      // member's combat on each companion's round end.
       if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)){
-        if(GameState.PartyManager.party.indexOf(args[0] as ModuleCreature) >= 0){
-          for(let i = 0, len = GameState.PartyManager.party.length; i < len; i++){
-            GameState.PartyManager.party[i].cancelCombat();
-          }
-        }else{
-          (args[0] as ModuleCreature).cancelCombat();
-        }
+        (args[0] as ModuleCreature).cancelCombat();
       }
     }
   },
@@ -2899,15 +2898,18 @@ NWScriptDefK1.Actions = {
     action: function(this: NWScriptInstance, args: [number, GameEffect, ModuleObject, number]){
       if(BitWise.InstanceOfObject(args[2], ModuleObjectType.ModuleObject)){
         if(args[1]){
-          args[1].setDurationType(args[0]);
-          args[1].setDuration(args[3]);
+          // Effects are values: each application gets its own copy, so one
+          // effect applied to every target of an area power reaches them all
+          // (k_sp1_generic's Force Wave pushed one trooper of four).
+          const effect: GameEffect = typeof args[1].clone === 'function' ? args[1].clone() : args[1];
+          effect.setDurationType(args[0]);
+          effect.setDuration(args[3]);
           if(args[0] == GameEffectDurationType.TEMPORARY){
             const future = GameState.module.timeManager.getFutureTimeFromSeconds(args[3]);
-            args[1].setExpireDay(future.pauseDay);
-            args[1].setExpireTime(future.pauseTime);
+            effect.setExpireDay(future.pauseDay);
+            effect.setExpireTime(future.pauseTime);
           }
-          // console.log('ApplyEffectToObject', args[2], args[1], args[0], args[3]);
-          args[2].addEffect(args[1], args[0], args[3]);
+          args[2].addEffect(effect, args[0], args[3]);
         }else{
           console.error('ApplyEffectToObject', 'Expected a GameEffect', args);
         }
@@ -4633,8 +4635,9 @@ NWScriptDefK1.Actions = {
     type: NWScriptDataType.INTEGER,
     args: [NWScriptDataType.TALENT],
     action: function(this: NWScriptInstance, args: [TalentObject]){
+      // TALENT_TYPE_* (FORCE 0, FEAT 1, SKILL 2), not the engine's flags.
       if(typeof args[0] == 'object'){
-        return args[0].objectType || 0;
+        return Math.max(0, talentScriptType(args[0]));
       }else{
         return 0;
       }
