@@ -237,6 +237,11 @@ describe('GameState world-prompt wiring', () => {
     expect(body.slice(0, body.indexOf('getWorldContext:'))).toContain('isVRCombatNamePlateHidden(');
   });
 
+  test('the engine cursor brackets hide on non-hostile creatures in combat', () => {
+    const body = source.slice(source.indexOf('hideCombatNonHostileReticles: () => {'));
+    expect(body.slice(0, body.indexOf('getWorldContext:'))).toContain('isVRCombatNamePlateHidden(');
+  });
+
   test('a qualifying creature contributes a prompt action', () => {
     expect(source).toContain('describeVRCreaturePromptAction');
     expect(source).toMatch(/onClick\?\.\(actor\)/);

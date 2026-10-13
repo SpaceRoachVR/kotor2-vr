@@ -508,6 +508,8 @@ export interface VRSpikeHooks {
   } | null;
   /** Current world reticle target for the headset-readable name label. */
   getWorldTargetIndicator?: () => VRWorldTargetIndicator | null;
+  /** Hides the engine's cursor brackets on non-hostile creatures while in combat. */
+  hideCombatNonHostileReticles?: () => void;
 }
 
 /** How long B must be held to cancel combat; a tap is Pause (round 15, PF4). */
@@ -5040,6 +5042,7 @@ export class VRSpike {
   }
 
   private static renderWorldTargetLabel(): void {
+    try { VRSpike.hooks?.hideCombatNonHostileReticles?.(); } catch { /* presentation only */ }
     const worldScene = VRSpike.scene;
     const menu = VRSpike.hooks?.getPanelContext?.().menu ?? null;
     const indicator = menu

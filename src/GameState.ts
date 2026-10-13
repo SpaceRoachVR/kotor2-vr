@@ -4963,6 +4963,23 @@ export class GameState implements EngineContext {
           position,
         };
       },
+      // The engine hovers the nearest interactable when nothing is selected,
+      // which mid-firefight is usually the Remote or a companion: its cyan
+      // brackets stayed up after its prompt and plate were dropped. In a fight
+      // only hostiles keep brackets (locked by Allen, 2026-10-13).
+      hideCombatNonHostileReticles: () => {
+        const cursor = GameState.CursorManager;
+        const actor = GameState.getCurrentPlayer();
+        const pairs: [ModuleObject | undefined, THREE.Object3D | undefined][] = [
+          [cursor.hoveredObject, cursor.reticle],
+          [cursor.selectedObject, cursor.reticle2],
+        ];
+        for (const [object, reticle] of pairs) {
+          if (!object || !reticle?.visible) continue;
+          if (isVRCombatNamePlateHidden(actor, object as any,
+            (object.objectType & ModuleObjectType.ModuleCreature) !== 0)) reticle.visible = false;
+        }
+      },
       getWorldContext: () => {
         const area = GameState.module?.area;
         const player = GameState.getCurrentPlayer();
