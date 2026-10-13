@@ -629,6 +629,15 @@ export class CutsceneManager {
     this.afterConversationQueue.push(callback);
   }
 
+  /**
+   * Drop every callback still waiting on a conversation. A module load
+   * abandons the conversation, so a callback queued in the outgoing module
+   * (the Lab Station opening) must not fire in the next one.
+   */
+  static clearAfterConversationQueue(): void {
+    this.afterConversationQueue = [];
+  }
+
   private static drainAfterConversationQueue(): void {
     const queue = this.afterConversationQueue;
     this.afterConversationQueue = [];

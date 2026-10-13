@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const gameState: any = {};
 jest.mock('@/GameState', () => ({ GameState: gameState }));
@@ -82,5 +84,28 @@ describe('CutsceneManager.runAfterConversation', () => {
     expect(later).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  test('clearAfterConversationQueue drops queued callbacks so they never run', () => {
+    const stale = jest.fn();
+    manager.active = true;
+    CutsceneManager.runAfterConversation(stale);
+    CutsceneManager.clearAfterConversationQueue();
+    CutsceneManager.endConversation();
+    expect(stale).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A module load abandons any conversation in flight, so a callback queued in
+   * the outgoing module (the Lab Station opening) must not fire later in another
+   * module. Source-level, as in movie-queue-abandoned-on-unload.test.ts: importing
+   * GameState does not load under jest.
+   */
+  test('module teardown (GameState.UnloadModule) clears the queue', () => {
+    const game = fs.readFileSync(path.join(__dirname, '..', 'GameState.ts'), 'utf8');
+    const at = game.indexOf('static UnloadModule(){');
+    expect(at).toBeGreaterThan(-1);
+    const body = game.slice(at, game.indexOf('\n  }', at));
+    expect(body).toContain('GameState.CutsceneManager.clearAfterConversationQueue();');
   });
 });

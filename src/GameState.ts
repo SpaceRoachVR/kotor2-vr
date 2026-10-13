@@ -5787,6 +5787,9 @@ export class GameState implements EngineContext {
 
     GameState.staticCameras = [];
     GameState.CutsceneManager.paused = false;
+    // A callback waiting on the outgoing module's conversation (the Lab
+    // Station opening) must not fire in the next module.
+    GameState.CutsceneManager.clearAfterConversationQueue();
 
     AudioEngine.Mute();
   }
