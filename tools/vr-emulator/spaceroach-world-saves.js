@@ -74,10 +74,14 @@ function profileFor(module) {
   return { ...p, active: [...p.active], roster: [...p.roster] };
 }
 
-async function configureProfile(harness, module) {
+// partyOnly re-applies the roster and levels after arrival scripts have moved
+// the party, and leaves the player's gear and the bag alone. A full second pass
+// added every supply twice and pushed the first copy of each worn item into the
+// bag (critic Holocron, 2026-10-13: Nar Shaddaa held 84 items against 40).
+async function configureProfile(harness, module, { partyOnly = false } = {}) {
   const profile = profileFor(module);
   const result = await harness.evaluate(`(async()=>{
-    const K=window.KotOR,gs=K.GameState,pm=K.PartyManager,profile=${JSON.stringify(profile)},companions=${JSON.stringify(COMPANIONS)},SLOT=${JSON.stringify(SLOT)};
+    const K=window.KotOR,gs=K.GameState,pm=K.PartyManager,profile=${JSON.stringify(profile)},companions=${JSON.stringify(COMPANIONS)},SLOT=${JSON.stringify(SLOT)},partyOnly=${JSON.stringify(partyOnly)};
     if(!pm.Player?.isPlayer) throw new Error('Profile requires the player character');
     gs.MenuManager.ClearMenus(); gs.Mode=0;
     pm.MakePlayerLeader();
@@ -101,7 +105,9 @@ async function configureProfile(harness, module) {
       for(let steps=0;p.getTotalClassLevel()<profile.level;steps++) {
         if(steps>=40 || !await gs.MenuManager.MenuLevelUp.autoLevelUp(p)) throw new Error('Auto-level failed: '+(p.tag||'player'));
       }
-      if(p.isPlayer) {
+      if(p.isPlayer && partyOnly) {
+        // Gear was equipped by the first pass.
+      } else if(p.isPlayer) {
         await p.equipItem(SLOT.ARMOR,await item(profile.armor));
         await p.equipItem(SLOT.RIGHTHAND,await item(profile.weapon));
         for(const [slot,resref] of Object.entries(profile.extras)) {
@@ -115,12 +121,12 @@ async function configureProfile(harness, module) {
       p.setHP(p.getMaxHP());
       p.forcePoints=p.maxForcePoints;
     }
-    for(const [resref,count] of profile.supplies) {
+    if(!partyOnly) for(const [resref,count] of profile.supplies) {
       const supply=await item(resref); supply.stackSize=count; gs.InventoryManager.addItem(supply);
     }
     if(profile.gold>pm.Gold) pm.AddGold(profile.gold-pm.Gold);
     gs.MenuManager.InGameOverlay.open();
-    return {extrasEquipped,gold:pm.Gold};
+    return partyOnly ? {gold:pm.Gold} : {extrasEquipped,gold:pm.Gold};
   })()`, { timeoutMs: 240000 });
   return { ...profile, ...result };
 }
@@ -130,6 +136,21 @@ const IDENTITY_SAMPLE = `(()=>{const K=window.KotOR,p=K.PartyManager.Player;retu
   forcePowers:(p?.getSpells?.()||p?.spells||[]).length,maxFP:p?.maxForcePoints,
   head:p?.equipment.HEAD?.tag,arms:p?.equipment.ARMS?.tag,gold:K.PartyManager.Gold,
   inventory:K.GameState.InventoryManager.getNonQuestInventory?.().length ?? K.GameState.InventoryManager.items?.length};})()`;
+
+const BAG_SAMPLE = `(()=>{const out={};for(const it of window.KotOR.GameState.InventoryManager.items||[]){
+  const r=String(it.templateResRef||it.resref||'').toLowerCase();out[r]=(out[r]||0)+(Number(it.stackSize)||1);}return out;})()`;
+
+/** Each supply exactly as profiled, and no spare copy of the player's worn gear. */
+function validateBag(bag, profile) {
+  const problems = [];
+  for (const [resref, count] of profile.supplies) {
+    if ((bag[resref] || 0) !== count) problems.push(`${resref} ${bag[resref] || 0} (want ${count})`);
+  }
+  for (const resref of [profile.armor, profile.weapon, ...Object.values(profile.extras || {})]) {
+    if (bag[resref]) problems.push(`spare worn item ${resref} x${bag[resref]}`);
+  }
+  if (problems.length) throw new Error('Bag does not match the profile: ' + problems.join(', '));
+}
 
 function validateIdentity(identity) {
   if (identity.name !== PLAYER_NAME) throw new Error('Wrong player name: ' + JSON.stringify(identity));
@@ -202,9 +223,10 @@ async function main() {
       let before = await settleArrival(harness, d, report, false);
       // Arrival scripts may rearrange the party; apply the profile after them (Telos keeps its authored pair).
       if (!['101PER', '231TEL'].includes(d.module)) {
-        Object.assign(loadout, await configureProfile(harness, d.module));
+        Object.assign(loadout, await configureProfile(harness, d.module, { partyOnly: true }));
         before = await settleMenus(harness, d);
       }
+      validateBag(await harness.evaluate(BAG_SAMPLE), loadout);
       const prepared = await harness.evaluate(EQUIPPED_PARTY_SAMPLE);
       validateEquippedParty(prepared, loadout, loadout.active);
       const identity = await harness.evaluate(IDENTITY_SAMPLE);
