@@ -4739,12 +4739,14 @@ export class VRSpike {
       typeof local?.maxHitPoints === 'number' ? local.maxHitPoints : null);
     VRSpike.shownHitPoints = VRSpike.hurtGate.holding ? gated.displayedHitPoints : null;
     for (const landed of gated.released) {
-      // ROADMAP 3.14: who landed it, so the drop is shown on their side.
-      VRSpike.lastAttackOnPlayer = { attackerId: landed.attackerId, targetId: localActorId as number };
       const attacker = snapshots.find((snapshot) => snapshot.id === landed.attackerId);
-      if (landed.amount > 0 && attacker?.position) {
-        VRSpike.damageTracker.recordAttack({ attackerPosition: attacker.position, critical: landed.critical, timestampMs: nowMs });
-      } else if (landed.amount <= 0) {
+      if (landed.amount > 0) {
+        // ROADMAP 3.14: who landed it, so the drop is shown on their side.
+        VRSpike.lastAttackOnPlayer = { attackerId: landed.attackerId, targetId: localActorId as number };
+        if (attacker?.position) {
+          VRSpike.damageTracker.recordAttack({ attackerPosition: attacker.position, critical: landed.critical, timestampMs: nowMs });
+        }
+      } else {
         // A blow a shield absorbed: no HP drop to voice it, so it sounds here.
         VRSpike.playHurtCue(landed.attackerId, localActorId as number, landed.critical);
       }
@@ -4802,6 +4804,8 @@ export class VRSpike {
     // ranged attack animations have no Hit event (critic run 10).
     const hurtCue = damage.critical ? 'hurt-critical' : 'hurt';
     const lastHit = VRSpike.lastAttackOnPlayer;
+    // Spent: a later drop with no blow behind it (a grenade) is not theirs.
+    VRSpike.lastAttackOnPlayer = null;
     VRSpike.playCombatCue(hurtCue, 0, false,
       lastHit ? VRSpike.hooks?.resolveCombatCueSounds?.(lastHit.attackerId, lastHit.targetId, hurtCue) ?? null : null);
     // Part D: the PC's own pain grunt, in the head - never the sound of
@@ -4938,9 +4942,17 @@ export class VRSpike {
 
   /** A creature's own retail soundset line, when it has one (Part D). */
   private static playBark(creatureId: string | number, kind: VRCombatBarkKind): void {
+    const own = creatureId === VRSpike.lastLocalActorId;
+    // Two blows landing together are one grunt, not two on top of each other.
+    const now = performance.now();
+    if (own && kind === 'pain' && now - VRSpike.lastOwnPainAt < 150) return;
     const placed = VRSpike.hooks?.resolveCombatBark?.(creatureId, kind) ?? null;
-    if (placed?.sounds?.length) VRSpike.playCombatCue(kind === 'pain' && creatureId === VRSpike.lastLocalActorId ? 'pain' : 'bark', 0, false, placed);
+    if (!placed?.sounds?.length) return;
+    if (own && kind === 'pain') VRSpike.lastOwnPainAt = now;
+    VRSpike.playCombatCue(own && kind === 'pain' ? 'pain' : 'bark', 0, false, placed);
   }
+
+  private static lastOwnPainAt = Number.NEGATIVE_INFINITY;
 
   /** The controlled creature's id, for the PC's own barks. */
   private static lastLocalActorId: number | null = null;
