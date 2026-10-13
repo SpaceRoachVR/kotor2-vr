@@ -651,7 +651,8 @@ export class ModuleArea extends ModuleObject {
     this.musicDiagStartedAt ??= performance.now();
     const audioEngine = AudioEngine.GetAudioEngine();
     const oPC = GameState.getCurrentPlayer();
-    if(oPC.excitedDuration > 0 && audioEngine.bgmMode == BackgroundMusicMode.AREA && audioEngine.battleMusicLoaded){
+    if(oPC.excitedDuration > 0 && audioEngine.bgmMode == BackgroundMusicMode.AREA && audioEngine.battleMusicLoaded &&
+      this.hasHostileWithinPerception(oPC)){
       // TEMPORARY (headset round 5, R6): "fight music ended after fight, but
       // comes back on after loading another area or loading a save". Names
       // what excited the leader each time battle music starts, and how long
@@ -675,8 +676,32 @@ export class ModuleArea extends ModuleObject {
     }
   }
 
-  musicBackgroundPlay(){
+  /**
+   * Battle music needs an enemy. The leader is "excited" by any attack it
+   * makes, so bashing a footlocker or a door started the battle track with no
+   * hostile anywhere (headset round 17: 18 starts in the 101PER medbay).
+   */
+  private hasHostileWithinPerception(oPC: ModuleCreature): boolean {
+    const range = oPC.getPerceptionRangePrimary();
+    for(let i = 0; i < this.creatures.length; i++){
+      const creature = this.creatures[i];
+      if(creature === oPC || creature.isDead()) continue;
+      if(!creature.isHostile(oPC)) continue;
+      if(creature.position.distanceTo(oPC.position) < range) return true;
+    }
+    return false;
+  }
+
+  /** `force`: a module load, which always starts the new area's track. */
+  musicBackgroundPlay(force = false){
     const audioEngine = AudioEngine.GetAudioEngine();
+    // A script restarting the area track mid-fight (MusicBackgroundPlay) set the
+    // mode back to AREA while the leader was still excited, and the next frame
+    // restarted the battle track from its first bar - every few seconds in
+    // 101PER. Battle music hands back to the area track itself when it ends.
+    if(!force && (audioEngine.bgmMode == BackgroundMusicMode.BATTLE || audioEngine.bgmMode == BackgroundMusicMode.BATTLE_STINGER)){
+      return;
+    }
     audioEngine.areaMusicDayAudioEmitter.play();
   }
 
