@@ -424,6 +424,8 @@ export interface VRSpikeHooks {
    * is still waiting for the round to open.
    */
   serviceCombatSwingBuffer?: () => { readonly released: boolean; readonly armed: boolean } | null;
+  /** Whether the game is paused for any reason, the VR Menu's own pause included. */
+  isEnginePaused?: () => boolean;
   /**
    * The player picked an entry from a world prompt: which prompt (its
    * candidate id) and the entry's label. A swing bashes only a target the
@@ -1431,6 +1433,9 @@ export class VRSpike {
     if (radialOwnsInput) {
       VRSpike.captureWorldPromptSelectLatch();
       VRSpike.clearWorldActionPrompt(false);
+    }
+    if (foregroundSurfaceOwnsInput || radialOwnsInput || lifecycleSuspendsGameplayInput) {
+      VRSpike.holdCombatCancelOutsideWorld();
     }
     if (!foregroundSurfaceOwnsInput) {
       VRSpike.processLocomotionInput(timestamp, frame, !radialOwnsInput);
@@ -2560,21 +2565,17 @@ export class VRSpike {
       return;
     }
     try {
-      const actions = VRSpike.inputRouter.route(
-        XRGamepadReader.read(Array.from(session.inputSources ?? [])),
-        new Set(['combat', 'interaction', 'ui'])
-      );
-      const buttonDown = actions.some((action) =>
-        action.action === SemanticXRAction.Cancel && action.hand === VRSpike.dominantHand && action.pressed
-      );
+      const buttonDown = VRSpike.readCombatCancelButton(session);
       // B is also Pause. A tap pauses or resumes and nothing else; cancelling
       // combat needs B held for VR_COMBAT_CANCEL_HOLD_MS, never while paused.
       // A tap used to cancel too, clearing the actions just queued in the
-      // pause (round 15, PF4). A press that began paused never cancels.
+      // pause (round 15, PF4). A press that began paused never cancels, and
+      // the VR Menu's pause counts: holding B to close it cancelled combat
+      // and cleared the queue (round 17, R4).
       const now = performance.now();
       if (!buttonDown) {
         VRSpike.combatCancelDownSince = null;
-      } else if (VRSpike.isPlayerPaused()) {
+      } else if (VRSpike.isPlayerPaused() || VRSpike.isEnginePaused()) {
         VRSpike.combatCancelDownSince = Number.POSITIVE_INFINITY;
       } else if (VRSpike.combatCancelDownSince === null) {
         VRSpike.combatCancelDownSince = now;
@@ -2630,8 +2631,43 @@ export class VRSpike {
     }
   }
 
+  private static readCombatCancelButton(session: XRSession): boolean {
+    const actions = VRSpike.inputRouter.route(
+      XRGamepadReader.read(Array.from(session.inputSources ?? [])),
+      new Set(['combat', 'interaction', 'ui'])
+    );
+    return actions.some((action) =>
+      action.action === SemanticXRAction.Cancel && action.hand === VRSpike.dominantHand && action.pressed
+    );
+  }
+
+  /**
+   * A frame on which a panel, the VR Menu, the wheel or a cutscene owned
+   * input, so processCombatCancel did not run. A B press held now began
+   * outside the world and must never become a combat cancel: closing the VR
+   * Menu with a held B cancelled combat once the menu had gone (round 17, R4).
+   */
+  private static holdCombatCancelOutsideWorld(): void {
+    const session = VRSpike.session;
+    VRSpike.combatCancelHeld = false;
+    let buttonDown = false;
+    try {
+      buttonDown = !!session && VRSpike.readCombatCancelButton(session);
+    } catch { /* treat as released */ }
+    VRSpike.combatCancelDownSince = buttonDown ? Number.POSITIVE_INFINITY : null;
+  }
+
+  /** Any pause of the game, the player's own or the VR Menu's. */
+  private static isEnginePaused(): boolean {
+    try {
+      return VRSpike.hooks?.isEnginePaused?.() === true;
+    } catch {
+      return false;
+    }
+  }
+
   private static pendingCancelTraceFrames = 0;
-  /** When B went down this press; +Infinity if it went down while paused. */
+  /** When B went down this press; +Infinity if it went down while paused or outside the world. */
   private static combatCancelDownSince: number | null = null;
   private static combatCancelErrorReported = false;
 
@@ -2694,7 +2730,14 @@ export class VRSpike {
           }
         }
       } catch { /* notice only */ }
-      VRSpike.updateHiltTimer(context.weaponMode, 0, context.inCombat, context.stanceReadout, false);
+      // A swing held for the next round survives the pause, and the hilt
+      // keeps saying so in amber (round 17, locked). The buffer is asked,
+      // not serviced: paused, it neither ages nor fires.
+      let heldSwing = false;
+      try {
+        heldSwing = VRSpike.hooks?.serviceCombatSwingBuffer?.()?.armed === true;
+      } catch { /* the hilt only */ }
+      VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout, heldSwing);
       VRSpike.updateCombatTargetHighlight();
       VRSpike.roundReadyLatched = false;
       VRSpike.combatInputController.reset();

@@ -956,7 +956,10 @@ describe('VRSpike XR loop ownership', () => {
     };
     let paused = true;
     const swings: unknown[] = [];
-    const bufferServiced = jest.fn(() => ({ released: false, armed: false }));
+    // Round 17 (locked): a swing held for the next round survives the pause,
+    // and the hilt shows it held in amber while paused.
+    const bufferServiced = jest.fn(() => ({ released: false, armed: true }));
+    const hilt = jest.spyOn(VRSpike as any, 'updateHiltTimer').mockImplementation(() => undefined);
     VRSpike.hooks = {
       update: () => undefined,
       getPlayerPosition: () => null,
@@ -970,15 +973,20 @@ describe('VRSpike XR loop ownership', () => {
       serviceCombatSwingBuffer: bufferServiced,
     };
 
-    (VRSpike as any).processCombatInput(1_000);
-    expect(swings).toHaveLength(0);
-    expect(bufferServiced).not.toHaveBeenCalled();
+    try {
+      (VRSpike as any).processCombatInput(1_000);
+      expect(swings).toHaveLength(0);
+      expect(bufferServiced).toHaveBeenCalledTimes(1);
+      expect(hilt).toHaveBeenLastCalledWith('melee-one-handed', 0, true, '', true);
 
-    paused = false;
-    // A swing is two fast samples within 120 ms (critic run 15).
-    (VRSpike as any).processCombatInput(1_180);
-    (VRSpike as any).processCombatInput(1_200);
-    expect(swings).toHaveLength(1);
+      paused = false;
+      // A swing is two fast samples within 120 ms (critic run 15).
+      (VRSpike as any).processCombatInput(1_180);
+      (VRSpike as any).processCombatInput(1_200);
+      expect(swings).toHaveLength(1);
+    } finally {
+      hilt.mockRestore();
+    }
   });
 
   test('shows the pause and, only when the option is on, resumes when the wheel closes (3.18)', () => {
@@ -1520,6 +1528,57 @@ describe('VRSpike XR loop ownership', () => {
 
     expect(cancelCount).toBe(1);
     expect(requestedTargets).toEqual([null]);
+  });
+
+  test('a B hold that began in the VR Menu, or with the game paused by it, never cancels combat (round 17, R4)', () => {
+    const buttons = Array.from({ length: 6 }, () => ({ pressed: false, touched: false, value: 0 }));
+    let cancelCount = 0;
+    let enginePaused = false;
+    VRSpike.session = {
+      inputSources: [{ handedness: 'right', profiles: ['oculus-touch-v3'], gamepad: { axes: [], buttons } }],
+    } as unknown as XRSession;
+    VRSpike.hooks = {
+      update: () => undefined,
+      getPlayerPosition: () => null,
+      getFacing: () => 0,
+      getWorldContext: () => ({ module: null, position: null, room: null, roomsVisible: 0, roomsTotal: 0 }),
+      // The VR Menu pauses the game behind itself; that is not a player pause.
+      isPaused: () => false,
+      isEnginePaused: () => enginePaused,
+      getCombatContext: () => ({
+        actorId: '7', nominatedTargetId: '42', weaponMode: 'unarmed', inCombat: true, stanceReadout: '',
+        onCombatSwing: () => undefined, cancel: () => { cancelCount += 1; },
+      }),
+    };
+    let now = 30_000;
+    const clock = jest.spyOn(performance, 'now').mockImplementation(() => now);
+    const setB = (down: boolean) => {
+      buttons[5] = down ? { pressed: true, touched: true, value: 1 } : { pressed: false, touched: false, value: 0 };
+    };
+    try {
+      // B goes down while the VR Menu owns input (it closes the menu); the
+      // world frames that follow see the same hold.
+      setB(true);
+      (VRSpike as any).holdCombatCancelOutsideWorld();
+      now += 100; (VRSpike as any).processCombatCancel();
+      now += 900; (VRSpike as any).processCombatCancel();
+      expect(cancelCount).toBe(0);
+      setB(false); (VRSpike as any).processCombatCancel();
+
+      // B goes down in a world frame while the VR Menu's pause is still on.
+      enginePaused = true; setB(true); (VRSpike as any).processCombatCancel();
+      enginePaused = false; now += 900; (VRSpike as any).processCombatCancel();
+      expect(cancelCount).toBe(0);
+      setB(false); (VRSpike as any).processCombatCancel();
+
+      // A hold begun in the running world still cancels.
+      setB(true); (VRSpike as any).processCombatCancel();
+      now += 700; (VRSpike as any).processCombatCancel();
+      expect(cancelCount).toBe(1);
+      setB(false); (VRSpike as any).processCombatCancel();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test('consumes a grip-modified Force flick before it can also activate a nearby object', () => {
