@@ -70,6 +70,13 @@ export function readVRCreaturePromptState(
     getConversation?: () => { resref?: unknown } | null | undefined;
     hasInventory?: () => unknown;
   },
+  /**
+   * Whether the fight is on, when the caller knows better than the actor's
+   * own flag (Part F, decision 1 of 2026-10-13): the flag drops between the
+   * player's rounds while hostiles fight the companions, and plates came back
+   * mid-firefight in 28 of 30 samples (Anchor, run 2, finding 1).
+   */
+  fightOn?: boolean,
 ): VRCreaturePromptState {
   return {
     isSelf: target === actor,
@@ -86,7 +93,9 @@ export function readVRCreaturePromptState(
       const held = target.hasInventory?.();
       return typeof held === 'number' ? held > 0 : held === true;
     }),
-    actorInCombat: safeFlag(() => (actor as { combatData?: { combatState?: unknown } } | null)?.combatData?.combatState),
+    actorInCombat: typeof fightOn === 'boolean'
+      ? fightOn
+      : safeFlag(() => (actor as { combatData?: { combatState?: unknown } } | null)?.combatData?.combatState),
   };
 }
 
@@ -126,9 +135,13 @@ export function isVRCombatNamePlateHidden(
   actor: unknown,
   target: { isHostile?: (actor: unknown) => unknown } | null | undefined,
   targetIsCreature: boolean,
+  /** The fight is on, by the caller's own test; see readVRCreaturePromptState. */
+  fightOn?: boolean,
 ): boolean {
   if (!target || !targetIsCreature || (target as unknown) === actor) return false;
-  const inCombat = safeFlag(() => (actor as { combatData?: { combatState?: unknown } } | null)?.combatData?.combatState);
+  const inCombat = typeof fightOn === 'boolean'
+    ? fightOn
+    : safeFlag(() => (actor as { combatData?: { combatState?: unknown } } | null)?.combatData?.combatState);
   if (!inCombat) return false;
   return !safeFlag(() => target.isHostile?.(actor));
 }

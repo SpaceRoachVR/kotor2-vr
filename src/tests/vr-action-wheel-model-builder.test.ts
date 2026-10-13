@@ -573,3 +573,39 @@ test('Attack My Target fails closed once the target or the companions are gone',
   order.activate();
   expect(activate).not.toHaveBeenCalled();
 });
+
+/**
+ * Part F (decision 8 of 2026-10-13): Stun, Disable and Destroy Droid were
+ * offered against human troopers (Anchor, Hilt, run 2), and the page a power
+ * was used from last fight was four pages deep at L19 (Bolt, run 2).
+ */
+test('droid-only Force powers are offered only at a droid', () => {
+  const powers = [
+    engineAction('stun-droid', 'Stun Droid', { panelIndex: 1, isForcePower: true, spellId: 47 }),
+    engineAction('disable-droid', 'Disable Droid', { panelIndex: 1, isForcePower: true, spellId: 12 }),
+    engineAction('destroy-droid', 'Destroy Droid', { panelIndex: 1, isForcePower: true, spellId: 13 }),
+    engineAction('wave', 'Force Wave', { panelIndex: 1, isForcePower: true, spellId: 130 }),
+  ];
+  const atHuman = findSubmenu(buildVRActionWheel(context({ targetIsHostileCreature: true, targetActions: powers })),
+    'submenu:force-powers').buildMenu();
+  expect(contentIds(atHuman)).toEqual(['engine:wave']);
+  const atDroid = findSubmenu(buildVRActionWheel(context({ targetIsHostileCreature: true, targetIsDroid: true, targetActions: powers })),
+    'submenu:force-powers').buildMenu();
+  expect(contentIds(atDroid)).toEqual(['engine:stun-droid', 'engine:disable-droid', 'engine:destroy-droid', 'engine:wave']);
+});
+
+test('powers used lately lead the Force page, most recent first', () => {
+  const powers = Array.from({ length: 9 }, (_, i) =>
+    engineAction(`p${i}`, `Power ${i}`, { panelIndex: 1, isForcePower: true, spellId: 100 + i }));
+  const heal = engineAction('heal', 'Heal', { panelIndex: 1, isForcePower: true, spellId: 200 });
+  const menu = findSubmenu(buildVRActionWheel(context({
+    targetIsHostileCreature: true,
+    targetActions: powers,
+    selfActions: [heal],
+    recentForcePowerSpellIds: [108, 200],
+  })), 'submenu:force-powers').buildMenu();
+  const firstPage = menu.pages[0].entries
+    .filter((entry): entry is VRRadialContentItem => entry.kind === 'action' || entry.kind === 'submenu')
+    .map((entry) => entry.id);
+  expect(firstPage.slice(0, 3)).toEqual(['engine:p8', 'engine:heal', 'engine:p0']);
+});
