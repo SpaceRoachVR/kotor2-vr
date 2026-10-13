@@ -347,7 +347,15 @@ export class GUIListBox extends GUIControl {
   private _doPublish(): void {
     this.updateList();
     if (this.scrollbar) {
+      // Publishing must not move the list. scrollbar.update() snaps the
+      // scroll to whole rows (for thumb drags), which pulled a list kept at
+      // its bottom by setItems' keepScroll up by part of a row.
+      const scroll = this.scroll;
       this.scrollbar.update();
+      if (this.scroll !== scroll) {
+        this.scroll = scroll;
+        this.updateList();
+      }
     }
     this.updateScrollbarVisibility();
     this.listRttDirty = false;
