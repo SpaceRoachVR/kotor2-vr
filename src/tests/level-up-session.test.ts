@@ -130,6 +130,18 @@ describe('a level-up session', () => {
     session.cancel();
     expect(cls.level).toBe(3);
   });
+
+  test('Toughness adds one more vitality point to the level', () => {
+    const cls = consularAt(2);
+    const creature = creatureWith(cls);
+    creature.feats.push({ id: 84 });
+    const session = LevelUpSession.begin(creature)!;
+    session.completeStep('skills');
+    session.completeStep('feats');
+    session.completeStep('powers');
+    expect(session.finish()).toEqual({ hitPoints: 8, forcePoints: 11 });
+    expect(creature.maxHitPoints).toBe(38);
+  });
 });
 
 // Round 14 (S2): skill points left unspent at character creation never

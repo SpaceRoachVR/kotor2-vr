@@ -93,6 +93,18 @@ export function resolveLevelUpSkillPoints(skillpointbase: number, intelligence: 
   return Math.max(1, base + abilityModifier(intelligence));
 }
 
+/** feat.2da 84, Toughness: +1 vitality per level. */
+export const TOUGHNESS_FEAT_ID = 84;
+export const TOUGHNESS_VITALITY_PER_LEVEL = 1;
+
+/**
+ * feat.2da 206, War Veteran: "+25 Vitality points at the start of the game".
+ * TSL gives the Exile this and Toughness at creation, outside the class grant
+ * columns of feat.2da; both of Allen's retail level-1 saves carry the pair.
+ */
+export const WAR_VETERAN_FEAT_ID = 206;
+export const WAR_VETERAN_VITALITY = 25;
+
 /**
  * Vitality and Force points gained on Accept, from the final attributes.
  *
@@ -100,16 +112,21 @@ export function resolveLevelUpSkillPoints(skillpointbase: number, intelligence: 
  * points gained at each level-up" and Wisdom "adds modifiers to Jedi Force
  * Points" (dialog.tlk 224 and 225), so the class die plus that modifier, as
  * `autoLevelUp` already did for vitality. Retail grants the full die.
+ *
+ * Toughness (feat 84) adds one more vitality point to every level, the first
+ * included: Allen's retail level-1 Exiles carry it, and their MaxHitPoints
+ * (Guardian 38, Consular 33) only add up with that point counted.
  */
 export function resolveLevelUpVitalityGain(
   characterClass: Pick<LevelUpClassRules, 'hitdie' | 'forcedie' | 'spellcaster'>,
   constitution: number,
   wisdom: number,
+  toughness = false,
 ): LevelUpVitalityGain {
   const hitdie = Number(characterClass?.hitdie) || 0;
   const forcedie = Number(characterClass?.forcedie) || 0;
   return {
-    hitPoints: Math.max(1, hitdie + abilityModifier(constitution)),
+    hitPoints: Math.max(1, hitdie + abilityModifier(constitution)) + (toughness ? TOUGHNESS_VITALITY_PER_LEVEL : 0),
     forcePoints: characterClass?.spellcaster && forcedie > 0
       ? Math.max(1, forcedie + abilityModifier(wisdom))
       : 0,

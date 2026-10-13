@@ -89,7 +89,17 @@ describe('starting vitality comes from the class and Constitution', () => {
   const manager = read('src/managers/CharGenManager.ts');
 
   test('it uses the per-level rule: hit die plus Constitution, Force die plus Wisdom', () => {
-    expect(manager).toContain('return resolveLevelUpVitalityGain(characterClass, creature.con, creature.wis);');
+    expect(manager).toContain('const start = resolveLevelUpVitalityGain(characterClass, creature.con, creature.wis, exile);');
+  });
+
+  // Allen's retail level-1 saves: Guardian MaxHitPoints 38 = d10 + CON 2 + War
+  // Veteran 25 + Toughness 1; Consular 33 = d6 + CON 1 + 25 + 1. Both carry
+  // feats 206 and 84, which feat.2da's class grant columns never hand out.
+  test('the TSL Exile starts with War Veteran and Toughness and their vitality', () => {
+    expect(manager).toContain('if(exile) return { ...start, hitPoints: start.hitPoints + WAR_VETERAN_VITALITY };');
+    expect(manager).toContain('return GameState.GameKey == GameEngineType.TSL;');
+    expect(manager).toContain('for(const id of [WAR_VETERAN_FEAT_ID, TOUGHNESS_FEAT_ID]){');
+    expect(manager).toMatch(/if\(!start\) return;\s*CharGenManager\.grantExileStartingFeats\(creature\);/);
   });
 
   test('base, maximum and current vitality are all set, so the character starts full', () => {

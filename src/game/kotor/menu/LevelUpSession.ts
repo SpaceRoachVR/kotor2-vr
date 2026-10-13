@@ -3,6 +3,7 @@ import {
   resolveLevelUpAllowances,
   resolveLevelUpSkillPoints,
   resolveLevelUpVitalityGain,
+  TOUGHNESS_FEAT_ID,
 } from "@/game/kotor/menu/LevelUpRules";
 import type {
   LevelUpAbility,
@@ -191,7 +192,8 @@ export class LevelUpSession {
    */
   finish(): LevelUpVitalityGain | undefined {
     if(!this.canFinish()) return undefined;
-    const gain = resolveLevelUpVitalityGain(this.characterClass, this.creature.con, this.creature.wis);
+    const toughness = this.creature.feats.some((feat) => feat?.id === TOUGHNESS_FEAT_ID);
+    const gain = resolveLevelUpVitalityGain(this.characterClass, this.creature.con, this.creature.wis, toughness);
     this.creature.hitPoints += gain.hitPoints;
     this.creature.maxHitPoints += gain.hitPoints;
     this.creature.currentHitPoints += gain.hitPoints;

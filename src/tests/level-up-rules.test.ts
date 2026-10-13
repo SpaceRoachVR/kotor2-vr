@@ -60,6 +60,12 @@ describe('what one level is worth', () => {
     expect(resolveLevelUpVitalityGain({ hitdie: 6, forcedie: 8, spellcaster: true }, 1, 1))
       .toEqual({ hitPoints: 1, forcePoints: 3 });
   });
+
+  test('Toughness adds one vitality point to the level and nothing to Force', () => {
+    expect(resolveLevelUpVitalityGain(consular, 12, 16, true)).toEqual({ hitPoints: 8, forcePoints: 11 });
+    expect(resolveLevelUpVitalityGain({ hitdie: 6, forcedie: 8, spellcaster: true }, 1, 1, true))
+      .toEqual({ hitPoints: 2, forcePoints: 3 });
+  });
 });
 
 const row = (index: number, fields: Record<string, string>) => ({

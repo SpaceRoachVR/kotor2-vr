@@ -19,7 +19,10 @@ import { MDLLoader, ResourceLoader } from "@/loaders";
 import { ResourceTypes } from "@/resource/ResourceTypes";
 import { allocateRecommendedCharGenSkills } from "@/game/kotor/menu/CharGenSkillRules";
 import { validateCharGenProgression } from "@/game/kotor/menu/CharGenProgression";
-import { resolveLevelUpVitalityGain } from "@/game/kotor/menu/LevelUpRules";
+import {
+  resolveLevelUpVitalityGain, TOUGHNESS_FEAT_ID, WAR_VETERAN_FEAT_ID, WAR_VETERAN_VITALITY,
+} from "@/game/kotor/menu/LevelUpRules";
+import { TalentFeat } from "@/talents/TalentFeat";
 import type { LevelUpSession } from "@/game/kotor/menu/LevelUpSession";
 
 /**
@@ -279,11 +282,30 @@ export class CharGenManager {
    * First-level vitality and Force points, by the same rule each later level
    * adds: the class hit die plus the Constitution modifier, and for a Force user
    * the Force die plus the Wisdom modifier. Undefined without a class.
+   *
+   * TSL's Exile also starts with War Veteran (+25) and Toughness (+1 per
+   * level): retail Guardian 38 = 10 + 2 + 25 + 1, Consular 33 = 6 + 1 + 25 + 1.
    */
   static getStartingVitality(creature: any = CharGenManager.selectedCreature){
     const characterClass = creature?.classes?.[0];
     if(!characterClass) return undefined;
-    return resolveLevelUpVitalityGain(characterClass, creature.con, creature.wis);
+    const exile = CharGenManager.grantsExileStartingFeats();
+    const start = resolveLevelUpVitalityGain(characterClass, creature.con, creature.wis, exile);
+    if(exile) return { ...start, hitPoints: start.hitPoints + WAR_VETERAN_VITALITY };
+    return start;
+  }
+
+  /** TSL only: KotOR I's Revan has neither War Veteran nor a free Toughness. */
+  static grantsExileStartingFeats(){
+    return GameState.GameKey == GameEngineType.TSL;
+  }
+
+  /** Gives the Exile War Veteran and Toughness, once each. */
+  static grantExileStartingFeats(creature: any = CharGenManager.selectedCreature){
+    if(!CharGenManager.grantsExileStartingFeats() || !Array.isArray(creature?.feats)) return;
+    for(const id of [WAR_VETERAN_FEAT_ID, TOUGHNESS_FEAT_ID]){
+      if(!creature.feats.some((feat: any) => feat?.id === id)) creature.feats.push(new TalentFeat(id));
+    }
   }
 
   /**
@@ -295,10 +317,13 @@ export class CharGenManager {
    * while TSL wrongly handed out KotOR I's non-Force classes. Each pool's base,
    * maximum and current value are set together, so the character starts full.
    * Retail TSL creation has no Powers step, so no powers are granted here.
+   * The Exile's War Veteran and Toughness are granted here, with the vitality
+   * they are worth.
    */
   static applyStartingVitality(creature: any = CharGenManager.selectedCreature){
     const start = CharGenManager.getStartingVitality(creature);
     if(!start) return;
+    CharGenManager.grantExileStartingFeats(creature);
     creature.hitPoints = start.hitPoints;
     creature.maxHitPoints = start.hitPoints;
     creature.currentHitPoints = start.hitPoints;
