@@ -88,6 +88,7 @@ import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { TalkVolume } from "@/enums/engine/TalkVolume";
 import { takeHeardShout } from "@/module/creature/ListenPatterns";
 import { resolveKillExperience } from "@/combat/killExperience";
+import { dropStaleCombatActions } from "@/combat/staleCombatActions";
 import {
   abilityModifier,
   isAutoBalanceSet,
@@ -1188,6 +1189,10 @@ export class ModuleCreature extends ModuleObject {
   updateCombat(delta = 0){
     // this.combatData.update(delta);
     this.combatRound.update(delta);
+
+    // An unstarted action on a target that died, was destroyed or is in
+    // another area would block every later action of this creature.
+    dropStaleCombatActions(this.combatRound, this.area);
 
     if(this.combatData.lastAttackTarget instanceof ModuleObject && this.combatData.lastAttackTarget.isDead()){
       this.combatData.clearTarget(this.combatData.lastAttackTarget);
