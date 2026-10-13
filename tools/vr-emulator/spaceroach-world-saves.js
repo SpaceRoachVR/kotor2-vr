@@ -172,6 +172,38 @@ async function placeParty(harness, waypoints) {
     return placed;})()`);
 }
 
+// partytable.2da slot → the creature tag each companion's template carries.
+const COMPANION_TAG_BY_SLOT = Object.freeze({ 0: 'atton', 1: 'baodur', 2: 'mand', 6: 'kreia', 8: 't3m4', 9: 'visasmarr' });
+
+// Arrival scripts spawn the world's authored companions (Telos's Bao-Dur and
+// Atton, Nar Shaddaa's pair) beside the profiled party, and those bodies share
+// object ids with the party and go into the save's GIT. In Telos they took
+// half the troopers' fire and blocked every shot (critic Hive, 2026-10-13).
+// Only companions on the profile's roster count as strays: an empty roster
+// (Peragus) keeps its story NPCs, Atton in his cell and T3. Remove them, then
+// put the party back in the id registry the duplicates shared.
+function strayTags(module) {
+  return profileFor(module).roster.map(slot => COMPANION_TAG_BY_SLOT[slot]).filter(Boolean);
+}
+
+const strayCompanions = (module) => `(()=>{const K=window.KotOR,gs=K.GameState,pm=K.PartyManager,tags=${JSON.stringify(strayTags(module))};
+  const party=new Set(pm.party);
+  return gs.module.area.creatures.filter(c=>!party.has(c)&&tags.includes(String(c.tag).toLowerCase()));})()`;
+
+async function removeStrayCompanions(harness, module) {
+  return harness.evaluate(`(()=>{const K=window.KotOR,gs=K.GameState,pm=K.PartyManager,removed=[];
+    for(const c of ${strayCompanions(module)}) {
+      removed.push(c.tag+'#'+c.id); gs.module.area.detachObject(c); try{c.destroy();}catch(e){}
+    }
+    for(const p of pm.party) gs.ModuleObjectManager.ObjectList.set(p.id,p);
+    return removed;})()`);
+}
+
+async function validateNoStrayCompanions(harness, destination) {
+  const strays = await harness.evaluate(`${strayCompanions(destination.module)}.map(c=>c.tag+'#'+c.id)`);
+  if (strays.length) throw new Error(`${destination.name} reloaded with stray companion bodies: ${strays.join(', ')}`);
+}
+
 /** Thirty seconds in the world after a reload: a save must not leave its module on its own. */
 async function validateStays(harness, destination) {
   await new Promise(r => setTimeout(r, 30000));
@@ -253,6 +285,7 @@ async function main() {
         Object.assign(loadout, await configureProfile(harness, d.module, { partyOnly: true }));
         before = await settleMenus(harness, d);
       }
+      loadout.strayCompanionsRemoved = await removeStrayCompanions(harness, d.module);
       if (loadout.arriveAt) loadout.placed = await placeParty(harness, loadout.arriveAt);
       validateBag(await harness.evaluate(BAG_SAMPLE), loadout);
       const prepared = await harness.evaluate(EQUIPPED_PARTY_SAMPLE);
@@ -265,6 +298,7 @@ async function main() {
         return {directory:s.directory,saveName:s.getSaveName()};})()`, { timeoutMs: 180000 });
       await loadSave(harness, metadata.directory, d.module);
       const after = await settleMenus(harness, d);
+      await validateNoStrayCompanions(harness, d);
       await validateStays(harness, d);
       const reloaded = await harness.evaluate(EQUIPPED_PARTY_SAMPLE);
       validateEquippedParty(reloaded, loadout, loadout.active);
