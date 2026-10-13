@@ -1,6 +1,6 @@
 import type { VRCombatCuePlayOptions } from "@/vr/runtime/VRCombatCueAudio";
 import { impactResRef, resolveVRImpactMaterialFor } from "@/engine/rules/ImpactMaterial";
-import { describeVRCombatVoicingSounds, describeVRPlayerBarks, pickVRBark, resolveVRCriticalImpact, type VRCombatBarkKind } from "@/vr/runtime/VRCombatVoicing";
+import { describeVRCombatVoicingSounds, describeVRPlayerBarks, pickVRBark, resolveVRCriticalImpact, VRStrokeWhooshPicker, type VRCombatBarkKind, type VRStrokeShape } from "@/vr/runtime/VRCombatVoicing";
 import { SSFType } from "@/enums/resource/SSFType";
 import * as THREE from "three";
 import {
@@ -155,7 +155,9 @@ function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
 import { VRCombatTempoGate, type VRCombatTempoGateReason, resolveVRRoundReadiness, resolveVRRoundOpen, VRRoundReadinessLatch } from "@/vr/runtime/VRCombatTempoGate";
 import { addSwoopRideListener, type SwoopRideEventType } from "@/module/minigame/SwoopRideEvents";
 import { VRCombatSwingBuffer, VRHeldSwingLifetime, isVRCombatSwingBufferable, isVRFightOngoing } from "@/vr/runtime/VRCombatSwingBuffer";
-import { AttackBarkGate, type AttackBarkPolicy } from "@/engine/rules/AttackBarkGate";
+import { VRRecentForcePowers } from "@/vr/runtime/VRForcePowerWheelRules";
+import { AttackBarkGate, SPARSE_ATTACK_BARK_POLICY, type AttackBarkPolicy } from "@/engine/rules/AttackBarkGate";
+import { VRRefusalTickThrottle, isVRRefusedInputMeaningful, type VRRefusalTickReason } from "@/vr/runtime/VRRefusalTick";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
@@ -1096,7 +1098,11 @@ function resolveVRScheduledItemLabels(actor: ModuleCreature): string[] {
  * the struck material, placed at the target's chest (critic run 6: every cue
  * was one flesh sample in the head). Null keeps the cue's defaults.
  */
-function resolveVRCombatCueSounds(attackerId: string | number, targetId: string | number, cue: string): VRCombatCuePlayOptions | null {
+const vrStrokeWhooshPicker = new VRStrokeWhooshPicker();
+/** Force powers picked lately, most recent first: they lead the wheel's Force page (Part F). */
+const vrRecentForcePowers = new VRRecentForcePowers();
+
+function resolveVRCombatCueSounds(attackerId: string | number, targetId: string | number, cue: string, stroke?: VRStrokeShape): VRCombatCuePlayOptions | null {
   try {
     const attacker: any = GameState.ModuleObjectManager.GetObjectById?.(Number(attackerId));
     const target: any = GameState.ModuleObjectManager.GetObjectById?.(Number(targetId));
@@ -1138,6 +1144,11 @@ function resolveVRCombatCueSounds(attackerId: string | number, targetId: string 
     const sounds: any = weapon ? weapon.weaponSound : GameState.SWRuleSet?.weaponSounds?.[0];
     const parrySounds: any = cue === 'parried' ? (resolveVRAttackWeapon(target)?.weaponSound ?? sounds) : sounds;
     if (!sounds) return { position };
+    // A physical stroke rotates the weapon's own swing takes (Part F).
+    if (cue === 'whoosh' && stroke) {
+      const picked = vrStrokeWhooshPicker.pick(sounds, stroke);
+      if (picked) return { position, sounds: [{ resref: picked.resref, at: 0, gain: 1, rate: picked.rate }] };
+    }
     let resrefs: string[] = [];
     if (cue === 'hit' || cue === 'hurt') resrefs = [impactResRef(sounds, material, Math.random() < 0.5 ? 0 : 1)];
     // Both impact variants together: heavier than a hit, and nothing to do
@@ -1248,7 +1259,8 @@ function resolveVRCombatPreloadSounds(): string[] {
   const out = new Set<string>();
   const rows: any[] = Object.values(GameState.SWRuleSet?.weaponSounds ?? {});
   for (const row of rows) {
-    for (const key of ['leather0', 'leather1', 'metal0', 'metal1', 'armor0', 'armor1', 'cloth0', 'cloth1', 'parry0', 'swingShort0']) {
+    for (const key of ['leather0', 'leather1', 'metal0', 'metal1', 'armor0', 'armor1', 'cloth0', 'cloth1', 'parry0',
+      'swingShort0', 'swingShort1', 'swingShort2', 'swingLong0', 'swingLong1', 'swingLong2']) {
       if (row?.[key]) out.add(String(row[key]));
     }
   }
@@ -1264,6 +1276,22 @@ function signalVRRefusal(shape: string): void {
   // left the bag), so it blips too (critic run 4).
   if (!shape.startsWith('refused') && !shape.startsWith('cancelled')) return;
   try { VRSpike.signalRefusal(shape); } catch { /* feedback is best effort */ }
+}
+
+const vrRefusalTickThrottle = new VRRefusalTickThrottle();
+const reportedVRRefusalTicks = new Set<VRRefusalTickReason>();
+
+/**
+ * Part F (decision 2 of 2026-10-13): a refused gesture or input plays the
+ * soft refused tick only - no text - throttled so it never spams.
+ */
+function tickVRRefusal(reason: VRRefusalTickReason): void {
+  if (!vrRefusalTickThrottle.allow(reason, performance.now())) return;
+  try { VRSpike.playRefusedCue(); } catch { /* feedback is best effort */ }
+  if (!reportedVRRefusalTicks.has(reason)) {
+    reportedVRRefusalTicks.add(reason);
+    console.info(`[VR combat] refused tick: ${reason}`);
+  }
 }
 
 function reportVRConsumableOutcome(shape: string, detail = ''): void {
@@ -1456,6 +1484,12 @@ function dispatchVREmbodiedCombatInput(
     currentWeaponSignature: resolveVRCombatWeaponSignature(actor),
     input,
   });
+  // The head waits for another input (Force Push needs a flick): the pull
+  // still attacks, and the tick says the queued action did not take it
+  // (Tempo run 2, finding 3: "refused in silence").
+  if (input === 'dominant-trigger' && (result.state === 'deferred-input-mismatch' || result.state === 'deferred-weapon-mismatch')) {
+    tickVRRefusal('trigger-cannot-serve-head');
+  }
   reportVRSwingOutcomeOnce(
     `dispatch input=${input} state=${result.state}${'reason' in result ? ' reason=' + result.reason : ''} head=${head ? head.label : 'none'}`,
     `target=${targetId} weapon=${resolveVRCombatWeaponSignature(actor)} head=${headLabel} queueAfter=${vrCombatIntentQueue.getSnapshot().entries.length}`,
@@ -1671,6 +1705,45 @@ function isVRHostileEngagedWithParty(actor: ModuleCreature): boolean {
     if (party.includes(combat.lastAttackTarget) || party.includes(combat.lastAttacker)) return true;
   }
   return false;
+}
+
+/** The hostile the VR lock last named to getCombatContext; read by isVRFightOnFor. */
+let vrCombatLockTargetId: number | null = null;
+let vrFightOnMemo: { actor: ModuleCreature | null; at: number; value: boolean } = { actor: null, at: Number.NEGATIVE_INFINITY, value: false };
+/** Prompts ask once per candidate per frame; the answer holds for one frame's worth. */
+const VR_FIGHT_ON_MEMO_MS = 30;
+
+/**
+ * Part F (decision 1 of 2026-10-13): one "fight is on" for every piece of
+ * combat-only VR presentation - prompts, plates and brackets, the hilt ring
+ * and the round-ready tick, and whether a friendly power queues or casts at
+ * once. Part B's test, as the held-swing buffer uses it: the player's own
+ * flag, the locked hostile still fighting, or a hostile in lock range fighting
+ * a party member. The flag alone dropped between rounds while troopers shot
+ * the companions (companion AI's CancelCombat), so plates came back in 28 of
+ * 30 samples (Anchor run 2) and the ring read "ready" on 9 of 23 pulls (Tempo
+ * run 2). A hostile merely aimed at outside a fight does not count: it is not
+ * fighting.
+ */
+function isVRFightOnFor(actor: ModuleCreature | null | undefined): boolean {
+  if (!actor) return false;
+  const now = performance.now();
+  if (vrFightOnMemo.actor === actor && now - vrFightOnMemo.at >= 0 && now - vrFightOnMemo.at < VR_FIGHT_ON_MEMO_MS) {
+    return vrFightOnMemo.value;
+  }
+  let value = actor.combatData?.combatState === true;
+  try {
+    if (!value) {
+      const locked = resolveVRLockedHostile(actor, vrCombatLockTargetId === null ? null : String(vrCombatLockTargetId)) as ModuleCreature | null;
+      value = isVRFightOngoing({
+        actorInCombat: false,
+        lockedTargetLive: !!locked && locked.combatData?.combatState === true,
+        hostileEngagedWithParty: isVRHostileEngagedWithParty(actor),
+      });
+    }
+  } catch { /* the flag alone */ }
+  vrFightOnMemo = { actor, at: now, value };
+  return value;
 }
 
 function dispatchVRDirectionalForceGesture(
@@ -1946,7 +2019,17 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   // Friendly powers outside combat (a heal after the fight, a buff before it)
   // have no hostile target to spend a tempo window on, so the intent queue
   // could never dispatch them. Let the engine cast them immediately.
-  if (kind === 'self' && actor.combatData?.combatState !== true) return false;
+  // "In combat" is the fight, not the player's flag (Part F, decision 1): a
+  // heal picked while the flag had dropped mid-fight cast at once instead of
+  // waiting its turn in the queue.
+  if (kind === 'self' && !isVRFightOnFor(actor)) {
+    if (panelIndex === 1) {
+      try {
+        vrRecentForcePowers.note((GameState.ActionMenuManager.ActionPanels.selfPanels[1]?.getSelectedAction() as any)?.talent?.id);
+      } catch { /* ordering only */ }
+    }
+    return false;
+  }
   if (panelIndex !== 0 && panelIndex !== 1) return false;
 
   let selected: VRActionMenuEntry | undefined;
@@ -1991,7 +2074,9 @@ function consumeVRCombatIntentSelection(panelIndex: number, kind: 'target' | 'se
   // included, as in retail (Allen, 2026-10-03). The run-18 stale-entry
   // complaint is answered by dropping a head the pool can't pay, not by
   // refusing repeats.
-  vrCombatIntentQueue.enqueue(intent);
+  if (!vrCombatIntentQueue.enqueue(intent).accepted) tickVRRefusal('queue-full');
+  // A power picked now leads the wheel's Force page next time (Part F).
+  else if (panelIndex === 1) vrRecentForcePowers.note((selected.talent as any)?.id);
   return true;
 }
 
@@ -2212,7 +2297,7 @@ function buildVRWorldActionPromptFor(
   // having no pages — which is what made 3C-FD and the medbay dummy inert.
   if ((target.objectType & ModuleObjectType.ModuleCreature) !== 0) {
     const creatureDescriptor = describeVRCreaturePromptAction(
-      readVRCreaturePromptState(actor, target),
+      readVRCreaturePromptState(actor, target, isVRFightOnFor(actor)),
       target.id,
       candidate.name,
     );
@@ -2553,7 +2638,7 @@ function hasPotentialVRWorldPromptActions(
   target: ModuleObject,
 ): boolean {
   if ((target.objectType & ModuleObjectType.ModuleCreature) !== 0) {
-    return hasCreatureWorldPromptAction(readVRCreaturePromptState(actor, target));
+    return hasCreatureWorldPromptAction(readVRCreaturePromptState(actor, target, isVRFightOnFor(actor)));
   }
   if ((target.objectType & (ModuleObjectType.ModuleDoor | ModuleObjectType.ModulePlaceable)) !== 0) {
     const lockTarget = target as ModuleObject & {
@@ -3309,7 +3394,20 @@ export class GameState implements EngineContext {
   /** Decides whether an attack voices its soundset line (ActionPhysicalAttacks). */
   static attackBarkGate = new AttackBarkGate();
   /** The policy for one attacker's lines; null or undefined plays one on every attack. */
-  static attackBarkPolicy: ((attacker: unknown) => AttackBarkPolicy | undefined) | null = null;
+  static attackBarkPolicy: ((attacker: unknown) => AttackBarkPolicy | undefined) | null = (attacker) => {
+    // In VR an enemy's battle cry played on every shot (30 of 30) and buried
+    // the shot, impact and pain cues (Spark, Bolt, run 2). About one attack in
+    // three, never within 4 s per creature (Part F, decision 7 of
+    // 2026-10-13). Outside VR, and for the party, every attack still voices.
+    if (!VRSpike.isPresenting) return undefined;
+    try {
+      const player = GameState.getCurrentPlayer() as any;
+      if (!player || attacker === player || !(attacker as any)?.isHostile?.(player)) return undefined;
+    } catch {
+      return undefined;
+    }
+    return SPARSE_ATTACK_BARK_POLICY;
+  };
 
   /** In VR, the player's own blows and blows on the player are voiced by the VR cue (critic run 7). */
   static vrVoicesCombatImpact: ((attacker: unknown, target: unknown) => boolean) | null = (attacker, target) => {
@@ -4178,7 +4276,7 @@ export class GameState implements EngineContext {
           ? { context: engine.audioCtx, destination, loadSound: (resref: string) => AudioLoader.LoadSound(resref) }
           : null;
       },
-      resolveCombatCueSounds: (attackerId, targetId, cue) => resolveVRCombatCueSounds(attackerId, targetId, cue),
+      resolveCombatCueSounds: (attackerId, targetId, cue, stroke) => resolveVRCombatCueSounds(attackerId, targetId, cue, stroke),
       resolveCombatBark: (creatureId, kind) => resolveVRCombatBark(creatureId, kind),
       getCombatCuePreloadSounds: () => resolveVRCombatPreloadSounds(),
       getPlayerDisabledState: () => resolveVRPlayerDisabledState(),
@@ -4366,6 +4464,7 @@ export class GameState implements EngineContext {
           return null;
         }
         observeVREmbodiedCombatActor(actor);
+        vrCombatLockTargetId = aimedTargetId;
         const candidate = resolveVRAimedObject(aimedTargetId);
         // Nominated at lock range; weapon reach is enforced at dispatch. See
         // vrCombatLockRangeMetres.
@@ -4381,11 +4480,15 @@ export class GameState implements EngineContext {
           scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
         } : null);
         const queuedIntent = vrCombatIntentQueue.getHead();
+        // The fight decides, not the player's own flag (Part F, decision 1):
+        // the flag drops between rounds in a group fight, and the ring read
+        // "ready" mid-round on 9 of 23 Telos pulls (Tempo run 2, finding 2).
+        const fightOn = isVRFightOnFor(actor);
         return {
           actorId: String(actor.id),
           nominatedTargetId: target ? String(target.id) : null,
           weaponMode: resolveVRCombatWeaponMode(actor),
-          inCombat: actor.combatData.combatState === true,
+          inCombat: fightOn,
           // The hilt readout is every requested action, next first, never a
           // hidden attack mode. An empty queue deliberately returns to basic
           // attacks. Round 6 asked to know that more than one was queued; round
@@ -4397,14 +4500,14 @@ export class GameState implements EngineContext {
             ...vrCombatIntentQueue.getSnapshot().entries.map((entry) => entry.label),
             ...resolveVRScheduledItemLabels(actor),
           ]),
-          roundOpen: actor.combatData.combatState === true && roundOpen,
+          roundOpen: fightOn && roundOpen,
           tempoReadiness: vrRoundReadinessLatch.apply(resolveVRRoundReadiness({
             eligible: tempo.eligible,
             hasTarget: target !== null,
-            inCombat: actor.combatData.combatState === true,
+            inCombat: fightOn,
             roundOpen,
             round: actor.combatRound ?? null,
-          }), roundOpen, actor.combatData.combatState === true, actor, actor.combatRound?.action),
+          }), roundOpen, fightOn, actor, actor.combatRound?.action),
           allowDominantTrigger: queuedIntent?.requiredInput === 'dominant-trigger',
           onCombatSwing: (event) => {
             if (event.actorId !== String(actor.id)) return;
@@ -4414,6 +4517,14 @@ export class GameState implements EngineContext {
             dispatchVRDirectionalForceGesture(actor, target ? String(target.id) : null, gesture.kind),
           onForceCastGesture: () =>
             dispatchVRForceCastGesture(actor, target ? String(target.id) : null),
+          onRefusedInput: (refused) => {
+            if (isVRRefusedInputMeaningful(refused, vrCombatIntentQueue.getHead(), {
+              fightOn,
+              blaster: resolveVRCombatWeaponMode(actor) === 'blaster',
+            })) {
+              tickVRRefusal(refused === 'idle-trigger' ? 'pull-did-nothing' : 'force-gesture-off-target');
+            }
+          },
           armedConsumable: vrArmedConsumableState.getSnapshot().armed !== undefined,
           onConsumableUseGesture: () => commitVRArmedConsumable(actor),
           onGrenadeTrigger: () => {
@@ -4484,6 +4595,7 @@ export class GameState implements EngineContext {
           bash: () => dispatchVRWeaponBash(actor, resolved.target.id),
         };
       },
+      isCombatSwingHeld: () => vrCombatSwingBuffer.hasPending,
       serviceCombatSwingBuffer: () => {
         const actor = GameState.getCurrentPlayer();
         if (!actor) {
@@ -4643,6 +4755,8 @@ export class GameState implements EngineContext {
             },
           })),
           targetIsHostileCreature: target !== null,
+          targetIsDroid: !!target && typeof (target as any).getRace === 'function' && (target as any).getRace() === VR_RACE_DROID,
+          recentForcePowerSpellIds: vrRecentForcePowers.list(),
           partyMembers: snapshotVRPartyMembers(),
           partyAttackOrder: target ? buildVRPartyAttackOrder(actor, target) : null,
           openComfortSettings: () => {
@@ -5007,8 +5121,9 @@ export class GameState implements EngineContext {
         // after the kill (critic runs 11-12).
         if (typeof (object as any).isDead === 'function' && (object as any).isDead()) return null;
         // In a fight only hostiles keep a plate (locked by Allen, 2026-10-13).
-        if (isVRCombatNamePlateHidden(GameState.getCurrentPlayer(), object as any,
-          (object.objectType & ModuleObjectType.ModuleCreature) !== 0)) return null;
+        const plateActor = GameState.getCurrentPlayer();
+        if (isVRCombatNamePlateHidden(plateActor, object as any,
+          (object.objectType & ModuleObjectType.ModuleCreature) !== 0, isVRFightOnFor(plateActor))) return null;
         const position = reticle.getWorldPosition(new THREE.Vector3());
         return {
           id: String(object.id),
@@ -5035,7 +5150,7 @@ export class GameState implements EngineContext {
         for (const [object, reticle] of pairs) {
           if (!object || !reticle?.visible) continue;
           if (isVRCombatNamePlateHidden(actor, object as any,
-            (object.objectType & ModuleObjectType.ModuleCreature) !== 0)) reticle.visible = false;
+            (object.objectType & ModuleObjectType.ModuleCreature) !== 0, isVRFightOnFor(actor))) reticle.visible = false;
         }
       },
       getWorldContext: () => {

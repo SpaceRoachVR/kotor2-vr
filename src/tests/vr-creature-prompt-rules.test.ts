@@ -217,6 +217,25 @@ describe('isVRCombatNamePlateHidden', () => {
   test('the actor itself is never hidden by this rule', () => {
     expect(isVRCombatNamePlateHidden(actor, actor as never, true)).toBe(false);
   });
+
+  // Part F (decision 1, 2026-10-13): the fight decides, not the actor's own
+  // flag, which CancelCombat dropped mid-firefight (Anchor run 2, finding 1).
+  test('the caller fight-is-on test overrides the actor flag', () => {
+    const flagDown = { combatData: { combatState: false } };
+    expect(isVRCombatNamePlateHidden(flagDown, creature(false), true, true)).toBe(true);
+    expect(isVRCombatNamePlateHidden(actor, creature(false), true, false)).toBe(false);
+    expect(isVRCombatNamePlateHidden(flagDown, creature(true), true, true)).toBe(false);
+  });
+});
+
+describe('readVRCreaturePromptState fight-is-on override', () => {
+  test('a fight still on keeps companion prompts away with the flag dropped', () => {
+    const companion = { isHostile: () => false, getConversation: () => ({ resref: 'atton' }) };
+    const flagDown = { combatData: { combatState: false } };
+    expect(hasCreatureWorldPromptAction(readVRCreaturePromptState(flagDown, companion))).toBe(true);
+    expect(hasCreatureWorldPromptAction(readVRCreaturePromptState(flagDown, companion, true))).toBe(false);
+    expect(hasCreatureWorldPromptAction(readVRCreaturePromptState({ combatData: { combatState: true } }, companion, false))).toBe(true);
+  });
 });
 
 /**
@@ -240,6 +259,12 @@ describe('GameState world-prompt wiring', () => {
   test('the engine cursor brackets hide on non-hostile creatures in combat', () => {
     const body = source.slice(source.indexOf('hideCombatNonHostileReticles: () => {'));
     expect(body.slice(0, body.indexOf('getWorldContext:'))).toContain('isVRCombatNamePlateHidden(');
+  });
+
+  test('plates, brackets and prompts follow the one fight-is-on test', () => {
+    const indicator = source.slice(source.indexOf('getWorldTargetIndicator: () => {'));
+    expect(indicator.slice(0, indicator.indexOf('getWorldContext:')).match(/isVRFightOnFor\(/g)?.length).toBe(2);
+    expect(source).toMatch(/readVRCreaturePromptState\(actor, target, isVRFightOnFor\(actor\)\)/);
   });
 
   test('a qualifying creature contributes a prompt action', () => {

@@ -73,7 +73,7 @@ import { VRHealthPlateHost, type VRPlayerVitals } from "./runtime/VRHealthPlateH
 import { VRDamageFeedbackTracker, type VRDamageEvent } from "./runtime/VRDamageFeedback";
 import { VRDamageFlashHost } from "./runtime/VRDamageFlashHost";
 import { VRHurtPresentationGate } from "./runtime/VRHurtPresentationGate";
-import { shouldVoiceTargetPain, strokeWhooshCoversMiss, type VRCombatBarkKind } from "./runtime/VRCombatVoicing";
+import { shouldVoiceTargetPain, VRStrokeResultLedger, type VRCombatBarkKind, type VRStrokeShape } from "./runtime/VRCombatVoicing";
 import { VRRefusalNoticeHost, describeVRRefusal } from "./runtime/VRRefusalNoticeHost";
 import { VRPauseIndicatorHost } from "./runtime/VRPauseIndicatorHost";
 import type { VRHapticPattern } from "./runtime/VRHapticFeedback";
@@ -218,7 +218,7 @@ export interface VRSpikeHooks {
   /** Why the player cannot act right now (stunned, knocked down, ...), or null. */
   getPlayerDisabledState?: () => string | null;
   /** The attacker's own weaponsounds.2da sounds for a cue, and where it happened. */
-  resolveCombatCueSounds?: (attackerId: string | number, targetId: string | number, cue: VRCombatCue) => VRCombatCuePlayOptions | null;
+  resolveCombatCueSounds?: (attackerId: string | number, targetId: string | number, cue: VRCombatCue, stroke?: VRStrokeShape) => VRCombatCuePlayOptions | null;
   /** A creature's own retail soundset line (Part D): the PC's in the head, anyone else's at them. */
   resolveCombatBark?: (creatureId: string | number, kind: VRCombatBarkKind) => VRCombatCuePlayOptions | null;
   /** The controlled character's HP and FP, for the wrist plate. */
@@ -376,6 +376,12 @@ export interface VRSpikeHooks {
      * Returns true only when it released the queued Force power at the head.
      */
     onForceCastGesture?(gesture: VRForceCastGesture): boolean;
+    /**
+     * Part F: an input VR could not spend - a Force gesture with the weapon
+     * hand off the target, a trigger pull with nothing locked. The host
+     * decides whether it was meant for something queued (the refused tick).
+     */
+    onRefusedInput?(input: 'push' | 'pull' | 'cast' | 'idle-trigger'): void;
     /** ROADMAP 3.20 — true while a medpac, stim or repair kit is armed in the off hand. */
     readonly armedConsumable?: boolean;
     /** The armed consumable was held to the neck. Returns true when the engine spent it. */
@@ -430,6 +436,8 @@ export interface VRSpikeHooks {
    * is still waiting for the round to open.
    */
   serviceCombatSwingBuffer?: () => { readonly released: boolean; readonly armed: boolean } | null;
+  /** Whether a swing is held for the next round, without servicing the buffer (Part F: amber at the stroke). */
+  isCombatSwingHeld?: () => boolean;
   /** Whether the game is paused for any reason, the VR Menu's own pause included. */
   isEnginePaused?: () => boolean;
   /**
@@ -715,6 +723,8 @@ export class VRSpike {
     VRSpike.throwHandAnchor.updateMatrixWorld(true);
   }
   private static dominantShotTriggerHeld = false;
+  /** The weapon trigger was down on the last frame with nothing locked (Part F refused tick). */
+  private static idleTriggerHeld = false;
   private static combatTargetHighlightHost: VRCombatTargetHighlightHost | null = null;
   private static combatTargetHighlightErrorReported = false;
   /**
@@ -2880,9 +2890,14 @@ export class VRSpike {
       // Cancel is handled by processCombatCancel, which runs every gameplay
       // frame regardless of whether a world prompt consumed input first.
       if (!context.nominatedTargetId) {
+        // A pull at nothing in a fight did nothing, silently (Tempo run 2):
+        // the host ticks it when it was meant as a shot or a cast.
+        if (weaponActionPressed && !VRSpike.idleTriggerHeld) context.onRefusedInput?.('idle-trigger');
+        VRSpike.idleTriggerHeld = weaponActionPressed;
         VRSpike.processWeaponBash(inputFrame, timestamp, offhandGrip, dominantHand, offhandHand);
         return;
       }
+      VRSpike.idleTriggerHeld = weaponActionPressed;
 
       if (VRSpike.processForceInput(timestamp, context)) {
         VRSpike.combatInputController.reset();
@@ -2915,6 +2930,11 @@ export class VRSpike {
       VRSpike.reportSwingMisses();
       for (const event of events) context.onCombatSwing(event);
       VRSpike.voiceStrokes(events, timestamp);
+      // A stroke held for the next round turns the hilt amber this frame,
+      // not on the next one (Part F, decision 4: amber at the stroke).
+      if (events.length && swingBuffer?.armed !== true && VRSpike.hooks?.isCombatSwingHeld?.() === true) {
+        VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout, true);
+      }
     } catch (error) {
       if (!VRSpike.combatInputErrorReported) {
         VRSpike.combatInputErrorReported = true;
@@ -3157,6 +3177,7 @@ export class VRSpike {
     timestamp: number,
     combatContext?: {
       onDirectionalForceGesture?(gesture: VRForceGesture): boolean;
+      onRefusedInput?(input: 'push' | 'pull' | 'cast' | 'idle-trigger'): void;
       readonly nominatedTargetAimPoint?: THREE.Vector3 | null;
     },
   ): boolean {
@@ -3188,7 +3209,10 @@ export class VRSpike {
       if (combatContext?.onDirectionalForceGesture) {
         // The weapon hand must be on the locked target (locked by Allen,
         // 2026-10-13); a flick with the hand turned away is a swing, not a push.
-        if (!VRSpike.isWeaponHandOnLockedTarget(inputFrame, combatContext.nominatedTargetAimPoint)) return false;
+        if (!VRSpike.isWeaponHandOnLockedTarget(inputFrame, combatContext.nominatedTargetAimPoint)) {
+          combatContext.onRefusedInput?.(gesture.kind);
+          return false;
+        }
         return combatContext.onDirectionalForceGesture(gesture) === true;
       }
       legacyContext?.onForceGesture(gesture);
@@ -3220,7 +3244,11 @@ export class VRSpike {
    * detector unchanged.
    */
   private static processForceCastInput(
-    context: { onForceCastGesture?(gesture: VRForceCastGesture): boolean; readonly nominatedTargetAimPoint?: THREE.Vector3 | null },
+    context: {
+      onForceCastGesture?(gesture: VRForceCastGesture): boolean;
+      onRefusedInput?(input: 'push' | 'pull' | 'cast' | 'idle-trigger'): void;
+      readonly nominatedTargetAimPoint?: THREE.Vector3 | null;
+    },
     inputFrame: XRInputFrame,
     timestamp: number,
     offhandHand: XRHandRole,
@@ -3243,7 +3271,10 @@ export class VRSpike {
       }
       // F14: the lock outlives the aim by 2.5 s, and a thrust with the sword
       // at the floor cast on it. The weapon hand must be on the target.
-      if (!VRSpike.isWeaponHandOnLockedTarget(inputFrame, context.nominatedTargetAimPoint)) return false;
+      if (!VRSpike.isWeaponHandOnLockedTarget(inputFrame, context.nominatedTargetAimPoint)) {
+        context.onRefusedInput?.('cast');
+        return false;
+      }
       return context.onForceCastGesture(gesture) === true;
     } catch (error) {
       if (!VRSpike.forceGestureErrorReported) {
@@ -4800,9 +4831,15 @@ export class VRSpike {
       VRSpike.playHapticSequence(session, VRSpike.dominantHand, feedback.pulses, feedback.gapMs, delayMs);
       // Heard and seen as well as felt: round 12 felt no haptics at all.
       const cue = cueForVRCombatOutcome(feedback.outcome);
-      const meleeMissAfterStroke = cue === 'miss' && feedback.role === 'attacker' &&
-        snapshots.find((snapshot) => snapshot.id === event.attackerId)?.attackIsRanged !== true &&
-        strokeWhooshCoversMiss(VRSpike.lastStrokeWhooshAt, nowMs);
+      // Each stroke's whoosh voices the result of the attack it bought, even
+      // a held swing resolving at the next opening: a miss is then the absence
+      // of an impact, with the ready tick, not a second whoosh (Part F,
+      // decision 4; Spark run 2: a held miss sounded like a phantom swing).
+      const meleeAttack = feedback.role === 'attacker' &&
+        snapshots.find((snapshot) => snapshot.id === event.attackerId)?.attackIsRanged !== true;
+      let meleeMissAfterStroke = false;
+      if (meleeAttack && cue === 'miss') meleeMissAfterStroke = VRSpike.strokeResults.coversMiss(performance.now());
+      else if (meleeAttack && cue) VRSpike.strokeResults.noteResult(performance.now());
       if (cue && !meleeMissAfterStroke) {
         const placed = VRSpike.hooks?.resolveCombatCueSounds?.(event.attackerId, event.targetId, cue) ?? null;
         VRSpike.playCombatCue(cue, delayMs, false, placed);
@@ -5058,8 +5095,8 @@ export class VRSpike {
 
   /** The controlled creature's id, for the PC's own barks. */
   private static lastLocalActorId: number | null = null;
-  /** When the last stroke's whoosh played (XR frame time). */
-  private static lastStrokeWhooshAt: number | null = null;
+  /** Strokes whose whoosh still stands for their attack's result (Part F). */
+  private static readonly strokeResults = new VRStrokeResultLedger();
 
   /**
    * One whoosh per physical stroke, at the hand, in the weapon's own retail
@@ -5069,11 +5106,16 @@ export class VRSpike {
   private static voiceStrokes(events: readonly VRCombatSwingEvent[], timestamp: number): void {
     for (const event of events) {
       if (event.input !== 'dominant-swing' || event.weaponMode === 'blaster') continue;
-      const placed = VRSpike.hooks?.resolveCombatCueSounds?.(event.actorId, event.actorId, 'whoosh') ?? null;
+      // The weapon's own swing takes, rotated by the stroke's speed and grip
+      // (Part F, decision 4): one sample on every stroke read as a loop.
+      const placed = VRSpike.hooks?.resolveCombatCueSounds?.(event.actorId, event.actorId, 'whoosh', {
+        speedMetresPerSecond: event.speedMetresPerSecond,
+        twoHanded: event.weaponMode === 'melee-two-handed',
+      }) ?? null;
       const hand = VRSpike.controllerAnchorHost?.getAnchor(event.hand) ?? null;
       const at = hand ? hand.getWorldPosition(new THREE.Vector3()) : null;
       VRSpike.playCombatCue('whoosh', 0, false, { sounds: placed?.sounds, position: at });
-      VRSpike.lastStrokeWhooshAt = timestamp;
+      VRSpike.strokeResults.noteStroke(performance.now());
     }
   }
 
