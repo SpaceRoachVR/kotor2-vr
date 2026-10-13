@@ -4118,7 +4118,11 @@ NWScriptDefK1.Actions = {
     action: function(this: NWScriptInstance, args: [ModuleObject]){
       if(BitWise.InstanceOfObject(args[0], ModuleObjectType.ModuleCreature)){
         if(args[0].combatData.combatState){
-          return args[0].combatData.lastAttackTarget || args[0].combatData.lastAttacker;
+          // The creature's own target only. Retail AI tests GetAttackTarget()
+          // to ask "am I already fighting?" (k_ai_master 2002/2005/2006,
+          // GN_RespondToShout); answering with whoever attacked it made a
+          // creature that was hit but not yet fighting look engaged.
+          return args[0].combatData.lastAttackTarget;
         }else{
           return undefined;
         }
