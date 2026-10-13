@@ -89,6 +89,7 @@ import { TalkVolume } from "@/enums/engine/TalkVolume";
 import { takeHeardShout } from "@/module/creature/ListenPatterns";
 import { resolveKillExperience } from "@/combat/killExperience";
 import { dropStaleCombatActions } from "@/combat/staleCombatActions";
+import { resolvePartyForcePool } from "@/combat/partyForcePool";
 import {
   abilityModifier,
   isAutoBalanceSet,
@@ -3097,12 +3098,23 @@ export class ModuleCreature extends ModuleObject {
    * 3, 0/0; critic run 17), so Kreia joined unable to cast. A party member
    * with Jedi levels and no Force pool at all gets the retail per-level pool.
    * A Jedi level always grants at least one point, so a real 0 can't be lost.
+   * A member with no Force-die class level has no pool at all, whatever its
+   * template stores (p_baodur.utc: ForcePoints 48; retail shows 0 / 0).
    */
   ensureForcePointsFromClasses(): void {
-    if((Number(this.maxForcePoints) || 0) > 0 || (Number(this.forcePoints) || 0) > 0) return;
-    const fromClasses = this.getForcePointsFromClasses();
-    if(fromClasses > 0){
-      this.forcePoints = this.maxForcePoints = this.currentForce = fromClasses;
+    let forceClassLevels = 0;
+    for(const creatureClass of this.classes){
+      if((Number(creatureClass?.forcedie) || 0) <= 0) continue;
+      forceClassLevels += Number(creatureClass.level) || 0;
+    }
+    const pool = resolvePartyForcePool({
+      maxForcePoints: this.maxForcePoints,
+      forcePoints: this.forcePoints,
+      forceClassLevels,
+      poolFromClasses: forceClassLevels > 0 ? this.getForcePointsFromClasses() : 0,
+    });
+    if(pool !== undefined){
+      this.forcePoints = this.maxForcePoints = this.currentForce = pool;
     }
   }
 
