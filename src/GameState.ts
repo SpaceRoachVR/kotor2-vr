@@ -155,6 +155,7 @@ function readSwoopGripPoses(container: THREE.Object3D | null | undefined) {
 import { VRCombatTempoGate, type VRCombatTempoGateReason, resolveVRRoundReadiness, resolveVRRoundOpen, VRRoundReadinessLatch } from "@/vr/runtime/VRCombatTempoGate";
 import { addSwoopRideListener, type SwoopRideEventType } from "@/module/minigame/SwoopRideEvents";
 import { VRCombatSwingBuffer, VRHeldSwingLifetime, isVRCombatSwingBufferable, isVRFightOngoing } from "@/vr/runtime/VRCombatSwingBuffer";
+import { AttackBarkGate, type AttackBarkPolicy } from "@/engine/rules/AttackBarkGate";
 import { VRArmedGrenadeState, type VRArmedGrenadeDescriptor } from "@/vr/runtime/VRArmedGrenadeState";
 import { resolveVRArmedGrenadeCommitEligibility } from "@/vr/runtime/VRArmedGrenadeCommitPolicy";
 import type { CombatWeaponMode, VRComfortSettings } from "@/vr/runtime/XRTypes";
@@ -3304,6 +3305,11 @@ export class GameState implements EngineContext {
     if (classifyVRForcePower(spell) !== true) return;
     VRSpike.presentLocalForceCast();
   };
+
+  /** Decides whether an attack voices its soundset line (ActionPhysicalAttacks). */
+  static attackBarkGate = new AttackBarkGate();
+  /** The policy for one attacker's lines; null or undefined plays one on every attack. */
+  static attackBarkPolicy: ((attacker: unknown) => AttackBarkPolicy | undefined) | null = null;
 
   /** In VR, the player's own blows and blows on the player are voiced by the VR cue (critic run 7). */
   static vrVoicesCombatImpact: ((attacker: unknown, target: unknown) => boolean) | null = (attacker, target) => {

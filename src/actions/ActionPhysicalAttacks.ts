@@ -156,17 +156,21 @@ export class ActionPhysicalAttacks extends Action {
               TURN_SPEED_FAST
             );
 
-            const attack_sound = THREE.MathUtils.randInt(0, 2);
-            switch(attack_sound){
-              case 1:
-                owner.playSoundSet(SSFType.ATTACK_2);
-              break;
-              case 2:
-                owner.playSoundSet(SSFType.ATTACK_3);
-              break;
-              default:
-                owner.playSoundSet(SSFType.ATTACK_1);
-              break;
+            // Every attack voices a line unless the host picked a sparser
+            // policy (AttackBarkGate); the attack itself is unchanged.
+            if(GameState.attackBarkGate.shouldBark(owner, performance.now(), GameState.attackBarkPolicy?.(owner) ?? undefined)){
+              const attack_sound = THREE.MathUtils.randInt(0, 2);
+              switch(attack_sound){
+                case 1:
+                  owner.playSoundSet(SSFType.ATTACK_2);
+                break;
+                case 2:
+                  owner.playSoundSet(SSFType.ATTACK_3);
+                break;
+                default:
+                  owner.playSoundSet(SSFType.ATTACK_1);
+                break;
+              }
             }
 
             return ActionStatus.COMPLETE;
