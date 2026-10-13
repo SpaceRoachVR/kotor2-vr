@@ -27,6 +27,7 @@ import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
 
 import { registerPartyRosterMember } from "@/managers/PartyRosterRules";
+import { repointCombatReferences } from "@/combat/repointCombatReferences";
 export interface CurrentMember {
   isLeader: boolean,
   memberID: number
@@ -99,6 +100,26 @@ export class PartyManager {
   static MaxNPCCount = 2;
   static MaxPartyCount = 12;
   static NPCS: PartyNPCList = {};
+  /**
+   * The instance a companion stood in the world as, destroyed by a leader
+   * switch, until RestoreCompanion builds its replacement.
+   */
+  static RetiredInstances = new Map<number, ModuleCreature>();
+
+  /**
+   * A leader switch destroys a companion instance and builds another: every
+   * creature fighting the old one now fights the new one (enemies went on
+   * attacking the destroyed copy for 1-2 rounds).
+   */
+  static RepointToReplacement(from: ModuleCreature | undefined, to: ModuleCreature){
+    if(!from || !to || from === to) return;
+    const creatures = (GameState.module?.area?.creatures ?? []).concat(PartyManager.party);
+    try{
+      repointCombatReferences(creatures as any[], from, to, from.id);
+    }catch(e){
+      console.error(e);
+    }
+  }
 
   static Puppets: PartyPuppetList = {};
 
@@ -1148,6 +1169,7 @@ export class PartyManager {
     // old leader (critic runs 19-20). Scripted swaps keep the old behaviour.
     let companionSpawn: THREE.Vector3 | null = null;
     let companionQuaternion: THREE.Quaternion | null = null;
+    let replacedCompanion: ModuleCreature | undefined;
     if(npcId >= 0){
       const companionIndex = PartyManager.party.findIndex((pm, index) => index > 0 && pm && pm.npcId == npcId);
       if(companionIndex > 0){
@@ -1158,6 +1180,7 @@ export class PartyManager {
         }
         try{ PartyManager.NPCS[npcId].template = companion.save(); }catch(e){ console.error(e); }
         PartyManager.party.splice(companionIndex, 1);
+        replacedCompanion = companion;
         try{ companion.destroy(); }catch(e){ console.error(e); }
       }
     }
@@ -1222,6 +1245,7 @@ export class PartyManager {
       // exists logically the moment the swap happens; its 3D model is what is
       // asynchronous, not its identity.
       PartyManager.party[0] = partyMember;
+      PartyManager.RepointToReplacement(replacedCompanion, partyMember);
 
       partyMember.loadModel().then( (model: OdysseyModel3D) => {
         model.userData.moduleObject = partyMember;
@@ -1244,6 +1268,7 @@ export class PartyManager {
           }
           PartyManager.RebuildPortraitOrder();
         }else{
+          if(outgoingNpcId >= 0) PartyManager.RetiredInstances.set(outgoingNpcId, oldPC);
           oldPC.destroy();
         }
         partyMember.onSpawn();
@@ -1313,6 +1338,7 @@ export class PartyManager {
     PartyManager.RebuildPortraitOrder();
 
     if(oldPC && oldPC !== follower){
+      if(outgoingNpcId >= 0) PartyManager.RetiredInstances.set(outgoingNpcId, oldPC);
       try{ oldPC.destroy(); }catch(e){ console.error(e); }
     }
     if(restoreCompanion && outgoingNpcId >= 0 && PartyManager.IsNPCInParty(outgoingNpcId)){
@@ -1336,6 +1362,8 @@ export class PartyManager {
     companion.npcId = npcId;
     companion.load();
     companion.clearAllActions();
+    PartyManager.RepointToReplacement(PartyManager.RetiredInstances.get(npcId), companion);
+    PartyManager.RetiredInstances.delete(npcId);
     PartyManager.AddPortraitToOrder( companion.getPortraitResRef() );
     PartyManager.party.push(companion);
     companion.position.copy(near);

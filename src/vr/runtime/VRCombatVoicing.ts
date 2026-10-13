@@ -14,7 +14,7 @@
  *   in place of the hit sample re-pitched (Spark, Finding 5).
  */
 
-export type VRCombatBarkKind = 'pain' | 'low-health' | 'critical';
+export type VRCombatBarkKind = 'pain' | 'low-health' | 'critical' | 'select';
 export type VRPlayerVoice = 'male' | 'female';
 
 const PLAYER_BARKS: Readonly<Record<VRPlayerVoice, Readonly<Record<VRCombatBarkKind, readonly string[]>>>> = Object.freeze({
@@ -22,11 +22,15 @@ const PLAYER_BARKS: Readonly<Record<VRPlayerVoice, Readonly<Record<VRCombatBarkK
     pain: Object.freeze(['p_plyermw_hit1', 'p_plyermw_hit2']),
     'low-health': Object.freeze(['p_plyermw_low1', 'p_plyermw_low2', 'p_plyermw_low3']),
     critical: Object.freeze(['p_plyermw_crit1', 'p_plyermw_crit2', 'p_plyermw_crit3']),
+    // Taking control (a leader switch): the PC soundset's select lines.
+    select: Object.freeze(['p_plyermw_slct1', 'p_plyermw_slct2', 'p_plyermw_slct3', 'p_plyermw_slct4', 'p_plyermw_slct5']),
   }),
   female: Object.freeze({
     pain: Object.freeze(['p_plyerfw_hit1', 'p_plyerfw_hit2']),
     'low-health': Object.freeze(['p_plyerfw_low1', 'p_plyerfw_low2', 'p_plyerfw_low3']),
     critical: Object.freeze(['p_plyerfw_crit1', 'p_plyerfw_crit2', 'p_plyerfw_crit3']),
+    select: Object.freeze(['p_plyerfw_slct1', 'p_plyerfw_slct2', 'p_plyerfw_slct3', 'p_plyerfw_slct4',
+      'p_plyerfw_slct5', 'p_plyerfw_slct6', 'p_plyerfw_slct7', 'p_plyerfw_slct8']),
   }),
 });
 

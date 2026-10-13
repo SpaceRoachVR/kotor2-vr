@@ -771,6 +771,9 @@ export class VRSpike {
   private static combatVisualsErrorReported = false;
   private static cutsceneFadeHost: VRCutsceneFadeHost | null = null;
   private static readonly cutsceneFadeEnvelope = new VRCutsceneFadeEnvelope();
+  /** A leader switch's fade back from black, in ms (Anchor run 2, option C1). */
+  static LEADER_SWITCH_FADE_MS = 150;
+  private static leaderSwitchFade: VRCutsceneFadeEnvelope | null = null;
   private static lastCutsceneCamera: THREE.Camera | null = null;
   private static previousXRInputTimestamp: number | null = null;
   private static locomotionInputErrorReported = false;
@@ -4230,7 +4233,7 @@ export class VRSpike {
     // fade in against a stale camera reference from a previous, unrelated
     // cutscene.
     VRSpike.lastCutsceneCamera = null;
-    VRSpike.cutsceneFadeHost?.setOpacity(0);
+    VRSpike.applyLeaderSwitchFade();
 
     VRSpike.traceRoomVisibility();
     VRSpike.renderKeyboard();
@@ -5129,6 +5132,32 @@ export class VRSpike {
     const cue = critical ? 'hurt-critical' : 'hurt';
     VRSpike.playCombatCue(cue, 0, false, VRSpike.hooks?.resolveCombatCueSounds?.(attackerId, targetId, cue) ?? null);
     VRSpike.playBark(targetId, 'pain');
+  }
+
+  /**
+   * You are in another body (Y, the wheel, or a knockout handing you a
+   * standing companion): the view comes back from black over 150 ms, the
+   * label names the body, and it says its retail select line. The jump used
+   * to land with no transition, up to 8 m (Anchor, run 2).
+   */
+  static presentLeaderSwitch(text: string, actorId: number | null): void {
+    if (!VRSpike.isPresenting) return;
+    const half = Math.max(1, VRSpike.LEADER_SWITCH_FADE_MS);
+    VRSpike.leaderSwitchFade = new VRCutsceneFadeEnvelope({ totalDurationMilliseconds: 2 * half });
+    // Triggered half an envelope ago: black now, clear in `half` ms.
+    VRSpike.leaderSwitchFade.trigger(performance.now() - half);
+    VRSpike.showNotice(text, 1500, 'info');
+    if (actorId !== null) VRSpike.playBark(actorId, 'select');
+  }
+
+  /** The leader-switch fade shares the cutscene fade's quad; 0 when idle. */
+  private static applyLeaderSwitchFade(): void {
+    const opacity = VRSpike.leaderSwitchFade?.sample(performance.now()) ?? 0;
+    if (opacity <= 0) VRSpike.leaderSwitchFade = null;
+    if (opacity > 0 && !VRSpike.cutsceneFadeHost && VRSpike.camera) {
+      VRSpike.cutsceneFadeHost = new VRCutsceneFadeHost(VRSpike.camera);
+    }
+    VRSpike.cutsceneFadeHost?.setOpacity(opacity);
   }
 
   /** A creature's own retail soundset line, when it has one (Part D). */
