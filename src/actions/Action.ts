@@ -164,6 +164,7 @@ export class Action {
   runCreatureAvoidance(delta = 0, finalTarget: THREE.Vector3, excludeTarget?: ModuleObject) {
     if (!BitWise.InstanceOfObject(this.owner, ModuleObjectType.ModuleCreature)) return;
     const owner: ModuleCreature = this.owner as any;
+    this.avoidanceHoldSeconds = Math.max(0, this.avoidanceHoldSeconds - delta);
 
     // Early exit if no movement vector
     if (owner.forceVector.lengthSq() < 0.001) return;
@@ -247,13 +248,26 @@ export class Action {
       // For player character, use force-based avoidance (adjust movement vector)
       this.applyPlayerAvoidance(owner, closestObstacle, closestDistance, delta);
     } else {
-      // For NPCs, use full path recalculation
-      this.calculateAvoidancePath(owner, closestObstacle, finalTarget, closestDistance);
-      this.coordinateObstacleAvoidance(owner, closestObstacle);
+      // For NPCs, a detour path around the obstacle, followed for a moment
+      // before another is planned for the same obstacle. Planning one every
+      // frame aimed the creature at its own feet (each detour starts where it
+      // stands) and flipped the detour from side to side: an attacker behind
+      // two others jittered in place for 25 s, its target 3.5 m away.
+      if (closestObstacle !== this.avoidanceObstacle || this.avoidanceHoldSeconds <= 0) {
+        this.calculateAvoidancePath(owner, closestObstacle, finalTarget, closestDistance);
+        this.coordinateObstacleAvoidance(owner, closestObstacle);
+        this.avoidanceObstacle = closestObstacle;
+        this.avoidanceHoldSeconds = Action.AVOIDANCE_REPLAN_SECONDS;
+      }
     }
 
     owner.blockingTimer += 1;
   }
+
+  /** How long an NPC follows a detour before planning another around the same creature. */
+  static AVOIDANCE_REPLAN_SECONDS = 0.6;
+  private avoidanceObstacle: ModuleCreature | undefined;
+  private avoidanceHoldSeconds = 0;
 
   /**
    * Applies force-based avoidance for player character
