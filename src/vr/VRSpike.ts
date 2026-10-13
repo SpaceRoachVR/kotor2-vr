@@ -461,8 +461,8 @@ export interface VRSpikeHooks {
   noteWorldPromptSelection?: (promptId: string | null, label: string) => void;
   /**
    * ROADMAP 3.17 — a locked door or container the weapon hand is aimed at and
-   * the player has chosen Bash on, which a melee swing through `volume`
-   * bashes by the authored route.
+   * the player has chosen Bash on, which a melee swing through `volume`, or a
+   * blaster's trigger pull, bashes by the authored route.
    */
   getWeaponBashContext?: (aimedTargetId: number | null) => {
     readonly actorId: string;
@@ -2924,11 +2924,13 @@ export class VRSpike {
       // Cancel is handled by processCombatCancel, which runs every gameplay
       // frame regardless of whether a world prompt consumed input first.
       if (!context.nominatedTargetId) {
+        const triggerEdge = weaponActionPressed && !VRSpike.idleTriggerHeld;
+        VRSpike.idleTriggerHeld = weaponActionPressed;
+        // A blaster shot at the door or container Bash was picked on bashes it.
+        const triggerBashed = VRSpike.processWeaponBash(inputFrame, timestamp, offhandGrip, dominantHand, offhandHand, triggerEdge);
         // A pull at nothing in a fight did nothing, silently (Tempo run 2):
         // the host ticks it when it was meant as a shot or a cast.
-        if (weaponActionPressed && !VRSpike.idleTriggerHeld) context.onRefusedInput?.('idle-trigger');
-        VRSpike.idleTriggerHeld = weaponActionPressed;
-        VRSpike.processWeaponBash(inputFrame, timestamp, offhandGrip, dominantHand, offhandHand);
+        if (triggerEdge && !triggerBashed) context.onRefusedInput?.('idle-trigger');
         return;
       }
       VRSpike.idleTriggerHeld = weaponActionPressed;
@@ -3002,7 +3004,10 @@ export class VRSpike {
   /**
    * ROADMAP 3.17 — with no hostile locked, a melee swing through a locked door
    * or container the player has chosen Bash on starts its authored Bash. Uses
-   * the same swing detector, so the same contact rule (3.16) applies.
+   * the same swing detector, so the same contact rule (3.16) applies. Bash
+   * persists (round 18): every later swing, or with a blaster every trigger
+   * pull aimed at it, bashes again. Returns whether the trigger edge was
+   * taken as a Bash shot.
    */
   private static processWeaponBash(
     inputFrame: XRInputFrame,
@@ -3010,9 +3015,15 @@ export class VRSpike {
     offhandGrip: boolean,
     dominantHand: XRHandRole,
     offhandHand: XRHandRole,
-  ): void {
+    triggerEdge = false,
+  ): boolean {
     const bash = VRSpike.hooks?.getWeaponBashContext?.(VRSpike.resolveAimedTargetId()) ?? null;
-    if (!bash) return;
+    if (!bash) return false;
+    if (bash.weaponMode === 'blaster') {
+      if (!triggerEdge) return false;
+      bash.bash();
+      return true;
+    }
     const events = VRSpike.combatInputController.process(inputFrame, {
       actorId: bash.actorId,
       nominatedTargetId: bash.targetId,
@@ -3027,6 +3038,7 @@ export class VRSpike {
     });
     VRSpike.reportSwingMisses();
     if (events.some((event) => event.input === 'dominant-swing')) bash.bash();
+    return false;
   }
 
   private static isPlayerPaused(): boolean {
@@ -4736,6 +4748,7 @@ export class VRSpike {
         context.viewportHeight,
         context.presentOptions ?? {}
       );
+      VRSpike.reportPanelPresentation(context.menu, context.presentOptions ?? {});
       // GameState deliberately hides the legacy mouse cursor during ordinary
       // XR play. Reapply the panel hit after simulation so the original cursor
       // is included only in this GUI-to-texture pass.
@@ -4768,6 +4781,30 @@ export class VRSpike {
         VRSpike.panelPresentationErrorReported = true;
         console.error('[VRSpike] panel presentation rejected', error);
       }
+    }
+  }
+
+  private static lastReportedPanelShape: string | null = null;
+  private static reportedPanelShapes = 0;
+
+  /**
+   * TEMPORARY (headset round 18, "large, empty black boxes before and after
+   * interactions"): names each panel the player is shown, with its size and
+   * backing, so a box seen in the headset can be matched to its menu. One
+   * line per change of shape, at most 60 a session.
+   */
+  private static reportPanelPresentation(menu: object, options: { readonly backingOpacity?: number, readonly region?: unknown }): void {
+    try {
+      const object = VRSpike.panelHost?.object;
+      if (!object) return;
+      const name = (menu as any)?.constructor?.name ?? 'menu';
+      const shape = `${name} ${object.scale.x.toFixed(2)}x${object.scale.y.toFixed(2)}m backing=${options.backingOpacity ?? 0}`;
+      if (shape === VRSpike.lastReportedPanelShape || VRSpike.reportedPanelShapes >= 60) return;
+      VRSpike.lastReportedPanelShape = shape;
+      VRSpike.reportedPanelShapes++;
+      console.info(`[VR panel] TEMPORARY shown ${shape}`);
+    } catch {
+      // Diagnostics only.
     }
   }
 

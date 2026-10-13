@@ -154,6 +154,28 @@ export class InGameDialog extends GameMenu {
   }
 
   /**
+   * What a VR world-conversation plate would carry: the spoken line only
+   * while it is set and drawn (it is hidden while the letterbox closes in),
+   * and the replies only while they are listed.
+   */
+  getVRWorldDialogueContent(): { messageDrawn: boolean, replyCount: number } {
+    let messageDrawn = false;
+    try{
+      const text = this.LBL_MESSAGE?.text;
+      if(text?.text && text.mesh){
+        messageDrawn = true;
+        for(let node: THREE.Object3D | null = text.mesh; node; node = node.parent){
+          if(!node.visible){ messageDrawn = false; break; }
+        }
+      }
+    }catch(e){
+      messageDrawn = false;
+    }
+    const replyCount = this.LB_REPLIES?.isVisible?.() ? (this.LB_REPLIES.children?.length ?? 0) : 0;
+    return { messageDrawn, replyCount };
+  }
+
+  /**
    * The canvas region the VR panel shows for a world conversation: the bottom
    * half, trimmed to the width of the dialogue itself.
    */

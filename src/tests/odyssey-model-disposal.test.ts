@@ -161,7 +161,7 @@ describe('OdysseyModel3D resource disposal', () => {
     } finally { build.mockRestore(); }
   });
 
-  test('preserves material groups on a chunk mesh and releases every cloned material', async () => {
+  test('preserves material groups on a chunk mesh and releases every chunk material once', async () => {
     const emitter = createEmitter();
     const source = new OdysseyModel3D();
     const materials = [new THREE.MeshBasicMaterial(), new THREE.MeshBasicMaterial()];
