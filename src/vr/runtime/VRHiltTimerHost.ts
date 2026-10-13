@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { normalizeVRRoundAttackPips, type VRRoundAttackPips } from './VRRoundStrokeBudget';
 
 const RING_SIZE_METRES = 0.05;
 const RING_LOCAL_OFFSET = new THREE.Vector3(0, 0, -0.12);
@@ -17,6 +18,7 @@ export class VRHiltTimerHost {
   private readonly texture: THREE.CanvasTexture;
   private lastDrawnReadiness = -1;
   private lastDrawnArmed = false;
+  private lastDrawnPips = '';
 
   constructor(private readonly handAnchor: THREE.Object3D) {
     if (typeof document === 'undefined') throw new Error('VR hilt timer requires a browser document');
@@ -48,19 +50,30 @@ export class VRHiltTimerHost {
   /**
    * `readiness` is clamped to [0, 1]; hides the ring entirely at 1 (ready,
    * nothing to show). `armed` (ROADMAP 3.12) draws a full amber ring while a
-   * buffered swing waits for the round to open.
+   * buffered swing waits for the round to open. `pips` (T-B) are the attacks
+   * the running round still holds: white for the weapon hand, violet for the
+   * off hand's weapon.
    */
-  present(readiness: number, armed = false): void {
+  present(readiness: number, armed = false, pips: VRRoundAttackPips | null = null): void {
     const clamped = Number.isFinite(readiness) ? Math.min(1, Math.max(0, readiness)) : 1;
-    if (clamped >= 1 && !armed) {
+    const attackPips = normalizeVRRoundAttackPips(pips);
+    const pipsKey = `${attackPips.main}/${attackPips.off}`;
+    if (clamped >= 1 && !armed && pipsKey === '0/0') {
       this.object.visible = false;
       return;
     }
     this.object.visible = true;
-    if (armed === this.lastDrawnArmed && Math.abs(clamped - this.lastDrawnReadiness) < 0.02) return;
+    if (armed === this.lastDrawnArmed && pipsKey === this.lastDrawnPips &&
+      Math.abs(clamped - this.lastDrawnReadiness) < 0.02) return;
     this.lastDrawnReadiness = clamped;
     this.lastDrawnArmed = armed;
-    this.draw(clamped, armed);
+    this.lastDrawnPips = pipsKey;
+    this.draw(clamped, armed, attackPips);
+  }
+
+  /** What the ring shows now, for probes. */
+  get drawnState(): Readonly<{ visible: boolean; readiness: number; armed: boolean; pips: string }> {
+    return { visible: this.object.visible, readiness: this.lastDrawnReadiness, armed: this.lastDrawnArmed, pips: this.lastDrawnPips };
   }
 
   clear(): void {
@@ -74,7 +87,7 @@ export class VRHiltTimerHost {
     this.texture.dispose();
   }
 
-  private draw(readiness: number, armed: boolean): void {
+  private draw(readiness: number, armed: boolean, pips: VRRoundAttackPips): void {
     const size = this.canvas.width;
     const center = size / 2;
     const radius = size * 0.4;
@@ -100,6 +113,25 @@ export class VRHiltTimerHost {
       this.context.arc(center, center, size * 0.14, 0, Math.PI * 2);
       this.context.fill();
     }
+    // One dot per attack the round still holds, in a row under the centre:
+    // a stroke spends the leftmost of its hand's colour.
+    const dots = [
+      ...Array.from({ length: pips.main }, () => '#f4f8ff'),
+      ...Array.from({ length: pips.off }, () => '#c79bff'),
+    ];
+    const spacing = size * 0.17;
+    const y = center + radius * 0.5;
+    dots.forEach((colour, i) => {
+      const x = center + (i - (dots.length - 1) / 2) * spacing;
+      this.context.fillStyle = 'rgba(20, 20, 20, 0.85)';
+      this.context.beginPath();
+      this.context.arc(x, y, size * 0.075, 0, Math.PI * 2);
+      this.context.fill();
+      this.context.fillStyle = colour;
+      this.context.beginPath();
+      this.context.arc(x, y, size * 0.055, 0, Math.PI * 2);
+      this.context.fill();
+    });
 
     this.texture.needsUpdate = true;
   }

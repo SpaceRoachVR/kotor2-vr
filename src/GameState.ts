@@ -168,6 +168,8 @@ import { BaseItemType } from "@/enums/combat/BaseItemType";
 import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 import { CombatActionType } from "@/enums/combat/CombatActionType";
 import { CombatRoundAction } from "@/combat/CombatRoundAction";
+import { CombatRound } from "@/combat/CombatRound";
+import { resolveVRRoundStroke, normalizeVRRoundAttackPips, NO_VR_ROUND_ATTACK_PIPS, type VRRoundAttackPips, type VRStrokeHand } from "@/vr/runtime/VRRoundStrokeBudget";
 import type { VRComfortSettingsRow } from "@/vr/runtime/VRComfortSettingsHost";
 import {
   buildVRActionWheel,
@@ -450,6 +452,8 @@ const vrCreatureLocomotionAdapter = new CreatureLocomotionAdapter<ModuleCreature
   retainVRInPlaceSkillActionsWhileMoving,
 );
 let vrCombatIssuedTargetId: number | null = null;
+/** When a stroke last dispatched the attack that opens the player's round (T-B). */
+let vrRoundOpeningDispatchedAt: number | null = null;
 /** Phase G1: the object id VR last selected through CursorManager, if any. */
 let vrCursorSelectedTargetId: number | null = null;
 let vrCursorSelectionErrorReported = false;
@@ -930,6 +934,7 @@ function resetVREmbodiedCombatState(): void {
   vrCombatQueueActorId = null;
   vrCombatQueueWeaponSignature = null;
   vrCombatIssuedTargetId = null;
+  vrRoundOpeningDispatchedAt = null;
 }
 
 function observeVREmbodiedCombatActor(actor: ModuleCreature): void {
@@ -1379,8 +1384,9 @@ function getVREmbodiedTempoResult(
       roundPaused: round.roundPaused === true,
       scheduledActionCount: Array.isArray(round.scheduledActionList) ? round.scheduledActionList.length : 0,
       playerActionCommitted: round.action !== undefined,
-      // Extra attacks remain resolved by the engine's current CombatRound;
-      // opening a second player input window here would double-spend it.
+      // A round's later attacks are spent by resolveVRRoundStrokeBudget
+      // before the gate is asked; the gate never opens for them, so a held
+      // extra can never also take the intent queue's head.
       additionalActionWindowOpen: false,
     } : undefined,
   });
@@ -1426,6 +1432,13 @@ function dispatchVREmbodiedCombatInput(
   if (input === 'dominant-trigger' && head?.kind === 'force-power' && head.requiredInput === 'dominant-trigger') {
     return dispatchVRForceCastGesture(actor, targetId);
   }
+  // T-B: a stroke inside the player's own round spends the round's next held
+  // attack (Flurry / Rapid Shot's extra, a second blade), or does nothing when
+  // the round has none left and is still young - a brisk return to guard
+  // used to be held for the next opening and bought an attack every round.
+  const budget = resolveVRRoundStrokeBudget(actor, targetId, 'main');
+  if (budget === 'spent') return true;
+  if (budget === 'absorbed') return false;
   const initialTarget = resolveVRLiveCombatTarget(actor, targetId);
   const headLabel = head ? `${head.label}(${head.requiredInput},${head.weaponSignature})` : 'none';
   // One physical swing is one attack. The controller emits one event per
@@ -1499,10 +1512,103 @@ function dispatchVREmbodiedCombatInput(
     result.state === 'intent-skipped-invalid' || result.state === 'deferred-input-mismatch' ||
     result.state === 'deferred-weapon-mismatch') {
     vrCombatIssuedTargetId = initialTarget.id;
+    vrRoundOpeningDispatchedAt = nowMs;
     return true;
   }
   return false;
 }
+
+const reportedVRRoundStrokes = new Set<string>();
+
+/**
+ * T-B (locked decision 2): each retail attack of a round needs its own
+ * stroke. The engine round holds the player's later attacks
+ * (CombatRound.holdsLaterAttacks); a stroke at the round's own target spends
+ * the next one its hand can make. With nothing left and the round still
+ * young, the stroke is absorbed: its whoosh plays, nothing rolls, and it is
+ * not held for the next opening. 'pass' leaves the stroke to the usual
+ * route: open a round, or wait for the next opening.
+ */
+function resolveVRRoundStrokeBudget(
+  actor: ModuleCreature,
+  targetId: string | null,
+  hand: VRStrokeHand,
+): 'spent' | 'absorbed' | 'pass' {
+  const round = actor.combatRound;
+  if (!round) return hand === 'off' ? 'absorbed' : 'pass';
+  const target = resolveVRLiveCombatTarget(actor, targetId);
+  const atRoundTarget = !!target && round.action?.target === target;
+  const nowMs = performance.now();
+  const ownRoundRunning = round.roundStarted === true && round.action !== undefined;
+  const openingPending = !round.roundStarted &&
+    (round.action !== undefined || (Array.isArray(round.scheduledActionList) && round.scheduledActionList.length > 0));
+  const decision = resolveVRRoundStroke({
+    hand,
+    heldAttacks: atRoundTarget ? round.heldAttackCount(hand) : 0,
+    ownRoundRemainingMs: ownRoundRunning
+      ? Math.max(0, round.roundPaused ? Number(round.pauseTimer) : Number(round.roundLength) - Number(round.timer))
+      : null,
+    openingAgeMs: openingPending && vrRoundOpeningDispatchedAt !== null ? nowMs - vrRoundOpeningDispatchedAt : null,
+  });
+  if (decision === 'spend') {
+    const result = round.resolveHeldAttack(actor, hand);
+    reportVRRoundStrokeOnce(`spent hand=${hand}`, `result=${result} left main=${round.heldAttackCount('main')} off=${round.heldAttackCount('off')}`);
+    return result === undefined ? 'absorbed' : 'spent';
+  }
+  if (decision === 'absorb') {
+    reportVRRoundStrokeOnce(`absorbed hand=${hand}`, ownRoundRunning ? 'round has no attack left for this hand' : 'no round of its own');
+    return 'absorbed';
+  }
+  return 'pass';
+}
+
+function reportVRRoundStrokeOnce(shape: string, detail: string): void {
+  if (reportedVRRoundStrokes.has(shape)) return;
+  reportedVRRoundStrokes.add(shape);
+  console.info(`[VR combat stroke] ${shape} || ${detail}`);
+}
+
+/**
+ * An off-hand stroke (two melee weapons) or off-hand trigger pull (two
+ * blasters). It spends the round's off-hand attack and nothing else; it never
+ * opens a round. A blaster pull with no round running still opens one, as
+ * either trigger always has ('pass').
+ */
+function dispatchVROffhandCombatInput(actor: ModuleCreature, targetId: string | null, input: 'stroke' | 'trigger'): 'spent' | 'absorbed' | 'pass' {
+  const round = actor.combatRound;
+  const target = resolveVRLiveCombatTarget(actor, targetId);
+  const offHeld = !!round && !!target && round.action?.target === target ? round.heldAttackCount('off') : 0;
+  if (input === 'stroke' || offHeld > 0) return resolveVRRoundStrokeBudget(actor, targetId, 'off');
+  // A pull with no off-hand attack to spend: either trigger opens a round,
+  // or late in one waits for the next opening, as before - but never takes
+  // an attack the round holds for the weapon hand.
+  if (round && round.heldAttackCount('main') > 0) return 'absorbed';
+  const asWeaponHand = resolveVRRoundStroke({
+    hand: 'main',
+    heldAttacks: 0,
+    ownRoundRemainingMs: round && round.roundStarted === true && round.action !== undefined
+      ? Math.max(0, round.roundPaused ? Number(round.pauseTimer) : Number(round.roundLength) - Number(round.timer))
+      : null,
+    openingAgeMs: round && !round.roundStarted && vrRoundOpeningDispatchedAt !== null &&
+      (round.action !== undefined || (Array.isArray(round.scheduledActionList) && round.scheduledActionList.length > 0))
+      ? performance.now() - vrRoundOpeningDispatchedAt : null,
+  });
+  return asWeaponHand === 'absorb' ? 'absorbed' : 'pass';
+}
+
+/** The round's held attacks at its own, still-live target, for the hilt pips. */
+function resolveVRRoundAttackPips(actor: ModuleCreature): VRRoundAttackPips {
+  const round = actor.combatRound;
+  if (!round || round.roundStarted !== true || typeof round.heldAttackCount !== 'function') return NO_VR_ROUND_ATTACK_PIPS;
+  return normalizeVRRoundAttackPips({ main: round.heldAttackCount('main'), off: round.heldAttackCount('off') });
+}
+
+/**
+ * T-B: in VR the current player rolls a round's first attack when the round
+ * opens and each later one with a stroke of its own. Everyone else, and the
+ * player outside VR, rolls the whole round at once (retail).
+ */
+CombatRound.holdsLaterAttacks = (owner) => VRSpike.isPresenting === true && owner === GameState.getCurrentPlayer();
 
 let vrSwingTooFarNoticeAt = Number.NEGATIVE_INFINITY;
 
@@ -4442,6 +4548,8 @@ export class GameState implements EngineContext {
             attackTargetId: target && Number.isInteger(target.id) ? target.id : null,
             hitPoints: typeof creature.getHP === 'function' ? creature.getHP() : null,
           maxHitPoints: typeof creature.getMaxHP === 'function' ? creature.getMaxHP() : null,
+            heldAttacksResolved: Number(creature.combatRound?.heldAttacksResolved) || 0,
+            lastHeldAttackResult: creature.combatRound?.lastHeldAttackResult,
           });
         };
         for (const creature of (area.creatures ?? [])) add(creature as ModuleCreature);
@@ -4530,6 +4638,15 @@ export class GameState implements EngineContext {
             if (event.actorId !== String(actor.id)) return;
             dispatchVREmbodiedCombatInput(actor, event.nominatedTargetId, event.input);
           },
+          // T-B: the attacks the round still holds, as pips on the hilt.
+          roundAttackPips: resolveVRRoundAttackPips(actor),
+          // Two melee weapons: the off hand's own stroke spends the off-hand attack.
+          offhandStrokeAvailable: resolveVRCombatWeaponMode(actor) === 'melee-dual-wield',
+          onOffhandStroke: (event) => {
+            if (event.actorId !== String(actor.id)) return;
+            dispatchVROffhandCombatInput(actor, event.nominatedTargetId, 'stroke');
+          },
+          onOffhandShot: () => dispatchVROffhandCombatInput(actor, target ? String(target.id) : null, 'trigger'),
           onDirectionalForceGesture: (gesture) =>
             dispatchVRDirectionalForceGesture(actor, target ? String(target.id) : null, gesture.kind),
           onForceCastGesture: () =>

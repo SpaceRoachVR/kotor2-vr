@@ -369,6 +369,17 @@ export interface VRSpikeHooks {
     /** True only while the queue head needs an aimed dominant-hand trigger. */
     readonly allowDominantTrigger?: boolean;
     onCombatSwing(event: VRCombatSwingEvent): void;
+    /** T-B: attacks the running round still holds, drawn as pips on the hilt. */
+    readonly roundAttackPips?: import('./runtime/VRRoundStrokeBudget').VRRoundAttackPips;
+    /** Two melee weapons are held: the off hand's own strokes are watched. */
+    readonly offhandStrokeAvailable?: boolean;
+    /** T-B: a stroke of the off-hand weapon; it spends the round's off-hand attack. */
+    onOffhandStroke?(event: VRCombatSwingEvent): void;
+    /**
+     * T-B: an off-hand blaster's trigger pull. 'spent' and 'absorbed' consume
+     * the pull; 'pass' lets it count as a pull of either trigger, as before.
+     */
+    onOffhandShot?(): 'spent' | 'absorbed' | 'pass';
     /** Returns true only when the gesture was spent on a queued Push/Pull. */
     onDirectionalForceGesture?(gesture: VRForceGesture): boolean;
     /**
@@ -817,6 +828,15 @@ export class VRSpike {
   private static readonly keyboardInputController = new VRKeyboardInputController();
   // Two fast samples within 120 ms: one-frame pops and wrist snaps are not swings (critic runs 13-15).
   private static readonly combatInputController = new VRCombatInputController({ minimumFastSamples: 2 });
+  /** T-B: the off hand's own strokes, watched only while two melee weapons are held. */
+  private static readonly offhandCombatInputController = new VRCombatInputController({ minimumFastSamples: 2 });
+  /** An off-hand blaster pull already taken by the off-hand attack, until it is released. */
+  private static offhandPullTaken = false;
+
+  private static resetCombatStrokeDetectors(): void {
+    VRSpike.combatInputController.reset();
+    VRSpike.offhandCombatInputController.reset();
+  }
   private static readonly forceGestureController = new VRForceGestureController();
   private static readonly forceCastGestureController = new VRForceCastGestureController();
   private static readonly consumableUseGestureController = new VRConsumableUseGestureController();
@@ -1212,7 +1232,7 @@ export class VRSpike {
     VRSpike.worldPromptModuleInitialized = false;
     VRSpike.worldPromptSelectHeld = { left: true, right: true };
     VRSpike.interactionAimedTargetId = null;
-    VRSpike.combatInputController.reset();
+    VRSpike.resetCombatStrokeDetectors();
     VRSpike.combatTargetLock.clear();
     VRSpike.offhandGrenadeTriggerHeld = false;
     VRSpike.hooks?.resetCombatInteraction?.();
@@ -1300,7 +1320,7 @@ export class VRSpike {
     VRSpike.clearTrackedInput();
     VRSpike.interactionTargetSet.clear();
     VRSpike.panelInputController.cancel();
-    VRSpike.combatInputController.reset();
+    VRSpike.resetCombatStrokeDetectors();
     VRSpike.forceGestureController.reset();
     VRSpike.forceCastGestureController.reset();
     VRSpike.consumableUseGestureController.reset();
@@ -2794,10 +2814,11 @@ export class VRSpike {
       try {
         heldSwing = VRSpike.hooks?.serviceCombatSwingBuffer?.()?.armed === true;
       } catch { /* the hilt only */ }
-      VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout, heldSwing);
+      VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout, heldSwing,
+        context.roundAttackPips ?? null);
       VRSpike.updateCombatTargetHighlight();
       VRSpike.roundReadyLatched = false;
-      VRSpike.combatInputController.reset();
+      VRSpike.resetCombatStrokeDetectors();
       VRSpike.forceGestureController.reset();
       VRSpike.forceCastGestureController.reset();
       VRSpike.consumableUseGestureController.reset();
@@ -2821,6 +2842,7 @@ export class VRSpike {
       context.inCombat,
       context.stanceReadout,
       swingBuffer?.armed === true,
+      context.roundAttackPips ?? null,
     );
     VRSpike.updateCombatTargetHighlight();
 
@@ -2861,10 +2883,17 @@ export class VRSpike {
           VRSpike.throwHandAnchorUntil = performance.now() + 4000;
           VRSpike.updateThrowHandAnchor(inputFrame);
           context.onGrenadeTrigger?.();
-        } else if (VRSpike.isPresentationShotAllowed(context)) {
-          VRSpike.firePresentationShot(context, timestamp, offhandHand, () => context.playOffhandShotSound?.());
+        } else {
+          if (VRSpike.isPresentationShotAllowed(context)) {
+            VRSpike.firePresentationShot(context, timestamp, offhandHand, () => context.playOffhandShotSound?.());
+          }
+          // T-B: inside a round, the off-hand blaster's pull spends the
+          // off-hand attack and nothing else.
+          const offhandShot = context.onOffhandShot?.() ?? 'pass';
+          VRSpike.offhandPullTaken = offhandShot !== 'pass';
         }
       }
+      if (!offhandTriggerPressed) VRSpike.offhandPullTaken = false;
       VRSpike.offhandGrenadeTriggerHeld = offhandTriggerPressed;
 
       // Every pull of a blaster trigger shows a shot and plays its sound, even
@@ -2900,7 +2929,7 @@ export class VRSpike {
       VRSpike.idleTriggerHeld = weaponActionPressed;
 
       if (VRSpike.processForceInput(timestamp, context)) {
-        VRSpike.combatInputController.reset();
+        VRSpike.resetCombatStrokeDetectors();
         return;
       }
       // ROADMAP 3.19 — the off hand's open-palm thrust releases the queued
@@ -2909,7 +2938,7 @@ export class VRSpike {
       // open and the thrust is ignored here.
       if (VRSpike.processForceCastInput(context, inputFrame, timestamp, offhandHand,
         !offhandGrip && !offhandTriggerPressed)) {
-        VRSpike.combatInputController.reset();
+        VRSpike.resetCombatStrokeDetectors();
         return;
       }
       const events = VRSpike.combatInputController.process(inputFrame, {
@@ -2920,8 +2949,8 @@ export class VRSpike {
         offhandGrip,
         // Either blaster's pull completes the round; the controller latches
         // the combined press, so holding one trigger and pulling the other
-        // is still one pull.
-        weaponActionPressed: weaponActionPressed || offhandShotPressed,
+        // is still one pull. A pull the off-hand attack took is not also one.
+        weaponActionPressed: weaponActionPressed || (offhandShotPressed && !VRSpike.offhandPullTaken),
         dominantHand,
         offhandHand,
         allowDominantTrigger: context.allowDominantTrigger === true,
@@ -2930,10 +2959,32 @@ export class VRSpike {
       VRSpike.reportSwingMisses();
       for (const event of events) context.onCombatSwing(event);
       VRSpike.voiceStrokes(events, timestamp);
+      // T-B: with two melee weapons the off hand strokes for itself. Not while
+      // it holds the hilt two-handed or works a trigger.
+      if (context.offhandStrokeAvailable === true && !offhandGrip && !offhandTriggerPressed) {
+        const offhandEvents = VRSpike.offhandCombatInputController.process(inputFrame, {
+          actorId: context.actorId,
+          nominatedTargetId: context.nominatedTargetId,
+          weaponMode: 'melee-one-handed',
+          timestamp,
+          offhandGrip: false,
+          weaponActionPressed: false,
+          dominantHand: offhandHand,
+          offhandHand: dominantHand,
+          allowDominantTrigger: false,
+          nominatedTargetVolume: context.nominatedTargetVolume ?? null,
+        });
+        VRSpike.offhandCombatInputController.drainMisses();
+        for (const event of offhandEvents) context.onOffhandStroke?.(event);
+        VRSpike.voiceStrokes(offhandEvents, timestamp);
+      } else {
+        VRSpike.offhandCombatInputController.reset();
+      }
       // A stroke held for the next round turns the hilt amber this frame,
       // not on the next one (Part F, decision 4: amber at the stroke).
       if (events.length && swingBuffer?.armed !== true && VRSpike.hooks?.isCombatSwingHeld?.() === true) {
-        VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout, true);
+        VRSpike.updateHiltTimer(context.weaponMode, context.tempoReadiness ?? 0, context.inCombat, context.stanceReadout, true,
+          context.roundAttackPips ?? null);
       }
     } catch (error) {
       if (!VRSpike.combatInputErrorReported) {
@@ -3118,6 +3169,7 @@ export class VRSpike {
     inCombat: boolean,
     stanceReadout = '',
     swingArmed = false,
+    roundAttackPips: import('./runtime/VRRoundStrokeBudget').VRRoundAttackPips | null = null,
   ): void {
     VRSpike.lastCombatWeaponMode = weaponMode;
     // The hilt timer is a diegetic ring on the weapon itself, so it belongs on
@@ -3139,7 +3191,7 @@ export class VRSpike {
     }
     VRSpike.hiltTimerHost.present(Number.isFinite(tempoReadiness)
       ? Math.min(1, Math.max(0, tempoReadiness))
-      : 0, swingArmed);
+      : 0, swingArmed, roundAttackPips);
 
     // Same grip anchor as the ring, so the upcoming player-selected action
     // belongs to the equipped weapon rather than a screen-space HUD.
