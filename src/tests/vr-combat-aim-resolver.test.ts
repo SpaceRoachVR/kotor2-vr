@@ -1,6 +1,7 @@
 import { describe, expect, test } from '@jest/globals';
 import * as THREE from 'three';
 import {
+  measureVRCombatAim,
   resolveVRCombatAimedTargetId,
   VRCombatAimCandidate,
 } from '@/vr/runtime/VRCombatAimResolver';
@@ -71,11 +72,13 @@ describe('resolveVRCombatAimedTargetId', () => {
 
   test('returns the nearest of two hostiles along the same ray', () => {
     // Two identical droids in a line is exactly the case a name plate cannot
-    // disambiguate, so the wheel must act on the closer one.
+    // disambiguate, so the wheel must act on the closer one. The barrel is at
+    // body height here so the two really share a bearing: from eye height
+    // they sit 3.3 degrees apart and the one under the barrel wins instead.
     const near = droid(1, 0, 6);
     const far = droid(2, 0, 12);
     const id = resolveVRCombatAimedTargetId({
-      rayPose: poseAimedAt(EYE, bodyOf(far)),
+      rayPose: poseAimedAt(new THREE.Vector3(0, 0, 0.9), bodyOf(far)),
       actorPosition: ACTOR,
       candidates: [far, near],
       maxRangeMetres: 15,
@@ -167,5 +170,59 @@ describe('resolveVRCombatAimedTargetId', () => {
         maxRangeMetres: 15,
       }),
     ).toBeNull();
+  });
+});
+
+describe('measureVRCombatAim', () => {
+  // Bolt's grouped troopers: three at 9 m, 1.3 m apart. With the aim-assist
+  // sphere every one of them is "hit" when the barrel sits on the middle one,
+  // and the old nearest-along-the-ray rule handed the shot to whichever stood
+  // a step closer rather than the one under the barrel.
+  const a = droid(1, -1.3, 9);
+  const b = droid(2, 0, 8.6);
+  const c = droid(3, 1.3, 9);
+  const request = (lookAt: THREE.Vector3) => ({
+    rayPose: poseAimedAt(EYE, lookAt),
+    actorPosition: ACTOR,
+    candidates: [a, b, c],
+    maxRangeMetres: 15,
+    aimAssistRadiusMetres: 0.6,
+  });
+
+  test('picks the hostile under the barrel, not the nearest one the ray grazes', () => {
+    const aim = measureVRCombatAim(request(bodyOf(c)));
+    expect(aim.targetId).toBe(3);
+    expect(aim.offsetsDegrees.get(3)).toBeCloseTo(0, 5);
+  });
+
+  test('reports the barrel offset of every hostile in range, hit or not', () => {
+    const aim = measureVRCombatAim(request(bodyOf(c)));
+    expect([...aim.offsetsDegrees.keys()].sort()).toEqual([1, 2, 3]);
+    // A is two spacings away: well beyond the 3 degree overlap band.
+    expect(aim.offsetsDegrees.get(1)!).toBeGreaterThan(14);
+    expect(aim.offsetsDegrees.get(2)!).toBeGreaterThan(7);
+  });
+
+  test('leaves hostiles beyond combat range out of the offsets', () => {
+    const far = droid(9, 0, 40);
+    const aim = measureVRCombatAim({ ...request(bodyOf(c)), candidates: [a, far] });
+    expect(aim.offsetsDegrees.has(9)).toBe(false);
+  });
+
+  test('within 3 degrees of each other the nearer hostile still wins', () => {
+    const near = droid(1, 0, 6);
+    const far = droid(2, 0.2, 12);
+    const aim = measureVRCombatAim({
+      rayPose: poseAimedAt(new THREE.Vector3(0, 0, 0.9), bodyOf(far)),
+      actorPosition: ACTOR,
+      candidates: [far, near],
+      maxRangeMetres: 15,
+      aimAssistRadiusMetres: 0.6,
+    });
+    expect(aim.targetId).toBe(1);
+  });
+
+  test('agrees with resolveVRCombatAimedTargetId', () => {
+    expect(resolveVRCombatAimedTargetId(request(bodyOf(a)))).toBe(measureVRCombatAim(request(bodyOf(a))).targetId);
   });
 });

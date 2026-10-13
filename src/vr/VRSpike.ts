@@ -54,7 +54,7 @@ import { VRWeaponStanceHost } from "./runtime/VRWeaponStanceHost";
 import { VRCombatTargetHighlightHost, type VRCombatTargetHighlight } from "./runtime/VRCombatTargetHighlightHost";
 import { VRBlasterLaserHost } from "./runtime/VRBlasterLaserHost";
 import {
-  resolveVRCombatAimedTargetId,
+  measureVRCombatAim,
   type VRCombatAimCandidate,
 } from "./runtime/VRCombatAimResolver";
 import {
@@ -2505,18 +2505,21 @@ export class VRSpike {
    * cache would have to be invalidated on every spawn, death and module load.
    */
   private static resolveAimedCombatTargetId(): number | null {
+    VRSpike.combatAimOffsetsDegrees.clear();
     const rayPose = VRSpike.latestInputFrame?.hands[VRSpike.dominantHand]?.targetRayPose;
     if (!rayPose || !isUsableXRPose(rayPose)) return null;
     try {
       const context = VRSpike.hooks?.getCombatAimCandidates?.() ?? null;
       if (!context || !context.candidates.length) return null;
-      return resolveVRCombatAimedTargetId({
+      const aim = measureVRCombatAim({
         rayPose,
         actorPosition: context.actorPosition,
         candidates: context.candidates,
         maxRangeMetres: context.maxRangeMetres,
         aimAssistRadiusMetres: VRSpike.COMBAT_AIM_ASSIST_RADIUS_METRES,
       });
+      for (const [id, offset] of aim.offsetsDegrees) VRSpike.combatAimOffsetsDegrees.set(String(id), offset);
+      return aim.targetId;
     } catch {
       // Aim resolution must never break the frame loop; no target is the
       // honest outcome and the player can step closer.
@@ -2524,15 +2527,24 @@ export class VRSpike {
     }
   }
 
-  /** Interaction aim first, then combat reach. See `resolveAimedCombatTargetId`. */
+  /** The barrel's angle to each in-range hostile, from the last combat aim. */
+  private static readonly combatAimOffsetsDegrees = new Map<string, number>();
+
+  /**
+   * A hostile under the barrel first, then the interaction ray.
+   *
+   * The interaction ray used to win whenever it hit anything alive, so the
+   * Remote or a companion a metre in front took the aim from the trooper
+   * behind: the lock stayed on the old target, every shot went there, and a
+   * queued power could not be cast (Bolt, round 17). Corpses did the same
+   * (critic run 19). A hostile in combat range under the barrel now outranks
+   * any non-hostile hit; a door or companion still answers when no hostile is.
+   */
   private static resolveAimedTargetIdForCombat(): number | null {
     const aimed = VRSpike.resolveAimedTargetId();
-    // A corpse under the ray (lootable, so the interaction ray takes it) hid
-    // the live droid behind it: 0 of 6 swings registered (critic run 19).
-    let dead = false;
-    try { dead = aimed !== null && VRSpike.hooks?.isDeadCreature?.(aimed) === true; } catch { dead = false; }
-    if (aimed !== null && !dead) return aimed;
-    return VRSpike.resolveAimedCombatTargetId() ?? aimed;
+    const hostile = VRSpike.resolveAimedCombatTargetId();
+    if (hostile !== null) return hostile;
+    return aimed;
   }
 
   private static parseModuleObjectTargetId(id: string | null): number | null {
@@ -2653,6 +2665,7 @@ export class VRSpike {
     const lock = VRSpike.combatTargetLock.update({
       candidateTargetId: candidateContext?.nominatedTargetId ?? undefined,
       nowMilliseconds: timestamp,
+      aimOffsetsDegrees: VRSpike.combatAimOffsetsDegrees,
     });
     const lockedTargetId = VRSpike.parseModuleObjectTargetId(lock.lockedTargetId);
     // Re-resolve the soft lock even during aim-loss grace. The original
