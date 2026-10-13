@@ -40,6 +40,20 @@ import { MenuSaveLoadMode } from "@/enums/gui/MenuSaveLoadMode";
 /** How long nobody standing must be in combat before a downed party member gets up. */
 const DOWNED_PARTY_REVIVE_DELAY_SECONDS = 3;
 
+/**
+ * A creature outside the party still fighting it: in combat, alive, with its
+ * attack aimed at a party member. Its own combat flag alone is not enough
+ * (a hostile in combat with someone else is not this party's battle).
+ */
+function isFightingParty(creature: any, party: readonly unknown[]): boolean {
+  if(!creature || party.includes(creature) || creature.destroyed) return false;
+  if(typeof creature.isDead !== 'function' || creature.isDead()) return false;
+  if(creature.combatData?.combatState !== true) return false;
+  return party.includes(creature.combatRound?.action?.target) ||
+    party.includes(creature.combatData?.lastAttackTarget) ||
+    party.includes(creature.combatData?.lastAttemptedAttackTarget);
+}
+
 function isKnockoutEligible(creature: any): boolean {
   return !!GameState.module?.readyToProcessEvents &&
     creature?.spawned === true &&
@@ -964,8 +978,13 @@ export class ModuleCreature extends ModuleObject {
     }
     ModuleCreature.partyDefeatScreen.reset();
     // Still fighting while anyone standing is in combat; a hostile that can see
-    // the party keeps combatState armed through excitedDuration.
-    if(standing.some((member) => member.combatData?.combatState)){
+    // the party keeps combatState armed through excitedDuration. Or while a
+    // hostile is still attacking the party: companions not yet engaged left
+    // the Exile getting up at 1 HP 3 s after going down, the Sith still
+    // swinging at her (Nar Shaddaa duel).
+    const party = GameState.PartyManager.party;
+    if(standing.some((member) => member.combatData?.combatState) ||
+      (this.area?.creatures ?? []).some((creature) => isFightingParty(creature, party))){
       this.downedCalmSeconds = 0;
       return;
     }
