@@ -4706,6 +4706,7 @@ export class VRSpike {
         context.viewportHeight,
         context.presentOptions ?? {}
       );
+      VRSpike.reportPanelPresentation(context.menu, context.presentOptions ?? {});
       // GameState deliberately hides the legacy mouse cursor during ordinary
       // XR play. Reapply the panel hit after simulation so the original cursor
       // is included only in this GUI-to-texture pass.
@@ -4738,6 +4739,30 @@ export class VRSpike {
         VRSpike.panelPresentationErrorReported = true;
         console.error('[VRSpike] panel presentation rejected', error);
       }
+    }
+  }
+
+  private static lastReportedPanelShape: string | null = null;
+  private static reportedPanelShapes = 0;
+
+  /**
+   * TEMPORARY (headset round 18, "large, empty black boxes before and after
+   * interactions"): names each panel the player is shown, with its size and
+   * backing, so a box seen in the headset can be matched to its menu. One
+   * line per change of shape, at most 60 a session.
+   */
+  private static reportPanelPresentation(menu: object, options: { readonly backingOpacity?: number, readonly region?: unknown }): void {
+    try {
+      const object = VRSpike.panelHost?.object;
+      if (!object) return;
+      const name = (menu as any)?.constructor?.name ?? 'menu';
+      const shape = `${name} ${object.scale.x.toFixed(2)}x${object.scale.y.toFixed(2)}m backing=${options.backingOpacity ?? 0}`;
+      if (shape === VRSpike.lastReportedPanelShape || VRSpike.reportedPanelShapes >= 60) return;
+      VRSpike.lastReportedPanelShape = shape;
+      VRSpike.reportedPanelShapes++;
+      console.info(`[VR panel] TEMPORARY shown ${shape}`);
+    } catch {
+      // Diagnostics only.
     }
   }
 

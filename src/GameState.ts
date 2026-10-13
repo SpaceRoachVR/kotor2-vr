@@ -55,6 +55,7 @@ import { classifyVRForcePower } from "@/vr/runtime/VRForcePowerClassification";
 import { measureVRSaberGripCentre } from "@/vr/runtime/VRHeldSaberGrip";
 import { resolveVRMenuRegion } from "@/vr/runtime/VRMenuRegion";
 import { shouldDispatchVRBashStroke, shouldKeepVRBashArmed } from "@/vr/runtime/VRBashPersistence";
+import { shouldPresentVRWorldDialoguePlate } from "@/vr/runtime/VRWorldDialoguePlate";
 import { CutsceneMode } from "@/enums/dialog/CutsceneMode";
 import { EngineFrameSource, shouldProcessEngineFrame } from "@/vr/XRFrameCadence";
 import { clampFrameDelta } from "@/engine/FrameDeltaRules";
@@ -434,6 +435,22 @@ function findVRRoomUnderPoint(point: THREE.Vector3): ModuleRoom | null {
 }
 
 /** A spoken conversation (not a computer terminal) being held in the world. */
+/**
+ * TEMPORARY (headset round 18): an empty world-dialogue plate was withheld.
+ * Once per conversation node, at most 40 a session, naming the conversation.
+ */
+let vrWithheldPlateNode: unknown = null;
+let vrWithheldPlateReports = 0;
+function reportVRWithheldDialoguePlate(): void {
+  const node = GameState.CutsceneManager.currentEntry ?? GameState.CutsceneManager.dialog ?? null;
+  if (node === vrWithheldPlateNode || vrWithheldPlateReports >= 40) return;
+  vrWithheldPlateNode = node;
+  vrWithheldPlateReports++;
+  const content = GameState.MenuManager.InGameDialog.getVRWorldDialogueContent();
+  console.info(`[VR dialogue plate] TEMPORARY withheld empty plate dlg=${(GameState.CutsceneManager.dialog as any)?.resref ?? '?'}` +
+    ` lineSet=${!!GameState.MenuManager.InGameDialog.LBL_MESSAGE?.text?.text} drawn=${content.messageDrawn} replies=${content.replyCount}`);
+}
+
 function isVRWorldDialogue(menu: unknown): boolean {
   return !!menu && menu === GameState.MenuManager.InGameDialog &&
     GameState.CutsceneManager.active && VRSpike.isPresenting &&
@@ -5234,9 +5251,16 @@ export class GameState implements EngineContext {
       },
       getPanelContext: () => {
         const foregroundMenu = GameState.MenuManager.GetForegroundMenu();
-        const menu = foregroundMenu?.bVisible && foregroundMenu !== GameState.MenuManager.InGameOverlay
+        const shownMenu = foregroundMenu?.bVisible && foregroundMenu !== GameState.MenuManager.InGameOverlay
           ? foregroundMenu
           : null;
+        // Round 18: a world conversation's plate is shown only with something
+        // on it - not on a node with no spoken line, nor while the line is
+        // hidden for the letterbox - or it is a large, empty black box.
+        const emptyWorldDialogue = isVRWorldDialogue(shownMenu) &&
+          !shouldPresentVRWorldDialoguePlate(GameState.MenuManager.InGameDialog.getVRWorldDialogueContent());
+        const menu = emptyWorldDialogue ? null : shownMenu;
+        if (emptyWorldDialogue) reportVRWithheldDialoguePlate();
         // A conversation held in the world shows only its dialogue, in the
         // lower part of the view, so the player can see who they are talking
         // to (round 7: direct interactions "should only show dialogue on the
