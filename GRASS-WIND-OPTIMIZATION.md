@@ -53,12 +53,44 @@ whole-game speedup and does not establish a headset FPS improvement.
 
 Raw local evidence is under
 `tools/vr-emulator/evidence/wind-optimization/benchmark.json` and
-`tools/vr-emulator/evidence/vr-check-metrics.json` in the implementation worktree.
+`tools/vr-emulator/evidence/wind-optimization/vr-check-metrics.json` in the main
+checkout. The integrated checkout also passed **335 suites / 2,993 tests**,
+including its existing additional harness tests.
 
-## Device acceptance remaining
+## Native stationary verification
 
-Reload the rebuilt game, reproduce the same Telos save, location, head view,
-90 Hz refresh setting and SSW-off configuration. Compare repeated unprofiled
-stationary and walking windows, and confirm grass motion/visuals. The separately
-reported missing/wrong character rendering remains an unresolved correctness
-issue. Neither device FPS gains nor character fixes are claimed here.
+Allen reloaded the build, returned to `231TEL` / `231telc` with the requested
+90 Hz and SSW-off configuration, and reported: "The grass looks good."
+A live runtime probe confirmed the optimized sampling code was loaded before
+capture. Two consecutive unprofiled 30-second windows followed:
+
+| Window | FPS | Frame p50 / p90 / p99 | Simulation CPU p50 / p90 | Render CPU p50 / p90 |
+|---|---:|---|---|---|
+| Before, stationary | 21.42 | 46.7 / 49.6 / 56.0 ms | 8.3 / 9.5 ms | 14.4 / 15.4 ms |
+| Updated, stationary 1 | 31.68 | 31.1 / 34.3 / 44.4 ms | 7.2 / 8.3 ms | 11.8 / 12.8 ms |
+| Updated, stationary 2 | 31.10 | 31.4 / 36.5 / 47.7 ms | 7.3 / 8.6 ms | 12.0 / 13.3 ms |
+
+All three windows had zero movement, gameplay mode, 8/9 rooms visible and
+trustworthy one-update/one-render XR cadence. The updated FPS is **45–48% higher
+than the earlier observed baseline**, and median simulation CPU is **12–13%
+lower**. This is an observed comparison, not a controlled measurement assigning
+the entire gain to wind: the player returned about 0.64 m from the old position,
+head view and dynamic NPC state were not locked, the page was reloaded, and
+final-pass draw calls/triangles differed. The prior snapshot had 1,166 calls /
+442,810 triangles; updated snapshots had 1,120 / 430,006 and 1,160 / 447,890.
+The independent exact-output microbenchmark remains the stronger evidence for
+the wind routine's isolated CPU improvement.
+
+A separate updated CPU profile recorded 967 ms inclusive grass-wind time over
+21.02 s, versus 1,601 ms in the earlier 21.05 s profile. Those profiles also
+cover different movement/scene states and are not a normalized per-frame A/B.
+No profiler ran during the two updated FPS windows.
+
+Evidence: `tools/vr-emulator/evidence/perf/audit-20261014-wind-after.jsonl`,
+the prior `audit-20261014.jsonl`, and
+`tools/vr-emulator/evidence/performance-native-wind-after-20261014/`.
+
+Repeated controlled A/B/A and walking comparisons remain open. The 50 FPS
+project floor and 90 Hz setting are still unmet here. The separately reported
+missing/wrong character rendering remains an unresolved correctness issue;
+this change does not claim to fix it.
