@@ -7,6 +7,10 @@ const WIND_GRID_CELLS = WIND_GRID_SIZE * WIND_GRID_SIZE;
 const MAX_POINT_SOURCES = 16;
 const NOISE_PERIOD = 2.0;
 const DEG2RAD = Math.PI / 180;
+const WIND_ANGLE_STEP = Math.PI / 16;
+const WIND_ANGLE_MASK = 31;
+const WIND_ANGLE_COS = Float64Array.from({ length: 32 }, (_, index) => Math.cos(index * WIND_ANGLE_STEP));
+const WIND_ANGLE_SIN = Float64Array.from({ length: 32 }, (_, index) => Math.sin(index * WIND_ANGLE_STEP));
 
 export interface PointSourceWind {
   position: THREE.Vector3;
@@ -264,7 +268,7 @@ export class WindManager {
     return current + (next - current) * this.noiseAlpha;
   }
 
-  private applyDeviation(base: THREE.Vector3, worldX: number, worldY: number, noise: number): THREE.Vector3 {
+  private applyDeviation(base: THREE.Vector3, worldX: number, worldY: number, noise: number, output = new THREE.Vector3()): THREE.Vector3 {
     let horizontalDev = 0;
     if (this.windMaxDeviation.x !== 0) {
       horizontalDev = ((noise * 2) * this.windMaxDeviation.x - this.windMaxDeviation.x) * 0.5;
@@ -276,37 +280,42 @@ export class WindManager {
       verticalDev = ((noiseV * 2) * this.windMaxDeviation.y - this.windMaxDeviation.y) * 0.5;
     }
 
-    return this.rotateVectorByTrigLookup(base, horizontalDev, verticalDev);
+    return this.rotateVectorByTrigLookup(base, horizontalDev, verticalDev, output);
   }
 
-  private rotateVectorByTrigLookup(v: THREE.Vector3, horizontalDev: number, verticalDev: number): THREE.Vector3 {
-    const step = Math.PI / 16;
-    const hIdx = Math.round(horizontalDev / step) & 31;
-    const vIdx = Math.round(verticalDev / step) & 31;
-    const hc = Math.cos(hIdx * step);
-    const hs = Math.sin(hIdx * step);
-    const vc = Math.cos(vIdx * step);
-    const vs = Math.sin(vIdx * step);
+  private rotateVectorByTrigLookup(v: THREE.Vector3, horizontalDev: number, verticalDev: number, output = new THREE.Vector3()): THREE.Vector3 {
+    const hIdx = Math.round(horizontalDev / WIND_ANGLE_STEP) & WIND_ANGLE_MASK;
+    const vIdx = Math.round(verticalDev / WIND_ANGLE_STEP) & WIND_ANGLE_MASK;
+    const hc = WIND_ANGLE_COS[hIdx];
+    const hs = WIND_ANGLE_SIN[hIdx];
+    const vc = WIND_ANGLE_COS[vIdx];
+    const vs = WIND_ANGLE_SIN[vIdx];
 
     const qw = vc * hc;
     const qx = vc * hs;
     const qy = vs * hc;
     const qz = -vs * hs;
 
-    const u = new THREE.Vector3(qx, qy, qz);
-    const result = new THREE.Vector3();
-    const dotUV = u.dot(v);
-    const dotUU = u.dot(u);
-    result.copy(u).multiplyScalar(2 * dotUV);
-    result.addScaledVector(v, qw * qw - dotUU);
-    result.add(new THREE.Vector3().crossVectors(u, v).multiplyScalar(2 * qw));
-    return result;
+    // Snapshot components before writing: callers may reuse the input as output.
+    // Keep the old vector expression's operation order for numerical parity.
+    const x = v.x, y = v.y, z = v.z;
+    const twiceDot = 2 * (qx * x + qy * y + qz * z);
+    const vectorScale = qw * qw - (qx * qx + qy * qy + qz * qz);
+    const twiceW = 2 * qw;
+    return output.set(
+      (qx * twiceDot + x * vectorScale) + (qy * z - qz * y) * twiceW,
+      (qy * twiceDot + y * vectorScale) + (qz * x - qx * z) * twiceW,
+      (qz * twiceDot + z * vectorScale) + (qx * y - qy * x) * twiceW
+    );
   }
 
-  pointSourceWindVector(position: THREE.Vector3): THREE.Vector3 {
-    const result = new THREE.Vector3();
+  /** Optional caller-owned output avoids allocations and may alias position. */
+  pointSourceWindVector(position: THREE.Vector3, output = new THREE.Vector3()): THREE.Vector3 {
+    WindManager.validateSamplingVectors(position, output);
+    const x = position.x, y = position.y, z = position.z;
+    const result = output.set(0, 0, 0);
     for (const src of this.pointSourceWinds) {
-      const delta = this._scratchPos.copy(position).sub(src.position);
+      const delta = this._scratchPos.set(x, y, z).sub(src.position);
       const d = Math.max(Math.abs(delta.x), Math.abs(delta.y), Math.abs(delta.z));
       if (d < src.radius) {
         const len = delta.length();
@@ -319,14 +328,17 @@ export class WindManager {
     return result;
   }
 
-  getGlobalWindNoPoint(position: THREE.Vector3, scale: number): THREE.Vector3 {
+  /** Defaults to a fresh result; grass passes its own scratch vector. */
+  getGlobalWindNoPoint(position: THREE.Vector3, scale: number, output = new THREE.Vector3()): THREE.Vector3 {
+    WindManager.validateSamplingVectors(position, output);
+    if (!Number.isFinite(scale)) throw new RangeError('wind sample scale must be finite');
     if (this.globalWind.lengthSq() < 1e-12) {
-      return new THREE.Vector3();
+      return output.set(0, 0, 0);
     }
 
     const noise = this.sampleBlendedNoise(position.x, position.y);
     this._scratchWind.copy(this.globalWind).multiplyScalar(scale * noise);
-    return this.applyDeviation(this._scratchWind, position.x, position.y, noise);
+    return this.applyDeviation(this._scratchWind, position.x, position.y, noise, output);
   }
 
   /** Cap sampled wind magnitude when |globalWind| > 5. */
@@ -347,8 +359,17 @@ export class WindManager {
     return this.applyDeviation(this._scratchWind, position.x, position.y, noise);
   }
 
-  getGlobalPointWind(position: THREE.Vector3, _scale?: number): THREE.Vector3 {
-    return this.pointSourceWindVector(position);
+  getGlobalPointWind(position: THREE.Vector3, _scale?: number, output = new THREE.Vector3()): THREE.Vector3 {
+    return this.pointSourceWindVector(position, output);
+  }
+
+  private static validateSamplingVectors(position: THREE.Vector3, output: THREE.Vector3): void {
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
+      throw new RangeError('wind sample position must have finite coordinates');
+    }
+    if (!output?.isVector3 || typeof output.set !== 'function') {
+      throw new TypeError('wind sample output must be a Vector3');
+    }
   }
 
   /** Bind shared wind uniform value objects onto a dangly or grass material. */

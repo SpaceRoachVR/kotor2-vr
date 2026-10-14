@@ -783,8 +783,8 @@ export class ModuleRoom extends ModuleObject {
       this.grass.getMatrixAt(i, this._grassWindMatrix);
       this._grassWindMid.setFromMatrixPosition(this._grassWindMatrix);
 
-      this._grassWindSample.copy(wm.getGlobalWindNoPoint(this._grassWindMid, 1.0)).multiplyScalar(capScale);
-      this._grassWindGust.copy(wm.getGlobalPointWind(this._grassWindMid));
+      wm.getGlobalWindNoPoint(this._grassWindMid, 1.0, this._grassWindSample).multiplyScalar(capScale);
+      wm.getGlobalPointWind(this._grassWindMid, undefined, this._grassWindGust);
 
       const ox = offsets[i * 2];
       const oy = offsets[i * 2 + 1];
