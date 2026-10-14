@@ -1,112 +1,121 @@
+import * as THREE from 'three';
 import { describe, expect, test } from '@jest/globals';
 import {
   VRDesktopMirror,
+  isMirrorFrameDue,
   readMirrorOptionsFromSearch,
-  resolveMirrorSourceRect,
+  resolveSpectatorFovDegrees,
 } from '@/vr/runtime/VRDesktopMirror';
 
-describe('resolveMirrorSourceRect', () => {
-  test('crops a near-square eye to a 16:9 window band, centred', () => {
-    const rect = resolveMirrorSourceRect({ x: 0, y: 0, width: 2064, height: 2208 }, 1920, 1080)!;
-    expect(rect.width).toBe(2064);
-    expect(rect.height).toBe(Math.round(2064 * 9 / 16));
-    expect(rect.y).toBe(Math.round((2208 - 2064 * 9 / 16) / 2));
-    expect(rect.x).toBe(0);
+function eyeProjection(horizontalDeg: number, verticalDeg: number): THREE.Matrix4 {
+  const m = new THREE.Matrix4();
+  m.elements[0] = 1 / Math.tan(THREE.MathUtils.degToRad(horizontalDeg / 2));
+  m.elements[5] = 1 / Math.tan(THREE.MathUtils.degToRad(verticalDeg / 2));
+  return m;
+}
+
+describe('resolveSpectatorFovDegrees', () => {
+  test('a 16:9 window keeps the eye horizontal field and narrows the vertical', () => {
+    const fov = resolveSpectatorFovDegrees(eyeProjection(96, 100), 16 / 9);
+    const horizontal = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(fov / 2)) * 16 / 9);
+    expect(THREE.MathUtils.radToDeg(horizontal)).toBeCloseTo(96, 5);
+    expect(fov).toBeLessThan(100);
   });
 
-  test('keeps the right eye inside its own half', () => {
-    const rect = resolveMirrorSourceRect({ x: 2064, y: 0, width: 2064, height: 2208 }, 1920, 1080)!;
-    expect(rect.x).toBe(2064);
-    expect(rect.x + rect.width).toBeLessThanOrEqual(4128);
+  test('a tall window is clamped to the eye vertical field', () => {
+    expect(resolveSpectatorFovDegrees(eyeProjection(96, 100), 0.5)).toBeCloseTo(100, 5);
   });
 
-  test('crops width when the window is taller than the eye', () => {
-    const rect = resolveMirrorSourceRect({ x: 0, y: 0, width: 2000, height: 1000 }, 1000, 1000)!;
-    expect(rect).toEqual({ x: 500, y: 0, width: 1000, height: 1000 });
-  });
-
-  test('zoom crops tighter around the same centre', () => {
-    const rect = resolveMirrorSourceRect({ x: 0, y: 0, width: 1600, height: 900 }, 1600, 900, 2)!;
-    expect(rect).toEqual({ x: 400, y: 225, width: 800, height: 450 });
-  });
-
-  test('a zero-sized canvas (hidden window) yields no copy', () => {
-    expect(resolveMirrorSourceRect({ x: 0, y: 0, width: 100, height: 100 }, 0, 0)).toBeNull();
+  test('zoom narrows the view', () => {
+    const wide = resolveSpectatorFovDegrees(eyeProjection(96, 100), 16 / 9);
+    expect(resolveSpectatorFovDegrees(eyeProjection(96, 100), 16 / 9, 1.5)).toBeLessThan(wide);
   });
 });
 
 describe('readMirrorOptionsFromSearch', () => {
-  test('defaults to the left eye, on, unzoomed', () => {
-    expect(readMirrorOptionsFromSearch('')).toEqual({ enabled: true, eye: 'left', zoom: 1 });
+  test('the live mirror is off unless asked for', () => {
+    expect(readMirrorOptionsFromSearch('')).toEqual({ enabled: false, eye: 'left', zoom: 1, fps: 20 });
   });
 
-  test('reads off, right eye and zoom', () => {
-    expect(readMirrorOptionsFromSearch('?token=x&mirror=off&mirrorEye=right&mirrorZoom=1.25'))
-      .toEqual({ enabled: false, eye: 'right', zoom: 1.25 });
+  test('reads on, right eye, zoom and fps', () => {
+    expect(readMirrorOptionsFromSearch('?token=x&mirror=on&mirrorEye=right&mirrorZoom=1.25&mirrorFps=30'))
+      .toEqual({ enabled: true, eye: 'right', zoom: 1.25, fps: 30 });
   });
 });
 
-function fakeGL() {
+describe('isMirrorFrameDue', () => {
+  test('a 20 fps cap on a 72 Hz loop draws every fourth refresh, not every fifth', () => {
+    const refresh = 1000 / 72;
+    let last = 0;
+    const drawn: number[] = [];
+    for (let i = 1; i <= 72; i++) {
+      if (isMirrorFrameDue(i * refresh, last, 20)) { drawn.push(i); last = i * refresh; }
+    }
+    expect(drawn.length).toBe(18);
+    expect(drawn[1] - drawn[0]).toBe(4);
+  });
+
+  test('zero fps never draws', () => {
+    expect(isMirrorFrameDue(1e9, 0, 0)).toBe(false);
+  });
+});
+
+function fakeRenderer() {
   const calls: string[] = [];
-  let read: unknown = 'engine-read';
-  let draw: unknown = 'engine-draw';
-  let scissor = true;
-  const gl = {
-    READ_FRAMEBUFFER: 1, DRAW_FRAMEBUFFER: 2, READ_FRAMEBUFFER_BINDING: 3, DRAW_FRAMEBUFFER_BINDING: 4,
-    SCISSOR_TEST: 5, COLOR_BUFFER_BIT: 6, LINEAR: 7,
-    canvas: { width: 1920, height: 1080, toDataURL: () => 'data:image/png;base64,AAAA' },
-    getParameter: (p: number) => (p === 3 ? read : draw),
-    isEnabled: () => scissor,
-    disable: () => { scissor = false; calls.push('scissor-off'); },
-    enable: () => { scissor = true; calls.push('scissor-on'); },
-    bindFramebuffer: (target: number, fb: unknown) => {
-      if (target === 1) read = fb; else draw = fb;
-      calls.push(`bind ${target === 1 ? 'read' : 'draw'} ${String(fb)}`);
-    },
-    blitFramebuffer: (...args: number[]) => {
-      calls.push(`blit read=${String(read)} draw=${String(draw)} scissor=${scissor} ${args.slice(0, 8).join(',')}`);
+  const eye = new THREE.PerspectiveCamera(100, 1, 0.05, 15000);
+  eye.position.set(1, 2, 3);
+  eye.updateMatrixWorld(true);
+  const target = { name: 'xr-target' };
+  let current: unknown = target;
+  const renderer = {
+    xr: { enabled: true, getCamera: () => ({ cameras: [eye, eye] }) },
+    autoClear: false,
+    domElement: { width: 1920, height: 1080, toDataURL: () => 'data:image/png;base64,AAAA' },
+    getRenderTarget: () => current,
+    setRenderTarget: (t: unknown) => { current = t; calls.push(`target ${t ? 'xr' : 'canvas'}`); },
+    render: (_scene: unknown, camera: THREE.PerspectiveCamera) => {
+      calls.push(`render xr=${renderer.xr.enabled} target=${current ? 'xr' : 'canvas'} clear=${renderer.autoClear} aspect=${camera.aspect.toFixed(3)} pos=${camera.position.toArray().join(',')}`);
     },
   };
-  return { gl, calls, state: () => ({ read, draw, scissor }) };
+  return { renderer, calls, state: () => ({ target: current, xr: renderer.xr.enabled, autoClear: renderer.autoClear }) };
 }
 
-const layer = { framebuffer: 'xr' as unknown as WebGLFramebuffer, framebufferWidth: 4128, framebufferHeight: 2208 };
+const scene = new THREE.Scene();
 
-describe('VRDesktopMirror.mirror', () => {
-  test('blits the left eye from the XR framebuffer to the canvas and restores state', () => {
-    const { gl, calls, state } = fakeGL();
+describe('VRDesktopMirror.render', () => {
+  test('off by default: no extra draw', () => {
+    const { renderer, calls } = fakeRenderer();
+    new VRDesktopMirror().render(renderer as unknown as THREE.WebGLRenderer, scene, 1000);
+    expect(calls).toEqual([]);
+  });
+
+  test('when on, draws once from the eye pose to the canvas and restores the XR target', () => {
+    const { renderer, calls, state } = fakeRenderer();
     const mirror = new VRDesktopMirror();
-    mirror.mirror(gl as unknown as WebGL2RenderingContext, layer);
-    const blit = calls.find((c) => c.startsWith('blit'))!;
-    expect(blit).toContain('read=xr draw=null scissor=false');
-    const [sx0, , sx1, , dx0, dy0, dx1, dy1] = blit.split(' ').pop()!.split(',').map(Number);
-    expect(sx0).toBe(0);
-    expect(sx1).toBe(2064);
-    expect([dx0, dy0, dx1, dy1]).toEqual([0, 0, 1920, 1080]);
-    expect(state()).toEqual({ read: 'engine-read', draw: 'engine-draw', scissor: true });
+    mirror.enabled = true;
+    mirror.render(renderer as unknown as THREE.WebGLRenderer, scene, 1000);
+    expect(calls).toContain('render xr=false target=canvas clear=true aspect=1.778 pos=1,2,3');
+    expect(state()).toEqual({ target: { name: 'xr-target' }, xr: true, autoClear: false });
     expect(mirror.framesMirrored).toBe(1);
   });
 
-  test('skips the copy when the layer draws straight to the canvas (emulator)', () => {
-    const { gl, calls } = fakeGL();
+  test('respects the frame cap', () => {
+    const { renderer, calls } = fakeRenderer();
     const mirror = new VRDesktopMirror();
-    mirror.mirror(gl as unknown as WebGL2RenderingContext, { ...layer, framebuffer: null });
-    expect(calls).toEqual([]);
+    mirror.enabled = true;
+    mirror.render(renderer as unknown as THREE.WebGLRenderer, scene, 1000);
+    mirror.render(renderer as unknown as THREE.WebGLRenderer, scene, 1010);
+    expect(calls.filter((c) => c.startsWith('render')).length).toBe(1);
   });
 
-  test('disabled mirror does nothing', () => {
-    const { gl, calls } = fakeGL();
-    const mirror = new VRDesktopMirror();
-    mirror.enabled = false;
-    mirror.mirror(gl as unknown as WebGL2RenderingContext, layer);
-    expect(calls).toEqual([]);
-  });
-
-  test('capture resolves with the canvas read in the frame that drew it', async () => {
-    const { gl } = fakeGL();
+  test('a screenshot draws one frame even with the mirror off', async () => {
+    const { renderer, calls } = fakeRenderer();
     const mirror = new VRDesktopMirror();
     const pending = mirror.capture(1000);
-    mirror.mirror(gl as unknown as WebGL2RenderingContext, layer);
+    mirror.render(renderer as unknown as THREE.WebGLRenderer, scene, 1000);
     await expect(pending).resolves.toBe('data:image/png;base64,AAAA');
+    expect(calls.filter((c) => c.startsWith('render')).length).toBe(1);
+    mirror.render(renderer as unknown as THREE.WebGLRenderer, scene, 2000);
+    expect(calls.filter((c) => c.startsWith('render')).length).toBe(1);
   });
 });

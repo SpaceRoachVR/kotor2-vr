@@ -126,7 +126,7 @@ function startAssetService() {
   console.log('  · Disable Synchronous Spacewarp and select 72 Hz.');
   console.log('  · Accept the EULA, load your save, then press "Enter VR".');
   console.log('  · Leave DevTools open — the console is the evidence for several open items.');
-  console.log('  · The desktop window mirrors the left eye (OBS: Window Capture). Screenshot: node tools/vr-emulator/screenshot.js');
+  console.log('  · Screenshot: node tools/vr-emulator/screenshot.js · desktop mirror for OBS (costs fps): node tools/vr-emulator/mirror.js on');
   console.log(`  · CDP is on http://127.0.0.1:${CDP_PORT} — diagnostics can be pulled from outside.`);
   console.log('\nCtrl+C here stops the asset service when you are done.\n');
 

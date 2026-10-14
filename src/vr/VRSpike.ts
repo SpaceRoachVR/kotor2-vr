@@ -1535,7 +1535,6 @@ export class VRSpike {
         );
       }
     }
-    VRSpike.mirrorToDesktop(frame);
   };
 
   private static readonly engineUpdateErrorSignatures = new Set<string>();
@@ -1543,8 +1542,8 @@ export class VRSpike {
   /**
    * The headset view on the desktop window, for OBS window capture and for
    * `tools/vr-emulator/screenshot.js`. Options come from the page URL
-   * (`?mirror=off`, `?mirrorEye=right`, `?mirrorZoom=1.2`) and can be changed
-   * live on `VRSpike.desktopMirror`.
+   * (`?mirror=on`, `?mirrorFps=30`, `?mirrorEye=right`, `?mirrorZoom=1.2`) and
+   * can be changed live with `tools/vr-emulator/mirror.js`.
    */
   static readonly desktopMirror = (() => {
     const mirror = new VRDesktopMirror();
@@ -1552,21 +1551,6 @@ export class VRSpike {
     return mirror;
   })();
 
-  private static mirrorToDesktop(frame: XRFrame): void {
-    const renderer = VRSpike.renderer;
-    if (!renderer) return;
-    try {
-      const referenceSpace = renderer.xr.getReferenceSpace();
-      const views = referenceSpace ? frame.getViewerPose(referenceSpace)?.views : null;
-      VRSpike.desktopMirror.mirror(renderer.getContext(), renderer.xr.getBaseLayer() as XRWebGLLayer | null, views);
-    } catch (error) {
-      if (VRSpike.desktopMirrorErrorReported) return;
-      VRSpike.desktopMirrorErrorReported = true;
-      console.warn('[VRSpike] desktop mirror rejected', error);
-    }
-  }
-
-  private static desktopMirrorErrorReported = false;
 
   private static updateTrackedInput(timestamp: number, frame: XRFrame): void {
     const rig = VRSpike.rig;
@@ -4295,6 +4279,7 @@ export class VRSpike {
     const restoreHiddenWorld = revealVRInterfaceOverHiddenWorld(scene);
     try {
       renderer.render(scene, VRSpike.camera);
+      VRSpike.desktopMirror.render(renderer, scene);
     } finally {
       restoreHiddenWorld();
       restoreBody();
@@ -4422,6 +4407,7 @@ export class VRSpike {
       const restoreWorld = hideWorldForTheater(worldScene, VRSpike.movieHost.object);
       try {
         renderer.render(worldScene, VRSpike.camera);
+        VRSpike.desktopMirror.render(renderer, worldScene);
       } finally {
         restoreWorld();
       }
@@ -4555,6 +4541,7 @@ export class VRSpike {
       const restoreOwnBody = hidePlayerBodyForFirstPerson(playerBody);
       try {
         renderer.render(worldScene, VRSpike.camera);
+        VRSpike.desktopMirror.render(renderer, worldScene);
       } finally {
         restoreOwnBody();
         restoreWorld();

@@ -1,132 +1,140 @@
+import * as THREE from 'three';
+
 /**
- * Copies one headset eye onto the desktop canvas every XR frame.
+ * Draws the headset's view onto the desktop canvas, for OBS window capture
+ * and for `tools/vr-emulator/screenshot.js`.
  *
  * While an immersive session is up, three renders into the XRWebGLLayer's
- * opaque framebuffer and nothing reaches the page canvas, so the browser
- * window showed black and so did anything capturing it (OBS window capture,
- * screenshots over CDP). OpenVR mirror capture does not help either: the game
- * runs on VDXR's OpenXR runtime, not SteamVR's compositor.
+ * framebuffer and nothing reaches the page canvas, so the browser window shows
+ * black. Copying the eye image out is not possible here: the engine runs
+ * WebGL 1 (WebGL 2 draws flat green, see RendererOptions), the layer is
+ * multisampled, and WebGL 1 cannot read a multisampled framebuffer -
+ * readPixels and copyTexSubImage2D both fail with INVALID_OPERATION, measured
+ * live in the headset on 2026-10-14.
  *
- * A blit from the XR framebuffer is one GPU copy, not a second render, so it
- * costs a fraction of a millisecond against the 31 ms plateau measured in the
- * frame-rate rounds. The eye is cropped to the canvas aspect so the window
- * shows an undistorted view instead of a squashed square eye.
+ * So the scene is drawn a second time from the left eye's pose. That costs a
+ * second scene submission, which the frame-rate rounds cannot afford every
+ * frame, so the live mirror is opt-in (`?mirror=on`) and capped
+ * (`mirrorFps`, default 20). A screenshot is one extra draw on the frame it
+ * is taken and needs no mirror at all.
  *
- * Under the emulator (iwer) the layer framebuffer is null - the eye views are
- * already drawn straight onto the canvas - so there is nothing to copy.
+ * The drawing uses only three's own API: raw GL calls here once corrupted
+ * three's cached vertex arrays and turned the VR pointers into giant
+ * triangles for the rest of the session.
  */
 export type VRMirrorEye = 'left' | 'right';
 
-export interface VRMirrorRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+export interface VRMirrorOptions {
+  enabled: boolean;
+  eye: VRMirrorEye;
+  zoom: number;
+  fps: number;
 }
 
-/**
- * The centred region of an eye viewport whose aspect matches the target's.
- * `zoom` > 1 crops tighter, trimming the stretched lens edges of a wide FOV.
- */
-export function resolveMirrorSourceRect(
-  eye: VRMirrorRect,
-  targetWidth: number,
-  targetHeight: number,
-  zoom: number = 1,
-): VRMirrorRect | null {
-  if (!(eye.width > 0 && eye.height > 0 && targetWidth > 0 && targetHeight > 0)) return null;
-  const targetAspect = targetWidth / targetHeight;
-  let width = eye.width;
-  let height = eye.height;
-  if (width / height > targetAspect) width = height * targetAspect;
-  else height = width / targetAspect;
-  const scale = 1 / Math.max(1, Number.isFinite(zoom) ? zoom : 1);
-  width *= scale;
-  height *= scale;
-  return {
-    x: Math.round(eye.x + (eye.width - width) / 2),
-    y: Math.round(eye.y + (eye.height - height) / 2),
-    width: Math.round(width),
-    height: Math.round(height),
-  };
-}
-
-/** Reads `?mirror=off`, `?mirrorEye=right` and `?mirrorZoom=1.2` from the page URL. */
-export function readMirrorOptionsFromSearch(search: string): { enabled: boolean; eye: VRMirrorEye; zoom: number } {
+/** Reads `?mirror=on`, `?mirrorEye=right`, `?mirrorZoom=1.2`, `?mirrorFps=30` from the page URL. */
+export function readMirrorOptionsFromSearch(search: string): VRMirrorOptions {
   const params = new URLSearchParams(search);
   const mirror = (params.get('mirror') ?? '').toLowerCase();
   const eye = (params.get('mirrorEye') ?? '').toLowerCase() === 'right' ? 'right' : 'left';
   const zoom = Number(params.get('mirrorZoom'));
+  const fps = Number(params.get('mirrorFps'));
   return {
-    enabled: !['off', '0', 'false', 'no'].includes(mirror),
+    enabled: ['on', '1', 'true', 'yes'].includes(mirror),
     eye,
     zoom: Number.isFinite(zoom) && zoom >= 1 ? zoom : 1,
+    fps: Number.isFinite(fps) && fps > 0 ? Math.min(fps, 120) : 20,
   };
 }
 
-interface MirrorLayer {
-  framebuffer: WebGLFramebuffer | null;
-  framebufferWidth: number;
-  framebufferHeight: number;
-  getViewport?(view: XRView): XRViewport | null | undefined;
+/**
+ * Vertical field of view (degrees) for a desktop view of `aspect` that keeps
+ * the eye's full horizontal field, clamped to the eye's own vertical field.
+ * Eye projections are slightly asymmetric; the symmetric approximation is
+ * fine for a spectator view.
+ */
+export function resolveSpectatorFovDegrees(eyeProjection: THREE.Matrix4, aspect: number, zoom: number = 1): number {
+  const e = eyeProjection.elements;
+  const tanHalfX = 1 / e[0];
+  const tanHalfY = 1 / e[5];
+  if (!(tanHalfX > 0 && tanHalfY > 0 && aspect > 0)) return 90;
+  const tanHalf = Math.min(tanHalfX / aspect, tanHalfY) / Math.max(1, zoom);
+  return THREE.MathUtils.radToDeg(2 * Math.atan(tanHalf));
 }
 
-export class VRDesktopMirror {
-  enabled = true;
+/** True when enough time has passed since the last live mirror frame. */
+export function isMirrorFrameDue(nowMs: number, lastMs: number, fps: number): boolean {
+  if (!(fps > 0)) return false;
+  // Half a refresh of slack, so a 20 fps cap on a 72 Hz loop does not drift to 18.
+  return nowMs - lastMs >= 1000 / fps - 7;
+}
+
+export class VRDesktopMirror implements VRMirrorOptions {
+  enabled = false;
   eye: VRMirrorEye = 'left';
   zoom = 1;
-  /** Frames copied this session; read over CDP to confirm the mirror is live. */
+  fps = 20;
+  /** Spectator frames drawn this session; read over CDP to confirm it is live. */
   framesMirrored = 0;
+  private lastFrameMs = Number.NEGATIVE_INFINITY;
+  private readonly camera = new THREE.PerspectiveCamera(90, 16 / 9, 0.05, 15000);
   private errorReported = false;
   private pendingCaptures: Array<{ resolve: (url: string) => void; reject: (error: Error) => void }> = [];
 
-  /**
-   * Call after the frame's last draw into the XR framebuffer. Restores every
-   * piece of GL state it touches, because three caches bindings and would
-   * otherwise draw the next frame into the canvas.
-   */
-  mirror(gl: WebGL2RenderingContext | WebGLRenderingContext, layer: MirrorLayer | null | undefined, views?: readonly XRView[] | null): void {
-    if (!this.enabled && this.pendingCaptures.length === 0) return;
-    if (!layer || !layer.framebuffer) {
-      this.flushCaptures(gl.canvas);
-      return;
-    }
-    const gl2 = gl as WebGL2RenderingContext;
-    if (typeof gl2.blitFramebuffer !== 'function') {
-      this.reportOnce('WebGL2 is required to mirror the headset view');
-      return;
-    }
-    const canvas = gl.canvas;
-    const eye = this.resolveEyeViewport(layer, views);
-    const source = resolveMirrorSourceRect(eye, canvas.width, canvas.height, this.zoom);
-    if (!source) return;
-
-    const previousRead = gl2.getParameter(gl2.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
-    const previousDraw = gl2.getParameter(gl2.DRAW_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
-    const scissor = gl2.isEnabled(gl2.SCISSOR_TEST);
-    try {
-      if (scissor) gl2.disable(gl2.SCISSOR_TEST);
-      gl2.bindFramebuffer(gl2.READ_FRAMEBUFFER, layer.framebuffer);
-      gl2.bindFramebuffer(gl2.DRAW_FRAMEBUFFER, null);
-      gl2.blitFramebuffer(
-        source.x, source.y, source.x + source.width, source.y + source.height,
-        0, 0, canvas.width, canvas.height,
-        gl2.COLOR_BUFFER_BIT, gl2.LINEAR,
-      );
-      this.framesMirrored++;
-    } catch (error) {
-      this.reportOnce(`blit rejected: ${(error as Error)?.message ?? error}`);
-    } finally {
-      gl2.bindFramebuffer(gl2.READ_FRAMEBUFFER, previousRead);
-      gl2.bindFramebuffer(gl2.DRAW_FRAMEBUFFER, previousDraw);
-      if (scissor) gl2.enable(gl2.SCISSOR_TEST);
-    }
-    this.flushCaptures(canvas);
+  /** Whether `render` would draw this frame. Lets the caller skip setup. */
+  wantsFrame(nowMs: number = performance.now()): boolean {
+    return this.pendingCaptures.length > 0 ||
+      (this.enabled && isMirrorFrameDue(nowMs, this.lastFrameMs, this.fps));
   }
 
   /**
-   * PNG data URL of the next mirrored frame. The canvas has no preserved
-   * drawing buffer, so it can only be read in the same task that drew it.
+   * Call right after the stereo submission, while that frame's presentation
+   * state (hidden player body, hidden world) is still applied, so the desktop
+   * shows exactly what the headset does.
+   */
+  render(renderer: THREE.WebGLRenderer, scene: THREE.Scene, nowMs: number = performance.now()): void {
+    if (!this.wantsFrame(nowMs)) return;
+    const xrCamera = renderer.xr.getCamera() as THREE.ArrayCamera;
+    const eye = xrCamera.cameras?.[this.eye === 'right' ? 1 : 0] ?? xrCamera.cameras?.[0];
+    const canvas = renderer.domElement;
+    if (!eye || !canvas.width || !canvas.height) return;
+
+    this.camera.near = eye.near;
+    this.camera.far = eye.far;
+    this.camera.aspect = canvas.width / canvas.height;
+    this.camera.fov = resolveSpectatorFovDegrees(eye.projectionMatrix, this.camera.aspect, this.zoom);
+    this.camera.updateProjectionMatrix();
+    eye.matrixWorld.decompose(this.camera.position, this.camera.quaternion, this.camera.scale);
+    this.camera.layers.mask = eye.layers.mask;
+    this.camera.updateMatrixWorld(true);
+
+    const previousTarget = renderer.getRenderTarget();
+    const previousXREnabled = renderer.xr.enabled;
+    const previousAutoClear = renderer.autoClear;
+    try {
+      // xr.enabled would make render() swap in the stereo camera.
+      renderer.xr.enabled = false;
+      renderer.setRenderTarget(null);
+      renderer.autoClear = true;
+      renderer.render(scene, this.camera);
+      this.framesMirrored++;
+      this.lastFrameMs = nowMs;
+      this.flushCaptures(canvas);
+    } catch (error) {
+      this.rejectCaptures(error as Error);
+      if (!this.errorReported) {
+        this.errorReported = true;
+        console.warn('[VRDesktopMirror] spectator render rejected; the desktop window will stay black', error);
+      }
+    } finally {
+      renderer.autoClear = previousAutoClear;
+      renderer.xr.enabled = previousXREnabled;
+      renderer.setRenderTarget(previousTarget);
+    }
+  }
+
+  /**
+   * PNG data URL of the next headset frame. The canvas has no preserved
+   * drawing buffer, so it is read in the same task that drew it.
    */
   capture(timeoutMs: number = 3000): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -139,38 +147,28 @@ export class VRDesktopMirror {
         const index = this.pendingCaptures.indexOf(entry);
         if (index < 0) return;
         this.pendingCaptures.splice(index, 1);
-        reject(new Error('no XR frame was mirrored in time (is the headset session running?)'));
+        reject(new Error('no XR frame was drawn in time (is the headset session running?)'));
       }, timeoutMs);
     });
   }
 
-  private flushCaptures(canvas: HTMLCanvasElement | OffscreenCanvas): void {
+  private flushCaptures(canvas: HTMLCanvasElement): void {
     if (this.pendingCaptures.length === 0) return;
+    let url: string;
+    try {
+      url = canvas.toDataURL('image/png');
+    } catch (error) {
+      this.rejectCaptures(error as Error);
+      return;
+    }
     const captures = this.pendingCaptures;
     this.pendingCaptures = [];
-    try {
-      // toDataURL snapshots synchronously, while the buffer still holds this frame.
-      const url = (canvas as HTMLCanvasElement).toDataURL('image/png');
-      for (const capture of captures) capture.resolve(url);
-    } catch (error) {
-      for (const capture of captures) capture.reject(error as Error);
-    }
+    for (const capture of captures) capture.resolve(url);
   }
 
-  private resolveEyeViewport(layer: MirrorLayer, views?: readonly XRView[] | null): VRMirrorRect {
-    const index = this.eye === 'right' ? 1 : 0;
-    const view = views?.[index] ?? views?.[0];
-    const viewport = view && layer.getViewport ? layer.getViewport(view) : null;
-    if (viewport && viewport.width > 0 && viewport.height > 0) {
-      return { x: viewport.x, y: viewport.y, width: viewport.width, height: viewport.height };
-    }
-    const half = Math.floor(layer.framebufferWidth / 2);
-    return { x: index === 1 ? half : 0, y: 0, width: half, height: layer.framebufferHeight };
-  }
-
-  private reportOnce(message: string): void {
-    if (this.errorReported) return;
-    this.errorReported = true;
-    console.warn(`[VRDesktopMirror] ${message}; the desktop window will stay black`);
+  private rejectCaptures(error: Error): void {
+    const captures = this.pendingCaptures;
+    this.pendingCaptures = [];
+    for (const capture of captures) capture.reject(error);
   }
 }
