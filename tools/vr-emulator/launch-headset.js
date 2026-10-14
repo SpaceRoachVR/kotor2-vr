@@ -75,6 +75,8 @@ function startAssetService() {
 (async () => {
   const preferEdge = process.argv.includes('--edge');
   const keepProfile = process.argv.includes('--keep-profile');
+  // A clean window for OBS window capture of the desktop mirror; CDP stays up.
+  const noDevtools = process.argv.includes('--no-devtools');
   const browser = resolveBrowser(preferEdge);
 
   const { url, child } = await startAssetService();
@@ -99,7 +101,7 @@ function startAssetService() {
     // Opening DevTools before the session starts means the console is already
     // capturing if something needs reporting; several open roadmap items are
     // waiting on exactly that evidence.
-    '--auto-open-devtools-for-tabs',
+    ...(noDevtools ? [] : ['--auto-open-devtools-for-tabs']),
     // ...and make that evidence collectable rather than only readable. Without
     // a debugging port the only way to get a texture diagnostic or a console
     // warning out of a headset session is for the person wearing the headset
@@ -124,6 +126,7 @@ function startAssetService() {
   console.log('  · Disable Synchronous Spacewarp and select 72 Hz.');
   console.log('  · Accept the EULA, load your save, then press "Enter VR".');
   console.log('  · Leave DevTools open — the console is the evidence for several open items.');
+  console.log('  · The desktop window mirrors the left eye (OBS: Window Capture). Screenshot: node tools/vr-emulator/screenshot.js');
   console.log(`  · CDP is on http://127.0.0.1:${CDP_PORT} — diagnostics can be pulled from outside.`);
   console.log('\nCtrl+C here stops the asset service when you are done.\n');
 

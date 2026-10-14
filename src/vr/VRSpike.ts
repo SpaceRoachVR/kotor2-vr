@@ -105,6 +105,7 @@ import { PerfSampler, PerfWorldSnapshot } from "./PerfSampler";
 import type { EngineFrameSource } from "./XRFrameCadence";
 import { XRSessionController } from './runtime/XRSessionController';
 import { XRInputCapabilityValidator } from './input/XRInputCapabilityValidator';
+import { VRDesktopMirror, readMirrorOptionsFromSearch } from './runtime/VRDesktopMirror';
 
 /**
  * Phase 0.1 — stereo perf spike.
@@ -1534,9 +1535,38 @@ export class VRSpike {
         );
       }
     }
+    VRSpike.mirrorToDesktop(frame);
   };
 
   private static readonly engineUpdateErrorSignatures = new Set<string>();
+
+  /**
+   * The headset view on the desktop window, for OBS window capture and for
+   * `tools/vr-emulator/screenshot.js`. Options come from the page URL
+   * (`?mirror=off`, `?mirrorEye=right`, `?mirrorZoom=1.2`) and can be changed
+   * live on `VRSpike.desktopMirror`.
+   */
+  static readonly desktopMirror = (() => {
+    const mirror = new VRDesktopMirror();
+    if (typeof location !== 'undefined') Object.assign(mirror, readMirrorOptionsFromSearch(location.search));
+    return mirror;
+  })();
+
+  private static mirrorToDesktop(frame: XRFrame): void {
+    const renderer = VRSpike.renderer;
+    if (!renderer) return;
+    try {
+      const referenceSpace = renderer.xr.getReferenceSpace();
+      const views = referenceSpace ? frame.getViewerPose(referenceSpace)?.views : null;
+      VRSpike.desktopMirror.mirror(renderer.getContext(), renderer.xr.getBaseLayer() as XRWebGLLayer | null, views);
+    } catch (error) {
+      if (VRSpike.desktopMirrorErrorReported) return;
+      VRSpike.desktopMirrorErrorReported = true;
+      console.warn('[VRSpike] desktop mirror rejected', error);
+    }
+  }
+
+  private static desktopMirrorErrorReported = false;
 
   private static updateTrackedInput(timestamp: number, frame: XRFrame): void {
     const rig = VRSpike.rig;
