@@ -1542,7 +1542,7 @@ export class VRSpike {
   /**
    * The headset view on the desktop window, for OBS window capture and for
    * `tools/vr-emulator/screenshot.js`. Options come from the page URL
-   * (`?mirror=on`, `?mirrorFps=30`, `?mirrorEye=right`, `?mirrorZoom=1.2`) and
+   * (`?mirror=off`, `?mirrorFps=30`, `?mirrorEye=right`, `?mirrorZoom=1.2`) and
    * can be changed live with `tools/vr-emulator/mirror.js`.
    */
   static readonly desktopMirror = (() => {

@@ -33,13 +33,13 @@ describe('resolveSpectatorFovDegrees', () => {
 });
 
 describe('readMirrorOptionsFromSearch', () => {
-  test('the live mirror is off unless asked for', () => {
-    expect(readMirrorOptionsFromSearch('')).toEqual({ enabled: false, eye: 'left', zoom: 1, fps: 20 });
+  test('the live mirror is on unless turned off', () => {
+    expect(readMirrorOptionsFromSearch('')).toEqual({ enabled: true, eye: 'left', zoom: 1, fps: 20 });
   });
 
-  test('reads on, right eye, zoom and fps', () => {
-    expect(readMirrorOptionsFromSearch('?token=x&mirror=on&mirrorEye=right&mirrorZoom=1.25&mirrorFps=30'))
-      .toEqual({ enabled: true, eye: 'right', zoom: 1.25, fps: 30 });
+  test('reads off, right eye, zoom and fps', () => {
+    expect(readMirrorOptionsFromSearch('?token=x&mirror=off&mirrorEye=right&mirrorZoom=1.25&mirrorFps=30'))
+      .toEqual({ enabled: false, eye: 'right', zoom: 1.25, fps: 30 });
   });
 });
 
@@ -83,9 +83,11 @@ function fakeRenderer() {
 const scene = new THREE.Scene();
 
 describe('VRDesktopMirror.render', () => {
-  test('off by default: no extra draw', () => {
+  test('off: no extra draw', () => {
     const { renderer, calls } = fakeRenderer();
-    new VRDesktopMirror().render(renderer as unknown as THREE.WebGLRenderer, scene, 1000);
+    const off = new VRDesktopMirror();
+    off.enabled = false;
+    off.render(renderer as unknown as THREE.WebGLRenderer, scene, 1000);
     expect(calls).toEqual([]);
   });
 
@@ -111,6 +113,7 @@ describe('VRDesktopMirror.render', () => {
   test('a screenshot draws one frame even with the mirror off', async () => {
     const { renderer, calls } = fakeRenderer();
     const mirror = new VRDesktopMirror();
+    mirror.enabled = false;
     const pending = mirror.capture(1000);
     mirror.render(renderer as unknown as THREE.WebGLRenderer, scene, 1000);
     await expect(pending).resolves.toBe('data:image/png;base64,AAAA');

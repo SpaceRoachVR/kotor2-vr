@@ -13,9 +13,10 @@ import * as THREE from 'three';
  * live in the headset on 2026-10-14.
  *
  * So the scene is drawn a second time from the left eye's pose. That costs a
- * second scene submission, which the frame-rate rounds cannot afford every
- * frame, so the live mirror is opt-in (`?mirror=on`) and capped
- * (`mirrorFps`, default 20). A screenshot is one extra draw on the frame it
+ * second scene submission, so the live mirror is capped (`mirrorFps`,
+ * default 20). It is on by default - without it the desktop window freezes on
+ * entering VR - and measured no frame-rate cost in Telos (31-33 Hz either
+ * way, 2026-10-14); `?mirror=off` or `mirror.js off` disables it. A screenshot is one extra draw on the frame it
  * is taken and needs no mirror at all.
  *
  * The drawing uses only three's own API: raw GL calls here once corrupted
@@ -31,7 +32,7 @@ export interface VRMirrorOptions {
   fps: number;
 }
 
-/** Reads `?mirror=on`, `?mirrorEye=right`, `?mirrorZoom=1.2`, `?mirrorFps=30` from the page URL. */
+/** Reads `?mirror=off`, `?mirrorEye=right`, `?mirrorZoom=1.2`, `?mirrorFps=30` from the page URL. */
 export function readMirrorOptionsFromSearch(search: string): VRMirrorOptions {
   const params = new URLSearchParams(search);
   const mirror = (params.get('mirror') ?? '').toLowerCase();
@@ -39,7 +40,7 @@ export function readMirrorOptionsFromSearch(search: string): VRMirrorOptions {
   const zoom = Number(params.get('mirrorZoom'));
   const fps = Number(params.get('mirrorFps'));
   return {
-    enabled: ['on', '1', 'true', 'yes'].includes(mirror),
+    enabled: !['off', '0', 'false', 'no'].includes(mirror),
     eye,
     zoom: Number.isFinite(zoom) && zoom >= 1 ? zoom : 1,
     fps: Number.isFinite(fps) && fps > 0 ? Math.min(fps, 120) : 20,
@@ -69,7 +70,7 @@ export function isMirrorFrameDue(nowMs: number, lastMs: number, fps: number): bo
 }
 
 export class VRDesktopMirror implements VRMirrorOptions {
-  enabled = false;
+  enabled = true;
   eye: VRMirrorEye = 'left';
   zoom = 1;
   fps = 20;
