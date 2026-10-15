@@ -2548,12 +2548,16 @@ NWScriptDefK2.Actions = {
     name: 'ShowUpgradeScreen',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.OBJECT, NWScriptDataType.INTEGER, NWScriptDataType.INTEGER, NWScriptDataType.STRING ],
-    // The Workbench (k_workbench, k_ptar_startcon, Bao-Dur's k_workbench_bd,
-    // Mira's k_workbench_bdm with itemcreatemira, the prologue's
-    // k_workbench_tut with tutitemcreate). Only item creation exists so far:
-    // oItem is ignored, and a call that disables item creation (T3's
-    // k_workbench_t3, upgrades only) shows a notice and opens nothing. Like
-    // 773, the screen opens once any conversation that called it has closed.
+    // The Workbench (k_workbench, k_ptar_startcon, the prologue's
+    // k_workbench_tut with tutitemcreate), plus the three replies of
+    // workbnch.dlg, the conversation the placed benches run: the "create or
+    // breakdown items" reply is k_workbench_bd, or k_workbench_bdm
+    // (itemcreatemira) when party NPC 7 is available (c_npc_avail), and the
+    // "upgrade items" reply, always shown, is k_workbench_t3. Only item
+    // creation exists so far: oItem is ignored, and a call that disables item
+    // creation (k_workbench_t3, upgrades only) shows a notice and opens
+    // nothing. Like 773, the screen opens once any conversation that called it
+    // has closed.
     action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject, number, number, string]){
       GameState.CutsceneManager.runAfterConversation(() => {
         if(args[2]){

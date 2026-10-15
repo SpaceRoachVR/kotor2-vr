@@ -39,11 +39,11 @@ nDisableUpgrade, sOverride2DA)`:
 
 | script | call | where |
 | --- | --- | --- |
-| `k_workbench` | first use (`000_Workbench` == 0): set it, start the help conversation; else `(INVALID, GetLastUsedBy(), 0, 0, "")` | 103PER fuel depot bench (tag `000_Workbench`) |
+| `k_workbench` | first use (`000_Workbench` == 0): set it, start the help conversation; else `(INVALID, GetLastUsedBy(), 0, 0, "")` | the `workbench` template (tag `000_Workbench`); 103PER's GIT does not place it (it places `plc_workb_rep`, `a_compdlg` -> `workbnch.dlg`) |
 | `k_ptar_startcon` | a local-boolean first-use check, then `(INVALID, GetLastUsedBy(), 0, 0, "")` | 153HAR bench and others |
-| `k_workbench_bd` | `(INVALID, GetLastUsedBy(), 0, 1, "")` | Bao-Dur |
-| `k_workbench_bdm` | `(INVALID, GetLastUsedBy(), 0, 1, "itemcreatemira")` | Mira |
-| `k_workbench_t3` | `(INVALID, GetFirstPC(), 1, 0, "")` | T3-M4 (upgrades only) |
+| `k_workbench_bd` | `(INVALID, GetLastUsedBy(), 0, 1, "")` | `workbnch.dlg` "create or breakdown items" reply shown when party NPC 7 is not available (`c_npc_avail`) |
+| `k_workbench_bdm` | `(INVALID, GetLastUsedBy(), 0, 1, "itemcreatemira")` | same reply text, shown when party NPC 7 is available (`itemcreatemira`) |
+| `k_workbench_t3` | `(INVALID, GetFirstPC(), 1, 0, "")` | `workbnch.dlg` "upgrade items" reply, always shown (upgrades only) |
 | `k_workbench_tut` | `(INVALID, GetLastUsedBy(), 0, 1, "tutitemcreate")` | 001EBO prologue tutorial |
 
 Recipes. Columns `label` (item resref), `skill` (required rank), `group`,
@@ -137,8 +137,8 @@ cache (unregistered from `ModuleObjectManager`) and `ModuleItem` identity map
 move out of `MenuChemicals` into a class both screens use. It reads the
 currency counter named by the station, ranks from the user
 (`getSkillTotal`), the breakdown rank from the user or the main character
-(the party's player character, `PartyManager.Player` when it is the Exile,
-otherwise the Exile's record), applies `overrideTag` to created items, and
+(the party member with `isPlayer`, else `PartyManager.Player` if it has
+`isPlayer`, else the user), applies `overrideTag` to created items, and
 catches every creation error (resolving false).
 
 ### Screens
@@ -185,13 +185,13 @@ errors refund. A missing override table falls back to `itemcreate`.
   `breakdownRank()` (main character) not the user; tab filtering; override tag
   passed to `createItem`; the existing Lab Station session tests, renamed.
 - Emulator probe `tools/vr-emulator/probe-workbench.js` on a SpaceRoach save:
-  the 103PER `000_Workbench` through `k_workbench` (help conversation on first
-  use, then the screen on second use); create an upgrade and check components
+  the 103PER bench `plc_workb_rep` through `workbnch.dlg` -> `k_workbench_bd`, and
+  `k_workbench` as its OnUsed (help conversation on first use, then the screen on second use); create an upgrade and check components
   and inventory; break down a blaster and check the yield against the main
   character's Repair; a medpac is not offered for breakdown; stick scrolling,
-  greyed rows under the pointer, list kept after Accept; Bao-Dur's direct
-  route (`k_workbench_bd`), the tutorial table's override tag
-  (`k_workbench_tut` -> created part tagged `K_REPAIR_PART`), T3's route shows
+  greyed rows under the pointer, list kept after Accept; the create reply script
+  run directly (`k_workbench_bd`), the tutorial table's override tag
+  (`k_workbench_tut` -> created part tagged `K_REPAIR_PART`), the upgrade reply (`k_workbench_t3`) shows
   the notice and opens nothing; save/reload keeps the component count.
 - `tools/vr-emulator/probe-lab-station.js` still passes; full Jest and
   `vr:check` stay green (known `weapon-bash-route` failure excepted).
@@ -202,3 +202,4 @@ errors refund. A missing override table falls back to `itemcreate`.
 - Whether retail's workbench lists Lab Station items in breakdown at all.
 - Whether the Useable / Misc split matches retail's tabs exactly.
 - Whether "main character" means the Exile even when a companion leads.
+- When the Exile is not loaded at all (scripted solo segments), breakdown uses the user's Repair; retail may use the Exile's.

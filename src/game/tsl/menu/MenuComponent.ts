@@ -109,6 +109,10 @@ export class MenuComponent extends CraftingMenuBase {
       name = WORKBENCH_STATION.recipeTable;
       table = await MenuComponent.loadTable(name);
     }
+    if(!table){
+      // Even the default table is gone: the screen would open empty without a word.
+      console.warn(`[MenuComponent] default recipe table "${name}" could not be loaded; the Workbench will list no recipes`);
+    }
     this.recipeTable = name;
     const recipes = parseRecipes((table?.rows ?? {}) as any, WORKBENCH_STATION);
     this.engine.setUser(this.user);
@@ -120,7 +124,12 @@ export class MenuComponent extends CraftingMenuBase {
     this.open();
   }
 
-  /** A 2DA by name: the loaded table, else read through the resource loader and kept. */
+  /**
+   * A 2DA by name: the loaded table, else read through the resource loader and
+   * kept. Unlike Load2DATables, ResourceLoader can see Override and module
+   * archives, which is where override tables such as itemcreatemira and
+   * tutitemcreate live.
+   */
   private static async loadTable(name: string): Promise<TwoDAObject | undefined> {
     const tables = GameState.TwoDAManager.datatables;
     const loaded = tables.get(name);

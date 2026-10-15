@@ -56,7 +56,15 @@ describe('resolveMainCharacter', () => {
   test('main character is the party member flagged isPlayer', () => {
     expect(resolveMainCharacter([kreia, exile], kreia, kreia)).toBe(exile);
   });
-  test('falls back to the player record, then the user', () => {
+  test('a companion leading with the Exile following at a later party index still resolves to the Exile', () => {
+    expect(resolveMainCharacter([kreia, exile], kreia, kreia)).toBe(exile);
+    party.party = [kreia, exile];
+    party.Player = kreia;
+    const bench = new CraftingEnginePorts(WORKBENCH_STATION);
+    bench.setUser(kreia);
+    expect(bench.ports().breakdownRank()).toBe(7);
+  });
+  test('falls back to the player record when no party member is flagged; with the Exile not loaded at all, it intentionally falls back to the user', () => {
     expect(resolveMainCharacter([kreia], exile, kreia)).toBe(exile);
     expect(resolveMainCharacter([t3], t3NotPlayer, t3)).toBe(t3);
   });

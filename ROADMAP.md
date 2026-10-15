@@ -1935,7 +1935,7 @@ First shippable artifact.
   then made usable in VR like the other menus. Check the repair workbench
   (`ShowUpgradeScreen`) in the same pass; round 17 never reached one.
   **◑ lab station built, emulator-verified; awaiting headset (2026-10-12).**
-  `CraftingRules` (data from `chemicalcreate.2da`), `LabStationSession`, the
+  `CraftingRules` (data from `chemicalcreate.2da`), `CraftingSession`, the
   `MenuChemicals` screen (Health/Stimulants/Mines/Grenades tabs, create,
   breakdown), and routines 773 `ShowChemicalUpgradeScreen` (opens after the help
   conversation closes) and 774 `GetChemicals`. `tools/vr-emulator/probe-lab-station.js`
@@ -1968,12 +1968,17 @@ First shippable artifact.
   and a Repeating Blaster Rifle broken down (1750 → 87 → 43 at Repair 10), a medpac
   never offered; a companion user still gets the Exile's Repair; greyed rows under
   the VR ray, stick scrolling of both lists, scroll kept after Accept; `k_workbench_bd`
-  direct; `k_workbench_tut` (read from 001EBO's archive) lists `tutitemcreate` and the
+  run directly; `k_workbench_tut` (read from 001EBO's archive) lists `tutitemcreate` and the
   created part is tagged `K_REPAIR_PART`; `k_workbench_t3` shows a notice and opens
   nothing; chemicals untouched; PNGs of both panels; save/reload keeps components.
+  `workbnch.dlg` (read from dialogs.bif) offers: "[Use the workbench to create or
+  breakdown items.]" twice, as `k_workbench_bd` (shown when `c_npc_avail(7)` is false)
+  and as `k_workbench_bdm` (`itemcreatemira`, shown when party NPC 7 is available);
+  and "[Use the workbench to upgrade items.]" as `k_workbench_t3`, which has no
+  condition. Neither is Bao-Dur's or T3's own script.
   Still to build: the item upgrade screens. The workbench opens creation directly
-  (`oItem` ignored), and the upgrades-only route (T3, `nDisableItemCreation`) shows
-  "Upgrading items isn't available yet." instead.
+  (`oItem` ignored), and the upgrade reply (`k_workbench_t3`, `nDisableItemCreation`),
+  shown on every bench, shows "Upgrading items isn't available yet." for now.
 
 M4-78 is out of scope.
 

@@ -9,10 +9,11 @@
  * (components and inventory), break a blaster down (yield from the main
  * character's Repair, whoever uses the bench; a medpac is never offered), a
  * companion as the user, greyed rows under the VR ray, stick scrolling and
- * the list kept after Accept, Bao-Dur's direct route (k_workbench_bd), the
+ * the list kept after Accept, the create/breakdown reply script run directly
+ * (k_workbench_bd, workbnch.dlg's reply when party NPC 7 is not available), the
  * prologue's tutitemcreate table and its K_REPAIR_PART override tag
  * (k_workbench_tut), a missing override table falling back to itemcreate,
- * T3's upgrades-only route (k_workbench_t3: a notice, no screen), chemicals
+ * the upgrade reply script (k_workbench_t3, upgrades only: a notice, no screen), chemicals
  * untouched, PNGs of both panels, and the component count across save/reload.
  *
  *   node tools/vr-emulator/probe-workbench.js
@@ -678,10 +679,10 @@ async function main() {
     report.notes.closed = closed;
     check('backClosesToPlay', closed.visible === false && closed.mode === 1, closed);
 
-    // 7. Bao-Dur's route: k_workbench_bd opens the screen directly.
+    // 7. The create/breakdown reply script run directly: k_workbench_bd (workbnch.dlg, party NPC 7 not available) opens the screen with no conversation.
     const bd = await harness.evaluate(`window.__wb.useWithScript('k_workbench_bd')`, { timeoutMs: 60000 });
-    report.notes.baoDur = bd;
-    check('baoDurRouteOpensScreen', bd.loaded && bd.conversationSeen === false && bd.visible && bd.foreground && bd.user
+    report.notes.createReplyScript = bd;
+    check('createReplyScriptOpensScreen', bd.loaded && bd.conversationSeen === false && bd.visible && bd.foreground && bd.user
       && bd.recipeTable === 'itemcreate' && bd.category === 'ranged' && bd.shopRows > 0, bd);
     await harness.evaluate(`window.__wb.close()`);
 
@@ -738,13 +739,13 @@ async function main() {
     check('missingTableFallsBackToItemcreate', fallback.visible && fallback.recipeTable === 'itemcreate' && fallback.shopRows > 0
       && fallback.warnings.length > 0, fallback);
 
-    // 10. T3's route: upgrades only, so a notice and no screen.
+    // 10. workbnch.dlg's upgrade reply (k_workbench_t3, always shown): upgrades only, so a notice and no screen.
     const t3 = await harness.evaluate(`(async()=>{const W=window.__wb;const before=window.__wbNotices.length;
       const used=await W.useWithScript('k_workbench_t3',3000);
       return {loaded:used.loaded,visible:used.visible,conversationSeen:used.conversationSeen,presenting:window.KotOR.VRSpike.isPresenting,
         notices:window.__wbNotices.slice(before).map(a=>({text:a[0],holdMs:a[1],tone:a[2]}))};})()`, { timeoutMs: 60000 });
     report.notes.t3 = t3;
-    check('t3RouteShowsNoticeOnly', t3.loaded && t3.visible === false
+    check('upgradeReplyShowsNoticeOnly', t3.loaded && t3.visible === false
       && t3.notices.some((n) => n.text === NOTICE && n.holdMs === 3000 && n.tone === 'info'), t3);
 
     // 11. Chemicals untouched by every workbench action.

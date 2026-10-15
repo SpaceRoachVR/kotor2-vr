@@ -1,12 +1,13 @@
 import { SkillType } from '@/enums/nwscript/SkillType';
 
 /**
- * Pure rules for TSL's Lab Station crafting screen. Sources: the game's
- * chemicalcreate.2da (one row per recipe: label = item resref, skilllevel =
- * rank needed, group = tab, base_skill = skill the recipe uses) and the
- * StrategyWiki Lab Station page (item value = half the credit cost, chemicals
- * spent equal that value, breakdown returns 5% of value per Treat Injury rank
- * up to rank 20, and recipes show up to 8 ranks above the user's own).
+ * Pure rules for TSL's crafting screens (Lab Station and Workbench). Sources:
+ * the game's recipe 2DAs (chemicalcreate, itemcreate; one row per recipe:
+ * label = item resref, skilllevel = rank needed, group = tab, base_skill =
+ * skill the recipe uses) and the StrategyWiki Lab Station page (item value =
+ * half the credit cost, the currency spent equals that value, breakdown
+ * returns 5% of value per skill rank up to rank 20, and recipes show up to 8
+ * ranks above the user's own).
  * Nothing here touches the engine, so it can be unit-tested without a game.
  */
 
@@ -132,7 +133,7 @@ export function canCreate(recipe: Recipe, userRank: number, value: number, avail
 }
 
 /**
- * Chemicals returned for breaking an item down, per the spec:
+ * Currency (chemicals or components) returned for breaking an item down, per the spec:
  * rank < 1 ? 1 : floor(value * min(rank, 20) * 0.05). A low-value item at a
  * low rank can yield 0. Dividing by 20 is the same 5% without 0.05's binary
  * rounding error.
@@ -143,7 +144,7 @@ export function breakdownYield(value: number, breakdownRank: number): number {
   return Math.floor((value * rank) / BREAKDOWN_RANK_CAP);
 }
 
-/** Only items the lab can make can be broken down. */
+/** Whether the item is one of the given recipes (the lab breaks down only what it can make). */
 export function isBreakable(resref: string, recipes: Recipe[]): boolean {
   const lower = resref.toLowerCase();
   return recipes.some((r) => r.resref === lower);

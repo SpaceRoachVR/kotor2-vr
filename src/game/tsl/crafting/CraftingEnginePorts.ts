@@ -14,6 +14,8 @@ export interface EngineCraftingItem extends CraftingItem {
 /**
  * The main character: the party member flagged as the player, else the
  * PartyManager's player record when it is flagged, else the station's user.
+ * When the Exile is not loaded at all (scripted solo segments) breakdown thus
+ * uses the user's Repair; retail may use the Exile's (spec open question).
  */
 export function resolveMainCharacter(
   party: ModuleCreature[], player: ModuleCreature | undefined, user: ModuleCreature,
