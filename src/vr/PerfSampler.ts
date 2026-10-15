@@ -6,6 +6,7 @@ import {
   SUSTAINED_VR_MINIMUM_FPS,
   Sustained50GateVerdict,
 } from "./Sustained50Gate";
+import { GpuFrameTimer } from "./GpuFrameTimer";
 import { EMPTY_XR_RUNTIME_RATES, XRRuntimeRates } from './compatibility/XRRuntimeContracts';
 
 /**
@@ -51,6 +52,11 @@ export interface PerfWindowReport {
   xrCadence: XRFrameCadenceReport | null;
   /** Stock WebXR does not expose compositor reprojection telemetry. */
   compositorTelemetry: 'unavailable' | 'not-applicable';
+  /**
+   * GPU time of the wrapped world submission, from timer queries. Null when
+   * the driver lacks the extension or no query completed in the window.
+   */
+  gpuMs: { p50: number; p90: number; p99: number; samples: number; disjoint: boolean } | null;
   world: PerfWorldReport | null;
 }
 
@@ -166,11 +172,36 @@ export class PerfSampler {
   private firstXRCallbackTimestamp: number | null = null;
   private lastXRCallbackTimestamp: number | null = null;
   private xrCallbackCount = 0;
+  private gpuTimer: GpuFrameTimer | null = null;
+  private gpuTimes: number[] = [];
+  private gpuDisjoint = false;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
   attach(renderer: THREE.WebGLRenderer): void {
     this.renderer = renderer;
+    this.gpuTimer = null;
+    try {
+      const gl = renderer.getContext?.();
+      if (gl) {
+        const timer = new GpuFrameTimer(gl);
+        if (timer.supported) this.gpuTimer = timer;
+      }
+    } catch {
+      // No timer is a valid state: gpuMs reports null.
+    }
+  }
+
+  /**
+   * Bracket the world submission. Both are no-ops outside a sampling window,
+   * so ordinary play never issues a timer query.
+   */
+  beginGpuTimer(): void {
+    if (this.running) this.gpuTimer?.begin();
+  }
+
+  endGpuTimer(): void {
+    this.gpuTimer?.end();
   }
 
   attachWorldContext(provider: () => PerfWorldSnapshot): void {
@@ -189,6 +220,12 @@ export class PerfSampler {
     this.frametimes = [];
     this.simulationCpuTimes = [];
     this.renderCpuTimes = [];
+    this.gpuTimes = [];
+    this.gpuDisjoint = false;
+    if (this.gpuTimer) {
+      this.gpuTimer.drain();
+      this.gpuTimer.disjointSeen = false;
+    }
     this.windowStart = this.now();
     this.lastFrame = this.windowStart;
     this.cadence = new XRFrameCadence(this.runtimeRates.runtimeReportedHz);
@@ -247,6 +284,7 @@ export class PerfSampler {
   tick(): void {
     if (!this.running) return;
     const now = this.now();
+    if (this.gpuTimer) this.gpuTimes.push(...this.gpuTimer.collect());
     this.sampleWorld(now);
     const dt = now - this.lastFrame;
     this.lastFrame = now;
@@ -261,6 +299,22 @@ export class PerfSampler {
       this.report();
       this.start();
     }
+  }
+
+  private buildGpuReport(): PerfWindowReport['gpuMs'] {
+    const timer = this.gpuTimer;
+    if (!timer) return null;
+    this.gpuTimes.push(...timer.drain());
+    if (timer.disjointSeen) this.gpuDisjoint = true;
+    if (!this.gpuTimes.length) return null;
+    const sorted = [...this.gpuTimes].sort((a, b) => a - b);
+    return {
+      p50: round(percentile(sorted, 50)),
+      p90: round(percentile(sorted, 90)),
+      p99: round(percentile(sorted, 99)),
+      samples: sorted.length,
+      disjoint: this.gpuDisjoint,
+    };
   }
 
   /** Close the current window, log a report, and return it. */
@@ -279,6 +333,7 @@ export class PerfSampler {
     const info = this.renderer.info;
     const heap = (performance as any).memory?.usedJSHeapSize ?? null;
     const world = this.buildWorldReport();
+    const gpuMs = this.buildGpuReport();
 
     const rpt: PerfWindowReport = {
       runId: this.currentRunId,
@@ -319,6 +374,7 @@ export class PerfSampler {
         ? this.cadence.report(reportTimestamp)
         : null,
       compositorTelemetry: this.renderer.xr?.isPresenting ? 'unavailable' : 'not-applicable',
+      gpuMs,
       world,
     };
 

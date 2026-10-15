@@ -24,6 +24,7 @@ const memoryReport = (
   jsHeapMB: heap,
   xrCadence: null,
   compositorTelemetry: 'unavailable',
+  gpuMs: null,
   world: null,
 });
 

@@ -239,6 +239,7 @@ describe('PerfSampler XR cadence integration', () => {
         },
       },
       compositorTelemetry: 'unavailable',
+      gpuMs: null as PerfWindowReport['gpuMs'],
       world: {
         module: '101PER',
         roomsVisible: 2,
@@ -294,6 +295,7 @@ describe('PerfSampler XR cadence integration', () => {
       jsHeapMB: 100,
       xrCadence: null,
       compositorTelemetry: 'unavailable',
+      gpuMs: null,
       world: null,
     };
     sampler.reports.push(base, { ...base }, { ...base }, { ...base });

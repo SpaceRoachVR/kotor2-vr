@@ -108,6 +108,9 @@ import { XRSessionController } from './runtime/XRSessionController';
 import { XRInputCapabilityValidator } from './input/XRInputCapabilityValidator';
 import { VRDesktopMirror, readMirrorOptionsFromSearch } from './runtime/VRDesktopMirror';
 
+const XR_FRAME_MARK = 'kotor2vr.xrframe.start';
+const XR_FRAME_MEASURE = 'kotor2vr.xrframe';
+
 /**
  * Phase 0.1 — stereo perf spike.
  *
@@ -553,6 +556,8 @@ function applyStickDeadzone(magnitude: number): number {
 
 export class VRSpike {
   static readonly perf = new PerfSampler();
+  /** Reused empty scene for the L0 perf bisect submission. */
+  private static readonly perfEmptyScene = new THREE.Scene();
 
   static renderer: THREE.WebGLRenderer | null = null;
   static scene: THREE.Scene | null = null;
@@ -1425,6 +1430,27 @@ export class VRSpike {
    * engine reads THREE.Clock instead and does not need it.
    */
   private static frame = (timestamp: number, frame?: XRFrame): void => {
+    // One user-timing measure per XR callback, so a trace shows the whole
+    // JS cost of the frame. Cleared every frame: the performance timeline
+    // buffer would otherwise grow without bound.
+    const timing = typeof performance !== 'undefined' && typeof performance.mark === 'function';
+    if (timing) performance.mark(XR_FRAME_MARK);
+    try {
+      VRSpike.frameBody(timestamp, frame);
+    } finally {
+      if (timing) {
+        try {
+          performance.measure(XR_FRAME_MEASURE, XR_FRAME_MARK);
+        } catch {
+          // The mark can be gone if something cleared the timeline mid-frame.
+        }
+        performance.clearMarks(XR_FRAME_MARK);
+        performance.clearMeasures(XR_FRAME_MEASURE);
+      }
+    }
+  };
+
+  private static frameBody = (timestamp: number, frame?: XRFrame): void => {
     VRSpike.perf.recordXRCallback(timestamp, !!frame);
     VRSpike.sessionController.updateObservedCallbackHz(VRSpike.perf.runtimeRates.observedCallbackHz);
     if (!frame) return;
@@ -4286,13 +4312,20 @@ export class VRSpike {
     // blue disc critic run 6 asked for confused the headset player (round 15).
     const restoreHiddenWorld = revealVRInterfaceOverHiddenWorld(scene);
     try {
-      // Perf bisect: L0 submits an empty clear instead of the world, so the
-      // harness can measure the XR loop with nothing drawn. One submission
-      // site, so a GPU timer can wrap whichever branch runs.
-      if (PerfLayerGate.rendersWorld()) {
-        renderer.render(scene, VRSpike.camera);
-      } else {
-        renderer.clear();
+      // Perf bisect: L0 submits an empty scene instead of the world, so the
+      // harness can measure the XR loop with nothing drawn. render() rather
+      // than clear(): in three r149 the XR ArrayCamera pose only updates
+      // inside render(), and the frustum and audio-listener consumers need it.
+      // One submission site, so the GPU timer wraps whichever branch runs.
+      VRSpike.perf.beginGpuTimer();
+      try {
+        if (PerfLayerGate.rendersWorld()) {
+          renderer.render(scene, VRSpike.camera);
+        } else {
+          renderer.render(VRSpike.perfEmptyScene, VRSpike.camera);
+        }
+      } finally {
+        VRSpike.perf.endGpuTimer();
       }
       if (PerfLayerGate.playLayer()) VRSpike.desktopMirror.render(renderer, scene);
     } finally {

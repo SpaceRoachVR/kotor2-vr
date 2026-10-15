@@ -42,6 +42,7 @@ const passingReport = (): PerfWindowReport => ({
     },
   },
   compositorTelemetry: 'unavailable',
+  gpuMs: null,
   world: {
     module: '101PER',
     roomsVisible: 13,
