@@ -25,6 +25,7 @@ export { MenuAbilities } from "@/game/tsl/menu/MenuAbilities";
 export { MenuAutoPause } from "@/game/tsl/menu/MenuAutoPause";
 export { MenuCharacter } from "@/game/tsl/menu/MenuCharacter";
 export { MenuChemicals } from "@/game/tsl/menu/MenuChemicals";
+export { MenuComponent } from "@/game/tsl/menu/MenuComponent";
 export { MenuContainer } from "@/game/tsl/menu/MenuContainer";
 export { MenuCredits } from "@/game/tsl/menu/MenuCredits";
 export { MenuDebug } from "@/game/tsl/menu/MenuDebug";

@@ -1949,10 +1949,31 @@ First shippable artifact.
   scroll. The retail `k_medstation` (just `ShowChemicalUpgradeScreen(GetLastUsedBy())`,
   no global check) run as the station's OnUsed opens the screen with no
   conversation. 775 `GetChemicalPieceValue` stays
-  unimplemented (no retail caller). Follow-up: the workbench's create/breakdown
-  screen (`MenuComponent`) reuses `CraftingRules` with a second station
-  (`itemcreate.2da`, value rate 0.05, Repair); the item upgrade screen
-  (`ShowUpgradeScreen`) is separate work.
+  unimplemented (no retail caller).
+  **◑ workbench item creation built, emulator-verified; awaiting headset (2026-10-15).**
+  `MenuComponent` (`component_p`): create tabs Armor/Ranged/Melee/Lightsaber/Other
+  from `itemcreate.2da` (value = 5% of template Cost, the recipe's own skill),
+  breakdown of any non-plot item except Lab Station items into components (yield
+  from the main character's Repair, whoever uses the bench), breakdown tabs
+  All/Weapons/Armor/Useable/Misc (by `storepanelsort`, shown in place of the create
+  tabs). The screen behaviour both stations share moved to `CraftingMenuBase`
+  (`MenuChemicals` unchanged; its probe still passes). Routine 354
+  `ShowUpgradeScreen` opens it after any calling conversation, with the script's
+  `sOverride2DA` (`itemcreatemira`, `tutitemcreate`; a missing table falls back to
+  `itemcreate` with a warning). `tools/vr-emulator/probe-workbench.js` loads 103PER
+  on the SpaceRoach save and drives the placed bench (`plc_workb_rep`, OnUsed
+  `a_compdlg` → `workbnch.dlg` → "[Use the workbench to create or breakdown items.]"
+  → `k_workbench_bd` → screen); `k_workbench` as OnUsed (help conversation on first
+  use, screen on second); create `u_r_targ_01` (components and inventory); a blaster
+  and a Repeating Blaster Rifle broken down (1750 → 87 → 43 at Repair 10), a medpac
+  never offered; a companion user still gets the Exile's Repair; greyed rows under
+  the VR ray, stick scrolling of both lists, scroll kept after Accept; `k_workbench_bd`
+  direct; `k_workbench_tut` (read from 001EBO's archive) lists `tutitemcreate` and the
+  created part is tagged `K_REPAIR_PART`; `k_workbench_t3` shows a notice and opens
+  nothing; chemicals untouched; PNGs of both panels; save/reload keeps components.
+  Still to build: the item upgrade screens. The workbench opens creation directly
+  (`oItem` ignored), and the upgrades-only route (T3, `nDisableItemCreation`) shows
+  "Upgrading items isn't available yet." instead.
 
 M4-78 is out of scope.
 

@@ -13,6 +13,7 @@ import { NW_FALSE, NW_TRUE } from "@/nwscript/NWScriptConstants";
 import { NWScriptDef } from "@/nwscript/NWScriptDef";
 import { NWScriptDefK1 } from "@/nwscript/NWScriptDefK1";
 import { NWScriptInstance } from "@/nwscript/NWScriptInstance";
+import { VRSpike } from "@/vr/VRSpike";
 import { getRandomWalkableDestination } from "@/nwscript/actions/GetRandomDestination";
 import { CreatureClass } from "@/combat/CreatureClass";
 import type { GameEffect } from "@/effects/GameEffect";
@@ -2547,7 +2548,25 @@ NWScriptDefK2.Actions = {
     name: 'ShowUpgradeScreen',
     type: NWScriptDataType.VOID,
     args: [ NWScriptDataType.OBJECT, NWScriptDataType.OBJECT, NWScriptDataType.INTEGER, NWScriptDataType.INTEGER, NWScriptDataType.STRING ],
-    action: undefined
+    // The Workbench (k_workbench, k_ptar_startcon, Bao-Dur's k_workbench_bd,
+    // Mira's k_workbench_bdm with itemcreatemira, the prologue's
+    // k_workbench_tut with tutitemcreate). Only item creation exists so far:
+    // oItem is ignored, and a call that disables item creation (T3's
+    // k_workbench_t3, upgrades only) shows a notice and opens nothing. Like
+    // 773, the screen opens once any conversation that called it has closed.
+    action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject, number, number, string]){
+      GameState.CutsceneManager.runAfterConversation(() => {
+        if(args[2]){
+          const notice = "Upgrading items isn't available yet.";
+          if(VRSpike.isPresenting) VRSpike.showNotice(notice, 3000, 'info');
+          else console.warn(`ShowUpgradeScreen: ${notice}`);
+          return;
+        }
+        GameState.MenuManager.MenuComponent.openFor(args[1] as ModuleCreature, args[4] || 'itemcreate').catch((e: unknown) => {
+          console.error('ShowUpgradeScreen: the Workbench failed to open', e);
+        });
+      });
+    }
   },
   355: {
     comment: '355: Set eEffect to be versus a specific alignment.\n- eEffect\n- nLawChaos: ALIGNMENT_LAWFUL/ALIGNMENT_CHAOTIC/ALIGNMENT_ALL\n- nGoodEvil: ALIGNMENT_GOOD/ALIGNMENT_EVIL/ALIGNMENT_ALL',
