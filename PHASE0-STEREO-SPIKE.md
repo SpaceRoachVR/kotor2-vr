@@ -194,7 +194,7 @@ evidence showing native rather than sustained synthetic delivery.
 VRSpike.yawOffset      // radians, if facing is rotated
 VRSpike.eyeHeight      // 1.75 m spike default; production uses calibration
 VRSpike.followCamera   // false = stand still and look around
-VRSpike.perf.targetHz     // locked acceptance minimum: 72
+VRSpike.perf.targetHz     // the 50 Hz acceptance floor (acceptanceThresholdHz), not the refresh rate
 VRSpike.perf.xrRuntimeHz  // actual XR runtime refresh, audited separately
 ```
 
@@ -322,12 +322,36 @@ grass and lights, L5 is the full game. The sets live in
 
 - **72 Hz, SSW off.** Set the refresh rate to 72 Hz in Virtual Desktop and turn
   Synchronous Spacewarp off. SSW on halves the delivered rate and hides the
-  real frame time (the Phase 0 runs above). Before anything is timed,
-  `perf-round.js state` must report `runtimeRates.runtimeReportedHz` 72. A
-  window measured at another rate doesn't compare with the rest. Don't read
-  `targetHz` for this: it is the sampler's 50 Hz acceptance floor
+  real frame time (the Phase 0 runs above). A window measured at another rate
+  doesn't compare with the rest. Check it like this:
+  1. After Enter VR, run `perf-round.js state`.
+  2. If `runtimeReportedHz` is reported, it must be 72.
+  3. If it is null (expected on Chrome with Virtual Desktop / VDXR), Allen
+     confirms 72 Hz with SSW off in Virtual Desktop, and the lead records it:
+     `perf-round.js note "refresh 72 Hz, SSW off (VD)"`.
+  4. Every `bisect` and `wave` command passes `--refresh-hz 72`.
+
+  The driver stores `refreshHz` (and `refreshHzSource`: `runtime` when the
+  page reported one, `declared` when it came from `--refresh-hz`) on every
+  record, and the trace budget and the wave's A/B/A comparison use it. Don't
+  read `targetHz` for this: it is the sampler's 50 Hz acceptance floor
   (`acceptanceThresholdHz`), not the refresh, and it reads 50 whatever the
   headset runs at.
+- **The desktop mirror is part of L5.** `?mirror=on|off` defaults to on
+  (`VRDesktopMirror.ts`), so every L5 window includes the mirror's cost, and
+  the L4 to L5 delta is the play layer plus the mirror. If Allen won't be
+  streaming the mirror during play, take one extra L5 window per set with it
+  off. `load` keeps the page's current options, and `reload` takes any
+  `key=value` (it passes them straight into the URL), so:
+  ```bash
+  node tools/vr-emulator/perf-round.js reload perflayer=l5 mirror=off
+  node tools/vr-emulator/perf-round.js load medbay-swept
+  node tools/vr-emulator/perf-round.js enter-vr
+  node tools/vr-emulator/perf-round.js --round bisect-<date> window l5-medbay-mirror-off 60
+  node tools/vr-emulator/perf-round.js reload perflayer=l5      # mirror back on
+  ```
+  `bisect`, `wave` and `stop` build their own URLs and drop the option, so
+  this takes a separate pass of `reload`, `load`, `enter-vr` and `window`.
 - **Virtual Desktop performance overlay on.** It shows what the browser can't
   see: compositor frame time, dropped frames and encode/network latency.
 - Launch with `npm run vr:play` (CDP on 9422, asset service on 8479). Attach
@@ -362,11 +386,11 @@ command, Peragus first, and split the sets across two sittings if needed:
 
 ```bash
 node tools/vr-emulator/perf-round.js bisect all --dry          # the plan and its wall time, no CDP
-node tools/vr-emulator/perf-round.js --round bisect-<date> bisect peragus      # ~21 min, the full L0-L5 ladder
-node tools/vr-emulator/perf-round.js --round bisect-<date> bisect ebon-hawk
-node tools/vr-emulator/perf-round.js --round bisect-<date> bisect conversation
-node tools/vr-emulator/perf-round.js --round bisect-<date> bisect combat
-node tools/vr-emulator/perf-round.js --round bisect-<date> bisect telos
+node tools/vr-emulator/perf-round.js --round bisect-<date> --refresh-hz 72 bisect peragus      # ~21 min, the full L0-L5 ladder
+node tools/vr-emulator/perf-round.js --round bisect-<date> --refresh-hz 72 bisect ebon-hawk
+node tools/vr-emulator/perf-round.js --round bisect-<date> --refresh-hz 72 bisect conversation
+node tools/vr-emulator/perf-round.js --round bisect-<date> --refresh-hz 72 bisect combat
+node tools/vr-emulator/perf-round.js --round bisect-<date> --refresh-hz 72 bisect telos
 ```
 
 Use the same `--round` for every set in the round, so `attribution` sees them
@@ -458,7 +482,9 @@ Things it found that matter for the headset round:
   stage: runtime`. That is the emulator's frame rate, not a stack ceiling.
   Only the headset round can apply the L0 rule.
 - `gpuMs` was non-null at every rung under the emulator (EXT disjoint timer
-  available, no disjoint samples): 0.1 ms p90 at L0, up to 10.6 ms at L5.
+  available, no disjoint samples): 0.1 ms p90 at L0, and 8.7 to 12.6 ms at L5
+  across the checkpoints. The maximum is 12.1 to 12.6 ms at t3-hangar,
+  droids-cleared and ebon-engine-room-open; medbay-swept's 10.6 ms is not it.
 - A reloaded `perf-turret` save now stays in the turret minigame (engine
   mode 2). The overlay reopen used to force INGAME.
 

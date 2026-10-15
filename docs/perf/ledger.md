@@ -22,7 +22,7 @@ consecutive headset rounds. No visual trade-offs.
 - **Headset result** is `confirmFlag` from `perf-round.js wave`: the A/B/A gain in
   ms p90 on the worst set, against the prediction (confirmed within ±30%, or a
   gain of at least 70% of it; rejected below that; inconclusive on drift > 0.5 m
-  within or between the windows, a targetHz change, an untrustworthy window, or
+  within or between the windows, a refresh-rate change, an untrustworthy window, or
   a suite regression > 1 ms p90 against the baseline).
 - **Status:** `proposed` → `building` → `merged-off` (merged to
   `perf/integration`, flag off) → `confirmed` (flag on by default) or `rejected`

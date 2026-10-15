@@ -41,8 +41,11 @@ checkout. `docs/` is gitignored, so docs need `git add -f`.
 - **Proof:** only headset numbers confirm a fix. The emulator may only refute one.
 - **Launch-option naming:** `perflayer=l0..l5` (absent means `l5`, i.e. normal play),
   and `perf.<name>=on|off`.
-- **Headset rounds run at 72 Hz.** The round driver records `targetHz` and refuses
-  to label a round "72 Hz" when `vr.perf.targetHz !== 72`.
+- **Headset rounds run at 72 Hz.** `vr.perf.targetHz` is the 50 Hz acceptance floor,
+  not the refresh rate. The driver records `refreshHz`: the runtime's
+  `runtimeReportedHz` when reported, else the `--refresh-hz` (default 72) the lead
+  declares after Allen confirms 72 Hz with SSW off in Virtual Desktop (Chrome/VDXR
+  reports null). `refreshHzSource` says which (R20).
 - **Gates for every code task:**
   - `npx jest --ci --silent`
   - `npx tsc --noEmit -p tsconfig.kotorjs.json`
@@ -246,7 +249,7 @@ checkout. `docs/` is gitignored, so docs need `git add -f`.
     named `kotor2vr.xrframe` (Task 3).
   - It returns `xrFrame: null` with `xrFrameSource: 'generic'` when those events
     are absent, keeping the old generic selector as the labelled fallback.
-- Consumers: `perf-round.js` passes `budgetMs: 1000 / state.targetHz`.
+- Consumers: `perf-round.js` passes `budgetMs: 1000 / refreshHz` (R20; not `targetHz`).
 
 - [ ] **Step 1: Write failing tests:**
   - `budgetMs: 1000/90` counts the 20 ms and 31 ms tasks as over budget, and the
@@ -270,7 +273,7 @@ checkout. `docs/` is gitignored, so docs need `git add -f`.
   - `tools/vr-emulator/perf-benchmarks.json`
 - Modify: `tools/vr-emulator/perf-round.js`:
   - `main()` dispatch and the usage string (:317-332)
-  - `measureWindow` (:187) gains the `rung`, `set` and `targetHz` fields
+  - `measureWindow` (:187) gains the `rung`, `set`, `refreshHz` and `refreshHzSource` fields (`targetHz` is kept; it is the 50 Hz floor)
   - `STATE` (:64) echoes `perflayer`
   - `summaryLine` (:241) uses the 72 Hz target: `p90<=13.9 && p99<=20` is PASS
 
@@ -369,8 +372,11 @@ There is no code here. This task produces saves and updates the manifest.
 
 ### Task 8: Headset bisect round (Allen, ~30 min)
 
-- [ ] **Step 1: Check the setup.** `perf-round.js state` reports
-  `targetHz === 72`, `presenting` possible, and the driver on CDP 9422.
+- [ ] **Step 1: Check the setup.** After Enter VR, `perf-round.js state` reports
+  `runtimeReportedHz` 72, or null on Chrome/VDXR, in which case Allen confirms 72 Hz
+  with SSW off in Virtual Desktop and the lead runs
+  `perf-round.js note "refresh 72 Hz, SSW off (VD)"`. `presenting` possible, the
+  driver on CDP 9422, and every bisect/wave command passes `--refresh-hz 72`.
 - [ ] **Step 2: Create the pending checkpoints** from Task 6 Step 2 while Allen is
   in the headset.
 - [ ] **Step 3: Run the ladder.** Run `perf-round.js --round bisect-<date> bisect all`
