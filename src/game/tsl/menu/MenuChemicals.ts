@@ -1,24 +1,15 @@
 import { GameMenu } from "@/gui";
 import type { GUILabel, GUIListBox, GUIButton, GUIControl } from "@/gui";
 import { GameState } from "@/GameState";
-import { ResourceLoader } from "@/loaders";
-import { ResourceTypes } from "@/resource/ResourceTypes";
-import { GFFObject } from "@/resource/GFFObject";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
 import type { ModuleCreature, ModuleItem } from "@/module";
 import { GUIInventoryItem } from "@/game/tsl/gui/GUIInventoryItem";
 import {
-  CraftingCategory, LAB_STATION, Recipe, breakdownYield, parseRecipes,
+  CraftingCategory, LAB_STATION, breakdownYield, parseRecipes,
 } from "@/game/tsl/crafting/CraftingRules";
-import {
-  CraftingItem, CraftingPorts, CraftingSession, RecipeView,
-} from "@/game/tsl/crafting/CraftingSession";
-
-/** A party inventory entry as the session sees it, keeping the engine item for removal. */
-interface EngineCraftingItem extends CraftingItem {
-  moduleItem: ModuleItem;
-}
+import { CraftingSession, RecipeView } from "@/game/tsl/crafting/CraftingSession";
+import { CraftingEnginePorts, EngineCraftingItem } from "@/game/tsl/crafting/CraftingEnginePorts";
 
 type CategoryKey = CraftingCategory['key'];
 
@@ -47,8 +38,8 @@ const GREYED_TEXT = 0.5;
  *
  * The party spends chemicals (PartyManager.ChemicalCount) to create the
  * recipes in chemicalcreate.2da, and breaks lab items down into chemicals.
- * The rules live in CraftingRules / CraftingSession; this class only binds
- * them to the retail chemical_p layout, following MenuStore's two-list pattern:
+ * The rules live in CraftingRules / CraftingSession and the engine glue in
+ * CraftingEnginePorts; this class only binds them to the retail chemical_p layout, following MenuStore's two-list pattern:
  * LB_SHOPITEMS lists recipes (create mode), LB_INVITEMS lists breakable
  * inventory (breakdown mode), and BTN_Examine toggles between them.
  *
@@ -94,14 +85,8 @@ export class MenuChemicals extends GameMenu {
   private createViews: RecipeView[] = [];
   /** Breakable inventory, index-aligned with LB_INVITEMS rows. */
   private breakRows: EngineCraftingItem[] = [];
-  /** Template Cost per recipe resref, read once and kept across opens; undefined = no usable template. */
-  private templateCosts = new Map<string, number | undefined>();
-  /** Display items built from recipe templates, kept across opens so each is built once. */
-  private displayItems = new Map<string, ModuleItem>();
-  /** Resrefs whose missing template was already logged. */
-  private missingTemplates = new Set<string>();
-  /** One CraftingItem per engine item: the session compares inventory entries by identity. */
-  private craftingItems = new WeakMap<ModuleItem, EngineCraftingItem>();
+  /** Engine glue for the lab; lives as long as the menu, so templates are read once. */
+  private readonly engine = new CraftingEnginePorts(LAB_STATION);
   /** Texts the GUI file gives the create-mode controls. */
   private guiText: { accept?: string; examine?: string; cost?: string; title?: string } = {};
   private busy = false;
@@ -174,8 +159,9 @@ export class MenuChemicals extends GameMenu {
     this.user = BitWise.InstanceOfObject(user, ModuleObjectType.ModuleCreature) ? user : undefined;
     const table = GameState.TwoDAManager.datatables.get(LAB_STATION.recipeTable);
     const recipes = parseRecipes((table?.rows ?? {}) as any, LAB_STATION);
-    await this.preloadTemplates(recipes);
-    this.session = new CraftingSession(recipes, this.createPorts(), LAB_STATION);
+    this.engine.setUser(this.user);
+    await this.engine.preloadTemplates(recipes);
+    this.session = new CraftingSession(recipes, this.engine.ports(), LAB_STATION);
     this.category = 'health';
     this.breakdownMode = false;
     this.open();
@@ -188,96 +174,16 @@ export class MenuChemicals extends GameMenu {
 
   /** The station's user; the party leader when the user is gone. */
   activeUser(): ModuleCreature {
-    const user = this.user as any;
-    if(user && !user.destroyed && BitWise.InstanceOfObject(user, ModuleObjectType.ModuleCreature)) return user;
-    return GameState.PartyManager.party[0] ?? GameState.PartyManager.Player;
+    return this.engine.activeUser();
   }
 
-  private createPorts(): CraftingPorts {
-    return {
-      getCurrency: () => GameState.PartyManager.ChemicalCount || 0,
-      setCurrency: (n: number) => { GameState.PartyManager.ChemicalCount = Math.max(0, n); },
-      skillRank: (skill: number) => this.skillRank(skill),
-      breakdownRank: () => this.skillRank(LAB_STATION.breakdownSkill),
-      // Any failure resolves false so the session refunds the chemicals.
-      // The lab's recipes carry no override tag, so it is ignored here.
-      createItem: async (resref: string, _overrideTag?: string) => {
-        try {
-          const buffer = await ResourceLoader.loadResource(ResourceTypes['uti'], resref);
-          if(!buffer) return false;
-          return !!GameState.InventoryManager.addItem(new GFFObject(buffer), true);
-        } catch (e) {
-          console.warn(`[MenuChemicals] could not create "${resref}"`, e);
-          return false;
-        }
-      },
-      inventory: () => GameState.InventoryManager.getNonQuestInventory().map((item: ModuleItem) => this.toCraftingItem(item)),
-      removeOne: (item: CraftingItem) => {
-        GameState.InventoryManager.removeItem((item as EngineCraftingItem).moduleItem, 1);
-      },
-      templateCost: (resref: string) => this.templateCosts.get(resref),
-    };
+  /** Display items built from recipe templates, by resref (read by the Lab Station probe). */
+  get displayItems(): ReadonlyMap<string, ModuleItem> {
+    return this.engine.displayItemMap();
   }
 
   private skillRank(skill: number): number {
-    return Number(this.activeUser()?.getSkillTotal?.(skill)) || 0;
-  }
-
-  private toCraftingItem(item: ModuleItem): EngineCraftingItem {
-    let entry = this.craftingItems.get(item);
-    if(!entry){
-      entry = { resref: '', name: '', cost: 0, stackSize: 0, plot: false, storePanelSort: 0, moduleItem: item };
-      this.craftingItems.set(item, entry);
-    }
-    entry.resref = String(item.getTemplateResRef?.() || item.getTag?.() || '').toLowerCase();
-    entry.name = String(item.getName?.() ?? '');
-    entry.cost = Number(item.cost) || 0;
-    entry.stackSize = Number(item.getStackSize?.()) || 1;
-    entry.plot = !!(item as any).plot;
-    const baseItemId = Number((item as any).baseItemId);
-    const baseItem = GameState.TwoDAManager.datatables.get('baseitems')?.rows[baseItemId];
-    entry.storePanelSort = Number(baseItem?.storepanelsort) || 0;
-    return entry;
-  }
-
-  /**
-   * Reads each recipe's template once for the menu's lifetime (game data does
-   * not change while the game runs), keeping its Cost and a display item.
-   */
-  private async preloadTemplates(recipes: Recipe[]): Promise<void> {
-    for(const recipe of recipes){
-      const resref = recipe.resref;
-      if(this.templateCosts.has(resref)) continue;
-      try {
-        const buffer = await ResourceLoader.loadResource(ResourceTypes['uti'], resref);
-        const gff = new GFFObject(buffer);
-        const cost = gff.RootNode.hasField('Cost') ? Number(gff.getFieldByLabel('Cost').getValue()) : NaN;
-        if(!Number.isFinite(cost)) throw new Error('template has no Cost');
-        this.templateCosts.set(resref, cost);
-        if(!this.displayItems.has(resref)){
-          const item = new GameState.Module.ModuleArea.ModuleItem(gff);
-          item.initProperties();
-          item.load();
-          item.setStackSize(1);
-          // Only a picture for the recipe list: keep it out of the module's
-          // object registry, which a module load resets and re-numbers.
-          MenuChemicals.unregister(item);
-          this.displayItems.set(resref, item);
-        }
-      } catch (e) {
-        this.templateCosts.set(resref, undefined);
-        if(!this.missingTemplates.has(resref)){
-          this.missingTemplates.add(resref);
-          console.warn(`[MenuChemicals] recipe "${resref}" has no usable item template; it is not listed`, e);
-        }
-      }
-    }
-  }
-
-  /** A display item's constructor registers it with ModuleObjectManager; undo that. */
-  private static unregister(item: ModuleItem){
-    const manager = GameState.ModuleObjectManager;
-    if(manager?.ObjectList?.get(item.id) === item) manager.RemoveObjectById(item.id);
+    return this.engine.skillRank(skill);
   }
 
   /**
@@ -296,8 +202,8 @@ export class MenuChemicals extends GameMenu {
     if(!this.breakdownMode){
       this.LB_INVITEMS.hide();
       this.createViews = this.session.recipeViews(this.category)
-        .filter((view) => this.displayItems.has(view.recipe.resref));
-      const items = this.createViews.map((view) => this.displayItems.get(view.recipe.resref));
+        .filter((view) => !!this.engine.displayItem(view.recipe.resref));
+      const items = this.createViews.map((view) => this.engine.displayItem(view.recipe.resref));
       this.LB_SHOPITEMS.setItems(items, {
         getItemOptions: () => ({ onClick: () => this.showSelection() }),
         selectIndex: MenuChemicals.clampIndex(selectIndex, items.length),
@@ -396,7 +302,7 @@ export class MenuChemicals extends GameMenu {
     if(!this.breakdownMode){
       const view = this.createViews[this.selectedIndex(this.LB_SHOPITEMS)];
       if(!view) return;
-      const item = this.displayItems.get(view.recipe.resref);
+      const item = this.engine.displayItem(view.recipe.resref);
       this.LB_DESCRIPTION.setItem(item?.getDescription?.() ?? null);
       this.LBL_COST_VALUE.setText(String(view.value));
       this.LBL_STOCK_VALUE.setText(String(view.carried));
@@ -404,7 +310,7 @@ export class MenuChemicals extends GameMenu {
     }else{
       const row = this.breakRows[this.selectedIndex(this.LB_INVITEMS)];
       if(!row) return;
-      const rank = this.skillRank(LAB_STATION.breakdownSkill);
+      const rank = this.engine.breakdownRank();
       this.LB_DESCRIPTION.setItem(row.moduleItem.getDescription?.() ?? null);
       this.LBL_COST_VALUE.setText(String(breakdownYield(this.session.breakdownValue(row), rank)));
       this.LBL_STOCK_VALUE.setText(String(row.stackSize));
