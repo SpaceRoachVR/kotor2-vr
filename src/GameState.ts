@@ -5905,13 +5905,17 @@ export class GameState implements EngineContext {
    * Re-applied every frame because a module swap rebuilds the groups' content.
    */
   static applyPerfLayerGroupVisibility(){
-    const characters = PerfLayerGate.characters();
-    const effects = PerfLayerGate.effects();
-    GameState.group.creatures.visible = characters;
-    GameState.group.party.visible = characters;
-    GameState.group.emitters.visible = effects;
-    GameState.group.grass.visible = effects;
-    GameState.group.lights.visible = effects;
+    // Only ever hide. Assigning true would override the engine's own rules and
+    // the user's settings (L4 used to force grass visible every frame).
+    if(!PerfLayerGate.characters()){
+      GameState.group.creatures.visible = false;
+      GameState.group.party.visible = false;
+    }
+    if(!PerfLayerGate.effects()){
+      GameState.group.emitters.visible = false;
+      GameState.group.grass.visible = false;
+      GameState.group.lights.visible = false;
+    }
   }
 
   /** Shows the PAUSE overlay only while paused with the in-game overlay up. */
