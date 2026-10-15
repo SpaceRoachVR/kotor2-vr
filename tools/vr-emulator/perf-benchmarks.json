@@ -20,8 +20,8 @@
   },
   "combat": {
     "checkpoints": [
-      { "name": "perf-combat", "pending": true },
-      { "name": "perf-turret", "pending": true },
+      { "name": "perf-combat" },
+      { "name": "perf-turret" },
       { "name": "perf-swoop", "pending": true }
     ],
     "ladderCheckpoint": "perf-combat",

@@ -100,7 +100,7 @@ test('R12 shrinks the round well below the full cross-product', () => {
 test('bisectPlan flags pending checkpoints and accepts "all"', () => {
   const plan = bisectPlan(manifest, ['all']);
   assert.ok(plan.some((r) => r.set === 'telos'));
-  assert.ok(plan.filter((r) => r.checkpoint === 'perf-turret').every((r) => r.pending === true));
+  assert.ok(plan.filter((r) => r.checkpoint === 'perf-swoop').every((r) => r.pending === true));
   assert.ok(plan.filter((r) => r.checkpoint === 'medbay-swept').every((r) => !r.pending));
 });
 
