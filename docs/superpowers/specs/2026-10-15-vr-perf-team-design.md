@@ -99,7 +99,8 @@ during Phase 0 prep.
 
 2. **Stage-timing collector.** Records per-frame:
    - simulation CPU and render CPU, using `PerfSampler`'s paired timings
-   - GPU time via `EXT_disjoint_timer_query_webgl2`
+   - GPU time via `EXT_disjoint_timer_query`. The engine defaults to WebGL1
+     (`RendererOptions.ts:117`); the `_webgl2` variant applies only under `?gl=webgl2`.
    - XR callback deltas and cadence integrity (one update and one render per XRFrame)
    - VD timing (game, encode, network, decode, headset latency), scraped if possible,
      otherwise read off the overlay by Allen at fixed moments
@@ -126,7 +127,7 @@ during Phase 0 prep.
 **Early branch:** if L0 can't hold 72 Hz, the XR-runtime track becomes wave 1 before
 any game-side work.
 
-## Phase 1 — analysis workflow (8 agents)
+## Phase 1 — analysis workflow (7 roles, ≤10 agents)
 
 **Input packet**, given to every agent:
 - the attribution table and raw bisect JSONL
