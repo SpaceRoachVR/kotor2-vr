@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 const {
-  bisectPlan, attributeRungs, formatAttribution, resolvePlan, WINDOW_SECONDS,
+  bisectPlan, attributeRungs, formatAttribution, resolvePlan, estimatePlan, formatPlan, WINDOW_SECONDS,
 } = require('./perf-bisect');
 
 // perf-benchmarks.json: each set is {checkpoints, rungs, windows}. A checkpoint is
@@ -26,28 +26,75 @@ test('bisectPlan rejects unknown sets', () => {
   assert.throws(() => bisectPlan(manifest, ['nonesuch']), /Unknown benchmark set: nonesuch/);
 });
 
-test('bisectPlan expands peragus to 3 checkpoints x 6 rungs', () => {
+test('manifest names a ladderCheckpoint that is one of each set\'s checkpoints (R12)', () => {
+  const expected = { peragus: 'medbay-swept', 'ebon-hawk': 'ebon-main-hold-open', conversation: 'kreia-awakened', combat: 'perf-combat', telos: 'perf-telos-a' };
+  for (const [set, ladder] of Object.entries(expected)) {
+    assert.strictEqual(manifest[set].ladderCheckpoint, ladder);
+    assert.ok(manifest[set].checkpoints.some((c) => c.name === ladder));
+  }
+});
+
+test('bisectPlan runs the peragus ladder on medbay-swept only; the other checkpoints get rung 5 alone', () => {
   const plan = bisectPlan(manifest, ['peragus']);
-  const pairs = new Set(plan.map((r) => `${r.checkpoint}@${r.rung}`));
-  assert.strictEqual(pairs.size, 18);
-  assert.deepStrictEqual([...new Set(plan.map((r) => r.checkpoint))], ['medbay-swept', 't3-hangar', 'droids-cleared']);
   assert.ok(plan.every((r) => r.set === 'peragus'));
+  assert.deepStrictEqual([...new Set(plan.map((r) => r.checkpoint))], ['medbay-swept', 't3-hangar', 'droids-cleared']);
+  const ladder = plan.filter((r) => r.checkpoint === 'medbay-swept');
+  assert.deepStrictEqual([...new Set(ladder.map((r) => r.rung))], [0, 1, 2, 3, 4, 5]);
+  for (const cp of ['t3-hangar', 'droids-cleared']) {
+    assert.deepStrictEqual(plan.filter((r) => r.checkpoint === cp).map((r) => `${r.rung}:${r.window}`), ['5:rest', '5:walk']);
+  }
+  assert.strictEqual(plan.length, 11); // 5 rest rungs + (rest, walk) at l5, then 2 x (rest, walk)
+  assert.strictEqual(new Set(plan.map((r) => `${r.checkpoint}@${r.rung}`)).size, 8);
 });
 
-test('bisectPlan with one window per rung gives exactly checkpoints x rungs rows', () => {
-  const m = { s: { checkpoints: ['a', 'b', 'c'], rungs: [0, 1, 2, 3, 4, 5], windows: ['rest'] } };
-  assert.strictEqual(bisectPlan(m, ['s']).length, 18);
+test('bisectPlan: non-ladder checkpoints get only rung 5, and walk/talk appear only at rung 5, in every set', () => {
+  const plan = bisectPlan(manifest, ['all']);
+  for (const r of plan) {
+    if (r.checkpoint !== manifest[r.set].ladderCheckpoint) assert.strictEqual(r.rung, 5, `${r.set}/${r.checkpoint}`);
+    if (r.window !== 'rest') assert.strictEqual(r.rung, 5, `${r.set}/${r.checkpoint} ${r.window}`);
+  }
+  assert.ok(plan.some((r) => r.window === 'walk'));
+  assert.ok(plan.some((r) => r.window === 'talk'));
 });
 
-test('bisectPlan emits only rest below rung 3, whatever the set asks for', () => {
-  const m = { s: { checkpoints: ['a'], rungs: [0, 1, 2, 3, 4], windows: ['walk', 'talk', 'rest'] } };
+test('bisectPlan emits only rest below rung 5, whatever the set asks for', () => {
+  const m = { s: { checkpoints: ['a'], ladderCheckpoint: 'a', rungs: [0, 1, 2, 3, 4, 5], windows: ['walk', 'talk', 'rest'] } };
   const plan = bisectPlan(m, ['s']);
-  assert.deepStrictEqual(plan.filter((x) => x.rung < 3).map((x) => x.window), ['rest', 'rest', 'rest']);
-  // at rung >= 3 the set's own windows are kept, in order
-  assert.deepStrictEqual(plan.filter((x) => x.rung === 3).map((x) => x.window), ['walk', 'talk', 'rest']);
-  // a set with no 'rest' still gets one below rung 3
-  const talkOnly = bisectPlan({ s: { checkpoints: ['a'], rungs: [1, 3], windows: ['talk'] } }, ['s']);
-  assert.deepStrictEqual(talkOnly.map((x) => `${x.rung}:${x.window}`), ['1:rest', '3:talk']);
+  assert.deepStrictEqual(plan.filter((x) => x.rung < 5).map((x) => x.window), ['rest', 'rest', 'rest', 'rest', 'rest']);
+  // at rung 5 the set's own windows are kept, in order
+  assert.deepStrictEqual(plan.filter((x) => x.rung === 5).map((x) => x.window), ['walk', 'talk', 'rest']);
+  // a set with no 'rest' still gets one below rung 5
+  const talkOnly = bisectPlan({ s: { checkpoints: ['a'], ladderCheckpoint: 'a', rungs: [1, 3, 5], windows: ['talk'] } }, ['s']);
+  assert.deepStrictEqual(talkOnly.map((x) => `${x.rung}:${x.window}`), ['1:rest', '3:rest', '5:talk']);
+});
+
+test('bisectPlan rejects a ladderCheckpoint that is not a checkpoint of the set', () => {
+  const m = { s: { checkpoints: ['a'], ladderCheckpoint: 'zzz', rungs: [5], windows: ['rest'] } };
+  assert.throws(() => bisectPlan(m, ['s']), /ladderCheckpoint "zzz"/);
+});
+
+test('estimatePlan adds ~75 s per stop to the window time; formatPlan prints rows and the estimate', () => {
+  const m = { s: { checkpoints: ['a', 'b'], ladderCheckpoint: 'a', rungs: [4, 5], windows: ['rest', 'walk'] } };
+  const plan = bisectPlan(m, ['s']); // a l4 rest | a l5 rest, walk | b l5 rest, walk
+  const e = estimatePlan(plan);
+  assert.strictEqual(e.stops, 3);
+  assert.strictEqual(e.windows, 5);
+  assert.strictEqual(e.totalSeconds, 5 * 60 + 3 * 75);
+  const text = formatPlan(plan);
+  assert.match(text, /s\/a l4: rest/);
+  assert.match(text, /s\/b l5: rest, walk/);
+  assert.match(text, /3 stops, 5 windows: about 8\.8 min/);
+});
+
+test('R12 shrinks the round well below the full cross-product', () => {
+  const full = { };
+  for (const [set, def] of Object.entries(manifest)) {
+    if (set.startsWith('_')) continue;
+    full[set] = { ...def, ladderCheckpoint: undefined };
+  }
+  const before = estimatePlan(bisectPlan(full, ['all'])).totalMinutes;
+  const after = estimatePlan(bisectPlan(manifest, ['all'])).totalMinutes;
+  assert.ok(after < before * 0.6, `${after} vs ${before} min`);
 });
 
 test('bisectPlan flags pending checkpoints and accepts "all"', () => {
@@ -144,7 +191,79 @@ test('formatAttribution renders a markdown table and says so when there is nothi
   const md = formatAttribution(t);
   assert.match(md, /peragus/);
   assert.match(md, /\| rung \|/);
-  assert.match(md, /first over budget at l2/);
+  assert.match(md, /first over at l2/);
   assert.match(md, /render/);
   assert.match(formatAttribution([]), /no bisect records/i);
+});
+
+test('resolvePlan (R13): a pending checkpoint runs if its save exists, is skipped only if absent', () => {
+  const plan = bisectPlan(manifest, ['conversation']);
+  const withSave = resolvePlan(plan, ['VRPT-20260824-E2E kreia-awakened', 'VRPT-20260824-E2E perf-theater'], 'VRPT-20260824-E2E');
+  assert.deepStrictEqual(withSave.pendingSkipped, []);
+  assert.deepStrictEqual(withSave.aborted, []);
+  assert.ok(withSave.runnable.some((x) => x.checkpoint === 'perf-theater' && x.pending === true));
+  const without = resolvePlan(plan, ['VRPT-20260824-E2E kreia-awakened'], 'VRPT-20260824-E2E');
+  assert.deepStrictEqual(without.pendingSkipped, ['perf-theater']);
+  assert.ok(without.runnable.every((x) => x.checkpoint !== 'perf-theater'));
+});
+
+const plannedRows = (set, checkpoint, rungs) => rungs.map((rung) => ({ set, checkpoint, rung, window: 'rest' }));
+
+test('attributeRungs: a planned rung with no record is a missing row and makes the crossing uncertain', () => {
+  // l2 never ran; l1 passes, l3 is over budget. The crossing is somewhere in l2..l3.
+  const t = attributeRungs(
+    [rec('p', 'm', 0, { ft: 8 }), rec('p', 'm', 1, { ft: 9 }), rec('p', 'm', 3, { ft: 20 })],
+    13.9, plannedRows('p', 'm', [0, 1, 2, 3]),
+  )[0];
+  assert.strictEqual(t.firstOverRung, 3);
+  assert.strictEqual(t.uncertain, true);
+  assert.deepStrictEqual(t.boundedBy, [2, 3]);
+  assert.deepStrictEqual(t.missingRungs, [2]);
+  const row2 = t.rows.find((r) => r.rung === 2);
+  assert.strictEqual(row2.missing, true);
+  assert.strictEqual(row2.p90, null);
+  assert.match(formatAttribution([t]), /first over at l3 \(l2 unmeasured\)/);
+});
+
+test('attributeRungs: a rung whose every window is untrustworthy is missing too', () => {
+  const t = attributeRungs(
+    [rec('p', 'm', 1, { ft: 9, trustworthy: true }), rec('p', 'm', 2, { ft: 11, trustworthy: false, label: 'bad' }), rec('p', 'm', 3, { ft: 20, trustworthy: true })],
+    13.9, plannedRows('p', 'm', [1, 2, 3]),
+  )[0];
+  assert.strictEqual(t.firstOverRung, 3);
+  assert.strictEqual(t.uncertain, true);
+  assert.deepStrictEqual(t.boundedBy, [2, 3]);
+  const row2 = t.rows.find((r) => r.rung === 2);
+  assert.strictEqual(row2.missing, true);
+  assert.deepStrictEqual(row2.excluded, ['bad']);
+  assert.match(formatAttribution([t]), /first over at l3 \(l2 unmeasured\)/);
+});
+
+test('attributeRungs: nothing over budget with a rung unmeasured is not a clean pass', () => {
+  const t = attributeRungs([rec('p', 'm', 3, { ft: 9 }), rec('p', 'm', 5, { ft: 10 })], 13.9, plannedRows('p', 'm', [3, 4, 5]))[0];
+  assert.strictEqual(t.firstOverRung, null);
+  assert.strictEqual(t.stage, 'none');
+  assert.strictEqual(t.uncertain, true);
+  assert.match(formatAttribution([t]), /\(l4 unmeasured\)/);
+});
+
+test('attributeRungs: a complete ladder is certain; a missing rung above the crossing does not blur it', () => {
+  const full = attributeRungs([rec('p', 'm', 2, { ft: 9 }), rec('p', 'm', 3, { ft: 20 })], 13.9, plannedRows('p', 'm', [2, 3, 4]))[0];
+  assert.strictEqual(full.firstOverRung, 3);
+  assert.strictEqual(full.uncertain, false);
+  assert.strictEqual(full.boundedBy, undefined);
+  assert.doesNotMatch(formatAttribution([full]), /unmeasured\)/);
+});
+
+test('attributeRungs: without cpuMs the stage is null with a note, never runtime', () => {
+  const r = rec('p', 'm', 3, { ft: 20 });
+  delete r.report.cpuMs;
+  const t = attributeRungs([r], 13.9)[0];
+  assert.strictEqual(t.firstOverRung, 3);
+  assert.strictEqual(t.stage, null);
+  assert.match(t.note, /cpuMs/);
+  assert.match(formatAttribution([t]), /stage: unknown/);
+  const half = rec('p', 'm', 3, { ft: 20 });
+  delete half.report.cpuMs.render;
+  assert.strictEqual(attributeRungs([half], 13.9)[0].stage, null);
 });

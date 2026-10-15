@@ -9,7 +9,7 @@
  *   node tools/vr-emulator/perf-round.js state
  *   node tools/vr-emulator/perf-round.js reload [xrscale=0.8] [depth=linear]
  *   node tools/vr-emulator/perf-round.js summary
- *   node tools/vr-emulator/perf-round.js bisect <set|all>
+ *   node tools/vr-emulator/perf-round.js bisect <set|all> [--dry]
  *   node tools/vr-emulator/perf-round.js note <text...>
  *   node tools/vr-emulator/perf-round.js checkpoint <name>
  *   node tools/vr-emulator/perf-round.js attribution [--budget <ms>]
@@ -38,8 +38,13 @@
  * so the wearer presses Enter VR again after each one.
  *
  * `bisect` runs the PerfLayerGate ladder (`?perflayer=l0..l5`) over the sets in
- * perf-benchmarks.json: per rung it reloads with the layer, loads the
- * checkpoint, enters VR, settles 10 s and measures 60 s windows. Every
+ * perf-benchmarks.json: per rung it boots the page once at that layer, loads the
+ * checkpoint, enters VR, settles 10 s and measures 60 s windows. The ladder runs
+ * on each set's ladderCheckpoint only; the others run rung 5 (R12). `--dry`
+ * prints the plan and a wall-time estimate without touching CDP. A stripped
+ * layer must not leak into later play, so bisect navigates back to
+ * `perflayer=l5` when it ends or is interrupted, and `load`, `window` and the
+ * summary lines shout when the page is not at l5. Every
  * checkpoint is resolved against the saves first, and a set with one missing is
  * dropped whole before anything runs. The `walk` windows rely on the wearer
  * walking, as in `stop`; nothing scripts movement. `attribution` (no CDP) reads
@@ -53,7 +58,7 @@ const path = require('path');
 const { CdpSession, findPageTarget } = require('./cdp');
 const { captureTrace, analyzeTrace } = require('./perf-trace');
 const {
-  bisectPlan, resolvePlan, attributeRungs, formatAttribution,
+  bisectPlan, planStops, formatPlan, resolvePlan, attributeRungs, formatAttribution,
   WINDOW_SECONDS, TARGET_HZ, TARGET_P90_MS, TARGET_P99_MS,
 } = require('./perf-bisect');
 
@@ -66,8 +71,15 @@ const opt = (name, fallback) => {
   argv.splice(i, 2);
   return value;
 };
+const flag = (name) => {
+  const i = argv.indexOf(name);
+  if (i < 0) return false;
+  argv.splice(i, 1);
+  return true;
+};
 const PORT = Number(opt('--port', process.env.KOTOR2VR_CDP_PORT || 9422));
 const ROUND = opt('--round', 'r1');
+const DRY = flag('--dry');
 const [command, ...rest] = argv;
 const EVIDENCE = path.join(__dirname, 'evidence', 'perf', `${ROUND}.jsonl`);
 
@@ -124,8 +136,9 @@ async function waitUntil(cdp, expression, timeoutMs, what) {
 // the previous module's room, with no rooms drawn: the dry run measured an
 // empty Ebon Hawk at 54 fps that way. The playthrough harness only ever loads
 // into a freshly booted page, and so does this.
-async function freshPage(cdp) {
-  const url = await cdp.evaluate('location.origin + location.pathname + location.search');
+async function freshPage(cdp, targetUrl) {
+  // bisect passes the rung's URL so the page boots once, at the right layer.
+  const url = targetUrl || await cdp.evaluate('location.origin + location.pathname + location.search');
   await cdp.send('Page.navigate', { url });
   await sleep(3000);
   // Two gates stand between a reload and the main menu: the audio-unlock
@@ -154,8 +167,18 @@ async function freshPage(cdp) {
   await sleep(2000);
 }
 
-async function load(cdp, name) {
-  await freshPage(cdp);
+// A stripped perflayer (anything but l5) makes every figure a partial-scene
+// figure. It is only expected inside bisect, which passes `expectLayer`.
+function warnIfStripped(state, what) {
+  if (state && state.perflayer !== undefined && state.perflayer !== 5) {
+    console.log(`WARNING: ${what}: page is at perflayer=l${state.perflayer}, not the full game. These numbers are for a stripped scene; reload without ?perflayer (or run \`reload perflayer=l5\`) before judging or playing.`);
+  }
+}
+
+// `url` boots the page at a specific address; `expectLayer` says the caller put
+// the page at a stripped layer on purpose. Returns the state read after loading.
+async function load(cdp, name, { url, expectLayer } = {}) {
+  await freshPage(cdp, url);
   const wanted = `${CHECKPOINT_PREFIX} ${name}`.toLowerCase();
   const loaded = await cdp.evaluate(`(async () => {
     const K = window.KotOR;
@@ -206,6 +229,8 @@ async function load(cdp, name) {
   if (state.engineMode !== 1) {
     console.log(`WARNING: engineMode=${state.engineMode}, want 1 (INGAME); input may be suppressed`);
   }
+  if (expectLayer === undefined) warnIfStripped(state, `load "${name}"`);
+  return state;
 }
 
 // `extra` ({rung, set, checkpoint, window}) comes from bisect and is written into
@@ -215,6 +240,7 @@ async function measureWindow(cdp, label, seconds, extra = {}) {
   // window and leave report() describing only its tail. Hold it off for the
   // window and restore it after.
   const before = await cdp.evaluate(STATE);
+  if (extra.rung === undefined) warnIfStripped(before, `window "${label}"`);
   await cdp.evaluate(`(() => {
     const perf = window.KotOR.VRSpike.perf;
     window.__perfRoundAutoReport = perf.autoReportSec;
@@ -288,18 +314,23 @@ function summaryLine(r) {
     `${String(rpt.fps).padStart(6)} fps  p50 ${ft.p50} p90 ${ft.p90} p99 ${ft.p99}`,
     `calls ${rpt.render && rpt.render.calls}  tris ${rpt.render && rpt.render.triangles}`,
     `rooms ${world.roomsVisible}/${world.roomsTotal}  moved ${world.path ? world.path.distanceMetres : '?'} m`,
+    `layer ${r.before.perflayer === undefined ? 'n/a' : `l${r.before.perflayer}${r.before.perflayer === 5 ? '' : ' STRIPPED'}`}`,
     `heap ${rpt.jsHeapMB}  trustworthy=${cad.integrity ? cad.integrity.trustworthy : "n/a"}  ${r.before.presenting ? 'stereo' : 'MONO'}  ${verdict} (target ${TARGET_HZ} Hz: p90<=${TARGET_P90_MS} p99<=${TARGET_P99_MS})`,
   ].join(' | ');
 }
 
-async function navigateWithOptions(cdp, options) {
+async function gameUrl(cdp, options) {
   const params = new URLSearchParams('key=tsl&assets=/assets');
   for (const option of options) {
     const [key, value] = option.split('=');
     if (!key || value === undefined) throw new Error(`reload options are key=value, got "${option}"`);
     params.set(key, value);
   }
-  const url = `${await cdp.evaluate('location.origin')}/game/index.html?${params}`;
+  return `${await cdp.evaluate('location.origin')}/game/index.html?${params}`;
+}
+
+async function navigateWithOptions(cdp, options) {
+  const url = await gameUrl(cdp, options);
   await cdp.send('Page.navigate', { url });
   console.log(`navigated to ${url}`);
 }
@@ -384,15 +415,29 @@ async function checkpoint(cdp, name) {
     const ok = await window.KotOR.SaveGame.SaveCurrentGame(${JSON.stringify(`${CHECKPOINT_PREFIX} ${name}`)});
     return ok !== false;
   })()`, { timeoutMs: 60000 });
-  if (!saved) throw new Error(`saving "${name}" did not complete (a save may already be in progress)`);
+  if (!saved) throw new Error(`saving "${name}" did not complete: no module loaded, or a save is already writing`);
   console.log(`saved "${CHECKPOINT_PREFIX} ${name}"`);
 }
 
+function loadBenchmarks() {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, 'perf-benchmarks.json'), 'utf8'));
+}
+
+// The rungs the manifest asks of each set that has records, so a rung that never
+// ran shows as unmeasured and not as a gap nobody can see.
+function plannedRowsFor(records) {
+  const benchmarks = loadBenchmarks();
+  const sets = [...new Set(records.map((r) => r.set).filter((set) => set && benchmarks[set] && !set.startsWith('_')))];
+  return sets.length ? bisectPlan(benchmarks, sets) : [];
+}
+
 function attribution() {
-  const budgetMs = Number(opt('--budget', TARGET_P90_MS));
+  const raw = opt('--budget', String(TARGET_P90_MS));
+  const budgetMs = Number(raw);
+  if (!Number.isFinite(budgetMs) || budgetMs <= 0) throw new Error(`--budget must be a finite number > 0, got "${raw}"`);
   const records = readRecords();
   if (!records.length) return console.log(`no records at ${EVIDENCE}; run bisect <set|all> for round "${ROUND}" first`);
-  console.log(formatAttribution(attributeRungs(records, budgetMs), budgetMs));
+  console.log(formatAttribution(attributeRungs(records, budgetMs, plannedRowsFor(records)), budgetMs));
 }
 
 async function listSaveNames(cdp) {
@@ -404,59 +449,82 @@ async function listSaveNames(cdp) {
 }
 
 // The ladder. Each rung needs its own page (the layer is read at boot), and
-// `load` reboots the page anyway, so the windows of one (checkpoint, rung) share
-// one load. A failed stop is reported and the run goes on to the next.
+// `load` reboots the page anyway, so one navigation to the rung's URL serves
+// both, and the windows of one (checkpoint, rung) share one load. A failed stop
+// is reported and the run goes on to the next. However it ends, the page is
+// sent back to perflayer=l5 so the stripped layer cannot leak into play.
 async function bisect(cdp, setNames) {
-  const benchmarks = JSON.parse(fs.readFileSync(path.join(__dirname, 'perf-benchmarks.json'), 'utf8'));
-  const plan = bisectPlan(benchmarks, setNames);
+  const plan = bisectPlan(loadBenchmarks(), setNames);
 
-  // Resolve every checkpoint before any window, so a typo fails in seconds and
-  // not after an hour of rungs.
-  await freshPage(cdp);
-  const { runnable, aborted, pendingSkipped } = resolvePlan(plan, await listSaveNames(cdp), CHECKPOINT_PREFIX);
-  for (const name of pendingSkipped) console.log(`skipping pending checkpoint "${name}" (not created yet)`);
-  for (const a of aborted) {
-    console.log(`ABORTING set "${a.set}": no checkpoint ${a.missing.map((m) => `"${m}"`).join(', ')}; available: ${a.available.join(', ') || '(none)'}`);
-  }
-  if (!runnable.length) throw new Error('nothing to run');
-
-  const stops = [];
-  for (const row of runnable) {
-    const last = stops[stops.length - 1];
-    if (last && last.set === row.set && last.checkpoint === row.checkpoint && last.rung === row.rung) last.windows.push(row.window);
-    else stops.push({ set: row.set, checkpoint: row.checkpoint, rung: row.rung, windows: [row.window] });
-  }
-
-  const failures = [];
-  for (const s of stops) {
-    const tag = `${s.set}/${s.checkpoint} l${s.rung}`;
+  const restore = async () => {
     try {
-      console.log(`[${new Date().toLocaleTimeString()}] ${tag}: reload, load, enter VR`);
-      await navigateWithOptions(cdp, [`perflayer=l${s.rung}`]);
-      await sleep(3000);
-      await load(cdp, s.checkpoint);
-      await enterVrOrWait(cdp);
-      const echoed = (await cdp.evaluate(STATE)).perflayer;
-      if (echoed !== s.rung) throw new Error(`page reports perflayer l${echoed}, wanted l${s.rung}`);
-      await sleep(10000);
-      for (const window of s.windows) {
-        if (window === 'walk') console.log('WALK now: nothing scripts movement, the wearer walks for this window');
-        const label = `${ROUND}-bisect-${s.set}-${s.checkpoint}-l${s.rung}-${window}`;
-        await measureWindow(cdp, label, WINDOW_SECONDS[window], { rung: s.rung, set: s.set, checkpoint: s.checkpoint, window });
-      }
+      await Promise.race([
+        navigateWithOptions(cdp, ['perflayer=l5']),
+        sleep(5000).then(() => { throw new Error('timed out'); }),
+      ]);
     } catch (error) {
-      console.log(`FAILED ${tag}: ${error.message || error}`);
-      failures.push(tag);
+      console.log(`could not send the page back to perflayer=l5 (${error.message}); reload it without ?perflayer before playing`);
     }
+  };
+  let interrupted = false;
+  const onSigint = () => {
+    if (interrupted) return;
+    interrupted = true;
+    console.log('interrupted: restoring perflayer=l5');
+    restore().finally(() => process.exit(130));
+  };
+  process.on('SIGINT', onSigint);
+
+  try {
+    // Resolve every checkpoint before any window, so a typo fails in seconds and
+    // not after an hour of rungs.
+    await freshPage(cdp, await gameUrl(cdp, ['perflayer=l5']));
+    const { runnable, aborted, pendingSkipped } = resolvePlan(plan, await listSaveNames(cdp), CHECKPOINT_PREFIX);
+    for (const name of pendingSkipped) console.log(`skipping pending checkpoint "${name}" (its save does not exist yet)`);
+    for (const a of aborted) {
+      console.log(`ABORTING set "${a.set}": no checkpoint ${a.missing.map((m) => `"${m}"`).join(', ')}; available: ${a.available.join(', ') || '(none)'}`);
+    }
+    if (!runnable.length) throw new Error('nothing to run');
+
+    const failures = [];
+    for (const stopPlan of planStops(runnable)) {
+      const tag = `${stopPlan.set}/${stopPlan.checkpoint} l${stopPlan.rung}`;
+      try {
+        console.log(`[${new Date().toLocaleTimeString()}] ${tag}: boot at the rung, load, enter VR`);
+        const state = await load(cdp, stopPlan.checkpoint, {
+          url: await gameUrl(cdp, [`perflayer=l${stopPlan.rung}`]),
+          expectLayer: stopPlan.rung,
+        });
+        // Before Enter VR: a wrong layer wastes the whole stop, so find out now.
+        if (state.perflayer !== stopPlan.rung) throw new Error(`page reports perflayer l${state.perflayer}, wanted l${stopPlan.rung}`);
+        await enterVrOrWait(cdp);
+        await sleep(10000);
+        for (const window of stopPlan.windows) {
+          if (window === 'walk') console.log('WALK now: nothing scripts movement, the wearer walks for this window');
+          const label = `${ROUND}-bisect-${stopPlan.set}-${stopPlan.checkpoint}-l${stopPlan.rung}-${window}`;
+          await measureWindow(cdp, label, WINDOW_SECONDS[window], { rung: stopPlan.rung, set: stopPlan.set, checkpoint: stopPlan.checkpoint, window });
+        }
+      } catch (error) {
+        console.log(`FAILED ${tag}: ${error.message || error}`);
+        failures.push(tag);
+      }
+    }
+    if (failures.length) console.log(`failed stops: ${failures.join('; ')}`);
+    console.log(formatAttribution(attributeRungs(readRecords(), TARGET_P90_MS, runnable), TARGET_P90_MS));
+  } finally {
+    process.removeListener('SIGINT', onSigint);
+    await restore();
   }
-  if (failures.length) console.log(`failed stops: ${failures.join('; ')}`);
-  console.log(formatAttribution(attributeRungs(readRecords(), TARGET_P90_MS), TARGET_P90_MS));
 }
 
 async function main() {
   if (command === 'summary') return summary();
   if (command === 'attribution') return attribution();
   if (command === 'note') return note(rest);
+  if (command === 'bisect' && DRY) {
+    if (!rest[0]) throw new Error('usage: perf-round.js bisect <set|all> --dry');
+    return console.log(formatPlan(bisectPlan(loadBenchmarks(), rest)));
+  }
   const cdp = await connect();
   try {
     if (command === 'load' && rest[0]) return await load(cdp, rest[0]);
@@ -468,7 +536,7 @@ async function main() {
     if (command === 'reload') return await reload(cdp, rest);
     if (command === 'bisect' && rest[0]) return await bisect(cdp, rest);
     if (command === 'checkpoint' && rest[0]) return await checkpoint(cdp, rest.join(' '));
-    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> | note <text...> | checkpoint <name> | attribution [--budget <ms>]');
+    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> [--dry] | note <text...> | checkpoint <name> | attribution [--budget <ms>]');
   } finally {
     cdp.close();
   }
