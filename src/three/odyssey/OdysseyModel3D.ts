@@ -40,6 +40,7 @@ import { OdysseyLight3D } from "@/three/odyssey/OdysseyLight3D";
 import { type IGameContext } from "@/interface/engine/IGameContext";
 import { WindManager } from "@/managers/WindManager";
 import { GameState } from "@/GameState";
+import { PerfLayerGate } from "@/vr/PerfLayerGate";
 import { createNodeParseContext, type NodeParseContext } from "@/three/odyssey/OdysseyModel3DNodeParseContext";
 import { parseOdysseyNode } from "@/three/odyssey/OdysseyModel3DNodeParser";
 
@@ -668,10 +669,12 @@ export class OdysseyModel3D extends OdysseyObject3D {
     }
 
     //Update emitters
-    for(let i = 0; i < this.emitters.length; i++){
-      this.emitters[i].tick(delta);
+    if(PerfLayerGate.effects()){
+      for(let i = 0; i < this.emitters.length; i++){
+        this.emitters[i].tick(delta);
+      }
     }
-    
+
     //Update childModels
     for(let i = 0; i < this.childModels.length; i++){
       this.childModels[i].update(delta);

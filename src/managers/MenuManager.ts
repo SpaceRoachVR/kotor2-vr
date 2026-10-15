@@ -7,6 +7,7 @@ import { ActionMenuManager } from "@/engine/menu/ActionMenuManager";
 import { EngineState } from "@/enums/engine/EngineState";
 import { PerformanceMonitor } from "@/utility/PerformanceMonitor";
 import { EventManager } from "@/managers/EventManager";
+import { PerfLayerGate } from "@/vr/PerfLayerGate";
 
 /**
  * MenuManager class.
@@ -197,7 +198,11 @@ export class MenuManager {
   }
 
   static Update(delta = 0){
-    GameState.CursorManager.updateCursor();
+    // Perf bisect: the cursor is L5 play layer. Only this call is gated; the
+    // menu updates below drive the VR overlay and input and stay on.
+    if(PerfLayerGate.playLayer()){
+      GameState.CursorManager.updateCursor();
+    }
     GameState.CursorManager.cursor.material.depthTest = false;
     GameState.CursorManager.cursor.material.depthWrite = false;
     GameState.CursorManager.cursor.renderOrder = 9999999;

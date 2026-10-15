@@ -51,6 +51,7 @@ import { FollowerCamera } from "@/engine/FollowerCamera";
 import { OdysseyShaderPass } from "@/shaders/pass/OdysseyShaderPass";
 import { ResourceLoader, TextureLoader } from "@/loaders";
 import { VRSpike } from "@/vr/VRSpike";
+import { PerfLayerGate } from "@/vr/PerfLayerGate";
 import { AutoSaveManager } from "@/engine/AutoSaveManager";
 import { classifyVRForcePower } from "@/vr/runtime/VRForcePowerClassification";
 import { measureVRSaberGripCentre } from "@/vr/runtime/VRHeldSaberGrip";
@@ -5886,11 +5887,31 @@ export class GameState implements EngineContext {
    * culled against it. See the note in `Update`.
    */
   static updateWorldSystems(delta: number, lightTarget: THREE.Camera|ModuleObject){
-    GameState.lightManager.update(delta, lightTarget);
-    GameState.windManager.update(delta);
-    GameState.module.area.updateRoomAnimatedLights(delta);
-    GameState.module.area.updateRoomWindUniforms();
+    // Perf bisect: lights and wind are the L4 "effects" layer.
+    if(PerfLayerGate.effects()){
+      GameState.lightManager.update(delta, lightTarget);
+      GameState.windManager.update(delta);
+      GameState.module.area.updateRoomAnimatedLights(delta);
+      GameState.module.area.updateRoomWindUniforms();
+    }
     GameState.CameraShakeManager.update(delta, GameState.currentCamera);
+  }
+
+  /**
+   * Perf bisect (`?perflayer`): hides the scene groups whose layer is off.
+   *
+   * Callers must gate this on {@link PerfLayerGate.active}: at layer 5 nothing
+   * in play may write these flags, so existing visibility logic is untouched.
+   * Re-applied every frame because a module swap rebuilds the groups' content.
+   */
+  static applyPerfLayerGroupVisibility(){
+    const characters = PerfLayerGate.characters();
+    const effects = PerfLayerGate.effects();
+    GameState.group.creatures.visible = characters;
+    GameState.group.party.visible = characters;
+    GameState.group.emitters.visible = effects;
+    GameState.group.grass.visible = effects;
+    GameState.group.lights.visible = effects;
   }
 
   /** Shows the PAUSE overlay only while paused with the in-game overlay up. */
@@ -6487,12 +6508,20 @@ export class GameState implements EngineContext {
     VRSpike.traceStartupStage('simulation-complete');
 
     // In VR the listener is the headset, not the flatscreen follow camera.
-    if(VRSpike.getListenerPose(vrAudioListenerPosition, vrAudioListenerForward)){
-      AudioEngine.GetAudioEngine().update(delta, vrAudioListenerPosition, GameState.currentCamera.rotation, vrAudioListenerForward);
-    }else{
-      AudioEngine.GetAudioEngine().update(delta, GameState.currentCamera.position, GameState.currentCamera.rotation, GameState.forwardVector);
+    // Perf bisect: audio belongs to the L5 play layer.
+    if(PerfLayerGate.playLayer()){
+      if(VRSpike.getListenerPose(vrAudioListenerPosition, vrAudioListenerForward)){
+        AudioEngine.GetAudioEngine().update(delta, vrAudioListenerPosition, GameState.currentCamera.rotation, vrAudioListenerForward);
+      }else{
+        AudioEngine.GetAudioEngine().update(delta, GameState.currentCamera.position, GameState.currentCamera.rotation, GameState.forwardVector);
+      }
     }
     VRSpike.traceStartupStage('audio-complete');
+
+    // Perf bisect: only below L5; in normal play group visibility is untouched.
+    if(PerfLayerGate.active()){
+      GameState.applyPerfLayerGroupVisibility();
+    }
 
     const renderCpuStart = performance.now();
     VRSpike.traceStartupStage('render-start');

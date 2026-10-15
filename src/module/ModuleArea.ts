@@ -63,6 +63,7 @@ import { BackgroundMusicMode } from "@/enums/audio/BackgroundMusicMode";
 import { ModuleObjectScript } from "@/enums/module/ModuleObjectScript";
 import { detachPartyForModuleTransition } from "@/module/transition/detachPartyForModuleTransition";
 import { resolveAreaAmbientSlot } from "@/engine/AreaAmbientRules";
+import { PerfLayerGate } from "@/vr/PerfLayerGate";
 
 
 type AreaScriptKeys = 'OnEnter'|'OnExit'|'OnHeartbeat'|'OnUserDefined';
@@ -438,23 +439,31 @@ export class ModuleArea extends ModuleObject {
     }
 
     //update party
-    for(let i = 0; i < GameState.PartyManager.party.length; i++){
-      GameState.PartyManager.party[i]?.update(delta);
+    if(PerfLayerGate.characters()){
+      for(let i = 0; i < GameState.PartyManager.party.length; i++){
+        GameState.PartyManager.party[i]?.update(delta);
+      }
     }
 
     //update creatures
-    for(let i = 0; i < this.creatures.length; i++){
-      this.creatures[i]?.update(delta);
+    if(PerfLayerGate.characters()){
+      for(let i = 0; i < this.creatures.length; i++){
+        this.creatures[i]?.update(delta);
+      }
     }
 
     //update placeables
-    for(let i = 0; i < this.placeables.length; i++){
-      this.placeables[i]?.update(delta);
+    if(PerfLayerGate.characters()){
+      for(let i = 0; i < this.placeables.length; i++){
+        this.placeables[i]?.update(delta);
+      }
     }
 
     //update doors
-    for(let i = 0; i < this.doors.length; i++){
-      this.doors[i]?.update(delta);
+    if(PerfLayerGate.characters()){
+      for(let i = 0; i < this.doors.length; i++){
+        this.doors[i]?.update(delta);
+      }
     }
 
     //unset party controlled
@@ -985,8 +994,9 @@ export class ModuleArea extends ModuleObject {
           room.hide();
         }
 
-        //Show the current room and all of it's linked rooms
-        player.room.show(true);
+        //Show the current room and all of it's linked rooms (perf bisect
+        //below L2: the current room alone)
+        player.room.show(PerfLayerGate.allRooms());
       break;
     }
   }

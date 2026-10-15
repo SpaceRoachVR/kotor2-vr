@@ -20,6 +20,7 @@ import { BitWise } from "@/utility/BitWise";
 import { VISObject } from "@/resource/VISObject";
 import { IVISRoom } from "@/interface";
 import { EngineMode } from "@/enums/engine/EngineMode";
+import { PerfLayerGate } from "@/vr/PerfLayerGate";
 
 /**
 * ModuleRoom class.
@@ -189,7 +190,7 @@ export class ModuleRoom extends ModuleObject {
       this.model.update(delta);
     }
 
-    if(this.grass){
+    if(this.grass && PerfLayerGate.effects()){
       this.grass.material.uniforms.time.value += delta;
       
       // Update camera position for distance fade and player position for trample
@@ -212,7 +213,7 @@ export class ModuleRoom extends ModuleObject {
       this.model.visible = true;
     }
 
-    if(this.grass){
+    if(this.grass && PerfLayerGate.effects()){
       this.grass.visible = true;
     }
 
@@ -220,7 +221,7 @@ export class ModuleRoom extends ModuleObject {
       const linkedRooms = this.linkedRoomsArray;
       for(let i = 0, rLen = linkedRooms.length; i < rLen; i++){
         const room = linkedRooms[i];
-        if(room.grass){
+        if(room.grass && PerfLayerGate.effects()){
           room.grass.visible = true;
         }
         if(typeof room.model === 'object'){

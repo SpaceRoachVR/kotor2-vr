@@ -20,6 +20,7 @@ import { LocomotionController, ResolvedLocomotion } from "./runtime/LocomotionCo
 import { VRPanelHost } from "./runtime/VRPanelHost";
 import type { LegacyPanelRenderLayer, VRPanelPresentOptions } from "./runtime/VRPanelHost";
 import { DEFAULT_XR_FRAMEBUFFER_SCALE, parseXRFramebufferScale } from "@/utility/RendererOptions";
+import { PerfLayerGate } from "@/vr/PerfLayerGate";
 import { VRPanelPointerHost } from "./runtime/VRPanelPointerHost";
 import { VRPointerHandResolver } from "./runtime/VRPointerHandResolver";
 import { VRKeyboardHost } from "./runtime/VRKeyboardHost";
@@ -972,6 +973,13 @@ export class VRSpike {
     if (framebufferScale !== DEFAULT_XR_FRAMEBUFFER_SCALE) {
       renderer.xr.setFramebufferScaleFactor(framebufferScale);
       console.log(`[VRSpike] XR framebuffer scale: ${framebufferScale}`);
+    }
+
+    // Perf bisect (?perflayer=l0..l5): URL-only, absent means layer 5, the
+    // normal game. The engine switch points read PerfLayerGate.
+    PerfLayerGate.configure(typeof window !== 'undefined' ? window.location.search : '');
+    if (PerfLayerGate.active()) {
+      console.log(`[VRSpike] perf layer: l${PerfLayerGate.layer}`);
     }
 
     VRSpike.rig = new THREE.Group();
@@ -4249,14 +4257,14 @@ export class VRSpike {
     VRSpike.applyLeaderSwitchFade();
 
     VRSpike.traceRoomVisibility();
-    VRSpike.renderKeyboard();
-    VRSpike.renderPanel();
-    VRSpike.renderInGameOverlay();
-    if (!cutsceneContext) {
+    if (PerfLayerGate.playLayer()) VRSpike.renderKeyboard();
+    if (PerfLayerGate.playLayer()) VRSpike.renderPanel();
+    if (PerfLayerGate.playLayer()) VRSpike.renderInGameOverlay();
+    if (!cutsceneContext && PerfLayerGate.playLayer()) {
       VRSpike.renderWorldActionPrompt();
       VRSpike.renderWorldTargetLabel();
     }
-    VRSpike.updateCombatVisuals(frameTimestamp);
+    if (PerfLayerGate.playLayer()) VRSpike.updateCombatVisuals(frameTimestamp);
 
     // The GUI texture pass restores the target it observed. Legacy engine
     // renders may already have reset that target, so make the XR target
@@ -4278,8 +4286,15 @@ export class VRSpike {
     // blue disc critic run 6 asked for confused the headset player (round 15).
     const restoreHiddenWorld = revealVRInterfaceOverHiddenWorld(scene);
     try {
-      renderer.render(scene, VRSpike.camera);
-      VRSpike.desktopMirror.render(renderer, scene);
+      // Perf bisect: L0 submits an empty clear instead of the world, so the
+      // harness can measure the XR loop with nothing drawn. One submission
+      // site, so a GPU timer can wrap whichever branch runs.
+      if (PerfLayerGate.rendersWorld()) {
+        renderer.render(scene, VRSpike.camera);
+      } else {
+        renderer.clear();
+      }
+      if (PerfLayerGate.playLayer()) VRSpike.desktopMirror.render(renderer, scene);
     } finally {
       restoreHiddenWorld();
       restoreBody();
