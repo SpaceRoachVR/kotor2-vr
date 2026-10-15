@@ -30,9 +30,11 @@ const CATEGORIES = [
   'blink',
   'gpu',
   'viz',
+  // The kotor2vr.xrframe measure (one per XR frame callback) is a user-timing entry.
+  'blink.user_timing',
 ];
 
-/** 72 Hz, the headset refresh P1 ran at. */
+/** 72 Hz, the headset refresh P1 ran at. The default; callers pass `budgetMs` for other refresh rates. */
 const FRAME_BUDGET_MS = 1000 / 72;
 
 async function captureTrace(cdp, seconds, outFile) {
@@ -119,7 +121,38 @@ function jsSelfTime(events, callerDepth = 4) {
     .sort((a, b) => b[1] - a[1]);
 }
 
-function analyzeTrace(events, { seconds = null, top = 25 } = {}) {
+const XR_FRAME_MEASURE = 'kotor2vr.xrframe';
+
+/**
+ * Durations (ms) of the `kotor2vr.xrframe` user-timing measures. Chrome writes a
+ * measure as an async begin/end pair (`b`/`e`, paired by name plus id; the id is
+ * `id2.local`, `id2.global` or `id`), and some versions write one complete (`X`)
+ * event instead. An unmatched begin or end is dropped.
+ */
+function xrFrameDurationsMs(events) {
+  const durs = [];
+  const open = new Map();
+  for (const e of events) {
+    if (e.name !== XR_FRAME_MEASURE) continue;
+    if (e.cat && !/user_timing/.test(e.cat)) continue;
+    if (e.ph === 'X' && typeof e.dur === 'number') {
+      durs.push(e.dur / 1000);
+    } else if (e.ph === 'b' || e.ph === 'e') {
+      const id2 = e.id2 || {};
+      const key = id2.global !== undefined ? `g:${id2.global}`
+        : `${e.pid}:${id2.local !== undefined ? id2.local : e.id}`;
+      if (e.ph === 'b') {
+        open.set(key, e.ts);
+      } else if (open.has(key)) {
+        durs.push((e.ts - open.get(key)) / 1000);
+        open.delete(key);
+      }
+    }
+  }
+  return durs.sort((a, b) => a - b);
+}
+
+function analyzeTrace(events, { seconds = null, top = 25, budgetMs = FRAME_BUDGET_MS } = {}) {
   const main = new Set(threadIds(events, 'CrRendererMain'));
   const onMain = (e) => main.has(`${e.pid}:${e.tid}`);
   const complete = events.filter((e) => e.ph === 'X' && typeof e.dur === 'number');
@@ -128,6 +161,7 @@ function analyzeTrace(events, { seconds = null, top = 25 } = {}) {
   const taskMs = durationsMs(tasks);
   const animationFrames = complete.filter((e) => onMain(e) && /FireAnimationFrame|XRFrame|AnimationFrame/i.test(e.name));
   const frameMs = durationsMs(animationFrames);
+  const xrMs = xrFrameDurationsMs(events);
   const gc = complete.filter((e) => /GC|Scavenge|MarkCompact/i.test(e.name) && onMain(e));
   const gpu = complete.filter((e) => e.name === 'GPUTask');
   const sum = (list) => +list.reduce((t, e) => t + e.dur / 1000, 0).toFixed(1);
@@ -137,13 +171,13 @@ function analyzeTrace(events, { seconds = null, top = 25 } = {}) {
   return {
     seconds,
     rendererMainThreadFound: main.size > 0,
-    frameBudgetMs: +FRAME_BUDGET_MS.toFixed(2),
+    frameBudgetMs: +budgetMs.toFixed(2),
     mainThreadTasks: {
       count: taskMs.length,
       p50: percentile(taskMs, 50),
       p90: percentile(taskMs, 90),
       p99: percentile(taskMs, 99),
-      overBudget: taskMs.filter((ms) => ms > FRAME_BUDGET_MS).length,
+      overBudget: taskMs.filter((ms) => ms > budgetMs).length,
       totalMs: +taskMs.reduce((t, ms) => t + ms, 0).toFixed(1),
     },
     animationFrameCallbacks: {
@@ -151,8 +185,19 @@ function analyzeTrace(events, { seconds = null, top = 25 } = {}) {
       p50: percentile(frameMs, 50),
       p90: percentile(frameMs, 90),
       p99: percentile(frameMs, 99),
-      overBudget: frameMs.filter((ms) => ms > FRAME_BUDGET_MS).length,
+      overBudget: frameMs.filter((ms) => ms > budgetMs).length,
     },
+    // The exact per-XR-frame callback times, when the page emitted
+    // `kotor2vr.xrframe` measures; the generic selector above is the fallback.
+    xrFrameSource: xrMs.length ? 'user_timing' : 'generic',
+    xrFrame: xrMs.length ? {
+      count: xrMs.length,
+      p50: percentile(xrMs, 50),
+      p90: percentile(xrMs, 90),
+      p99: percentile(xrMs, 99),
+      max: percentile(xrMs, 100),
+      overBudget: xrMs.filter((ms) => ms > budgetMs).length,
+    } : null,
     gcMs: sum(gc),
     gpuTaskMs: sum(gpu),
     jsSampledMs: +jsTotal.toFixed(1),

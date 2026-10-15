@@ -220,11 +220,14 @@ async function traceWindow(cdp, label, seconds) {
   const dir = path.dirname(EVIDENCE);
   fs.mkdirSync(dir, { recursive: true });
   const traceFile = path.join(dir, `${ROUND}-${label}.trace.json`);
+  // The frame budget follows the headset's refresh rate; STATE carries targetHz.
+  const state = await cdp.evaluate(STATE);
+  const budgetMs = Number.isFinite(state.targetHz) && state.targetHz > 0 ? 1000 / state.targetHz : undefined;
   const [events] = await Promise.all([
     captureTrace(cdp, seconds, traceFile),
     measureWindow(cdp, label, seconds),
   ]);
-  const analysis = analyzeTrace(events, { seconds });
+  const analysis = analyzeTrace(events, { seconds, budgetMs });
   fs.writeFileSync(path.join(dir, `${ROUND}-${label}.trace-summary.json`), JSON.stringify(analysis, null, 1));
   const t = analysis.mainThreadTasks;
   const f = analysis.animationFrameCallbacks;
