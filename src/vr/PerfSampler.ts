@@ -175,6 +175,15 @@ export class PerfSampler {
   private gpuTimer: GpuFrameTimer | null = null;
   private gpuTimes: number[] = [];
   private gpuDisjoint = false;
+  private gpuBracketOpen = false;
+
+  /**
+   * Measurement instrumentation (GPU timer queries and the user-timing
+   * `kotor2vr.xrframe` measure). Default off (R22): with the perf tooling
+   * absent, normal play does no extra per-frame work. perf-round.js turns it
+   * on before each measuring window; a fresh page boot resets it.
+   */
+  instrument = false;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -193,14 +202,23 @@ export class PerfSampler {
   }
 
   /**
-   * Bracket the world submission. Both are no-ops outside a sampling window,
-   * so ordinary play never issues a timer query.
+   * Bracket the world submission. Both are no-ops unless `instrument` is on.
+   * Gating on `running` is not enough: entering VR starts the sampler and
+   * autoReport keeps it going, so it is always "running" in VR. Normal play
+   * therefore issues no timer query; only the measurement tooling (perf-round
+   * bisect/wave/window/trace) sets `instrument`.
    */
   beginGpuTimer(): void {
-    if (this.running) this.gpuTimer?.begin();
+    if (!this.instrument || !this.running || !this.gpuTimer) return;
+    this.gpuTimer.begin();
+    this.gpuBracketOpen = true;
   }
 
   endGpuTimer(): void {
+    // Closes whatever begin opened, even if instrument was switched off
+    // mid-frame; does nothing when no bracket was opened.
+    if (!this.gpuBracketOpen) return;
+    this.gpuBracketOpen = false;
     this.gpuTimer?.end();
   }
 

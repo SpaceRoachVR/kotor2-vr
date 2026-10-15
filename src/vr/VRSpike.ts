@@ -1432,8 +1432,12 @@ export class VRSpike {
   private static frame = (timestamp: number, frame?: XRFrame): void => {
     // One user-timing measure per XR callback, so a trace shows the whole
     // JS cost of the frame. Cleared every frame: the performance timeline
-    // buffer would otherwise grow without bound.
-    const timing = typeof performance !== 'undefined' && typeof performance.mark === 'function';
+    // buffer would otherwise grow without bound. Only while measuring
+    // (VRSpike.perf.instrument, R22): normal play makes no performance calls.
+    const timing =
+      VRSpike.perf.instrument &&
+      typeof performance !== 'undefined' &&
+      typeof performance.mark === 'function';
     if (timing) performance.mark(XR_FRAME_MARK);
     try {
       VRSpike.frameBody(timestamp, frame);

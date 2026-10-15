@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { describe, expect, test } from '@jest/globals';
 import { GpuFrameTimer } from '@/vr/GpuFrameTimer';
 import { PerfSampler } from '@/vr/PerfSampler';
@@ -163,6 +165,7 @@ describe('PerfSampler gpuMs', () => {
     let now = 1000;
     const sampler = new PerfSampler(() => now);
     sampler.attach(rendererWith(gl) as any);
+    sampler.instrument = true;
     sampler.start('gpu');
     for (let i = 0; i < 10; i++) {
       sampler.beginGpuTimer();
@@ -183,6 +186,7 @@ describe('PerfSampler gpuMs', () => {
     let now = 1000;
     const sampler = new PerfSampler(() => now);
     sampler.attach(rendererWith(gl) as any);
+    sampler.instrument = true;
     sampler.start('gpu');
     for (let i = 0; i < 3; i++) {
       sampler.beginGpuTimer();
@@ -197,8 +201,73 @@ describe('PerfSampler gpuMs', () => {
     const { gl, state } = makeFakeGl();
     const sampler = new PerfSampler(() => 0);
     sampler.attach(rendererWith(gl) as any);
+    sampler.instrument = true;
     sampler.beginGpuTimer();
     sampler.endGpuTimer();
     expect(state.created).toBe(0);
+  });
+
+  test('instrument defaults to false and a running sampler issues no timer query', () => {
+    const { gl, state } = makeFakeGl();
+    let now = 1000;
+    const sampler = new PerfSampler(() => now);
+    sampler.attach(rendererWith(gl) as any);
+    expect(sampler.instrument).toBe(false);
+    sampler.start('normal-play');
+    for (let i = 0; i < 5; i++) {
+      sampler.beginGpuTimer();
+      sampler.endGpuTimer();
+      now += 11;
+      sampler.tick();
+    }
+    expect(state.created).toBe(0);
+    expect(state.begun).toBe(0);
+    expect(sampler.report()?.gpuMs).toBeNull();
+  });
+
+  test('instrument true while running begins and ends the timer query', () => {
+    const { gl, state } = makeFakeGl();
+    const sampler = new PerfSampler(() => 0);
+    sampler.attach(rendererWith(gl) as any);
+    sampler.instrument = true;
+    sampler.start('measure');
+    sampler.beginGpuTimer();
+    expect(state.begun).toBe(1);
+    expect(state.active).toBe(1);
+    sampler.endGpuTimer();
+    expect(state.active).toBe(0);
+  });
+
+  test('switching instrument off mid-frame still closes the open query', () => {
+    const { gl, state } = makeFakeGl();
+    const sampler = new PerfSampler(() => 0);
+    sampler.attach(rendererWith(gl) as any);
+    sampler.instrument = true;
+    sampler.start('measure');
+    sampler.beginGpuTimer();
+    sampler.instrument = false;
+    sampler.endGpuTimer();
+    expect(state.active).toBe(0);
+  });
+});
+
+describe('VRSpike instrumentation gating (source slice)', () => {
+  const spike = fs.readFileSync(path.join(__dirname, '..', 'vr', 'VRSpike.ts'), 'utf8');
+
+  test('the xrframe user-timing mark and measure run only when instrument is on', () => {
+    const at = spike.indexOf('private static frame = (timestamp: number, frame?: XRFrame)');
+    expect(at).toBeGreaterThan(-1);
+    const block = spike.slice(at, at + 1400);
+    const gate = block.indexOf('const timing =');
+    expect(gate).toBeGreaterThan(-1);
+    expect(block.slice(gate, gate + 160)).toContain('VRSpike.perf.instrument');
+    // Every performance call is behind `timing`.
+    expect(block.indexOf('if (timing) performance.mark(XR_FRAME_MARK)')).toBeGreaterThan(gate);
+    expect(block).toContain('if (timing) {');
+  });
+
+  test('the world submission is bracketed through the gated sampler calls', () => {
+    expect(spike).toContain('VRSpike.perf.beginGpuTimer();');
+    expect(spike).toContain('VRSpike.perf.endGpuTimer();');
   });
 });
