@@ -9,11 +9,11 @@
  *   node tools/vr-emulator/perf-round.js state
  *   node tools/vr-emulator/perf-round.js reload [xrscale=0.8] [depth=linear]
  *   node tools/vr-emulator/perf-round.js summary
- *   node tools/vr-emulator/perf-round.js bisect <set|all> [--dry]
+ *   node tools/vr-emulator/perf-round.js bisect <set|all> [--dry] [--budget <ms>]
  *   node tools/vr-emulator/perf-round.js note <text...>
  *   node tools/vr-emulator/perf-round.js checkpoint <name>
  *   node tools/vr-emulator/perf-round.js attribution [--budget <ms>]
- *   node tools/vr-emulator/perf-round.js wave <flag,...> --worst <set> [--dry]
+ *   node tools/vr-emulator/perf-round.js wave <flag,...> --worst <set> [--predicted <ms>] [--baseline <round>] [--dry]
  *
  * Options: --port <cdp port> (default 9422, the `vr:play` browser; the
  * emulator harness uses its own), --round <name> (default r1), which names the
@@ -66,6 +66,23 @@
  * the perf.* overrides) however it ends. Its records add `flags` and `phase`
  * (and `flag` on the A/B/A windows) for `confirmFlag`. Flags are given as
  * `perf.x,perf.y` or `x,y`.
+ *
+ * With `--predicted <ms>` the wave ends by running confirmFlag for every flag
+ * on the worst set's A/B/A and printing the verdict, gain (deltaMs), position
+ * drift and notes. `predictedMs` in the workflow's `wave1[]` is a per-set
+ * object: pass the WORST set's value (one number applies to every flag; a comma
+ * list gives one per flag). `--baseline <round>` names an earlier round's
+ * evidence file (evidence/perf/<round>.jsonl, a previous wave or a Phase 0
+ * bisect) for the suite-regression check; without it the check is skipped and
+ * the output says so. `--baseline` needs `--predicted`.
+ *
+ * Instrumentation (R22). The GPU timer queries and the `kotor2vr.xrframe`
+ * user-timing mark cost per-frame work, so they run only while
+ * `VRSpike.perf.instrument` is true. `window`, `stop`, `trace`, `bisect` and
+ * `wave` all measure through measureWindow, which turns it on before the
+ * sampler starts (a page boot resets it, so it is set per window). Normal play
+ * never sets it. `--budget <ms>` (default 13.9) is the p90 budget the
+ * attribution table is judged against, for `attribution` and `bisect`.
  */
 const fs = require('fs');
 const path = require('path');
@@ -75,7 +92,10 @@ const {
   bisectPlan, planStops, formatPlan, resolvePlan, attributeRungs, formatAttribution,
   WINDOW_SECONDS, TARGET_HZ, TARGET_P90_MS, TARGET_P99_MS, parseRefreshHz, resolveRefreshHz,
 } = require('./perf-bisect');
-const { wavePlan, waveStops, stopOptions, formatWavePlan, formatAba, normalizeFlags } = require('./perf-wave');
+const {
+  wavePlan, waveStops, stopOptions, formatWavePlan, formatAba, normalizeFlags,
+  parsePredicted, confirmWave, formatConfirm, windowPrompt,
+} = require('./perf-wave');
 
 const CHECKPOINT_PREFIX = 'VRPT-20260824-E2E';
 const argv = process.argv.slice(2);
@@ -96,6 +116,11 @@ const PORT = Number(opt('--port', process.env.KOTOR2VR_CDP_PORT || 9422));
 const ROUND = opt('--round', 'r1');
 const DRY = flag('--dry');
 const WORST = opt('--worst', undefined);
+// The p90 budget the attribution table is judged against (attribution, bisect).
+const BUDGET_RAW = opt('--budget', undefined);
+// wave: confirm each flag against the worst set once the windows are done.
+const PREDICTED_RAW = opt('--predicted', undefined);
+const BASELINE_ROUND = opt('--baseline', undefined);
 // R20: the headset's refresh rate as the lead declares it, used when the page's
 // runtime does not report one (Chrome + Virtual Desktop reports null).
 const DECLARED_REFRESH_HZ = (() => {
@@ -276,6 +301,14 @@ async function load(cdp, name, { url, expectLayer } = {}) {
   return state;
 }
 
+// R22: the GPU timer queries and the kotor2vr.xrframe user-timing mark run only
+// while VRSpike.perf.instrument is true. Every measuring path (bisect, wave,
+// window, stop, trace) goes through measureWindow, which sets it before the
+// sampler starts; a fresh page boot (every `load`, `reload`, rung and stop)
+// resets it, so it is set per window. It stays on after the window: that only
+// affects this measurement session, and normal play never sets it.
+const INSTRUMENT_ON = '(() => { window.KotOR.VRSpike.perf.instrument = true; return true; })()';
+
 // `extra` ({rung, set, checkpoint, window}) comes from bisect and is written into
 // the record beside refreshHz, so attribution can group the lines by rung. The
 // wave adds {flags, phase, flag} and leaves `rung` out: its windows are all at
@@ -290,6 +323,7 @@ async function measureWindow(cdp, label, seconds, extra = {}) {
     const perf = window.KotOR.VRSpike.perf;
     window.__perfRoundAutoReport = perf.autoReportSec;
     perf.autoReportSec = 0;
+    perf.instrument = true;
     perf.start(${JSON.stringify(label)});
     return true;
   })()`);
@@ -337,6 +371,9 @@ async function traceWindow(cdp, label, seconds) {
   const state = await cdp.evaluate(STATE);
   const { refreshHz } = resolveRefreshHz(state, DECLARED_REFRESH_HZ);
   const budgetMs = 1000 / refreshHz;
+  // measureWindow turns instrumentation on too, but the capture starts first:
+  // turn it on now so the very first xrframe measure of the trace is recorded.
+  await cdp.evaluate(INSTRUMENT_ON);
   const [events] = await Promise.all([
     captureTrace(cdp, seconds, traceFile),
     measureWindow(cdp, label, seconds),
@@ -487,13 +524,21 @@ function plannedRowsFor(records) {
   return sets.length ? bisectPlan(benchmarks, sets) : [];
 }
 
+// --budget is parsed once, with the other global options, so every command that
+// prints an attribution table (attribution, bisect) judges it against the same
+// number. Absent, it is the spec's p90 target.
+function resolveBudgetMs() {
+  if (BUDGET_RAW === undefined) return TARGET_P90_MS;
+  const value = Number(BUDGET_RAW);
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`--budget must be a finite number > 0, got "${BUDGET_RAW}"`);
+  return value;
+}
+
 function attribution() {
-  const raw = opt('--budget', String(TARGET_P90_MS));
-  const budgetMs = Number(raw);
-  if (!Number.isFinite(budgetMs) || budgetMs <= 0) throw new Error(`--budget must be a finite number > 0, got "${raw}"`);
+  const budget = resolveBudgetMs();
   const records = readRecords();
   if (!records.length) return console.log(`no records at ${EVIDENCE}; run bisect <set|all> for round "${ROUND}" first`);
-  console.log(formatAttribution(attributeRungs(records, budgetMs, plannedRowsFor(records)), budgetMs));
+  console.log(formatAttribution(attributeRungs(records, budget, plannedRowsFor(records)), budget));
 }
 
 async function listSaveNames(cdp) {
@@ -519,6 +564,7 @@ async function withPlainPageAfter(cdp, body) {
     }
   };
   let interrupted = false;
+  const isInterrupted = () => interrupted;
   const onSigint = () => {
     if (interrupted) return;
     interrupted = true;
@@ -527,7 +573,7 @@ async function withPlainPageAfter(cdp, body) {
   };
   process.on('SIGINT', onSigint);
   try {
-    return await body();
+    return await body(isInterrupted);
   } finally {
     process.removeListener('SIGINT', onSigint);
     await restore();
@@ -554,10 +600,11 @@ async function resolveAgainstSaves(cdp, plan) {
 // sent back to perflayer=l5 so the stripped layer cannot leak into play.
 async function bisect(cdp, setNames) {
   const plan = bisectPlan(loadBenchmarks(), setNames);
-  return withPlainPageAfter(cdp, async () => {
+  return withPlainPageAfter(cdp, async (interrupted) => {
     const runnable = await resolveAgainstSaves(cdp, plan);
     const failures = [];
     for (const stopPlan of planStops(runnable)) {
+      if (interrupted()) break;
       const tag = `${stopPlan.set}/${stopPlan.checkpoint} l${stopPlan.rung}`;
       try {
         console.log(`[${new Date().toLocaleTimeString()}] ${tag}: boot at the rung, load, enter VR`);
@@ -570,7 +617,8 @@ async function bisect(cdp, setNames) {
         await enterVrOrWait(cdp);
         await sleep(10000);
         for (const window of stopPlan.windows) {
-          if (window === 'walk') console.log('WALK now: nothing scripts movement, the wearer walks for this window');
+          const prompt = windowPrompt(window);
+          if (prompt) console.log(prompt);
           const label = `${ROUND}-bisect-${stopPlan.set}-${stopPlan.checkpoint}-l${stopPlan.rung}-${window}`;
           await measureWindow(cdp, label, WINDOW_SECONDS[window], { rung: stopPlan.rung, set: stopPlan.set, checkpoint: stopPlan.checkpoint, window });
         }
@@ -580,7 +628,8 @@ async function bisect(cdp, setNames) {
       }
     }
     if (failures.length) console.log(`failed stops: ${failures.join('; ')}`);
-    console.log(formatAttribution(attributeRungs(readRecords(), TARGET_P90_MS, runnable), TARGET_P90_MS));
+    const budget = resolveBudgetMs();
+    console.log(formatAttribution(attributeRungs(readRecords(), budget, runnable), budget));
   });
 }
 
@@ -591,10 +640,12 @@ async function bisect(cdp, setNames) {
 async function wave(cdp, flagList, worstSet) {
   const flags = normalizeFlags(flagList);
   const plan = wavePlan(loadBenchmarks(), flags, worstSet);
-  return withPlainPageAfter(cdp, async () => {
+  const confirm = waveConfirmInputs(flags);
+  return withPlainPageAfter(cdp, async (interrupted) => {
     const runnable = await resolveAgainstSaves(cdp, plan);
     const failures = [];
     for (const stopPlan of waveStops(runnable)) {
+      if (interrupted()) break;
       const what = stopPlan.phase === 'suite' ? 'suite' : `${stopPlan.phase} perf.${stopPlan.flag}=${stopPlan.flags[stopPlan.flag]}`;
       const tag = `${stopPlan.set}/${stopPlan.checkpoint} ${what}`;
       try {
@@ -610,8 +661,8 @@ async function wave(cdp, flagList, worstSet) {
         await enterVrOrWait(cdp);
         await sleep(10000);
         for (const window of stopPlan.windows) {
-          if (window === 'walk') console.log('WALK now: nothing scripts movement, the wearer walks for this window');
-          else if (stopPlan.phase !== 'suite') console.log('STAND still at the load spot, same view: A/B/A compares like with like only from one place');
+          const prompt = windowPrompt(window, stopPlan.phase);
+          if (prompt) console.log(prompt);
           const suffix = stopPlan.phase === 'suite' ? 'suite' : `${stopPlan.flag}-${stopPlan.phase}`;
           const label = `${ROUND}-wave-${stopPlan.set}-${stopPlan.checkpoint}-${suffix}-${window}`;
           await measureWindow(cdp, label, WINDOW_SECONDS[window], {
@@ -625,22 +676,49 @@ async function wave(cdp, flagList, worstSet) {
       }
     }
     if (failures.length) console.log(`failed stops: ${failures.join('; ')}`);
-    console.log(formatAba(readRecords(), flags));
+    const records = readRecords();
+    console.log(formatAba(records, flags));
+    if (confirm && !interrupted()) {
+      console.log('');
+      console.log(`confirmFlag on the worst set (${worstSet}), baseline ${confirm.baselineRound ? `round "${confirm.baselineRound}"` : 'none'}:`);
+      console.log(formatConfirm(confirmWave(records, flags, confirm.predicted, confirm.baseline)));
+    }
   });
 }
+
+// `--predicted <ms>` (and optionally `--baseline <round>`) make `wave` finish by
+// running confirmFlag for each flag on the worst set's A/B/A. predictedMs in the
+// workflow's wave1[] is a per-set object: pass the WORST set's value. Checked
+// before any CDP so a bad value fails in seconds. Returns null when not asked.
+function waveConfirmInputs(flags) {
+  if (PREDICTED_RAW === undefined) {
+    if (BASELINE_ROUND !== undefined) throw new Error('--baseline needs --predicted <ms>: it is the baseline for the confirm verdict');
+    return null;
+  }
+  const predicted = parsePredicted(PREDICTED_RAW, flags);
+  if (BASELINE_ROUND === undefined) return { predicted, baseline: undefined, baselineRound: null };
+  const file = path.join(path.dirname(EVIDENCE), `${BASELINE_ROUND}.jsonl`);
+  if (!fs.existsSync(file)) throw new Error(`--baseline "${BASELINE_ROUND}": no evidence file at ${file}`);
+  const baseline = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter((t) => t.trim()).map((t) => JSON.parse(t));
+  return { predicted, baseline, baselineRound: BASELINE_ROUND };
+}
+
+const WAVE_USAGE = 'usage: perf-round.js wave <flag,...> --worst <set> [--predicted <ms>] [--baseline <round>] [--dry]';
 
 async function main() {
   if (command === 'summary') return summary();
   if (command === 'attribution') return attribution();
   if (command === 'note') return note(rest);
+  if (command === 'bisect') resolveBudgetMs();
   if (command === 'bisect' && DRY) {
     if (!rest[0]) throw new Error('usage: perf-round.js bisect <set|all> --dry');
     return console.log(formatPlan(bisectPlan(loadBenchmarks(), rest)));
   }
   if (command === 'wave') {
-    if (!rest[0] || !WORST) throw new Error('usage: perf-round.js wave <flag,...> --worst <set> [--dry]');
+    if (!rest[0] || !WORST) throw new Error(WAVE_USAGE);
     // Build the plan before any CDP, so a bad flag or set name fails here.
     const plan = wavePlan(loadBenchmarks(), rest[0], WORST);
+    waveConfirmInputs(normalizeFlags(rest[0]));
     if (DRY) return console.log(formatWavePlan(plan));
   }
   const cdp = await connect();
@@ -655,7 +733,7 @@ async function main() {
     if (command === 'bisect' && rest[0]) return await bisect(cdp, rest);
     if (command === 'wave') return await wave(cdp, rest[0], WORST);
     if (command === 'checkpoint' && rest[0]) return await checkpoint(cdp, rest.join(' '));
-    throw new Error('usage: perf-round.js [--port <n>] [--round <name>] [--refresh-hz <n>] stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> [--dry] | note <text...> | checkpoint <name> | attribution [--budget <ms>] | wave <flag,...> --worst <set> [--dry]');
+    throw new Error('usage: perf-round.js [--port <n>] [--round <name>] [--refresh-hz <n>] stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> [--dry] | note <text...> | checkpoint <name> | attribution | wave <flag,...> --worst <set> [--predicted <ms>] [--baseline <round>] [--dry]; --budget <ms> applies to bisect and attribution');
   } finally {
     cdp.close();
   }

@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   normalizeFlags, wavePlan, waveStops, stopOptions, estimateWave, formatWavePlan, abaDelta, confirmFlag,
+  parsePredicted, confirmWave, formatConfirm, windowPrompt,
 } = require('./perf-wave');
 const { STOP_OVERHEAD_SECONDS } = require('./perf-bisect');
 
@@ -285,7 +286,7 @@ test('wavePlan builds A/B/A per flag on worst set only', () => {
   assert.ok(plan.slice(firstAba).every((r) => r.phase !== 'suite'));
 });
 
-test('wavePlan suite: every set and checkpoint, all flags on, rest plus walk where the set walks', () => {
+test("wavePlan suite: every set and checkpoint, all flags on, rest plus each set's walk and talk windows", () => {
   const suite = wavePlan(manifest, ['x'], 'telos').filter((r) => r.phase === 'suite');
   assert.ok(suite.every((r) => r.flags.x === 'on' && r.flag === undefined));
   const sets = [...new Set(suite.map((r) => r.set))];
@@ -293,13 +294,39 @@ test('wavePlan suite: every set and checkpoint, all flags on, rest plus walk whe
   for (const set of sets) {
     const cps = manifest[set].checkpoints.map((c) => c.name);
     assert.deepStrictEqual([...new Set(suite.filter((r) => r.set === set).map((r) => r.checkpoint))], cps);
-    const want = manifest[set].windows.includes('walk') ? ['rest', 'walk'] : ['rest'];
+    const want = ['rest', ...manifest[set].windows.filter((w) => w !== 'rest')];
     for (const cp of cps) assert.deepStrictEqual(suite.filter((r) => r.checkpoint === cp).map((r) => r.window), want);
   }
   // Pending checkpoints stay marked so the save check can skip them.
   assert.ok(suite.find((r) => r.checkpoint === 'perf-telos-a').pending);
   // The worst set's ladder checkpoint is pending here, and so are its A/B/A rows.
   assert.ok(wavePlan(manifest, ['x'], 'telos').filter((r) => r.phase !== 'suite').every((r) => r.pending));
+});
+
+test('wavePlan suite: a talk-only set gets rest + talk, a walk set keeps walk, a rest-only set only rest', () => {
+  const m = {
+    c: { checkpoints: ['a', 'b'], ladderCheckpoint: 'a', rungs: [3, 5], windows: ['talk'] },
+    w: { checkpoints: ['a'], ladderCheckpoint: 'a', rungs: [3, 5], windows: ['rest', 'walk'] },
+    r: { checkpoints: ['a'], ladderCheckpoint: 'a', rungs: [5], windows: ['rest'] },
+  };
+  const suite = wavePlan(m, ['x'], 'w').filter((r) => r.phase === 'suite');
+  const windowsOf = (set, cp) => suite.filter((r) => r.set === set && r.checkpoint === cp).map((r) => r.window);
+  assert.deepStrictEqual(windowsOf('c', 'a'), ['rest', 'talk']);
+  assert.deepStrictEqual(windowsOf('c', 'b'), ['rest', 'talk']);
+  assert.deepStrictEqual(windowsOf('w', 'a'), ['rest', 'walk']);
+  assert.deepStrictEqual(windowsOf('r', 'a'), ['rest']);
+  // The real manifest's conversation set is talk-only.
+  const real = wavePlan(manifest, ['x'], 'peragus').filter((r) => r.phase === 'suite' && r.set === 'conversation');
+  assert.ok(real.some((r) => r.window === 'talk'));
+  assert.ok(real.some((r) => r.window === 'rest'));
+});
+
+test('a conversation talk window from a bisect baseline matches the wave suite talk window', () => {
+  const now = [{ ...rec('suite', { p90: 12, set: 'conversation', checkpoint: 'kreia-awakened', window: 'talk' }), phase: 'suite' }];
+  const baseline = [bisectRec('conversation', 'kreia-awakened', 5, 'talk', 11)];
+  const result = confirmFlag([...aba(), ...now], 'x', 4, baseline);
+  assert.strictEqual(result.regressionChecked, true);
+  assert.strictEqual(result.regressionMatched, 1);
 });
 
 test('wavePlan rejects an unknown worst set', () => {
@@ -326,4 +353,45 @@ test('estimateWave and formatWavePlan describe the run without CDP', () => {
   assert.match(text, /peragus\/medbay-swept B \(x off\): rest/);
   assert.match(text, /perf\.x=off/);
   assert.match(text, /min/);
+});
+
+test('parsePredicted: one number applies to every flag, a list gives one per flag, junk is refused', () => {
+  assert.deepStrictEqual(parsePredicted('4', ['x', 'perf.y']), { x: 4, y: 4 });
+  assert.deepStrictEqual(parsePredicted('4, 2.5', 'x,y'), { x: 4, y: 2.5 });
+  assert.throws(() => parsePredicted('4,3,2', ['x', 'y']), /3 values for 2 flags/);
+  for (const bad of ['0', '-1', 'abc', '', '4,', 'NaN']) assert.throws(() => parsePredicted(bad, ['x']), /--predicted must be a number > 0/, bad);
+});
+
+test('confirmWave and formatConfirm print the verdict, gain, drift and notes for each flag', () => {
+  const records = [...aba(), ...aba().map((r) => ({ ...r, flag: 'y' }))];
+  const results = confirmWave(records, ['x', 'y'], { x: 4, y: 4 });
+  assert.deepStrictEqual(results.map((r) => r.flag), ['x', 'y']);
+  assert.strictEqual(results[0].verdict, 'confirmed');
+  const text = formatConfirm(results);
+  assert.match(text, /^x: CONFIRMED {2}gain 4\.00 ms \(predicted 4 ms\) {2}drift 0\.00 m/m);
+  assert.match(text, /^y: CONFIRMED/m);
+  assert.match(text, /note: no baseline suite records given: regression check skipped/);
+});
+
+test('formatConfirm shows an inconclusive flag with its reason and a regression with its numbers', () => {
+  const records = [
+    ...aba(),
+    { ...rec('suite', { p90: 20, set: 'peragus', checkpoint: 'medbay-swept', window: 'rest' }), phase: 'suite' },
+  ];
+  const baseline = [bisectRec('peragus', 'medbay-swept', 5, 'rest', 12)];
+  const text = formatConfirm(confirmWave(records, ['x'], { x: 4 }, baseline));
+  assert.match(text, /x: INCONCLUSIVE/);
+  assert.match(text, /regression: peragus\/medbay-swept rest 12\.00 -> 20\.00 ms p90/);
+  const drifted = formatConfirm(confirmWave(aba({ posB: { x: 3, y: 0, z: 0 } }), ['x'], { x: 4 }));
+  assert.match(drifted, /x: INCONCLUSIVE.*drift 3\.00 m/);
+  assert.match(drifted, /reason: position drift 3\.00 m > 0\.5 m/);
+});
+
+test('windowPrompt: WALK, TALK before those windows, STAND for A/B/A, nothing for a suite rest', () => {
+  assert.match(windowPrompt('walk'), /^WALK now/);
+  assert.strictEqual(windowPrompt('talk'), 'TALK now: start the conversation in front of you');
+  assert.strictEqual(windowPrompt('talk', 'suite'), 'TALK now: start the conversation in front of you');
+  assert.match(windowPrompt('rest', 'B'), /^STAND still/);
+  assert.strictEqual(windowPrompt('rest', 'suite'), null);
+  assert.strictEqual(windowPrompt('rest'), null);
 });

@@ -457,6 +457,9 @@ if (!ranking) {
   const owner = new Map()
   for (const w of wave) {
     const sources = sourcesOf(w.id)
+    // An id neither judged nor ranked has no verdict and no bigBet flag to check,
+    // so it must not pass silently.
+    if (!sources.length) waveProblems.push(`${w.id} is unknown to both the judged hypotheses and the ranked list: its verdict and bigBet cannot be checked`)
     if (sources.some((s) => s.bigBet)) waveProblems.push(`${w.id} is a bigBet: spike, not wave`)
     if (sources.some((s) => s.verdict === 'refuted')) waveProblems.push(`${w.id} was refuted`)
     const files = w.files || []

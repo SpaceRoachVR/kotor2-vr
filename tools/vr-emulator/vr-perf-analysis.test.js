@@ -272,6 +272,24 @@ test('the wave 1 check uses the critic\'s verdict, so the lead cannot launder a 
   assert.match(p, /gpu-h2 is a bigBet/);
 });
 
+test('a wave 1 id unknown to both the judged hypotheses and the ranked list is a wave problem', async () => {
+  const { result } = await run({
+    lead: {
+      ledgerPath: 'docs/perf/ledger.md',
+      ranked: [{ rank: 1, id: 'gpu-h1', claim: 'c', score: 3, verdict: 'survives', files: ['src/three/odyssey/OdysseyModel3D.ts'], bigBet: false }],
+      wave1: [
+        { id: 'gpu-h1', files: ['src/three/odyssey/OdysseyModel3D.ts'], flag: 'perf.gpu-h1' },
+        { id: 'ghost-h9', files: ['src/ghost/9.ts'], flag: 'perf.ghost' },
+      ],
+      spikes: [],
+      preserved: [],
+    },
+  });
+  const p = result.waveProblems.join('\n');
+  assert.match(p, /ghost-h9 is unknown to both the judged hypotheses and the ranked list/);
+  assert.doesNotMatch(p, /gpu-h1 is unknown/);
+});
+
 const PRIOR_LEDGER = [
   '# VR performance ledger', '', '## Ranked items', '',
   '| rank | id | claim | ms × conf ÷ cost | verdict | wave | owner session | flag | headset result | status |',

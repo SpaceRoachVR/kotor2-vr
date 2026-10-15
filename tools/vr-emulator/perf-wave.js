@@ -4,7 +4,8 @@
  *
  * A wave round has two parts (spec, "Wave headset round"):
  *   1. suite: every set's checkpoints at the full game (perflayer l5) with every
- *      new flag on; `rest` windows, plus `walk` where the set's windows have it.
+ *      new flag on; a `rest` window, plus the set's own other windows (`walk`,
+ *      `talk`), so a conversation set is measured while talking.
  *   2. A/B/A: on the worst set's ladderCheckpoint, per flag, three standing
  *      (`rest`) windows: A1 all flags on, B `perf.<flag>=off`, A2 all on again.
  *      Each window is its own boot, because flags are read at boot
@@ -67,7 +68,9 @@ function wavePlan(benchmarks, flags, worstSet) {
   const plan = [];
   for (const set of setNamesOf(benchmarks)) {
     const def = setDef(benchmarks, set);
-    const windows = def.windows.includes('walk') ? ['rest', 'walk'] : ['rest'];
+    // The set's own windows: a stationary `rest` first, then whatever else the
+    // manifest lists (walk, talk), so a talk-only set gets rest + talk.
+    const windows = ['rest', ...def.windows.filter((w) => w !== 'rest')];
     for (const cp of def.checkpoints) {
       for (const window of windows) {
         const row = { phase: 'suite', set, checkpoint: nameOf(cp), window, flags: { ...allOn } };
@@ -339,7 +342,56 @@ function formatAba(records, flags) {
   }).join('\n');
 }
 
+/**
+ * `--predicted` for the flags of a wave. `predictedMs` in the workflow's
+ * `wave1[]` is a per-set object; the lead passes the WORST set's value. One
+ * number applies to every flag; a comma list gives one per flag, in the order
+ * the flags were listed.
+ */
+function parsePredicted(raw, flags) {
+  const ids = normalizeFlags(flags);
+  const parts = String(raw).split(',').map((t) => t.trim());
+  const values = parts.map(Number);
+  if (parts.some((t) => t === '') || values.some((v) => !Number.isFinite(v) || v <= 0)) {
+    throw new Error(`--predicted must be a number > 0 in ms (or a comma list, one per flag), got "${raw}"`);
+  }
+  if (values.length === 1) return Object.fromEntries(ids.map((id) => [id, values[0]]));
+  if (values.length !== ids.length) {
+    throw new Error(`--predicted gave ${values.length} values for ${ids.length} flags (${ids.join(', ')}): pass one number for all, or one per flag`);
+  }
+  return Object.fromEntries(ids.map((id, i) => [id, values[i]]));
+}
+
+/** confirmFlag for every flag of a wave: `predicted` is {id: ms} from parsePredicted. */
+function confirmWave(records, flags, predicted, baseline) {
+  return normalizeFlags(flags).map((id) => confirmFlag(records, id, predicted[id], baseline));
+}
+
+/** The printed verdict: flag, verdict, gain vs prediction, drift, reason and notes. */
+function formatConfirm(results) {
+  const n = (v) => (v === null || v === undefined ? '-' : v.toFixed(2));
+  return results.map((r) => {
+    const lines = [`${r.flag}: ${r.verdict.toUpperCase()}  gain ${n(r.deltaMs)} ms (predicted ${r.predictedMs} ms)  drift ${n(r.positionDriftM)} m  regression check ${r.regressionChecked ? `${r.regressionMatched} window(s), ${r.regressions.length} regressed` : 'skipped'}`];
+    if (r.reason) lines.push(`  reason: ${r.reason}`);
+    for (const g of r.regressions) lines.push(`  regression: ${g.set}/${g.checkpoint} ${g.window} ${g.baselineP90.toFixed(2)} -> ${g.p90.toFixed(2)} ms p90`);
+    if (r.note) lines.push(`  note: ${r.note}`);
+    return lines.join('\n');
+  }).join('\n');
+}
+
+/**
+ * What the wearer is told before a window starts, or null when there is nothing
+ * to do: nothing scripts movement or conversations, the wearer does them.
+ */
+function windowPrompt(window, phase) {
+  if (window === 'walk') return 'WALK now: nothing scripts movement, the wearer walks for this window';
+  if (window === 'talk') return 'TALK now: start the conversation in front of you';
+  if (phase !== undefined && phase !== 'suite') return 'STAND still at the load spot, same view: A/B/A compares like with like only from one place';
+  return null;
+}
+
 module.exports = {
   PREDICTION_TOLERANCE, REGRESSION_MS, MAX_DRIFT_M,
   normalizeFlags, wavePlan, waveStops, stopOptions, estimateWave, formatWavePlan, abaDelta, confirmFlag, formatAba,
+  parsePredicted, confirmWave, formatConfirm, windowPrompt,
 };
