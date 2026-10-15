@@ -133,6 +133,19 @@ const STATE = `(() => {
   };
 })()`;
 
+// A scripted load leaves InGameOverlay closed, so it is reopened; but its
+// show() forces EngineMode.INGAME, which drops a minigame module (107PER, the
+// turret; the swoop tracks) out of MINIGAME and leaves the wearer standing on
+// the hangar floor instead of in the turret. The engine's own load opens the
+// overlay and then sets the play mode; RestoreEnginePlayMode does the same
+// (MINIGAME for a minigame area, DIALOG under a live cutscene, else INGAME).
+const REOPEN_OVERLAY = `(() => {
+  const gs = window.KotOR.GameState;
+  gs.MenuManager.InGameOverlay.open();
+  if (typeof gs.RestoreEnginePlayMode === 'function') gs.RestoreEnginePlayMode();
+  return gs.Mode;
+})()`;
+
 async function waitUntil(cdp, expression, timeoutMs, what) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -229,7 +242,7 @@ async function load(cdp, name, { url, expectLayer } = {}) {
     if (Date.now() > deadline) throw new Error(`checkpoint "${name}" did not finish loading in 3 minutes`);
     await sleep(1000);
   }
-  await cdp.evaluate(`(() => { window.KotOR.GameState.MenuManager.InGameOverlay.open(); return true; })()`);
+  await cdp.evaluate(REOPEN_OVERLAY);
   await sleep(1500);
   const state = await cdp.evaluate(STATE);
   console.log(`loaded "${name}" from ${loaded.directory}`);
@@ -238,8 +251,8 @@ async function load(cdp, name, { url, expectLayer } = {}) {
   if (!String(state.room || '').toLowerCase().startsWith(prefix)) {
     console.log(`WARNING: player room ${state.room} does not look like part of ${state.module}`);
   }
-  if (state.engineMode !== 1) {
-    console.log(`WARNING: engineMode=${state.engineMode}, want 1 (INGAME); input may be suppressed`);
+  if (state.engineMode !== 1 && state.engineMode !== 2) {
+    console.log(`WARNING: engineMode=${state.engineMode}, want 1 (INGAME) or 2 (MINIGAME); input may be suppressed`);
   }
   if (expectLayer === undefined) warnIfStripped(state, `load "${name}"`);
   return state;
@@ -371,7 +384,7 @@ async function enterVr(cdp) {
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`, 60000, 'an enabled Enter VR button');
   await click(cdp, box);
   await waitUntil(cdp, '!!(window.KotOR.VRSpike && window.KotOR.VRSpike.isPresenting)', 30000, 'the XR session');
-  await cdp.evaluate(`(() => { window.KotOR.GameState.MenuManager.InGameOverlay.open(); return true; })()`);
+  await cdp.evaluate(REOPEN_OVERLAY);
   await sleep(1500);
   console.log(JSON.stringify(await cdp.evaluate(STATE)));
 }
@@ -386,7 +399,7 @@ async function enterVrOrWait(cdp) {
   } catch (error) {
     console.log(`Enter VR did not start from here (${error.message}); press it in the headset now`);
     await waitUntil(cdp, '!!(window.KotOR.VRSpike && window.KotOR.VRSpike.isPresenting)', 300000, 'the XR session');
-    await cdp.evaluate(`(() => { window.KotOR.GameState.MenuManager.InGameOverlay.open(); return true; })()`);
+    await cdp.evaluate(REOPEN_OVERLAY);
   }
 }
 
@@ -622,4 +635,8 @@ async function main() {
   }
 }
 
-main().catch((error) => { console.error(error.message || error); process.exit(1); });
+if (require.main === module) {
+  main().catch((error) => { console.error(error.message || error); process.exit(1); });
+}
+
+module.exports = { REOPEN_OVERLAY };
