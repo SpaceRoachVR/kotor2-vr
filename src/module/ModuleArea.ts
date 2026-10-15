@@ -443,6 +443,17 @@ export class ModuleArea extends ModuleObject {
       for(let i = 0; i < GameState.PartyManager.party.length; i++){
         GameState.PartyManager.party[i]?.update(delta);
       }
+    }else{
+      //Perf bisect below L3 skips the party's update, which is also where a
+      //loaded player gets its area and first resolves its room. Without a
+      //room, updateRoomVisibility bails and every room stays visible, so L1
+      //and L2 measured the whole module unculled. Do both here, as
+      //ModuleCreature.update does (the rungs are stationary).
+      const player = GameState.getCurrentPlayer();
+      if(player && !player.room){
+        if(!player.area) player.area = this;
+        player.getCurrentRoom();
+      }
     }
 
     //update creatures

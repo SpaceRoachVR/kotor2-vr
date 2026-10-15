@@ -49,3 +49,28 @@ describe('PerfLayerGate', () => {
     expect(PerfLayerGate.layer).toBe(5);
   });
 });
+
+describe('ModuleArea.update below L3 (source slice)', () => {
+  // A full ModuleArea is too heavy to stand up here; the emulator dry run
+  // (Task 7) found the defect, this keeps the fix from being dropped. Below L3
+  // the party update is skipped, and with it the player's first room lookup,
+  // so updateRoomVisibility bailed and L1/L2 drew every room unculled.
+  const fs = require('fs');
+  const path = require('path');
+  const source: string = fs.readFileSync(path.join(process.cwd(), 'src/module/ModuleArea.ts'), 'utf8');
+  const update = source.slice(source.indexOf('  update(delta: number = 0){'), source.indexOf('updateRoomVisibility(delta);'));
+
+  // findWalkableFace returns early without an area, and the area is also set in
+  // ModuleCreature.update, so both have to happen here.
+  test('still gives the player its area and room when the party update is gated off', () => {
+    const partyGate = update.indexOf('//update party');
+    expect(partyGate).toBeGreaterThan(-1);
+    const block = update.slice(partyGate, update.indexOf('//update creatures'));
+    expect(block).toMatch(/if\(PerfLayerGate\.characters\(\)\)\{[\s\S]*?\}else\{[\s\S]*?getCurrentPlayer\(\)[\s\S]*?!player\.room[\s\S]*?player\.area = this[\s\S]*?player\.getCurrentRoom\(\)/);
+  });
+
+  test('the room lookup runs before updateRoomVisibility in the same update', () => {
+    expect(update.length).toBeGreaterThan(0);
+    expect(update).toContain('player.getCurrentRoom()');
+  });
+});
