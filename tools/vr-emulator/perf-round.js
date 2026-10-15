@@ -9,6 +9,10 @@
  *   node tools/vr-emulator/perf-round.js state
  *   node tools/vr-emulator/perf-round.js reload [xrscale=0.8] [depth=linear]
  *   node tools/vr-emulator/perf-round.js summary
+ *   node tools/vr-emulator/perf-round.js bisect <set|all>
+ *   node tools/vr-emulator/perf-round.js note <text...>
+ *   node tools/vr-emulator/perf-round.js checkpoint <name>
+ *   node tools/vr-emulator/perf-round.js attribution [--budget <ms>]
  *
  * Options: --port <cdp port> (default 9422, the `vr:play` browser; the
  * emulator harness uses its own), --round <name> (default r1), which names the
@@ -32,11 +36,26 @@
  * cookie is already set, and both options are read when the renderer and the
  * XR session are built. Every `load` reloads the page, keeping its options,
  * so the wearer presses Enter VR again after each one.
+ *
+ * `bisect` runs the PerfLayerGate ladder (`?perflayer=l0..l5`) over the sets in
+ * perf-benchmarks.json: per rung it reloads with the layer, loads the
+ * checkpoint, enters VR, settles 10 s and measures 60 s windows. Every
+ * checkpoint is resolved against the saves first, and a set with one missing is
+ * dropped whole before anything runs. The `walk` windows rely on the wearer
+ * walking, as in `stop`; nothing scripts movement. `attribution` (no CDP) reads
+ * the round's records and prints which rung first went over budget and which
+ * stage (sim, render, gpu, runtime) dominated there. `note` records what Allen
+ * reads off the Virtual Desktop overlay; `checkpoint` saves the current game
+ * under the VRPT prefix so a stop can be loaded later.
  */
 const fs = require('fs');
 const path = require('path');
 const { CdpSession, findPageTarget } = require('./cdp');
 const { captureTrace, analyzeTrace } = require('./perf-trace');
+const {
+  bisectPlan, resolvePlan, attributeRungs, formatAttribution,
+  WINDOW_SECONDS, TARGET_HZ, TARGET_P90_MS, TARGET_P99_MS,
+} = require('./perf-bisect');
 
 const CHECKPOINT_PREFIX = 'VRPT-20260824-E2E';
 const argv = process.argv.slice(2);
@@ -74,6 +93,11 @@ const STATE = `(() => {
     engineMode: gs ? gs.Mode : null,
     presenting: !!(vr && vr.isPresenting),
     search: location.search,
+    perflayer: (() => {
+      // PerfLayerGate is not exported on window.KotOR, so echo what the launch URL asked for.
+      const m = /^l([0-5])$/.exec(String(new URLSearchParams(location.search).get('perflayer') || '').trim().toLowerCase());
+      return m ? Number(m[1]) : 5;
+    })(),
     depthMode: gs ? gs.rendererDepthMode : null,
     runtimeRates: vr && vr.perf ? vr.perf.runtimeRates : null,
     targetHz: vr && vr.perf ? vr.perf.targetHz : null,
@@ -184,7 +208,9 @@ async function load(cdp, name) {
   }
 }
 
-async function measureWindow(cdp, label, seconds) {
+// `extra` ({rung, set, checkpoint, window}) comes from bisect and is written into
+// the record beside targetHz, so attribution can group the lines by rung.
+async function measureWindow(cdp, label, seconds, extra = {}) {
   // Auto-reporting restarts the window every 60 s, which would split a long
   // window and leave report() describing only its tail. Hold it off for the
   // window and restore it after.
@@ -206,7 +232,16 @@ async function measureWindow(cdp, label, seconds) {
     return rpt;
   })()`, { timeoutMs: 30000 });
   const after = await cdp.evaluate(STATE);
-  const record = { at: new Date().toISOString(), round: ROUND, label, seconds, before, after, report };
+  const { rung, set, checkpoint, window } = extra;
+  const record = {
+    at: new Date().toISOString(), round: ROUND, label, seconds,
+    ...(rung !== undefined ? { rung } : {}),
+    ...(set !== undefined ? { set } : {}),
+    ...(checkpoint !== undefined ? { checkpoint } : {}),
+    ...(window !== undefined ? { window } : {}),
+    targetHz: before.targetHz,
+    before, after, report,
+  };
   fs.mkdirSync(path.dirname(EVIDENCE), { recursive: true });
   fs.appendFileSync(EVIDENCE, `${JSON.stringify(record)}\n`);
   console.log(summaryLine(record));
@@ -246,17 +281,18 @@ function summaryLine(r) {
   const ft = rpt.frametimeMs || {};
   const cad = rpt.xrCadence || {};
   const world = rpt.world || {};
-  const verdict = rpt.fps >= 50 && ft.p90 <= 33.33 && ft.p99 < 50 ? 'PASS' : 'FAIL';
+  // R4: the spec's 72 Hz target, not the old 50 fps floor.
+  const verdict = ft.p90 <= TARGET_P90_MS && ft.p99 <= TARGET_P99_MS ? 'PASS' : 'FAIL';
   return [
     `${r.label.padEnd(28)} ${String(world.module || r.before.module).padEnd(7)}`,
     `${String(rpt.fps).padStart(6)} fps  p50 ${ft.p50} p90 ${ft.p90} p99 ${ft.p99}`,
     `calls ${rpt.render && rpt.render.calls}  tris ${rpt.render && rpt.render.triangles}`,
     `rooms ${world.roomsVisible}/${world.roomsTotal}  moved ${world.path ? world.path.distanceMetres : '?'} m`,
-    `heap ${rpt.jsHeapMB}  trustworthy=${cad.integrity ? cad.integrity.trustworthy : "n/a"}  ${r.before.presenting ? 'stereo' : 'MONO'}  ${verdict}`,
+    `heap ${rpt.jsHeapMB}  trustworthy=${cad.integrity ? cad.integrity.trustworthy : "n/a"}  ${r.before.presenting ? 'stereo' : 'MONO'}  ${verdict} (target ${TARGET_HZ} Hz: p90<=${TARGET_P90_MS} p99<=${TARGET_P99_MS})`,
   ].join(' | ');
 }
 
-async function reload(cdp, options) {
+async function navigateWithOptions(cdp, options) {
   const params = new URLSearchParams('key=tsl&assets=/assets');
   for (const option of options) {
     const [key, value] = option.split('=');
@@ -266,6 +302,10 @@ async function reload(cdp, options) {
   const url = `${await cdp.evaluate('location.origin')}/game/index.html?${params}`;
   await cdp.send('Page.navigate', { url });
   console.log(`navigated to ${url}`);
+}
+
+async function reload(cdp, options) {
+  await navigateWithOptions(cdp, options);
   console.log('Now run `load <checkpoint>`; it reloads the page again with these options kept.');
 }
 
@@ -292,10 +332,7 @@ async function enterVr(cdp) {
 // first ~40 s after the level appears, then walk until the next load. The
 // settle period keeps the load's own hitches out of the standing window, and
 // the walking window's path distance shows afterwards whether they walked.
-async function stop(cdp, name, tag) {
-  const label = `${ROUND}-${name}${tag ? `-${tag}` : ''}`;
-  console.log(`[${new Date().toLocaleTimeString()}] loading ${name}`);
-  await load(cdp, name);
+async function enterVrOrWait(cdp) {
   try {
     await enterVr(cdp);
   } catch (error) {
@@ -303,6 +340,13 @@ async function stop(cdp, name, tag) {
     await waitUntil(cdp, '!!(window.KotOR.VRSpike && window.KotOR.VRSpike.isPresenting)', 300000, 'the XR session');
     await cdp.evaluate(`(() => { window.KotOR.GameState.MenuManager.InGameOverlay.open(); return true; })()`);
   }
+}
+
+async function stop(cdp, name, tag) {
+  const label = `${ROUND}-${name}${tag ? `-${tag}` : ''}`;
+  console.log(`[${new Date().toLocaleTimeString()}] loading ${name}`);
+  await load(cdp, name);
+  await enterVrOrWait(cdp);
   console.log(`[${new Date().toLocaleTimeString()}] in VR — settling 10 s, then STAND 30 s, then WALK 60 s`);
   await sleep(10000);
   await measureWindow(cdp, `${label}-rest`, 30);
@@ -312,13 +356,107 @@ async function stop(cdp, name, tag) {
 
 function summary() {
   if (!fs.existsSync(EVIDENCE)) throw new Error(`no evidence yet at ${EVIDENCE}`);
-  for (const text of fs.readFileSync(EVIDENCE, 'utf8').split(/\r?\n/)) {
-    if (text.trim()) console.log(summaryLine(JSON.parse(text)));
+  for (const record of readRecords()) {
+    console.log(record.label === 'note' ? `NOTE ${record.at}: ${record.text}` : summaryLine(record));
   }
+}
+
+function readRecords() {
+  if (!fs.existsSync(EVIDENCE)) return [];
+  return fs.readFileSync(EVIDENCE, 'utf8').split(/\r?\n/).filter((t) => t.trim()).map((t) => JSON.parse(t));
+}
+
+function appendRecord(record) {
+  fs.mkdirSync(path.dirname(EVIDENCE), { recursive: true });
+  fs.appendFileSync(EVIDENCE, `${JSON.stringify(record)}\n`);
+}
+
+// What the wearer reads off the Virtual Desktop overlay, kept with the round.
+function note(words) {
+  const text = words.join(' ').trim();
+  if (!text) throw new Error('usage: perf-round.js note <text...>');
+  appendRecord({ at: new Date().toISOString(), round: ROUND, label: 'note', text });
+  console.log(`noted in ${EVIDENCE}`);
+}
+
+async function checkpoint(cdp, name) {
+  const saved = await cdp.evaluate(`(async () => {
+    const ok = await window.KotOR.SaveGame.SaveCurrentGame(${JSON.stringify(`${CHECKPOINT_PREFIX} ${name}`)});
+    return ok !== false;
+  })()`, { timeoutMs: 60000 });
+  if (!saved) throw new Error(`saving "${name}" did not complete (a save may already be in progress)`);
+  console.log(`saved "${CHECKPOINT_PREFIX} ${name}"`);
+}
+
+function attribution() {
+  const budgetMs = Number(opt('--budget', TARGET_P90_MS));
+  const records = readRecords();
+  if (!records.length) return console.log(`no records at ${EVIDENCE}; run bisect <set|all> for round "${ROUND}" first`);
+  console.log(formatAttribution(attributeRungs(records, budgetMs), budgetMs));
+}
+
+async function listSaveNames(cdp) {
+  return cdp.evaluate(`(async () => {
+    const K = window.KotOR;
+    await K.SaveGame.GetSaveGames();
+    return K.SaveGame.saves.map((s) => String((s.getSaveName && s.getSaveName()) || s.SAVEGAMENAME || ''));
+  })()`, { timeoutMs: 120000 });
+}
+
+// The ladder. Each rung needs its own page (the layer is read at boot), and
+// `load` reboots the page anyway, so the windows of one (checkpoint, rung) share
+// one load. A failed stop is reported and the run goes on to the next.
+async function bisect(cdp, setNames) {
+  const benchmarks = JSON.parse(fs.readFileSync(path.join(__dirname, 'perf-benchmarks.json'), 'utf8'));
+  const plan = bisectPlan(benchmarks, setNames);
+
+  // Resolve every checkpoint before any window, so a typo fails in seconds and
+  // not after an hour of rungs.
+  await freshPage(cdp);
+  const { runnable, aborted, pendingSkipped } = resolvePlan(plan, await listSaveNames(cdp), CHECKPOINT_PREFIX);
+  for (const name of pendingSkipped) console.log(`skipping pending checkpoint "${name}" (not created yet)`);
+  for (const a of aborted) {
+    console.log(`ABORTING set "${a.set}": no checkpoint ${a.missing.map((m) => `"${m}"`).join(', ')}; available: ${a.available.join(', ') || '(none)'}`);
+  }
+  if (!runnable.length) throw new Error('nothing to run');
+
+  const stops = [];
+  for (const row of runnable) {
+    const last = stops[stops.length - 1];
+    if (last && last.set === row.set && last.checkpoint === row.checkpoint && last.rung === row.rung) last.windows.push(row.window);
+    else stops.push({ set: row.set, checkpoint: row.checkpoint, rung: row.rung, windows: [row.window] });
+  }
+
+  const failures = [];
+  for (const s of stops) {
+    const tag = `${s.set}/${s.checkpoint} l${s.rung}`;
+    try {
+      console.log(`[${new Date().toLocaleTimeString()}] ${tag}: reload, load, enter VR`);
+      await navigateWithOptions(cdp, [`perflayer=l${s.rung}`]);
+      await sleep(3000);
+      await load(cdp, s.checkpoint);
+      await enterVrOrWait(cdp);
+      const echoed = (await cdp.evaluate(STATE)).perflayer;
+      if (echoed !== s.rung) throw new Error(`page reports perflayer l${echoed}, wanted l${s.rung}`);
+      await sleep(10000);
+      for (const window of s.windows) {
+        if (window === 'walk') console.log('WALK now: nothing scripts movement, the wearer walks for this window');
+        const label = `${ROUND}-bisect-${s.set}-${s.checkpoint}-l${s.rung}-${window}`;
+        await measureWindow(cdp, label, WINDOW_SECONDS[window], { rung: s.rung, set: s.set, checkpoint: s.checkpoint, window });
+      }
+    } catch (error) {
+      console.log(`FAILED ${tag}: ${error.message || error}`);
+      failures.push(tag);
+    }
+  }
+  if (failures.length) console.log(`failed stops: ${failures.join('; ')}`);
+  console.log(formatAttribution(attributeRungs(readRecords(), TARGET_P90_MS), TARGET_P90_MS));
 }
 
 async function main() {
   if (command === 'summary') return summary();
+  if (command === 'attribution') return attribution();
+  if (command === 'note') return note(rest);
   const cdp = await connect();
   try {
     if (command === 'load' && rest[0]) return await load(cdp, rest[0]);
@@ -328,7 +466,9 @@ async function main() {
     if (command === 'enter-vr') return await enterVr(cdp);
     if (command === 'state') return console.log(JSON.stringify(await cdp.evaluate(STATE), null, 1));
     if (command === 'reload') return await reload(cdp, rest);
-    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary');
+    if (command === 'bisect' && rest[0]) return await bisect(cdp, rest);
+    if (command === 'checkpoint' && rest[0]) return await checkpoint(cdp, rest.join(' '));
+    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> | note <text...> | checkpoint <name> | attribution [--budget <ms>]');
   } finally {
     cdp.close();
   }

@@ -1,0 +1,32 @@
+{
+  "_comment": "Benchmark sets for `perf-round.js bisect`. checkpoints are {name, pending?}: pending:true means the save does not exist yet (Task 6 creates the perf-* ones) and bisect skips it with a note. rungs are PerfLayerGate layers (l0..l5). windows are rest|walk|talk; bisectPlan runs only `rest` below rung 3 because L1/L2 are valid stationary only.",
+  "peragus": {
+    "checkpoints": [{ "name": "medbay-swept" }, { "name": "t3-hangar" }, { "name": "droids-cleared" }],
+    "rungs": [0, 1, 2, 3, 4, 5],
+    "windows": ["rest", "walk"]
+  },
+  "ebon-hawk": {
+    "checkpoints": [{ "name": "ebon-main-hold-open" }, { "name": "ebon-engine-room-open" }],
+    "rungs": [3, 4, 5],
+    "windows": ["rest", "walk"]
+  },
+  "conversation": {
+    "checkpoints": [{ "name": "kreia-awakened" }, { "name": "perf-theater", "pending": true }],
+    "rungs": [3, 4, 5],
+    "windows": ["talk"]
+  },
+  "combat": {
+    "checkpoints": [
+      { "name": "perf-combat", "pending": true },
+      { "name": "perf-turret", "pending": true },
+      { "name": "perf-swoop", "pending": true }
+    ],
+    "rungs": [3, 4, 5],
+    "windows": ["rest", "walk"]
+  },
+  "telos": {
+    "checkpoints": [{ "name": "perf-telos-a", "pending": true }, { "name": "perf-telos-c", "pending": true }],
+    "rungs": [3, 4, 5],
+    "windows": ["rest", "walk"]
+  }
+}
