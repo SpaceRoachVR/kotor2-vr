@@ -11,9 +11,15 @@ import { parsePerfLayer, type PerfLayer } from '@/utility/RendererOptions';
  * | 0     | nothing: an empty clear                                 |
  * | 1     | world submission, the player's room only                |
  * | 2     | all linked rooms                                        |
- * | 3     | characters: party, creatures, placeables, doors         |
- * | 4     | effects: emitters, grass, lights, wind                  |
+ * | 3     | characters: party and creatures (drawn and updated),    |
+ * |       | plus the UPDATES of placeables and doors                |
+ * | 4     | effects: emitters, grass, lights, wind, effects,        |
+ * |       | weather effects, spell instances                        |
  * | 5     | play layer: cursor, audio, VR UI passes, desktop mirror |
+ *
+ * Placeable and door meshes draw from L1 (they are part of the room scene);
+ * only their updates (animation, logic) start at L3. Creatures and party are
+ * hidden, and not updated, below L3.
  *
  * Layer 5 is the normal game. Every call site is guarded so that at layer 5 it
  * behaves exactly as if the gate did not exist; {@link PerfLayerGate.active} is
@@ -35,10 +41,10 @@ export class PerfLayerGate {
   /** L2+: every linked room, not just the player's room. */
   static allRooms(): boolean { return PerfLayerGate.layer >= 2; }
 
-  /** L3+: party, creatures, placeables and doors. */
+  /** L3+: party and creatures drawn; placeable and door updates run. */
   static characters(): boolean { return PerfLayerGate.layer >= 3; }
 
-  /** L4+: emitters, grass, lights and wind. */
+  /** L4+: emitters, grass, lights, wind, and the effects, weather and spell groups. */
   static effects(): boolean { return PerfLayerGate.layer >= 4; }
 
   /** L5: cursor, audio, VR UI passes and the desktop mirror. */

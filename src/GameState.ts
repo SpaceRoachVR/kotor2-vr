@@ -5915,6 +5915,9 @@ export class GameState implements EngineContext {
       GameState.group.emitters.visible = false;
       GameState.group.grass.visible = false;
       GameState.group.lights.visible = false;
+      GameState.group.effects.visible = false;
+      GameState.group.weather_effects.visible = false;
+      GameState.group.spell_instances.visible = false;
     }
   }
 

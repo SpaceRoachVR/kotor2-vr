@@ -19,11 +19,20 @@ consecutive headset rounds. No visual trade-offs.
   `weakened`, `refuted`, or `unverified` when it was outside the critic's top 4.
   The emulator can refute but never confirm; only the headset result column can.
 - **Flag** is the launch option `perf.<id>=on|off` the fix ships behind.
-- **Headset result** is `confirmFlag` from `perf-round.js wave`: the A/B/A gain in
-  ms p90 on the worst set, against the prediction (confirmed within ±30%, or a
-  gain of at least 70% of it; rejected below that; inconclusive on drift > 0.5 m
-  within or between the windows, a refresh-rate change, an untrustworthy window, or
-  a suite regression > 1 ms p90 against the baseline).
+- **Headset result** is the `confirmFlag` verdict: the A/B/A gain in ms p90 on the
+  worst set, against the prediction (confirmed within ±30%, or a gain of at least
+  70% of it; rejected below that; inconclusive on drift > 0.5 m within or between
+  the windows, a refresh-rate change, an untrustworthy window, or a suite
+  regression > 1 ms p90 against the baseline). `perf-round.js wave` runs the
+  windows and, only when given `--predicted <ms>`, finishes by running
+  `confirmFlag` for each flag against the worst set and printing the verdict,
+  `deltaMs`, drift and notes. `--baseline <round>` supplies an earlier round's
+  records for the regression check; without it that check is skipped and the
+  output says so. `predictedMs` in the workflow's `wave1[]` is a per-set object:
+  the lead passes the WORST set's value. For example:
+  `perf-round.js --round wave1 --refresh-hz 72 wave perf.x,perf.y --worst peragus --predicted 4,2.5 --baseline bisect-<date>`.
+  Without `--predicted`, `wave` prints only the A/B/A table (`formatAba`); the lead
+  then records the verdict by hand.
 - **Status:** `proposed` → `building` → `merged-off` (merged to
   `perf/integration`, flag off) → `confirmed` (flag on by default) or `rejected`
   (stays merged with its flag off) → `removed` (code dropped two waves after

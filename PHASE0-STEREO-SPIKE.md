@@ -308,7 +308,7 @@ repeat the sustained-50 gate before the Peragus VR candidate.
 
 ## Bisect round procedure
 
-The Phase 2 bisect round (VR perf team, 2026-10-15) asks which engine layer
+The Phase 0 bisect round (VR perf team, 2026-10-15) asks which engine layer
 first pushes each benchmark scene over the 72 Hz budget (p90 ≤ 13.9 ms,
 p99 ≤ 20 ms). `tools/vr-emulator/perf-round.js bisect` boots the page at each
 `?perflayer=l0..l5` rung, loads a checkpoint, enters VR, settles 10 s and
@@ -317,6 +317,16 @@ player's room only, L2 the linked rooms, L3 adds characters, L4 adds effects,
 grass and lights, L5 is the full game. The sets live in
 `tools/vr-emulator/perf-benchmarks.json`. Records go to
 `tools/vr-emulator/evidence/perf/<round>.jsonl`.
+
+**Instrumentation is off in normal play (R22).** The GPU timer queries and the
+`kotor2vr.xrframe` user-timing mark cost per-frame work, so they run only while
+`VRSpike.perf.instrument` is true. Every measurement command (`bisect`, `wave`,
+`window`, `stop` and `trace`) turns it on before it starts a window, and a page
+boot resets it, so it is set per window. It stays on until the next reload, which
+only affects that measurement session. Normal play, with `?perflayer` absent and
+no `perf.*` flags, has no instrumentation at all: the game plays and renders as
+before. The side effect is that the sampler's 60 s auto-reports in casual play
+carry no `gpuMs`.
 
 ### Headset setup
 
@@ -409,9 +419,9 @@ all.
 - **Stand still through L0–L4.** Below L3 the party isn't updated, so the
   player can't move. L1 and L2 are valid only from the load spot, so don't
   walk during them. Every rung below L5 takes a `rest` window. Walk only when
-  the log says `WALK now` (the L5 `walk` windows). The `talk` window
-  (conversation set) means start the conversation in front of you and click
-  through it.
+  the log says `WALK now` (the L5 `walk` windows). When it says `TALK now`
+  (the conversation set's `talk` window, in `bisect` and in the `wave` suite),
+  start the conversation in front of you and click through it.
 - **Read the overlay at each rung.** When a window starts, Allen reads the VD
   overlay aloud, and Claude records it against the round:
   ```bash
@@ -421,6 +431,24 @@ all.
   run goes on to the next. When the run ends, or on Ctrl+C, the driver sends
   the page back to plain `perflayer=l5`. If it says it couldn't, reload
   without `?perflayer` before playing.
+
+### One profiled window per set
+
+The 60 s windows above are unprofiled. The spec also wants one profiled window
+per set (CPU profile plus trace), kept separate from them, because tracing
+perturbs the timing. Run it after that set's `bisect`, at plain L5 on the set's
+ladder checkpoint (`bisect` leaves the page at `perflayer=l5`):
+
+```bash
+node tools/vr-emulator/perf-round.js load <ladderCheckpoint>          # e.g. medbay-swept
+node tools/vr-emulator/perf-round.js enter-vr
+node tools/vr-emulator/perf-round.js --round bisect-<date> --refresh-hz 72 trace <set>-profile 20
+```
+
+`trace` records a Chrome trace over a 20 s window (the file is in
+`evidence/perf/`, open it in ui.perfetto.dev) and prints the top JS self-time
+rows. Its record carries no `rung` or `set`, so `attribution` and the wave
+baseline ignore it. Never mix it into the unprofiled numbers.
 
 ### Reading the attribution table
 
@@ -447,12 +475,22 @@ There is one block per set and checkpoint. The heading is the verdict:
   isn't proven.
 - `stage: unknown` means the report lacked `cpuMs`, so no stage can be named.
 - A `-` in the gpu column means `gpuMs` was null: no timer-query extension, or
-  disjoint samples. The runtime column then absorbs the GPU time.
+  no timed submissions in the window (including a window run with
+  instrumentation off). The runtime column then absorbs the GPU
+  time. Disjoint samples are different: the batch is discarded and the report
+  sets `disjoint: true`, and `gpuMs` stays non-null if other samples survive.
+  `gpuMs` times only the world submission (`renderer.render` of the scene, or
+  the L0 empty scene). The VR UI passes and the desktop mirror are outside it,
+  so the L4 to L5 gpu delta understates L5's GPU cost; that cost shows up in the
+  runtime column instead.
 - **excluded** lists windows dropped because their `xrCadence` integrity was
   untrustworthy. A rung with only excluded windows shows as `unmeasured`.
-- If an L0 row is already over budget (`first over at l0`), the cost is below
-  the engine, in the browser or XR runtime. Record "stack ceiling suspected",
-  and the XR-runtime track leads wave 1.
+- If an L0 row is already over budget (`first over at l0`) **and its stage is
+  `runtime`** (or its gpu is near zero), the cost is below the engine, in the
+  browser or XR runtime. Record "stack ceiling suspected", and the XR-runtime
+  track leads wave 1. If L0's stage is `sim`, the engine is still the suspect:
+  L0 skips the world draw but still runs simulation, scripts, input and menus,
+  so look at the CPU side before blaming the stack.
 
 Each set's other checkpoints run only at L5 (R12), so their blocks have one row.
 The emulator can rehearse all of this (see the dry run below), but its frame

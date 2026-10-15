@@ -74,3 +74,27 @@ describe('ModuleArea.update below L3 (source slice)', () => {
     expect(update).toContain('player.getCurrentRoom()');
   });
 });
+
+describe('GameState.applyPerfLayerGroupVisibility (source slice)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const source: string = fs.readFileSync(path.join(process.cwd(), 'src/GameState.ts'), 'utf8');
+  const start = source.indexOf('static applyPerfLayerGroupVisibility(){');
+  const body: string = source.slice(start, source.indexOf('/** Shows the PAUSE overlay', start));
+
+  test('below L3 it hides creatures and party; below L4 every effect group', () => {
+    const characters = body.slice(body.indexOf('!PerfLayerGate.characters()'), body.indexOf('!PerfLayerGate.effects()'));
+    expect(characters).toContain('GameState.group.creatures.visible = false;');
+    expect(characters).toContain('GameState.group.party.visible = false;');
+    const effects = body.slice(body.indexOf('!PerfLayerGate.effects()'));
+    for (const group of ['emitters', 'grass', 'lights', 'effects', 'weather_effects', 'spell_instances']) {
+      expect(effects).toContain(`GameState.group.${group}.visible = false;`);
+    }
+  });
+
+  test('it only ever hides: no group is assigned visible = true', () => {
+    expect(start).toBeGreaterThan(-1);
+    expect(body).not.toMatch(/visible\s*=\s*true/);
+    expect(body).not.toMatch(/visible\s*=\s*[^f;\s]/);
+  });
+});
