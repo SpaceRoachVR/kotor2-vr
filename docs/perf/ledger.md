@@ -22,11 +22,15 @@ consecutive headset rounds. No visual trade-offs.
 - **Headset result** is `confirmFlag` from `perf-round.js wave`: the A/B/A gain in
   ms p90 on the worst set, against the prediction (confirmed within ±30%, or a
   gain of at least 70% of it; rejected below that; inconclusive on drift > 0.5 m
-  or an untrustworthy window).
+  within or between the windows, a targetHz change, an untrustworthy window, or
+  a suite regression > 1 ms p90 against the baseline).
 - **Status:** `proposed` → `building` → `merged-off` (merged to
   `perf/integration`, flag off) → `confirmed` (flag on by default) or `rejected`
   (stays merged with its flag off) → `removed` (code dropped two waves after
-  rejection unless revived).
+  rejection unless revived). A status only moves forward.
+- A re-run of the analysis workflow updates this file in place: existing rows
+  keep their wave, owner, flag, headset result and status, and the Round log
+  is only appended to.
 - Big bets (multiview, workers, WebGPU) are listed under Spikes, never in a wave.
 - Upstream candidates are tagged `↑` after the id; nothing is posted upstream.
 

@@ -1,10 +1,10 @@
 export const meta = {
   name: 'vr-perf-analysis',
   description: 'VR perf team Phase 1: five domain analysts propose hypotheses, a critic attacks the top four in the emulator, the lead ranks them into docs/perf/ledger.md and proposes wave 1',
-  whenToUse: 'After a Phase 0 bisect headset round, with the attribution table and bisect JSONL in hand. args: {repoRoot, attributionTable, bisectJsonl, traceFiles[], auditPath, p1Notes, inFlightBranches[], dryRun?}',
+  whenToUse: 'After a Phase 0 bisect headset round, with the attribution table and bisect JSONL in hand. args: {repoRoot, attributionTable, bisectJsonl, traceFiles[], auditPath, p1Notes, inFlightBranches[], priorLedgerMarkdown?, dryRun?}',
   phases: [
     { title: 'Analyze', detail: '5 analysts in parallel (trace, GPU/WebGL, JS/CPU & GC, XR runtime, retail/visual guard); hypotheses per docs/perf/hypothesis.schema.json' },
-    { title: 'Verify', detail: 'critic per hypothesis, top 4 by provisional score, emulator on port 9430+i; refutes, never confirms' },
+    { title: 'Verify', detail: 'critic per hypothesis, top 4 by provisional score, one at a time, emulator on CDP 9480+i and assets 8520+i; refutes, never confirms' },
     { title: 'Rank', detail: 'lead merges duplicates, ranks by ms x confidence / cost, writes docs/perf/ledger.md, proposes wave 1' },
   ],
 }
@@ -18,7 +18,11 @@ export const meta = {
 // ---------------------------------------------------------------------------
 
 const CRITIC_CAP = 4
-const CRITIC_BASE_PORT = 9430
+// Controller ruling R18: critics run one at a time, each with its own CDP port,
+// asset-service port, user root and Chrome profile, clear of 9422 (vr:play),
+// 8479 (the default asset service) and 9431 (playthrough.js).
+const CRITIC_CDP_BASE = 9480
+const CRITIC_ASSET_BASE = 8520
 const TARGET_P90_MS = 13.9
 const CONFIDENCE_WEIGHT = { high: 1, med: 0.6, low: 0.3 }
 const COST_WEIGHT = { S: 1, M: 2, L: 4 }
@@ -90,7 +94,7 @@ const CRITIC_VERDICT = {
 
 const LEAD_OUTPUT = {
   type: 'object',
-  required: ['ledgerPath', 'ranked', 'wave1', 'spikes'],
+  required: ['ledgerPath', 'ranked', 'wave1', 'spikes', 'preserved'],
   properties: {
     ledgerPath: { type: 'string' },
     ranked: {
@@ -126,6 +130,8 @@ const LEAD_OUTPUT = {
       },
     },
     spikes: { type: 'array', items: { type: 'string' }, description: 'bigBet ids proposed as spike sessions' },
+    preserved: { type: 'array', items: { type: 'string' }, description: 'ids of prior ledger rows carried forward that are not in `ranked` this run' },
+    priorIds: { type: 'array', items: { type: 'string' }, description: 'every id in the Ranked items table of the ledger as you found it, before editing' },
     dropped: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, reason: { type: 'string' } } } },
     notes: { type: 'string' },
   },
@@ -145,6 +151,24 @@ if (missing.length) throw new Error(`vr-perf-analysis args missing: ${missing.jo
 const ROOT = input.repoRoot.replace(/[\\/]+$/, '')
 const LEDGER = `${ROOT}/docs/perf/ledger.md`
 
+// The ids already in the ledger's "Ranked items" table, when the caller passes
+// the current ledger text (the script has no fs). A re-run must not lose them.
+function ledgerIds(markdown) {
+  if (typeof markdown !== 'string') return []
+  const ids = []
+  let inRanked = false
+  for (const line of markdown.split(/\r?\n/)) {
+    if (/^##\s/.test(line)) { inRanked = /^##\s+Ranked items/i.test(line); continue }
+    if (!inRanked || !line.trim().startsWith('|')) continue
+    const cells = line.split('|').slice(1, -1).map((c) => c.trim())
+    const id = (cells[1] || '').replace(/↑/g, '').trim()
+    if (!id || id === 'id' || /^-+$/.test(id)) continue
+    if (!ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+const PRIOR_IDS = ledgerIds(input.priorLedgerMarkdown)
+
 const PACKET = [
   'INPUT PACKET (read these; paths are absolute or relative to the repo root):',
   `- repo root (your worktree): ${ROOT}`,
@@ -162,6 +186,7 @@ const SAFETY = [
   '- NEVER run `git worktree add` or `git worktree remove`. Never create or delete junctions or symlinks.',
   `- Never modify or delete anything outside your own worktree, ${ROOT} (reading packet files elsewhere is fine). Never git stash, reset, switch branches, commit or push.`,
   '- Never modify the main checkout (other Claude sessions and Codex edit it), and never connect to port 9422 (the headset browser).',
+  '- Writing scratch files under %TEMP% is allowed (and is where emulator profiles and user roots go). Never write to %LOCALAPPDATA%\\Kotor2VR, the real user root.',
   '- VISUAL TRADE-OFFS ARE FORBIDDEN: resolution, render scale, shadows, LOD, grass density, post-processing, authored animation and lighting stay exactly as they are. A hypothesis that changes what the player sees is out of scope, however much time it saves.',
   '- Only headset numbers prove a fix. Emulator and desktop traces generate and refute hypotheses; they never confirm one.',
 ].join('\n')
@@ -236,7 +261,15 @@ function analystPrompt(a) {
 const provisionalMs = (h) => Math.max(0, ...Object.values(h.expectedMsSaved || {}).filter((v) => Number.isFinite(v)))
 const provisionalScore = (h) => (provisionalMs(h) * (CONFIDENCE_WEIGHT[h.confidence] || 0)) / (COST_WEIGHT[h.cost] || 4)
 
-function criticPrompt(h, port, invariants) {
+function criticSetup(i) {
+  const cdp = CRITIC_CDP_BASE + i
+  const assets = CRITIC_ASSET_BASE + i
+  const dir = `%TEMP%\\kotor2vr-critic-${i}`
+  return { cdp, assets, dir, userRoot: `${dir}\\user`, userDataDir: `${dir}\\chrome` }
+}
+
+function criticPrompt(h, i, invariants) {
+  const s = criticSetup(i)
   return [
     'You are the adversarial critic on the KotOR II VR performance team. You build nothing. Attack this hypothesis on evidence, retail parity and visual identity.',
     '',
@@ -251,16 +284,28 @@ function criticPrompt(h, port, invariants) {
     'WHAT TO DO:',
     '1. Open every evidence reference. A file:line that does not say what the claim needs weakens or refutes it.',
     '2. Check expectedMsSaved against the bisect records and the attribution table: is the stage it targets actually the dominant one in those scenes at 72 Hz? The audit numbers are 90 Hz.',
-    `3. Run the falsification test in the emulator where it means anything. Use the emulator harness (tools/vr-emulator/harness.js, VrHarness; see .claude/skills/kotor2-vr/references/vr-testing.md) with CDP on YOUR OWN port ${port}, and pass --port ${port} to any tools/vr-emulator script (e.g. perf-round.js). If port ${port} is already in use, do not kill whatever holds it: report that and fall back to an evidence-only review. Do not build (no webpack); use the existing dist/. Stop every process you started before you return.`,
+    '3. Run the falsification test in the emulator where it means anything. You are the only critic running right now; this is your own isolated emulator (see .claude/skills/kotor2-vr/references/vr-testing.md):',
+    `   - Create ${s.userRoot} and ${s.userDataDir} (absolute paths; resolve %TEMP% yourself). If you need checkpoint saves, COPY only the save folders you need from %LOCALAPPDATA%\\Kotor2VR\\Saves into ${s.userRoot}\\Saves; never write to the source.`,
+    '   - Drive it from a Node script (a scratch file under your %TEMP% dir), with exactly these ports:',
+    "       const { startAssetService } = require('<repo>/tools/vr-emulator/asset-service');",
+    "       const { VrHarness } = require('<repo>/tools/vr-emulator/harness');",
+    `       const service = await startAssetService({ port: ${s.assets}, userRoot: '<absolute ${s.userRoot}>' });`,
+    `       const harness = new VrHarness({ port: ${s.cdp}, userDataDir: '<absolute ${s.userDataDir}>' });`,
+    '       await harness.launch(service.url);  /* ... */  finally { await harness.close(); service.stop(); }',
+    `   - perf-round.js may be pointed at it with --port ${s.cdp} --round critic-${h.id || i}.`,
+    `   - Do NOT run anything with hard-coded ports: playthrough.js, probe-*.js, collect.js, npm run vr:check or vr:play. If CDP ${s.cdp} or asset port ${s.assets} is in use, do not kill whatever holds it: report that and fall back to an evidence-only review.`,
+    '   - Do not build (no webpack); use the existing dist/. Stop every process you started before you return.',
     '4. Look for any way the fix would change what the player sees, or diverge from retail behaviour.',
     '',
-    'THE EMULATOR CAN REFUTE BUT NEVER CONFIRM. Emulator timings do not predict the headset. "survives" means you tried and failed to break it, not that it is proven. Verdicts:',
-    '- refuted: the evidence is wrong, the targeted stage is not the bottleneck, the falsification test failed, or the fix needs a visual trade-off.',
+    'THE EMULATOR CAN REFUTE BUT NEVER CONFIRM. Emulator timings do not predict the headset. "survives" means you tried and failed to break it, not that it is proven.',
+    'Never refute on emulator timing alone: an emulator frame time that does not move is not a refutation. A refutation needs a logical or code-level reason (the evidence does not say what the claim needs, the code path is not hot or never reached, the targeted stage is not the bottleneck in the HEADSET records) or a functional failure in the emulator (an exception, wrong output, a visual change).',
+    'Verdicts:',
+    '- refuted: the evidence is wrong, the code path or stage is not what the claim says, the falsification test fails on logic or function, or the fix needs a visual trade-off.',
     '- weakened: the claim holds in part, or the saving is clearly smaller or confined to fewer scenes than predicted.',
     '- survives: nothing you could check breaks it.',
     'Default to weakened when you could not run a meaningful check.',
     '',
-    'You may write emulator evidence under tools/vr-emulator/evidence/ only; edit nothing else.',
+    'You may write emulator evidence under tools/vr-emulator/evidence/ and scratch under your %TEMP% dir only; edit nothing else.',
     '',
     SAFETY,
   ].join('\n')
@@ -284,7 +329,14 @@ function leadPrompt(items, invariants) {
     `3. Down-weight (halve) any item that does not move some scene below ${TARGET_P90_MS} ms p90 or unblock one that will: read each scene's current p90 off the attribution table.`,
     '4. Refuted items stay in the ledger at the bottom with their reason; they are never in a wave.',
     '',
-    `WRITE ${LEDGER}: keep its header and "How to read this" section, fill "Ranked items" (columns: rank, id, claim, ms x conf / cost, verdict, wave, owner session, flag, headset result, status; status "proposed"; upstream candidates tagged with an up-arrow after the id), "Proposed wave" and "Spikes (big bets)", and stamp "Last ranked" with today's date. Edit no other file.`,
+    `UPDATE ${LEDGER}. Read the current ledger first: it may already hold rows from earlier rounds, and a re-run must not wipe them.`,
+    PRIOR_IDS.length ? `- The caller says it currently ranks: ${PRIOR_IDS.join(', ')}. Every one must stay in the ledger.` : '- Report every id you find in its Ranked items table as priorIds.',
+    '- For every existing row, carry forward its wave, owner session, flag, headset result and status unchanged. Re-score and re-rank it with the new evidence if relevant, but never downgrade a status: the order is proposed < building < merged-off < confirmed | rejected < removed, and a row only moves forward (e.g. never confirmed -> proposed).',
+    '- An existing row that this run\'s hypotheses do not cover stays as it is; list its id in `preserved`. A new hypothesis that duplicates an existing row merges into that row instead of adding a second one.',
+    '- New rows get status "proposed". Upstream candidates are tagged with an up-arrow after the id.',
+    '- Keep the header and "How to read this" section; update "Ranked items" (columns: rank, id, claim, ms x conf / cost, verdict, wave, owner session, flag, headset result, status), "Proposed wave" and "Spikes (big bets)"; stamp "Last ranked" with today\'s date.',
+    '- APPEND one line for this run to the "Round log"; never replace or edit earlier Round log lines.',
+    '- Edit no other file.',
     '',
     'WAVE 1: propose 2-4 items that are not refuted, not bigBet, and whose `files` are pairwise disjoint and not touched by the in-flight branches. Each gets a flag perf.<id>. bigBet items go to spikes instead. If fewer than 2 items qualify, say why in notes.',
     '',
@@ -303,7 +355,14 @@ if (input.dryRun) {
     ledgerPath: LEDGER,
     maxAgents: ANALYSTS.length + CRITIC_CAP + 1,
     analysts: ANALYSTS.map((a) => ({ domain: a.domain, label: a.title, prompt: analystPrompt(a) })),
-    critic: { cap: CRITIC_CAP, ports: Array.from({ length: CRITIC_CAP }, (_, i) => CRITIC_BASE_PORT + i), samplePrompt: criticPrompt({ id: 'example' }, CRITIC_BASE_PORT, []) },
+    critic: {
+      cap: CRITIC_CAP,
+      sequential: true,
+      ports: Array.from({ length: CRITIC_CAP }, (_, i) => criticSetup(i).cdp),
+      assetPorts: Array.from({ length: CRITIC_CAP }, (_, i) => criticSetup(i).assets),
+      samplePrompt: criticPrompt({ id: 'example' }, 0, []),
+    },
+    priorLedgerIds: PRIOR_IDS,
     lead: { prompt: leadPrompt([], []) },
     schemas: { HYPOTHESIS, ANALYST_OUTPUT, CRITIC_VERDICT, LEAD_OUTPUT },
   }
@@ -337,7 +396,9 @@ hypotheses.sort((a, b) => b.provisionalScore - a.provisionalScore)
 log(`${hypotheses.length} hypotheses from ${analystResults.filter(Boolean).length}/${ANALYSTS.length} analysts, ${invariants.length} visual invariants`)
 
 // ---------------------------------------------------------------------------
-// Verify: one critic per hypothesis, capped at the top CRITIC_CAP.
+// Verify: one critic per hypothesis, capped at the top CRITIC_CAP, run one at a
+// time (R18): one emulator at a time, so emulators never contend for the GPU,
+// the CPU or a port.
 // ---------------------------------------------------------------------------
 
 phase('Verify')
@@ -345,14 +406,16 @@ const toVerify = hypotheses.slice(0, CRITIC_CAP)
 const unverified = hypotheses.slice(CRITIC_CAP)
 if (unverified.length) log(`critic cap ${CRITIC_CAP}: ${unverified.length} lower-scored hypotheses pass through unverified (${unverified.map((h) => h.id).join(', ')})`)
 
-const verdicts = await pipeline(
-  toVerify,
-  (h, _item, i) => agent(criticPrompt(h, CRITIC_BASE_PORT + i, invariants), {
-    label: `Critic: ${h.id} (port ${CRITIC_BASE_PORT + i})`,
+const verdicts = []
+for (let i = 0; i < toVerify.length; i++) {
+  const h = toVerify[i]
+  const s = criticSetup(i)
+  verdicts.push(await agent(criticPrompt(h, i, invariants), {
+    label: `Critic: ${h.id} (CDP ${s.cdp}, assets ${s.assets})`,
     phase: 'Verify',
     schema: CRITIC_VERDICT,
-  }),
-)
+  }))
+}
 
 const judged = [
   ...toVerify.map((h, i) => {
@@ -374,25 +437,44 @@ phase('Rank')
 const ranking = await agent(leadPrompt(judged, invariants), { label: 'Lead: rank + ledger', phase: 'Rank', schema: LEAD_OUTPUT })
 
 const waveProblems = []
+let lostLedgerIds = []
 if (!ranking) {
   waveProblems.push('lead returned nothing: ledger not written')
 } else {
+  // The critic's verdict and the analyst's bigBet come from `judged`, never
+  // from the lead's re-labelling, so a refuted item cannot be laundered. A
+  // merged item answers for every hypothesis merged into it.
   const byId = new Map(judged.map((h) => [h.id, h]))
   const rankedById = new Map((ranking.ranked || []).map((r) => [r.id, r]))
+  const sourcesOf = (id) => {
+    if (byId.has(id)) return [byId.get(id)]
+    const r = rankedById.get(id)
+    const merged = ((r && r.mergedFrom) || []).map((m) => byId.get(m)).filter(Boolean)
+    return merged.length ? merged : (r ? [r] : [])
+  }
   const wave = ranking.wave1 || []
   if (wave.length < 2 || wave.length > 4) waveProblems.push(`wave 1 has ${wave.length} items, want 2-4`)
   const owner = new Map()
   for (const w of wave) {
-    const src = rankedById.get(w.id) || byId.get(w.id)
-    if (src && src.bigBet) waveProblems.push(`${w.id} is a bigBet: spike, not wave`)
-    if (src && src.verdict === 'refuted') waveProblems.push(`${w.id} was refuted`)
-    for (const f of w.files || []) {
+    const sources = sourcesOf(w.id)
+    if (sources.some((s) => s.bigBet)) waveProblems.push(`${w.id} is a bigBet: spike, not wave`)
+    if (sources.some((s) => s.verdict === 'refuted')) waveProblems.push(`${w.id} was refuted`)
+    const files = w.files || []
+    // Unknown files cannot be proven disjoint from the other items'.
+    if (!files.length) waveProblems.push(`${w.id} lists no files: cannot prove it disjoint`)
+    for (const f of files) {
       const key = String(f).replace(/\\/g, '/').toLowerCase()
       if (owner.has(key)) waveProblems.push(`${w.id} and ${owner.get(key)} both touch ${f}`)
       else owner.set(key, w.id)
     }
   }
   for (const p of waveProblems) log(`wave 1 check: ${p}`)
+
+  // Ledger rows from earlier rounds must survive a re-run.
+  const prior = [...new Set([...PRIOR_IDS, ...(ranking.priorIds || [])])]
+  const kept = new Set([...(ranking.ranked || []).flatMap((r) => [r.id, ...(r.mergedFrom || [])]), ...(ranking.preserved || [])])
+  lostLedgerIds = prior.filter((id) => !kept.has(id))
+  if (lostLedgerIds.length) log(`LEDGER: prior rows missing from ranked + preserved, check ${LEDGER} by hand: ${lostLedgerIds.join(', ')}`)
 }
 
 return {
@@ -402,4 +484,6 @@ return {
   invariants,
   ranking,
   waveProblems,
+  priorLedgerIds: [...new Set([...PRIOR_IDS, ...((ranking && ranking.priorIds) || [])])],
+  lostLedgerIds,
 }

@@ -11,12 +11,14 @@ const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'perf-benchmark
 
 // A wave record as `perf-round.js wave` writes it: the bisect fields plus
 // `flags` and `phase`, and `flag` on the A/B/A windows.
-const rec = (phase, { flag = 'x', p90, set = 'peragus', checkpoint = 'medbay-swept', window = 'rest', pos = { x: 0, y: 0, z: 0 }, trustworthy = true } = {}) => ({
+const rec = (phase, { flag = 'x', p90, set = 'peragus', checkpoint = 'medbay-swept', window = 'rest', pos = { x: 0, y: 0, z: 0 }, afterPos, trustworthy = true, hz = 72 } = {}) => ({
   label: `w-${phase}-${set}-${checkpoint}-${window}${flag ? `-${flag}` : ''}`,
   phase, set, checkpoint, window,
   ...(phase === 'suite' ? {} : { flag }),
   flags: { [flag || 'x']: phase === 'B' ? 'off' : 'on' },
+  targetHz: hz,
   before: { player: pos, perflayer: 5 },
+  after: { player: afterPos || pos, perflayer: 5 },
   report: {
     frametimeMs: { p50: p90 - 2, p90, p99: p90 + 3, max: p90 + 10 },
     xrCadence: { integrity: { trustworthy } },
@@ -24,11 +26,17 @@ const rec = (phase, { flag = 'x', p90, set = 'peragus', checkpoint = 'medbay-swe
 });
 
 // Flag x predicted to save 4 ms: off it runs 20 ms, on it runs 16 ms.
-const aba = ({ a1 = 16, b = 20, a2 = 16, posB = { x: 0, y: 0, z: 0 }, trustB = true } = {}) => [
+const aba = ({ a1 = 16, b = 20, a2 = 16, posB = { x: 0, y: 0, z: 0 }, afterB, trustB = true, hzB = 72 } = {}) => [
   rec('A1', { p90: a1 }),
-  rec('B', { p90: b, pos: posB, trustworthy: trustB }),
+  rec('B', { p90: b, pos: posB, afterPos: afterB || posB, trustworthy: trustB, hz: hzB }),
   rec('A2', { p90: a2 }),
 ];
+
+// A Phase 0 bisect record: `rung`, no `phase`.
+const bisectRec = (set, checkpoint, rung, window, p90) => ({
+  label: `bisect-${set}-${checkpoint}-l${rung}-${window}`, set, checkpoint, rung, window,
+  report: { frametimeMs: { p50: p90 - 2, p90, p99: p90 + 3 }, xrCadence: { integrity: { trustworthy: true } } },
+});
 
 test('confirmFlag confirmed within ±30%', () => {
   const out = confirmFlag(aba({ a1: 16, b: 20, a2: 16.4 }), 'x', 4);
@@ -117,6 +125,47 @@ test('confirmFlag: a suite regression over 1 ms p90 against the baseline blocks 
   assert.deepStrictEqual(ok.regressions, []);
 });
 
+test('confirmFlag: a bisect L5 baseline counts, so a suite window that went 12 -> 20 ms does not confirm', () => {
+  const suite = [rec('suite', { flag: null, set: 'ebon-hawk', checkpoint: 'ebon-main-hold-open', p90: 20 })];
+  const baseline = [
+    bisectRec('ebon-hawk', 'ebon-main-hold-open', 3, 'rest', 9),
+    bisectRec('ebon-hawk', 'ebon-main-hold-open', 5, 'rest', 12),
+  ];
+  const out = confirmFlag([...aba(), ...suite], 'x', 4, baseline);
+  assert.notStrictEqual(out.verdict, 'confirmed');
+  assert.strictEqual(out.regressionChecked, true);
+  assert.strictEqual(out.regressionMatched, 1);
+  assert.deepStrictEqual(out.regressions.map((r) => [r.set, r.baselineP90, r.p90]), [['ebon-hawk', 12, 20]]);
+});
+
+test('confirmFlag: a baseline that matches no suite window is not a regression check', () => {
+  const suite = [rec('suite', { flag: null, set: 'ebon-hawk', checkpoint: 'ebon-main-hold-open', p90: 20 })];
+  // Only a stripped rung here, and l5 for a checkpoint the wave did not run: nothing comparable.
+  const baseline = [
+    bisectRec('ebon-hawk', 'ebon-main-hold-open', 3, 'rest', 9),
+    bisectRec('telos', 'perf-telos-a', 5, 'rest', 25),
+  ];
+  const out = confirmFlag([...aba(), ...suite], 'x', 4, baseline);
+  assert.strictEqual(out.regressionChecked, false);
+  assert.strictEqual(out.regressionMatched, 0);
+  assert.match(out.note, /matched no suite window/);
+});
+
+test('confirmFlag inconclusive when the player moved within a window (after positions count)', () => {
+  const out = confirmFlag(aba({ afterB: { x: 7, y: 0, z: 0 } }), 'x', 4);
+  assert.strictEqual(out.verdict, 'inconclusive');
+  assert.ok(Math.abs(out.positionDriftM - 7) < 1e-9, `drift ${out.positionDriftM}`);
+  const noAfter = aba();
+  noAfter[2].after.player = null;
+  assert.strictEqual(confirmFlag(noAfter, 'x', 4).verdict, 'inconclusive');
+});
+
+test('confirmFlag inconclusive when targetHz differs across A1/B/A2', () => {
+  const out = confirmFlag(aba({ hzB: 90 }), 'x', 4);
+  assert.strictEqual(out.verdict, 'inconclusive');
+  assert.match(out.reason, /targetHz/);
+});
+
 test('confirmFlag rejects a prediction that is not a positive number', () => {
   assert.throws(() => confirmFlag(aba(), 'x', 0), /predictedMs/);
   assert.throws(() => confirmFlag(aba(), 'x', NaN), /predictedMs/);
@@ -131,6 +180,8 @@ test('abaDelta reads the latest A1/B/A2 windows of one flag', () => {
 
 test('normalizeFlags strips the perf. prefix, dedupes and rejects junk', () => {
   assert.deepStrictEqual(normalizeFlags('perf.x,perf.y,x'), ['x', 'y']);
+  // readLaunchOption is case-sensitive and flags are lowercase by convention.
+  assert.deepStrictEqual(normalizeFlags('Perf.Batching,BATCHING,perf.X'), ['batching', 'x']);
   assert.deepStrictEqual(normalizeFlags(['batching', 'perf.static-matrices']), ['batching', 'static-matrices']);
   assert.throws(() => normalizeFlags(''), /at least one flag/);
   assert.throws(() => normalizeFlags('perf.a=on'), /flag id/);

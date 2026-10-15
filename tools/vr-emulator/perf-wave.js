@@ -26,12 +26,16 @@ const PREDICTION_TOLERANCE = 0.3;
 const REGRESSION_MS = 1;
 const MAX_DRIFT_M = 0.5;
 
-/** `perf.x,perf.y` or `['x', 'perf.y']` -> `['x', 'y']`, deduped, in order. */
+/**
+ * `perf.x,perf.y` or `['x', 'perf.y']` -> `['x', 'y']`, lowercased, deduped, in
+ * order. Lowercase because readLaunchOption looks keys up case-sensitively and
+ * flags are lowercase by convention: `perf.Batching=off` would silently miss.
+ */
 function normalizeFlags(flags) {
   const list = (Array.isArray(flags) ? flags : String(flags || '').split(','))
-    .map((f) => String(f).trim())
+    .map((f) => String(f).trim().toLowerCase())
     .filter(Boolean)
-    .map((f) => (f.toLowerCase().startsWith('perf.') ? f.slice(5) : f));
+    .map((f) => (f.startsWith('perf.') ? f.slice(5) : f));
   if (!list.length) throw new Error('wave needs at least one flag, e.g. `wave perf.batching,perf.static-matrices`');
   for (const f of list) {
     if (!FLAG_ID.test(f)) throw new Error(`"${f}" is not a flag id (letters, digits, - and _; the URL param is perf.<id>=on|off)`);
@@ -142,9 +146,11 @@ const trusted = (r) => {
 };
 const mean = (a, b) => (a + b) / 2;
 
-// KotOR world space is Z-up: x/y is the floor plane, z is height.
+// KotOR world space is Z-up: x/y is the floor plane, z is height. Both the
+// before and after position of every window count, so a wearer who walked off
+// during a window (and came back for the next) shows up as drift too.
 function horizontalDrift(records) {
-  const pos = records.map((r) => r && r.before && r.before.player);
+  const pos = records.flatMap((r) => [r && r.before && r.before.player, r && r.after && r.after.player]);
   if (pos.some((p) => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return null;
   let max = 0;
   for (let i = 0; i < pos.length; i++) {
@@ -156,7 +162,9 @@ function horizontalDrift(records) {
 /**
  * The latest A1, B and A2 windows of `flag` and the gain they show.
  * `deltaMs = B.p90 - mean(A1.p90, A2.p90)`: B has the flag off, so a positive
- * delta is time the flag saves. `problems` lists missing or untrustworthy windows.
+ * delta is time the flag saves. `problems` lists missing or untrustworthy
+ * windows, and a targetHz that differs between them (frame budgets differ, so
+ * the p90s are not comparable).
  */
 function abaDelta(records, flag) {
   const [id] = normalizeFlags([flag]);
@@ -171,6 +179,8 @@ function abaDelta(records, flag) {
     else if (!trusted(r)) problems.push(`${phase} window untrustworthy (xrCadence integrity)`);
   }
   const present = Object.values(win).filter(Boolean);
+  const rates = [...new Set(present.map((r) => r.targetHz).filter((hz) => Number.isFinite(hz)))];
+  if (rates.length > 1) problems.push(`targetHz differs across A1/B/A2 (${present.map((r) => `${r.phase} ${r.targetHz}`).join(', ')})`);
   const positionDriftM = present.length === 3 ? horizontalDrift(present) : null;
   const ok = problems.length === 0;
   return {
@@ -188,23 +198,31 @@ function abaDelta(records, flag) {
 // baseline. Every suite window counts, including the worst set's: all flags are
 // on in the suite, so a regression there cannot be pinned on one flag, but it
 // still blocks confirmation (spec: "nothing regresses").
+//
+// A baseline row is a previous wave's suite window, or a Phase 0 bisect window
+// at the full game (`rung === 5`, no `phase`); stripped rungs never compare.
+// `matched` counts the keys found on both sides: zero means nothing was
+// actually checked, which the caller must not report as "no regressions".
+const isFullGameBisect = (r) => r && r.phase === undefined && r.rung === 5;
 function suiteRegressions(records, baseline) {
   const key = (r) => `${r.set}\u0000${r.checkpoint}\u0000${r.window}`;
-  const latest = (rows) => {
+  const latest = (rows, accept) => {
     const m = new Map();
-    for (const r of rows) if (r && r.phase === 'suite' && trusted(r) && p90Of(r) !== null) m.set(key(r), r);
+    for (const r of rows) if (r && accept(r) && trusted(r) && p90Of(r) !== null) m.set(key(r), r);
     return m;
   };
-  const now = latest(records);
-  const before = latest(baseline);
-  const out = [];
+  const now = latest(records, (r) => r.phase === 'suite');
+  const before = latest(baseline, (r) => r.phase === 'suite' || isFullGameBisect(r));
+  const regressions = [];
+  let matched = 0;
   for (const [k, r] of now) {
     const base = before.get(k);
     if (!base) continue;
+    matched++;
     const deltaMs = p90Of(r) - p90Of(base);
-    if (deltaMs > REGRESSION_MS) out.push({ set: r.set, checkpoint: r.checkpoint, window: r.window, baselineP90: p90Of(base), p90: p90Of(r), deltaMs });
+    if (deltaMs > REGRESSION_MS) regressions.push({ set: r.set, checkpoint: r.checkpoint, window: r.window, baselineP90: p90Of(base), p90: p90Of(r), deltaMs });
   }
-  return out;
+  return { regressions, matched };
 }
 
 /**
@@ -223,13 +241,17 @@ function suiteRegressions(records, baseline) {
  * Taken together: confirmed iff deltaMs >= 0.7 × predictedMs. `withinPrediction`
  * says whether it landed inside the ±30% band, so the ledger can note a miss.
  *
- * `baseline` (optional) is the suite records of the previous round. Without it
- * the regression check is skipped and `note` says so.
+ * `baseline` (optional) is the previous round's records: a wave's suite
+ * windows or Phase 0 bisect windows at rung 5. Without it, or when it matches
+ * none of this wave's suite windows, the regression check is skipped
+ * (`regressionChecked: false`) and `note` says so; `regressionMatched` counts
+ * the windows compared.
  */
 function confirmFlag(records, flag, predictedMs, baseline) {
   if (!Number.isFinite(predictedMs) || predictedMs <= 0) throw new Error(`predictedMs must be a number > 0, got ${predictedMs}`);
   const d = abaDelta(records, flag);
-  const regressionChecked = Array.isArray(baseline);
+  const check = Array.isArray(baseline) ? suiteRegressions(records, baseline) : { regressions: [], matched: 0 };
+  const regressionChecked = check.matched > 0;
   const result = {
     flag: d.flag,
     verdict: 'inconclusive',
@@ -239,10 +261,12 @@ function confirmFlag(records, flag, predictedMs, baseline) {
     a1: d.a1, b: d.b, a2: d.a2,
     withinPrediction: d.deltaMs === null ? null : Math.abs(d.deltaMs - predictedMs) <= PREDICTION_TOLERANCE * predictedMs,
     regressionChecked,
-    regressions: regressionChecked ? suiteRegressions(records, baseline) : [],
+    regressionMatched: check.matched,
+    regressions: check.regressions,
     reason: '',
   };
-  if (!regressionChecked) result.note = 'no baseline suite records given: regression check skipped';
+  if (!Array.isArray(baseline)) result.note = 'no baseline suite records given: regression check skipped';
+  else if (!regressionChecked) result.note = 'baseline matched no suite window of this wave (want suite or bisect rung-5 windows of the same set/checkpoint/window): regression check skipped';
 
   if (d.problems.length) {
     result.reason = d.problems.join('; ');
