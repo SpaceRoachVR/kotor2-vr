@@ -154,3 +154,64 @@ export function parseXRFramebufferScale(search: string): number {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_XR_FRAMEBUFFER_SCALE;
   return Math.min(MAXIMUM_XR_FRAMEBUFFER_SCALE, Math.max(MINIMUM_XR_FRAMEBUFFER_SCALE, parsed));
 }
+
+/**
+ * How much of the engine runs, for locating the frame-time bottleneck.
+ *
+ * Each level adds one layer on top of the previous, so a harness can run the
+ * same scene at `l0`..`l5` and read the cost of each layer off the difference
+ * in frame time. `5` is everything on, the normal game; lower levels strip
+ * layers progressively. What each level strips is defined where the layers are
+ * applied, not here — this only carries the requested level.
+ */
+export type PerfLayer = 0 | 1 | 2 | 3 | 4 | 5;
+
+const FULL_PERF_LAYER: PerfLayer = 5;
+
+/**
+ * Reads the perf layer from a launch query string (`?perflayer=l0`..`l5`).
+ *
+ * Deliberately URL-only, unlike {@link readLaunchOption}: the `localStorage`
+ * fallback exists so a person can set a startup option once from DevTools, but
+ * a stale `kotor2vr.perflayer` left behind by a measurement session would then
+ * silently strip layers out of the game in normal play. A measurement run
+ * always names its layer in the URL, so nothing is lost.
+ *
+ * Absent, malformed or out-of-range values fall back to `5` (everything on),
+ * the safe direction, like the other launch parsers.
+ *
+ * @param search - a `location.search` string, with or without its leading `?`
+ */
+export function parsePerfLayer(search: string): PerfLayer {
+  let value: string | null = null;
+  if (typeof search === 'string' && search) {
+    try {
+      value = new URLSearchParams(search).get('perflayer');
+    } catch { /* a malformed query must not stop the engine booting */ }
+  }
+  const match = typeof value === 'string' ? /^l([0-5])$/.exec(value.trim().toLowerCase()) : null;
+  return match ? (Number(match[1]) as PerfLayer) : FULL_PERF_LAYER;
+}
+
+/**
+ * Reads a performance-fix flag (`?perf.<name>=on|off`).
+ *
+ * Goes through {@link readLaunchOption}, so unlike `perflayer` it may also come
+ * from `localStorage['kotor2vr.perf.<name>']`: these flags gate individual
+ * fixes, and being able to pin one on or off from DevTools in Electron is the
+ * point. The URL still wins, so a harness run is not swayed by an earlier
+ * manual session.
+ *
+ * `on`/`1`/`true` enable, `off`/`0`/`false` disable, and anything else —
+ * including absent — returns `defaultOn`, so a typo leaves current behaviour.
+ *
+ * @param search - a `location.search` string, with or without its leading `?`
+ * @param name - the flag name without the `perf.` prefix
+ * @param defaultOn - what to return when the flag is absent or unrecognised
+ */
+export function readPerfFlag(search: string, name: string, defaultOn: boolean): boolean {
+  const value = readLaunchOption(search, `perf.${name}`);
+  if (value === 'on' || value === '1' || value === 'true') return true;
+  if (value === 'off' || value === '0' || value === 'false') return false;
+  return defaultOn;
+}
