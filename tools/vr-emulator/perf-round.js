@@ -13,6 +13,7 @@
  *   node tools/vr-emulator/perf-round.js note <text...>
  *   node tools/vr-emulator/perf-round.js checkpoint <name>
  *   node tools/vr-emulator/perf-round.js attribution [--budget <ms>]
+ *   node tools/vr-emulator/perf-round.js wave <flag,...> --worst <set> [--dry]
  *
  * Options: --port <cdp port> (default 9422, the `vr:play` browser; the
  * emulator harness uses its own), --round <name> (default r1), which names the
@@ -52,6 +53,15 @@
  * stage (sim, render, gpu, runtime) dominated there. `note` records what Allen
  * reads off the Virtual Desktop overlay; `checkpoint` saves the current game
  * under the VRPT prefix so a stop can be loaded later.
+ *
+ * `wave` is the Phase 2 wave headset round (perf-wave.js): the whole suite at
+ * l5 with every listed flag on, then on the worst set's ladderCheckpoint an
+ * A/B/A of standing windows per flag (all on, `perf.<flag>=off`, all on). It
+ * reuses bisect's machinery: one boot per stop with the stop's URL options,
+ * the save check before anything runs, and the return to plain l5 (which drops
+ * the perf.* overrides) however it ends. Its records add `flags` and `phase`
+ * (and `flag` on the A/B/A windows) for `confirmFlag`. Flags are given as
+ * `perf.x,perf.y` or `x,y`.
  */
 const fs = require('fs');
 const path = require('path');
@@ -61,6 +71,7 @@ const {
   bisectPlan, planStops, formatPlan, resolvePlan, attributeRungs, formatAttribution,
   WINDOW_SECONDS, TARGET_HZ, TARGET_P90_MS, TARGET_P99_MS,
 } = require('./perf-bisect');
+const { wavePlan, waveStops, stopOptions, formatWavePlan, formatAba, normalizeFlags } = require('./perf-wave');
 
 const CHECKPOINT_PREFIX = 'VRPT-20260824-E2E';
 const argv = process.argv.slice(2);
@@ -80,6 +91,7 @@ const flag = (name) => {
 const PORT = Number(opt('--port', process.env.KOTOR2VR_CDP_PORT || 9422));
 const ROUND = opt('--round', 'r1');
 const DRY = flag('--dry');
+const WORST = opt('--worst', undefined);
 const [command, ...rest] = argv;
 const EVIDENCE = path.join(__dirname, 'evidence', 'perf', `${ROUND}.jsonl`);
 
@@ -234,7 +246,9 @@ async function load(cdp, name, { url, expectLayer } = {}) {
 }
 
 // `extra` ({rung, set, checkpoint, window}) comes from bisect and is written into
-// the record beside targetHz, so attribution can group the lines by rung.
+// the record beside targetHz, so attribution can group the lines by rung. The
+// wave adds {flags, phase, flag} and leaves `rung` out: its windows are all at
+// l5, so the stripped-layer warning stays armed and attribution ignores them.
 async function measureWindow(cdp, label, seconds, extra = {}) {
   // Auto-reporting restarts the window every 60 s, which would split a long
   // window and leave report() describing only its tail. Hold it off for the
@@ -258,13 +272,16 @@ async function measureWindow(cdp, label, seconds, extra = {}) {
     return rpt;
   })()`, { timeoutMs: 30000 });
   const after = await cdp.evaluate(STATE);
-  const { rung, set, checkpoint, window } = extra;
+  const { rung, set, checkpoint, window, flags, phase, flag: flagUnderTest } = extra;
   const record = {
     at: new Date().toISOString(), round: ROUND, label, seconds,
     ...(rung !== undefined ? { rung } : {}),
     ...(set !== undefined ? { set } : {}),
     ...(checkpoint !== undefined ? { checkpoint } : {}),
     ...(window !== undefined ? { window } : {}),
+    ...(flags !== undefined ? { flags } : {}),
+    ...(phase !== undefined ? { phase } : {}),
+    ...(flagUnderTest !== undefined ? { flag: flagUnderTest } : {}),
     targetHz: before.targetHz,
     before, after, report,
   };
@@ -448,14 +465,10 @@ async function listSaveNames(cdp) {
   })()`, { timeoutMs: 120000 });
 }
 
-// The ladder. Each rung needs its own page (the layer is read at boot), and
-// `load` reboots the page anyway, so one navigation to the rung's URL serves
-// both, and the windows of one (checkpoint, rung) share one load. A failed stop
-// is reported and the run goes on to the next. However it ends, the page is
-// sent back to perflayer=l5 so the stripped layer cannot leak into play.
-async function bisect(cdp, setNames) {
-  const plan = bisectPlan(loadBenchmarks(), setNames);
-
+// Runs `body`, then, however it ends (error or Ctrl+C), navigates the page back
+// to plain perflayer=l5 with no other options, so neither a stripped layer nor
+// a perf.<flag>=off can leak into play.
+async function withPlainPageAfter(cdp, body) {
   const restore = async () => {
     try {
       await Promise.race([
@@ -463,7 +476,7 @@ async function bisect(cdp, setNames) {
         sleep(5000).then(() => { throw new Error('timed out'); }),
       ]);
     } catch (error) {
-      console.log(`could not send the page back to perflayer=l5 (${error.message}); reload it without ?perflayer before playing`);
+      console.log(`could not send the page back to perflayer=l5 (${error.message}); reload it without ?perflayer or perf.* options before playing`);
     }
   };
   let interrupted = false;
@@ -474,18 +487,36 @@ async function bisect(cdp, setNames) {
     restore().finally(() => process.exit(130));
   };
   process.on('SIGINT', onSigint);
-
   try {
-    // Resolve every checkpoint before any window, so a typo fails in seconds and
-    // not after an hour of rungs.
-    await freshPage(cdp, await gameUrl(cdp, ['perflayer=l5']));
-    const { runnable, aborted, pendingSkipped } = resolvePlan(plan, await listSaveNames(cdp), CHECKPOINT_PREFIX);
-    for (const name of pendingSkipped) console.log(`skipping pending checkpoint "${name}" (its save does not exist yet)`);
-    for (const a of aborted) {
-      console.log(`ABORTING set "${a.set}": no checkpoint ${a.missing.map((m) => `"${m}"`).join(', ')}; available: ${a.available.join(', ') || '(none)'}`);
-    }
-    if (!runnable.length) throw new Error('nothing to run');
+    return await body();
+  } finally {
+    process.removeListener('SIGINT', onSigint);
+    await restore();
+  }
+}
 
+// Resolve every checkpoint before any window, so a typo fails in seconds and
+// not after an hour of stops. Returns the runnable plan rows.
+async function resolveAgainstSaves(cdp, plan) {
+  await freshPage(cdp, await gameUrl(cdp, ['perflayer=l5']));
+  const { runnable, aborted, pendingSkipped } = resolvePlan(plan, await listSaveNames(cdp), CHECKPOINT_PREFIX);
+  for (const name of pendingSkipped) console.log(`skipping pending checkpoint "${name}" (its save does not exist yet)`);
+  for (const a of aborted) {
+    console.log(`ABORTING set "${a.set}": no checkpoint ${a.missing.map((m) => `"${m}"`).join(', ')}; available: ${a.available.join(', ') || '(none)'}`);
+  }
+  if (!runnable.length) throw new Error('nothing to run');
+  return runnable;
+}
+
+// The ladder. Each rung needs its own page (the layer is read at boot), and
+// `load` reboots the page anyway, so one navigation to the rung's URL serves
+// both, and the windows of one (checkpoint, rung) share one load. A failed stop
+// is reported and the run goes on to the next. However it ends, the page is
+// sent back to perflayer=l5 so the stripped layer cannot leak into play.
+async function bisect(cdp, setNames) {
+  const plan = bisectPlan(loadBenchmarks(), setNames);
+  return withPlainPageAfter(cdp, async () => {
+    const runnable = await resolveAgainstSaves(cdp, plan);
     const failures = [];
     for (const stopPlan of planStops(runnable)) {
       const tag = `${stopPlan.set}/${stopPlan.checkpoint} l${stopPlan.rung}`;
@@ -511,10 +542,52 @@ async function bisect(cdp, setNames) {
     }
     if (failures.length) console.log(`failed stops: ${failures.join('; ')}`);
     console.log(formatAttribution(attributeRungs(readRecords(), TARGET_P90_MS, runnable), TARGET_P90_MS));
-  } finally {
-    process.removeListener('SIGINT', onSigint);
-    await restore();
-  }
+  });
+}
+
+// The wave round (perf-wave.js). Same shape as bisect: one boot per stop with
+// that stop's URL options (perflayer=l5 plus perf.<id>=on|off for every flag),
+// load, enter VR, settle 10 s, measure. A failed stop is reported and the run
+// goes on to the next.
+async function wave(cdp, flagList, worstSet) {
+  const flags = normalizeFlags(flagList);
+  const plan = wavePlan(loadBenchmarks(), flags, worstSet);
+  return withPlainPageAfter(cdp, async () => {
+    const runnable = await resolveAgainstSaves(cdp, plan);
+    const failures = [];
+    for (const stopPlan of waveStops(runnable)) {
+      const what = stopPlan.phase === 'suite' ? 'suite' : `${stopPlan.phase} perf.${stopPlan.flag}=${stopPlan.flags[stopPlan.flag]}`;
+      const tag = `${stopPlan.set}/${stopPlan.checkpoint} ${what}`;
+      try {
+        const options = stopOptions(stopPlan);
+        console.log(`[${new Date().toLocaleTimeString()}] ${tag}: boot with ${options.join(' ')}, load, enter VR`);
+        const state = await load(cdp, stopPlan.checkpoint, { url: await gameUrl(cdp, options) });
+        // Before Enter VR: a page that lost its options wastes the whole stop.
+        const search = new URLSearchParams(state.search || '');
+        for (const option of options.slice(1)) {
+          const [key, value] = option.split('=');
+          if (search.get(key) !== value) throw new Error(`page URL has ${key}=${search.get(key)}, wanted ${value}`);
+        }
+        await enterVrOrWait(cdp);
+        await sleep(10000);
+        for (const window of stopPlan.windows) {
+          if (window === 'walk') console.log('WALK now: nothing scripts movement, the wearer walks for this window');
+          else if (stopPlan.phase !== 'suite') console.log('STAND still at the load spot, same view: A/B/A compares like with like only from one place');
+          const suffix = stopPlan.phase === 'suite' ? 'suite' : `${stopPlan.flag}-${stopPlan.phase}`;
+          const label = `${ROUND}-wave-${stopPlan.set}-${stopPlan.checkpoint}-${suffix}-${window}`;
+          await measureWindow(cdp, label, WINDOW_SECONDS[window], {
+            set: stopPlan.set, checkpoint: stopPlan.checkpoint, window, flags: stopPlan.flags, phase: stopPlan.phase,
+            ...(stopPlan.flag !== undefined ? { flag: stopPlan.flag } : {}),
+          });
+        }
+      } catch (error) {
+        console.log(`FAILED ${tag}: ${error.message || error}`);
+        failures.push(tag);
+      }
+    }
+    if (failures.length) console.log(`failed stops: ${failures.join('; ')}`);
+    console.log(formatAba(readRecords(), flags));
+  });
 }
 
 async function main() {
@@ -524,6 +597,12 @@ async function main() {
   if (command === 'bisect' && DRY) {
     if (!rest[0]) throw new Error('usage: perf-round.js bisect <set|all> --dry');
     return console.log(formatPlan(bisectPlan(loadBenchmarks(), rest)));
+  }
+  if (command === 'wave') {
+    if (!rest[0] || !WORST) throw new Error('usage: perf-round.js wave <flag,...> --worst <set> [--dry]');
+    // Build the plan before any CDP, so a bad flag or set name fails here.
+    const plan = wavePlan(loadBenchmarks(), rest[0], WORST);
+    if (DRY) return console.log(formatWavePlan(plan));
   }
   const cdp = await connect();
   try {
@@ -535,8 +614,9 @@ async function main() {
     if (command === 'state') return console.log(JSON.stringify(await cdp.evaluate(STATE), null, 1));
     if (command === 'reload') return await reload(cdp, rest);
     if (command === 'bisect' && rest[0]) return await bisect(cdp, rest);
+    if (command === 'wave') return await wave(cdp, rest[0], WORST);
     if (command === 'checkpoint' && rest[0]) return await checkpoint(cdp, rest.join(' '));
-    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> [--dry] | note <text...> | checkpoint <name> | attribution [--budget <ms>]');
+    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> [--dry] | note <text...> | checkpoint <name> | attribution [--budget <ms>] | wave <flag,...> --worst <set> [--dry]');
   } finally {
     cdp.close();
   }
