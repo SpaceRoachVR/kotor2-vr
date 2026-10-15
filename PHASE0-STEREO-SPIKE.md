@@ -306,6 +306,162 @@ delivered 51.82 FPS, p90 31.0 ms, p99 46.1 ms, and passed the revised sustained-
 as the current performance fix. Phase 1 may proceed; the full VR stack must
 repeat the sustained-50 gate before the Peragus VR candidate.
 
+## Bisect round procedure
+
+The Phase 2 bisect round (VR perf team, 2026-10-15) asks which engine layer
+first pushes each benchmark scene over the 72 Hz budget (p90 ≤ 13.9 ms,
+p99 ≤ 20 ms). `tools/vr-emulator/perf-round.js bisect` boots the page at each
+`?perflayer=l0..l5` rung, loads a checkpoint, enters VR, settles 10 s and
+times 60 s windows. The rungs are cumulative: L0 an empty clear, L1 the
+player's room only, L2 the linked rooms, L3 adds characters, L4 adds effects,
+grass and lights, L5 is the full game. The sets live in
+`tools/vr-emulator/perf-benchmarks.json`. Records go to
+`tools/vr-emulator/evidence/perf/<round>.jsonl`.
+
+### Headset setup
+
+- **72 Hz, SSW off.** Set the refresh rate to 72 Hz in Virtual Desktop and turn
+  Synchronous Spacewarp off. SSW on halves the delivered rate and hides the
+  real frame time (the Phase 0 runs above). Before anything is timed,
+  `perf-round.js state` must report `runtimeRates.runtimeReportedHz` 72. A
+  window measured at another rate doesn't compare with the rest. Don't read
+  `targetHz` for this: it is the sampler's 50 Hz acceptance floor
+  (`acceptanceThresholdHz`), not the refresh, and it reads 50 whatever the
+  headset runs at.
+- **Virtual Desktop performance overlay on.** It shows what the browser can't
+  see: compositor frame time, dropped frames and encode/network latency.
+- Launch with `npm run vr:play` (CDP on 9422, asset service on 8479). Attach
+  the console tailer: `node tools/vr-emulator/console-tail.js <round>.log`.
+  Never run `vr:check` at the same time, because both bind 8479.
+
+### Start of the round: create the pending checkpoints
+
+Some benchmark checkpoints can only be made from Allen's own saves.
+`perf-telos-a`, `perf-telos-c` and `perf-swoop` are `pending: true` in the
+manifest. Allen loads each save in the headset at the spot to be benchmarked,
+stands still, and the driver saves it under the VRPT prefix:
+
+```bash
+node tools/vr-emulator/perf-round.js checkpoint perf-telos-a
+node tools/vr-emulator/perf-round.js checkpoint perf-telos-c
+node tools/vr-emulator/perf-round.js checkpoint perf-swoop
+```
+
+Nobody needs to edit the manifest. A pending entry runs as soon as its save
+exists, and is skipped with a log line while it doesn't (R13).
+`perf-turret` and `perf-combat` already exist (made in the emulator,
+2026-10-15). `perf-theater` is still pending. Make it the same way at a
+cutscene trigger, for example on the Harbinger engine deck one step short of
+the Sion junction.
+
+### Run it set by set
+
+`bisect all` is ~50 min with the saves that exist now and ~66 min once every
+pending save exists (R14), which is more than one sitting. Run one set per
+command, Peragus first, and split the sets across two sittings if needed:
+
+```bash
+node tools/vr-emulator/perf-round.js bisect all --dry          # the plan and its wall time, no CDP
+node tools/vr-emulator/perf-round.js --round bisect-<date> bisect peragus      # ~21 min, the full L0-L5 ladder
+node tools/vr-emulator/perf-round.js --round bisect-<date> bisect ebon-hawk
+node tools/vr-emulator/perf-round.js --round bisect-<date> bisect conversation
+node tools/vr-emulator/perf-round.js --round bisect-<date> bisect combat
+node tools/vr-emulator/perf-round.js --round bisect-<date> bisect telos
+```
+
+Use the same `--round` for every set in the round, so `attribution` sees them
+all.
+
+- **Run the driver in the background, never in a Monitor.** Claude starts each
+  `bisect` with Bash `run_in_background` and redirects it to a log. A Monitor
+  only tails that log (`tail -f`). Stopping a Monitor kills only the current
+  step, so a Monitor that owns the driver leaves the loop running on.
+- **Reboot between rungs.** The layer is read once, at page boot, so every
+  rung (and every checkpoint) is a fresh page boot at that rung's URL. Loading
+  a second save into a used page leaves a blank player in the old room. The
+  driver does all of this. After each reboot, the wearer presses Enter VR again
+  if the driver's own click doesn't start the session; it waits up to 5 min.
+  Never change `perflayer` in a live page by hand.
+- **Stand still through L0–L4.** Below L3 the party isn't updated, so the
+  player can't move. L1 and L2 are valid only from the load spot, so don't
+  walk during them. Every rung below L5 takes a `rest` window. Walk only when
+  the log says `WALK now` (the L5 `walk` windows). The `talk` window
+  (conversation set) means start the conversation in front of you and click
+  through it.
+- **Read the overlay at each rung.** When a window starts, Allen reads the VD
+  overlay aloud, and Claude records it against the round:
+  ```bash
+  node tools/vr-emulator/perf-round.js --round bisect-<date> note "l3 medbay: VD 13.1 ms, 0 dropped, encode 6 ms"
+  ```
+- A failed stop is logged as `FAILED <set>/<checkpoint> l<N>: <reason>` and the
+  run goes on to the next. When the run ends, or on Ctrl+C, the driver sends
+  the page back to plain `perflayer=l5`. If it says it couldn't, reload
+  without `?perflayer` before playing.
+
+### Reading the attribution table
+
+At the end of each `bisect`, and on demand, the driver prints the table:
+
+```bash
+node tools/vr-emulator/perf-round.js --round bisect-<date> attribution [--budget 13.9]
+```
+
+There is one block per set and checkpoint. The heading is the verdict:
+
+- `first over at l3, stage: render` means l3 is the lowest measured rung whose
+  worst-window p90 is over budget. The rung's p90 splits into sim (CPU update),
+  render (CPU render submission), gpu (GPU timer query) and runtime (whatever
+  frame time is left over, which belongs to the XR runtime and compositor).
+  The stage named is the largest of those at that rung. So "characters pushed
+  it over, and the cost is on the CPU render side".
+- `first over at l3 (l1, l2 unmeasured), stage: …`: some planned rungs below l3
+  have no usable window (the stop failed, or every window was untrustworthy).
+  The true crossing could be at any unmeasured rung up to l3. Re-run those
+  rungs before acting on the verdict.
+- `no measured rung over the 13.9 ms p90 budget` means the scene is within
+  budget at every measured rung. With `(lN unmeasured)` after it, that "none"
+  isn't proven.
+- `stage: unknown` means the report lacked `cpuMs`, so no stage can be named.
+- A `-` in the gpu column means `gpuMs` was null: no timer-query extension, or
+  disjoint samples. The runtime column then absorbs the GPU time.
+- **excluded** lists windows dropped because their `xrCadence` integrity was
+  untrustworthy. A rung with only excluded windows shows as `unmeasured`.
+- If an L0 row is already over budget (`first over at l0`), the cost is below
+  the engine, in the browser or XR runtime. Record "stack ceiling suspected",
+  and the XR-runtime track leads wave 1.
+
+Each set's other checkpoints run only at L5 (R12), so their blocks have one row.
+The emulator can rehearse all of this (see the dry run below), but its frame
+times are not headset frame times. Only the headset round's numbers count.
+
+### Emulator dry run (2026-10-15)
+
+The machinery was rehearsed under the emulated Quest 3 on its own ports (CDP
+9490, asset service 8530, a temp user root holding copies of the saves). It ran
+`bisect peragus` (all 11 plan rows recorded, perflayer echoed l0..l5 per
+rung, the attribution table printed, and the page was sent back to plain l5),
+`bisect ebon-hawk`, and `bisect all --dry`. The evidence is in
+`tools/vr-emulator/evidence/perf/bisect-dryrun.jsonl`, and the per-rung views
+of `medbay-swept` are in `tools/vr-emulator/evidence/perf/bisect-dryrun/`.
+Things it found that matter for the headset round:
+
+- **Before the fix, L0–L2 never loaded.** Below L3 the player had no room, so
+  every room stayed visible (66/66) and the load timed out. Fixed in
+  `ModuleArea.update`. Since then, L1 draws one room and L2 the 17 linked
+  rooms of 101PER.
+- **`screenshot.js` times out below L5,** because the desktop mirror only
+  draws at the play layer. To see a stripped rung, draw one mirror frame
+  yourself inside an XR frame (the dry run's per-rung images were taken that
+  way). A plain CDP `Page.captureScreenshot` is black while presenting.
+- **The emulator's L0 is always "over".** Its frame loop runs at 60 Hz, so an
+  empty scene measures 17 ms p90 and the table says `first over at l0,
+  stage: runtime`. That is the emulator's frame rate, not a stack ceiling.
+  Only the headset round can apply the L0 rule.
+- `gpuMs` was non-null at every rung under the emulator (EXT disjoint timer
+  available, no disjoint samples): 0.1 ms p90 at L0, up to 10.6 ms at L5.
+- A reloaded `perf-turret` save now stays in the turret minigame (engine
+  mode 2). The overlay reopen used to force INGAME.
+
 ## What this deliberately does not do
 
 - No GUI in stereo. The GUI scene is an orthographic overlay with no meaning in a
