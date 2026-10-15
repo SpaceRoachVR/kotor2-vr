@@ -38,3 +38,10 @@ test('an engine without RestoreEnginePlayMode still gets the overlay opened', ()
   delete ctx.window.KotOR.GameState.RestoreEnginePlayMode;
   assert.strictEqual(vm.runInNewContext(REOPEN_OVERLAY, ctx), 1);
 });
+
+test('summaryLine prints the refresh rate the record was measured at, and where it came from', () => {
+  const { summaryLine } = require('./perf-round');
+  const base = { label: 'w', report: { frametimeMs: { p90: 10, p99: 12 } }, before: { module: '101per', perflayer: 5, presenting: true } };
+  assert.match(summaryLine({ ...base, refreshHz: 72, refreshHzSource: 'declared' }), /target p90<=13\.9 p99<=20 @ 72 Hz \(declared\)/);
+  assert.match(summaryLine({ ...base, refreshHz: 90, refreshHzSource: 'runtime' }), /@ 90 Hz \(runtime\)/);
+});

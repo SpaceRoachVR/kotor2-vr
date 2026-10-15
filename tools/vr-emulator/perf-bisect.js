@@ -9,9 +9,50 @@
  */
 
 // R4: the 72 Hz target. summaryLine (perf-round.js) and attribution agree on it.
+// This is the rate the p90/p99 targets below are written for; it is the DEFAULT
+// for `--refresh-hz` (R20), not something the page reports.
 const TARGET_HZ = 72;
 const TARGET_P90_MS = 13.9;
 const TARGET_P99_MS = 20;
+
+// R20: the headset's refresh rate. `VRSpike.perf.targetHz` is NOT it (that is
+// the 50 Hz acceptance floor). The page only knows the real rate through
+// `perf.runtimeRates.runtimeReportedHz`, which the IWER emulator fills in but
+// Chrome + Virtual Desktop leaves null (as it is before Enter VR). So the rate
+// is the runtime's when it reports one, else the one the lead declared with
+// `--refresh-hz` after confirming it in Virtual Desktop.
+const positiveHz = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
+
+/** Parses `--refresh-hz`: a finite number > 0, or an Error naming the flag. */
+function parseRefreshHz(text) {
+  const hz = typeof text === 'number' ? text : Number(String(text).trim());
+  if (String(text).trim() === '' || positiveHz(hz) === null) throw new Error(`--refresh-hz must be a number > 0, got "${text}"`);
+  return hz;
+}
+
+/**
+ * `state` is perf-round's STATE echo (`runtimeReportedHz`, or the raw
+ * `runtimeRates`). Returns `{refreshHz, refreshHzSource: 'runtime' | 'declared'}`.
+ */
+function resolveRefreshHz(state, declaredHz) {
+  const rates = state && state.runtimeRates;
+  const runtime = positiveHz(state && state.runtimeReportedHz) ?? positiveHz(rates && rates.runtimeReportedHz);
+  if (runtime !== null) return { refreshHz: runtime, refreshHzSource: 'runtime' };
+  return { refreshHz: parseRefreshHz(declaredHz), refreshHzSource: 'declared' };
+}
+
+/**
+ * The refresh rate an evidence record was measured at, or null when it cannot
+ * be told. Records written before R20 have no `refreshHz`; they fall back to
+ * the runtime's rate in their `before` state.
+ */
+function recordRefreshHz(r) {
+  if (!r) return null;
+  const own = positiveHz(r.refreshHz);
+  if (own !== null) return own;
+  const before = r.before || {};
+  return positiveHz(before.runtimeReportedHz) ?? positiveHz(before.runtimeRates && before.runtimeRates.runtimeReportedHz);
+}
 
 const WINDOW_SECONDS = { rest: 60, walk: 60, talk: 60 };
 
@@ -235,5 +276,6 @@ function formatAttribution(table, budgetMs = TARGET_P90_MS) {
 
 module.exports = {
   TARGET_HZ, TARGET_P90_MS, TARGET_P99_MS, WINDOW_SECONDS, STOP_OVERHEAD_SECONDS, FULL_RUNG,
+  parseRefreshHz, resolveRefreshHz, recordRefreshHz,
   bisectPlan, planStops, estimatePlan, formatPlan, resolvePlan, attributeRungs, formatAttribution,
 };

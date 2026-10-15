@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   bisectPlan, attributeRungs, formatAttribution, resolvePlan, estimatePlan, formatPlan, WINDOW_SECONDS,
+  parseRefreshHz, resolveRefreshHz, recordRefreshHz,
 } = require('./perf-bisect');
 
 // perf-benchmarks.json: each set is {checkpoints, rungs, windows}. A checkpoint is
@@ -266,4 +267,29 @@ test('attributeRungs: without cpuMs the stage is null with a note, never runtime
   const half = rec('p', 'm', 3, { ft: 20 });
   delete half.report.cpuMs.render;
   assert.strictEqual(attributeRungs([half], 13.9)[0].stage, null);
+});
+
+test('resolveRefreshHz: the runtime rate wins, else the declared one', () => {
+  assert.deepStrictEqual(resolveRefreshHz({ runtimeReportedHz: 90 }, 72), { refreshHz: 90, refreshHzSource: 'runtime' });
+  assert.deepStrictEqual(resolveRefreshHz({ runtimeRates: { runtimeReportedHz: 80 } }, 72), { refreshHz: 80, refreshHzSource: 'runtime' });
+  for (const state of [{ runtimeReportedHz: null }, {}, null, { runtimeReportedHz: 0 }, { runtimeReportedHz: NaN }, { runtimeRates: { runtimeReportedHz: null } }]) {
+    assert.deepStrictEqual(resolveRefreshHz(state, 72), { refreshHz: 72, refreshHzSource: 'declared' });
+  }
+  // targetHz is the 50 Hz acceptance floor and must never be read as the rate.
+  assert.deepStrictEqual(resolveRefreshHz({ targetHz: 50, runtimeReportedHz: null }, 72), { refreshHz: 72, refreshHzSource: 'declared' });
+});
+
+test('parseRefreshHz accepts positive finite numbers and rejects the rest', () => {
+  assert.strictEqual(parseRefreshHz('72'), 72);
+  assert.strictEqual(parseRefreshHz('90.5'), 90.5);
+  for (const bad of ['0', '-72', 'abc', '', 'Infinity', 'NaN', undefined]) assert.throws(() => parseRefreshHz(bad), /--refresh-hz/);
+  assert.throws(() => resolveRefreshHz({}, 'x'), /--refresh-hz/);
+});
+
+test('recordRefreshHz: own refreshHz, else before.runtimeReportedHz, else null', () => {
+  assert.strictEqual(recordRefreshHz({ refreshHz: 72, before: { runtimeReportedHz: 90 } }), 72);
+  assert.strictEqual(recordRefreshHz({ before: { runtimeReportedHz: 90 } }), 90);
+  assert.strictEqual(recordRefreshHz({ before: { runtimeRates: { runtimeReportedHz: 80 } } }), 80);
+  assert.strictEqual(recordRefreshHz({ targetHz: 50, before: {} }), null);
+  assert.strictEqual(recordRefreshHz(null), null);
 });

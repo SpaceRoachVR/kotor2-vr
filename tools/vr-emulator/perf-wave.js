@@ -14,7 +14,7 @@
  * 'suite'|'A1'|'B'|'A2'`, and on the A/B/A windows `flag` (the flag under test).
  * `confirmFlag` reads them back and classifies a flag against its prediction.
  */
-const { WINDOW_SECONDS, STOP_OVERHEAD_SECONDS, FULL_RUNG } = require('./perf-bisect');
+const { WINDOW_SECONDS, STOP_OVERHEAD_SECONDS, FULL_RUNG, recordRefreshHz } = require('./perf-bisect');
 
 const nameOf = (c) => (typeof c === 'string' ? c : c.name);
 const isPending = (c) => typeof c === 'object' && c !== null && c.pending === true;
@@ -163,8 +163,10 @@ function horizontalDrift(records) {
  * The latest A1, B and A2 windows of `flag` and the gain they show.
  * `deltaMs = B.p90 - mean(A1.p90, A2.p90)`: B has the flag off, so a positive
  * delta is time the flag saves. `problems` lists missing or untrustworthy
- * windows, and a targetHz that differs between them (frame budgets differ, so
- * the p90s are not comparable).
+ * windows, and a refreshHz that differs between them (frame budgets differ, so
+ * the p90s are not comparable). A window with no known refreshHz (older
+ * evidence: no `refreshHz`, no runtime rate in `before`) makes the check
+ * partial or skipped; `notes` says so.
  */
 function abaDelta(records, flag) {
   const [id] = normalizeFlags([flag]);
@@ -179,8 +181,14 @@ function abaDelta(records, flag) {
     else if (!trusted(r)) problems.push(`${phase} window untrustworthy (xrCadence integrity)`);
   }
   const present = Object.values(win).filter(Boolean);
-  const rates = [...new Set(present.map((r) => r.targetHz).filter((hz) => Number.isFinite(hz)))];
-  if (rates.length > 1) problems.push(`targetHz differs across A1/B/A2 (${present.map((r) => `${r.phase} ${r.targetHz}`).join(', ')})`);
+  const notes = [];
+  const known = present.filter((r) => recordRefreshHz(r) !== null);
+  const rates = [...new Set(known.map(recordRefreshHz))];
+  if (rates.length > 1) problems.push(`refreshHz differs across A1/B/A2 (${known.map((r) => `${r.phase} ${recordRefreshHz(r)}`).join(', ')})`);
+  else if (known.length < present.length) {
+    const unknown = present.filter((r) => recordRefreshHz(r) === null).map((r) => r.phase);
+    notes.push(`refreshHz unknown on ${unknown.join('/')}: A/B/A refresh-rate check ${known.length === 0 ? 'skipped' : 'partial'}`);
+  }
   const positionDriftM = present.length === 3 ? horizontalDrift(present) : null;
   const ok = problems.length === 0;
   return {
@@ -189,6 +197,7 @@ function abaDelta(records, flag) {
     deltaMs: ok ? p90Of(win.B) - mean(p90Of(win.A1), p90Of(win.A2)) : null,
     positionDriftM,
     problems,
+    notes,
     set: win.A1 ? win.A1.set : null,
     checkpoint: win.A1 ? win.A1.checkpoint : null,
   };
@@ -203,6 +212,9 @@ function abaDelta(records, flag) {
 // at the full game (`rung === 5`, no `phase`); stripped rungs never compare.
 // `matched` counts the keys found on both sides: zero means nothing was
 // actually checked, which the caller must not report as "no regressions".
+// A pair measured at different refresh rates is not compared (frame budgets
+// differ): `refreshMismatched` counts those, `refreshUnknown` the compared pairs
+// where either side has no known rate (older evidence).
 const isFullGameBisect = (r) => r && r.phase === undefined && r.rung === 5;
 function suiteRegressions(records, baseline) {
   const key = (r) => `${r.set}\u0000${r.checkpoint}\u0000${r.window}`;
@@ -215,14 +227,20 @@ function suiteRegressions(records, baseline) {
   const before = latest(baseline, (r) => r.phase === 'suite' || isFullGameBisect(r));
   const regressions = [];
   let matched = 0;
+  let refreshMismatched = 0;
+  let refreshUnknown = 0;
   for (const [k, r] of now) {
     const base = before.get(k);
     if (!base) continue;
+    const hzNow = recordRefreshHz(r);
+    const hzBase = recordRefreshHz(base);
+    if (hzNow !== null && hzBase !== null && hzNow !== hzBase) { refreshMismatched++; continue; }
+    if (hzNow === null || hzBase === null) refreshUnknown++;
     matched++;
     const deltaMs = p90Of(r) - p90Of(base);
     if (deltaMs > REGRESSION_MS) regressions.push({ set: r.set, checkpoint: r.checkpoint, window: r.window, baselineP90: p90Of(base), p90: p90Of(r), deltaMs });
   }
-  return { regressions, matched };
+  return { regressions, matched, refreshMismatched, refreshUnknown };
 }
 
 /**
@@ -250,7 +268,7 @@ function suiteRegressions(records, baseline) {
 function confirmFlag(records, flag, predictedMs, baseline) {
   if (!Number.isFinite(predictedMs) || predictedMs <= 0) throw new Error(`predictedMs must be a number > 0, got ${predictedMs}`);
   const d = abaDelta(records, flag);
-  const check = Array.isArray(baseline) ? suiteRegressions(records, baseline) : { regressions: [], matched: 0 };
+  const check = Array.isArray(baseline) ? suiteRegressions(records, baseline) : { regressions: [], matched: 0, refreshMismatched: 0, refreshUnknown: 0 };
   const regressionChecked = check.matched > 0;
   const result = {
     flag: d.flag,
@@ -265,8 +283,18 @@ function confirmFlag(records, flag, predictedMs, baseline) {
     regressions: check.regressions,
     reason: '',
   };
-  if (!Array.isArray(baseline)) result.note = 'no baseline suite records given: regression check skipped';
-  else if (!regressionChecked) result.note = 'baseline matched no suite window of this wave (want suite or bisect rung-5 windows of the same set/checkpoint/window): regression check skipped';
+  const notes = [...d.notes];
+  if (!Array.isArray(baseline)) notes.push('no baseline suite records given: regression check skipped');
+  else {
+    if (check.refreshMismatched > 0) notes.push(`${check.refreshMismatched} baseline window(s) were measured at a different refreshHz than this wave: not compared`);
+    if (check.refreshUnknown > 0) notes.push(`${check.refreshUnknown} compared window(s) have no known refreshHz on one side (older evidence)`);
+    if (!regressionChecked) {
+      notes.push(check.refreshMismatched > 0
+        ? 'every matching baseline window differs in refreshHz: regression check skipped'
+        : 'baseline matched no suite window of this wave (want suite or bisect rung-5 windows of the same set/checkpoint/window): regression check skipped');
+    }
+  }
+  if (notes.length) result.note = notes.join('; ');
 
   if (d.problems.length) {
     result.reason = d.problems.join('; ');

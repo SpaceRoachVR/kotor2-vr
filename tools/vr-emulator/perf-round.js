@@ -17,7 +17,11 @@
  *
  * Options: --port <cdp port> (default 9422, the `vr:play` browser; the
  * emulator harness uses its own), --round <name> (default r1), which names the
- * evidence file `evidence/perf/<round>.jsonl`.
+ * evidence file `evidence/perf/<round>.jsonl`, and --refresh-hz <n> (default 72),
+ * the headset's refresh rate. A record's `refreshHz` is the runtime's
+ * `runtimeReportedHz` when the page reports one, else this declared value
+ * (`refreshHzSource` says which). Chrome + Virtual Desktop reports none, so
+ * pass the rate you confirmed in Virtual Desktop.
  *
  * Why this exists. The Phase 0 procedure has the person in the headset type
  * `VRSpike.perf.start(...)` into DevTools, which cannot be done from inside the
@@ -69,7 +73,7 @@ const { CdpSession, findPageTarget } = require('./cdp');
 const { captureTrace, analyzeTrace } = require('./perf-trace');
 const {
   bisectPlan, planStops, formatPlan, resolvePlan, attributeRungs, formatAttribution,
-  WINDOW_SECONDS, TARGET_HZ, TARGET_P90_MS, TARGET_P99_MS,
+  WINDOW_SECONDS, TARGET_HZ, TARGET_P90_MS, TARGET_P99_MS, parseRefreshHz, resolveRefreshHz,
 } = require('./perf-bisect');
 const { wavePlan, waveStops, stopOptions, formatWavePlan, formatAba, normalizeFlags } = require('./perf-wave');
 
@@ -92,6 +96,17 @@ const PORT = Number(opt('--port', process.env.KOTOR2VR_CDP_PORT || 9422));
 const ROUND = opt('--round', 'r1');
 const DRY = flag('--dry');
 const WORST = opt('--worst', undefined);
+// R20: the headset's refresh rate as the lead declares it, used when the page's
+// runtime does not report one (Chrome + Virtual Desktop reports null).
+const DECLARED_REFRESH_HZ = (() => {
+  try {
+    return parseRefreshHz(opt('--refresh-hz', String(TARGET_HZ)));
+  } catch (error) {
+    if (require.main !== module) return TARGET_HZ;
+    console.error(error.message);
+    process.exit(1);
+  }
+})();
 const [command, ...rest] = argv;
 const EVIDENCE = path.join(__dirname, 'evidence', 'perf', `${ROUND}.jsonl`);
 
@@ -124,6 +139,9 @@ const STATE = `(() => {
     })(),
     depthMode: gs ? gs.rendererDepthMode : null,
     runtimeRates: vr && vr.perf ? vr.perf.runtimeRates : null,
+    // The runtime's refresh rate; null on Chrome + Virtual Desktop and before Enter VR.
+    runtimeReportedHz: vr && vr.perf && vr.perf.runtimeRates ? vr.perf.runtimeRates.runtimeReportedHz : null,
+    // NOT the refresh rate: PerfSampler.targetHz is the 50 Hz acceptance floor.
     targetHz: vr && vr.perf ? vr.perf.targetHz : null,
     player: p && p.position ? { x: +p.position.x.toFixed(2), y: +p.position.y.toFixed(2), z: +p.position.z.toFixed(2) } : null,
     roomsVisible: world && world.roomsVisible,
@@ -259,7 +277,7 @@ async function load(cdp, name, { url, expectLayer } = {}) {
 }
 
 // `extra` ({rung, set, checkpoint, window}) comes from bisect and is written into
-// the record beside targetHz, so attribution can group the lines by rung. The
+// the record beside refreshHz, so attribution can group the lines by rung. The
 // wave adds {flags, phase, flag} and leaves `rung` out: its windows are all at
 // l5, so the stripped-layer warning stays armed and attribution ignores them.
 async function measureWindow(cdp, label, seconds, extra = {}) {
@@ -295,7 +313,10 @@ async function measureWindow(cdp, label, seconds, extra = {}) {
     ...(flags !== undefined ? { flags } : {}),
     ...(phase !== undefined ? { phase } : {}),
     ...(flagUnderTest !== undefined ? { flag: flagUnderTest } : {}),
+    // targetHz is the 50 Hz acceptance floor, kept for old readers; refreshHz is
+    // the rate the headset runs at (runtime's, else --refresh-hz).
     targetHz: before.targetHz,
+    ...resolveRefreshHz(before, DECLARED_REFRESH_HZ),
     before, after, report,
   };
   fs.mkdirSync(path.dirname(EVIDENCE), { recursive: true });
@@ -311,9 +332,11 @@ async function traceWindow(cdp, label, seconds) {
   const dir = path.dirname(EVIDENCE);
   fs.mkdirSync(dir, { recursive: true });
   const traceFile = path.join(dir, `${ROUND}-${label}.trace.json`);
-  // The frame budget follows the headset's refresh rate; STATE carries targetHz.
+  // The frame budget follows the headset's refresh rate: the runtime's when it
+  // reports one, else --refresh-hz. (Not targetHz, the 50 Hz acceptance floor.)
   const state = await cdp.evaluate(STATE);
-  const budgetMs = Number.isFinite(state.targetHz) && state.targetHz > 0 ? 1000 / state.targetHz : undefined;
+  const { refreshHz } = resolveRefreshHz(state, DECLARED_REFRESH_HZ);
+  const budgetMs = 1000 / refreshHz;
   const [events] = await Promise.all([
     captureTrace(cdp, seconds, traceFile),
     measureWindow(cdp, label, seconds),
@@ -337,7 +360,10 @@ function summaryLine(r) {
   const ft = rpt.frametimeMs || {};
   const cad = rpt.xrCadence || {};
   const world = rpt.world || {};
-  // R4: the spec's 72 Hz target, not the old 50 fps floor.
+  // R4: p90/p99 targets are the spec's 72 Hz ones, not the old 50 fps floor.
+  // The rate printed is the one this record was measured at (R20); records from
+  // before R20 carry none, so they fall back to the runtime's or the default.
+  const hz = r.refreshHz !== undefined ? { refreshHz: r.refreshHz, refreshHzSource: r.refreshHzSource } : resolveRefreshHz(r.before || {}, DECLARED_REFRESH_HZ);
   const verdict = ft.p90 <= TARGET_P90_MS && ft.p99 <= TARGET_P99_MS ? 'PASS' : 'FAIL';
   return [
     `${r.label.padEnd(28)} ${String(world.module || r.before.module).padEnd(7)}`,
@@ -345,7 +371,7 @@ function summaryLine(r) {
     `calls ${rpt.render && rpt.render.calls}  tris ${rpt.render && rpt.render.triangles}`,
     `rooms ${world.roomsVisible}/${world.roomsTotal}  moved ${world.path ? world.path.distanceMetres : '?'} m`,
     `layer ${r.before.perflayer === undefined ? 'n/a' : `l${r.before.perflayer}${r.before.perflayer === 5 ? '' : ' STRIPPED'}`}`,
-    `heap ${rpt.jsHeapMB}  trustworthy=${cad.integrity ? cad.integrity.trustworthy : "n/a"}  ${r.before.presenting ? 'stereo' : 'MONO'}  ${verdict} (target ${TARGET_HZ} Hz: p90<=${TARGET_P90_MS} p99<=${TARGET_P99_MS})`,
+    `heap ${rpt.jsHeapMB}  trustworthy=${cad.integrity ? cad.integrity.trustworthy : "n/a"}  ${r.before.presenting ? 'stereo' : 'MONO'}  ${verdict} (target p90<=${TARGET_P90_MS} p99<=${TARGET_P99_MS} @ ${hz.refreshHz} Hz (${hz.refreshHzSource}))`,
   ].join(' | ');
 }
 
@@ -629,7 +655,7 @@ async function main() {
     if (command === 'bisect' && rest[0]) return await bisect(cdp, rest);
     if (command === 'wave') return await wave(cdp, rest[0], WORST);
     if (command === 'checkpoint' && rest[0]) return await checkpoint(cdp, rest.join(' '));
-    throw new Error('usage: perf-round.js stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> [--dry] | note <text...> | checkpoint <name> | attribution [--budget <ms>] | wave <flag,...> --worst <set> [--dry]');
+    throw new Error('usage: perf-round.js [--port <n>] [--round <name>] [--refresh-hz <n>] stop <checkpoint> [tag] | load <checkpoint> | enter-vr | window <label> <seconds> | trace <label> <seconds> | state | reload [k=v ...] | summary | bisect <set|all> [--dry] | note <text...> | checkpoint <name> | attribution [--budget <ms>] | wave <flag,...> --worst <set> [--dry]');
   } finally {
     cdp.close();
   }
@@ -639,4 +665,4 @@ if (require.main === module) {
   main().catch((error) => { console.error(error.message || error); process.exit(1); });
 }
 
-module.exports = { REOPEN_OVERLAY };
+module.exports = { REOPEN_OVERLAY, summaryLine };

@@ -11,13 +11,14 @@ const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'perf-benchmark
 
 // A wave record as `perf-round.js wave` writes it: the bisect fields plus
 // `flags` and `phase`, and `flag` on the A/B/A windows.
-const rec = (phase, { flag = 'x', p90, set = 'peragus', checkpoint = 'medbay-swept', window = 'rest', pos = { x: 0, y: 0, z: 0 }, afterPos, trustworthy = true, hz = 72 } = {}) => ({
+const rec = (phase, { flag = 'x', p90, set = 'peragus', checkpoint = 'medbay-swept', window = 'rest', pos = { x: 0, y: 0, z: 0 }, afterPos, trustworthy = true, hz = 72, runtimeHz } = {}) => ({
   label: `w-${phase}-${set}-${checkpoint}-${window}${flag ? `-${flag}` : ''}`,
   phase, set, checkpoint, window,
   ...(phase === 'suite' ? {} : { flag }),
   flags: { [flag || 'x']: phase === 'B' ? 'off' : 'on' },
-  targetHz: hz,
-  before: { player: pos, perflayer: 5 },
+  targetHz: 50, // the acceptance floor: constant, never what separates windows
+  ...(hz === null ? {} : { refreshHz: hz, refreshHzSource: 'declared' }),
+  before: { player: pos, perflayer: 5, ...(runtimeHz === undefined ? {} : { runtimeReportedHz: runtimeHz }) },
   after: { player: afterPos || pos, perflayer: 5 },
   report: {
     frametimeMs: { p50: p90 - 2, p90, p99: p90 + 3, max: p90 + 10 },
@@ -160,10 +161,88 @@ test('confirmFlag inconclusive when the player moved within a window (after posi
   assert.strictEqual(confirmFlag(noAfter, 'x', 4).verdict, 'inconclusive');
 });
 
-test('confirmFlag inconclusive when targetHz differs across A1/B/A2', () => {
+test('confirmFlag inconclusive when refreshHz differs across A1/B/A2', () => {
   const out = confirmFlag(aba({ hzB: 90 }), 'x', 4);
   assert.strictEqual(out.verdict, 'inconclusive');
-  assert.match(out.reason, /targetHz/);
+  assert.match(out.reason, /refreshHz differs/);
+});
+
+test('targetHz (the 50 Hz floor) never decides the A/B/A refresh check', () => {
+  const recs = aba();
+  recs[1].targetHz = 72; // would have looked like a mismatch under the old check
+  assert.strictEqual(confirmFlag(recs, 'x', 4).verdict, 'confirmed');
+});
+
+test('older A/B/A records fall back to before.runtimeReportedHz', () => {
+  const old = (hzs) => ['A1', 'B', 'A2'].map((phase, i) => rec(phase, { p90: phase === 'B' ? 20 : 16, hz: null, runtimeHz: hzs[i] }));
+  const same = confirmFlag(old([90, 90, 90]), 'x', 4);
+  assert.strictEqual(same.verdict, 'confirmed');
+  const diff = confirmFlag(old([90, 72, 90]), 'x', 4);
+  assert.strictEqual(diff.verdict, 'inconclusive');
+  assert.match(diff.reason, /refreshHz differs/);
+});
+
+test('A/B/A refresh check is skipped, with a note, when no window has a known refreshHz', () => {
+  const recs = ['A1', 'B', 'A2'].map((phase) => rec(phase, { p90: phase === 'B' ? 20 : 16, hz: null }));
+  const out = confirmFlag(recs, 'x', 4);
+  assert.strictEqual(out.verdict, 'confirmed');
+  assert.match(out.note, /refresh-rate check skipped/);
+});
+
+test('A/B/A refresh check is partial, with a note, when only some windows know their refreshHz', () => {
+  const recs = aba();
+  delete recs[0].refreshHz;
+  const out = confirmFlag(recs, 'x', 4);
+  assert.strictEqual(out.verdict, 'confirmed');
+  assert.match(out.note, /unknown on A1.*partial/);
+});
+
+test('a known A/B/A refreshHz leaves no refresh note', () => {
+  assert.doesNotMatch(String(confirmFlag(aba(), 'x', 4).note), /refresh/);
+});
+
+const hold = { set: 'ebon-hawk', checkpoint: 'ebon-main-hold-open' };
+
+test('confirmFlag: a baseline measured at another refreshHz is not compared, and says so', () => {
+  const suite = [rec('suite', { flag: null, ...hold, p90: 20, hz: 72 })];
+  const baseline = [rec('suite', { flag: null, ...hold, p90: 12, hz: 90 })];
+  const out = confirmFlag([...aba(), ...suite], 'x', 4, baseline);
+  assert.strictEqual(out.regressionChecked, false);
+  assert.deepStrictEqual(out.regressions, []);
+  assert.strictEqual(out.verdict, 'confirmed');
+  assert.match(out.note, /different refreshHz/);
+  assert.match(out.note, /every matching baseline window differs in refreshHz/);
+});
+
+test('confirmFlag: only the same-refreshHz baseline windows are compared', () => {
+  const suite = [
+    rec('suite', { flag: null, ...hold, p90: 20, hz: 72 }),
+    rec('suite', { flag: null, set: 'telos', checkpoint: 'perf-telos-a', p90: 25, hz: 72 }),
+  ];
+  const baseline = [
+    rec('suite', { flag: null, ...hold, p90: 12, hz: 90 }),
+    rec('suite', { flag: null, set: 'telos', checkpoint: 'perf-telos-a', p90: 20, hz: 72 }),
+  ];
+  const out = confirmFlag([...aba(), ...suite], 'x', 4, baseline);
+  assert.strictEqual(out.regressionChecked, true);
+  assert.strictEqual(out.regressionMatched, 1);
+  assert.deepStrictEqual(out.regressions.map((r) => r.set), ['telos']);
+  assert.match(out.note, /1 baseline window\(s\)/);
+});
+
+test('confirmFlag: a baseline without refreshHz is still compared, with a note', () => {
+  const suite = [rec('suite', { flag: null, ...hold, p90: 20 })];
+  const baseline = [bisectRec('ebon-hawk', 'ebon-main-hold-open', 5, 'rest', 12)];
+  const out = confirmFlag([...aba(), ...suite], 'x', 4, baseline);
+  assert.strictEqual(out.regressionChecked, true);
+  assert.match(out.note, /no known refreshHz on one side/);
+  // The fallback is the runtime rate in `before`: 90 now vs 72 then is a mismatch.
+  const old72 = bisectRec('ebon-hawk', 'ebon-main-hold-open', 5, 'rest', 12);
+  old72.before = { runtimeReportedHz: 72 };
+  const now90 = [rec('suite', { flag: null, ...hold, p90: 20, hz: null, runtimeHz: 90 })];
+  const out2 = confirmFlag([...aba(), ...now90], 'x', 4, [old72]);
+  assert.strictEqual(out2.regressionChecked, false);
+  assert.match(out2.note, /different refreshHz/);
 });
 
 test('confirmFlag rejects a prediction that is not a positive number', () => {
