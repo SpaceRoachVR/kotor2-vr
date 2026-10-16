@@ -1,4 +1,4 @@
-import { ItemCategory, UpgradeRow, fits, isSlotOpen, slotTypes } from '@/game/tsl/crafting/UpgradeRules';
+import { COLOUR_SLOT, ItemCategory, UpgradeRow, fits, isSlotOpen, slotTypes } from '@/game/tsl/crafting/UpgradeRules';
 
 /**
  * GUI-free staging of upgrade-slot changes for TSL's Upgrade Workbench. The
@@ -8,9 +8,17 @@ import { ItemCategory, UpgradeRow, fits, isSlotOpen, slotTypes } from '@/game/ts
  * nothing, so parts are never lost.
  */
 
+/** Lightsaber colour crystal, kept apart from the UpgradeSlotN list. */
+export interface ColourPort {
+  current(): UpgradePart | undefined;
+  accepts(resref: string): boolean;
+  set(resref: string): boolean;
+}
+
 export interface UpgradeItemPort {
   category: ItemCategory;
   level: number;
+  colour?: ColourPort;
   getSlot(i: number): number;
   setSlot(i: number, row: number): void;
 }
@@ -27,6 +35,7 @@ export interface UpgradeBagPorts {
   parts(): { part: UpgradePart; count: number }[];
   takeOne(resref: string): boolean;
   returnOne(resref: string): boolean;
+  colourCrystals?(): { part: UpgradePart; count: number }[];
 }
 
 export interface SlotView {
@@ -51,6 +60,17 @@ export class UpgradeSession {
     this.types = slotTypes(item.category);
   }
 
+  private isColour(i: number): boolean {
+    return this.types[i] === COLOUR_SLOT;
+  }
+
+  private slotOpen(i: number): boolean {
+    const type = this.types[i];
+    if (type === undefined) return false;
+    if (type === COLOUR_SLOT) return !!this.item.colour && isSlotOpen(this.item.level, type);
+    return isSlotOpen(this.item.level, type);
+  }
+
   private installedRow(i: number): number {
     return this.item.getSlot(i);
   }
@@ -62,8 +82,8 @@ export class UpgradeSession {
 
   slots(): SlotView[] {
     return this.types.map((type, index) => {
-      const view: SlotView = { index, type, open: isSlotOpen(this.item.level, type) };
-      const installed = this.installed(index);
+      const view: SlotView = { index, type, open: this.slotOpen(index) };
+      const installed = this.isColour(index) ? this.item.colour?.current() : this.installed(index);
       if (installed) view.installed = installed;
       if (this.staging.has(index)) view.staged = this.staging.get(index);
       return view;
@@ -81,8 +101,16 @@ export class UpgradeSession {
 
   candidates(slotIndex: number): UpgradePart[] {
     const type = this.types[slotIndex];
-    if (type === undefined || !isSlotOpen(this.item.level, type)) return [];
+    if (type === undefined || !this.slotOpen(slotIndex)) return [];
     const used = this.stagedUnits();
+    if (this.isColour(slotIndex)) {
+      const colour = this.item.colour!;
+      const current = colour.current()?.resref;
+      return (this.bag.colourCrystals?.() ?? [])
+        .filter(({ part, count }) => part.resref !== current && colour.accepts(part.resref)
+          && count - (used.get(part.resref) ?? 0) > 0)
+        .map(({ part }) => part);
+    }
     return this.bag.parts()
       .filter(({ part, count }) => fits(part, type, this.item.level) && count - (used.get(part.resref) ?? 0) > 0)
       .map(({ part }) => part);
@@ -90,7 +118,8 @@ export class UpgradeSession {
 
   stage(slotIndex: number, part: UpgradePart | null): boolean {
     const type = this.types[slotIndex];
-    if (type === undefined || !isSlotOpen(this.item.level, type)) return false;
+    if (type === undefined || !this.slotOpen(slotIndex)) return false;
+    if (this.isColour(slotIndex)) return this.stageColour(slotIndex, part);
     if (part === null) {
       if (this.installedRow(slotIndex) >= 0) this.staging.set(slotIndex, null);
       else this.staging.delete(slotIndex);
@@ -114,6 +143,23 @@ export class UpgradeSession {
     return true;
   }
 
+  private stageColour(slotIndex: number, part: UpgradePart | null): boolean {
+    const colour = this.item.colour!;
+    if (part === null || !colour.accepts(part.resref)) return false;
+    if (colour.current()?.resref === part.resref) {
+      this.staging.delete(slotIndex);
+      return true;
+    }
+    const held = this.bag.colourCrystals?.().find(b => b.part.resref === part.resref)?.count ?? 0;
+    let elsewhere = 0;
+    for (const [i, p] of this.staging) {
+      if (i !== slotIndex && p && p.resref === part.resref) elsewhere++;
+    }
+    if (held - elsewhere <= 0) return false;
+    this.staging.set(slotIndex, part);
+    return true;
+  }
+
   hasChanges(): boolean {
     return this.staging.size > 0;
   }
@@ -122,7 +168,17 @@ export class UpgradeSession {
     if (!this.hasChanges()) return false;
     const toTake: UpgradePart[] = [];
     const toReturn: UpgradePart[] = [];
+    let colourStaged: UpgradePart | undefined;
     for (const [i, staged] of this.staging) {
+      if (this.isColour(i)) {
+        if (staged) {
+          colourStaged = staged;
+          toTake.push(staged);
+          const old = this.item.colour?.current();
+          if (old) toReturn.push(old);
+        }
+        continue;
+      }
       const row = this.installedRow(i);
       if (row >= 0) {
         // An orphan row (no resolvable part) is cleared/overwritten; nothing is returned for it.
@@ -143,17 +199,28 @@ export class UpgradeSession {
       taken.push(p);
     }
     const returned: UpgradePart[] = [];
+    const undoReturns = () => {
+      for (const r of returned) {
+        if (!this.bag.takeOne(r.resref)) console.error(`UpgradeSession: rollback could not retake part ${r.resref}`);
+      }
+    };
     for (const p of toReturn) {
       if (!this.bag.returnOne(p.resref)) {
-        for (const r of returned) {
-          if (!this.bag.takeOne(r.resref)) console.error(`UpgradeSession: rollback could not retake part ${r.resref}`);
-        }
+        undoReturns();
         undoTakes();
         return false;
       }
       returned.push(p);
     }
-    for (const [i, staged] of this.staging) this.item.setSlot(i, staged ? staged.row : -1);
+    if (colourStaged && !this.item.colour!.set(colourStaged.resref)) {
+      undoReturns();
+      undoTakes();
+      return false;
+    }
+    for (const [i, staged] of this.staging) {
+      if (this.isColour(i)) continue;
+      this.item.setSlot(i, staged ? staged.row : -1);
+    }
     this.staging.clear();
     return true;
   }

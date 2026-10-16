@@ -1,8 +1,8 @@
 import { describe, expect, test, beforeEach, jest } from '@jest/globals';
 import {
-  UpgradeBagPorts, UpgradeItemPort, UpgradePart, UpgradeSession,
+  ColourPort, UpgradeBagPorts, UpgradeItemPort, UpgradePart, UpgradeSession,
 } from '@/game/tsl/crafting/UpgradeSession';
-import { ItemCategory, UpgradeRow } from '@/game/tsl/crafting/UpgradeRules';
+import { COLOUR_SLOT, ItemCategory, UpgradeRow } from '@/game/tsl/crafting/UpgradeRules';
 
 const part = (resref: string, row: number, type: number, level = 1): UpgradePart =>
   ({ resref, row, type, level, name: resref });
@@ -189,5 +189,127 @@ describe('UpgradeSession', () => {
     expect(v[0].installed).toBe(scope);
     expect(v[0].staged).toBeNull();
     expect(v[1].staged).toBeUndefined();
+  });
+});
+
+describe('UpgradeSession colour slot', () => {
+  const crystal = (n: number) => part(`u_l_colo_0${n}`, -1, COLOUR_SLOT, 0);
+  const c1 = crystal(1), c4 = crystal(4), c5 = crystal(5);
+  const lsCrystal = part('g_i_crystal01', 50, 0);
+
+  class SaberItem implements UpgradeItemPort {
+    category: ItemCategory = 'lightsaber';
+    level = 3;
+    slots: number[] = [-1, -1, -1, -1, -1, -1];
+    setCalls: number[] = [];
+    sets: string[] = [];
+    currentPart: UpgradePart | undefined = c1;
+    setResult = true;
+    rejected = new Set<string>(['u_l_colo_05']);
+    colour: ColourPort = {
+      current: () => this.currentPart,
+      accepts: (r: string) => !this.rejected.has(r),
+      set: (r: string) => { this.sets.push(r); return this.setResult; },
+    };
+    getSlot(i: number) { return this.slots[i] ?? -1; }
+    setSlot(i: number, row: number) { this.setCalls.push(i); this.slots[i] = row; }
+  }
+
+  class SaberBag implements UpgradeBagPorts {
+    counts = new Map<string, number>([['u_l_colo_04', 1], ['u_l_colo_05', 1], ['g_i_crystal01', 1]]);
+    returns = 0;
+    parts() {
+      return [lsCrystal].filter(p => (this.counts.get(p.resref) ?? 0) > 0)
+        .map(p => ({ part: p, count: this.counts.get(p.resref)! }));
+    }
+    colourCrystals() {
+      return [c1, c4, c5].filter(p => (this.counts.get(p.resref) ?? 0) > 0)
+        .map(p => ({ part: p, count: this.counts.get(p.resref)! }));
+    }
+    takeOne(r: string) {
+      const n = this.counts.get(r) ?? 0;
+      if (n <= 0) return false;
+      this.counts.set(r, n - 1);
+      return true;
+    }
+    returnOne(r: string) { this.returns++; this.counts.set(r, (this.counts.get(r) ?? 0) + 1); return true; }
+  }
+
+  let saber: SaberItem;
+  let sbag: SaberBag;
+  let sess: UpgradeSession;
+  const n = (r: string) => sbag.counts.get(r) ?? 0;
+  const lsTable: UpgradeRow[] = [{ row: lsCrystal.row, template: lsCrystal.resref, type: lsCrystal.type }];
+  beforeEach(() => {
+    saber = new SaberItem();
+    sbag = new SaberBag();
+    sess = new UpgradeSession(saber, sbag, lsTable, row => (row === lsCrystal.row ? lsCrystal : undefined));
+  });
+
+  test('colour slot shows the current crystal and cannot be removed', () => {
+    expect(sess.slots()[1].installed?.resref).toBe('u_l_colo_01');
+    expect(sess.slots()[1].open).toBe(true);
+    expect(sess.stage(1, null)).toBe(false);
+    expect(sess.hasChanges()).toBe(false);
+  });
+
+  test('colour candidates exclude the current crystal and crystals the saber rejects', () => {
+    sbag.counts.set('u_l_colo_01', 1);
+    expect(sess.candidates(1).map(p => p.resref)).toEqual(['u_l_colo_04']);
+    expect(sess.stage(1, c5)).toBe(false);
+  });
+
+  test('swap takes one crystal, returns the old, sets the colour', () => {
+    expect(sess.stage(1, c4)).toBe(true);
+    expect(sess.assemble()).toBe(true);
+    expect(n('u_l_colo_04')).toBe(0);
+    expect(n('u_l_colo_01')).toBe(1);
+    expect(saber.sets).toEqual(['u_l_colo_04']);
+    expect(saber.setCalls).not.toContain(1);
+  });
+
+  test('unknown current colour returns nothing', () => {
+    saber.currentPart = undefined;
+    sess.stage(1, c4);
+    expect(sess.assemble()).toBe(true);
+    expect(sbag.returns).toBe(0);
+    expect(n('u_l_colo_04')).toBe(0);
+  });
+
+  test('a failed set rolls the bag back', () => {
+    saber.setResult = false;
+    sess.stage(0, lsCrystal);
+    sess.stage(1, c4);
+    expect(sess.assemble()).toBe(false);
+    expect(n('u_l_colo_04')).toBe(1);
+    expect(n('u_l_colo_01')).toBe(0);
+    expect(n('g_i_crystal01')).toBe(1);
+    expect(saber.setCalls).toEqual([]);
+  });
+
+  test('staging the current crystal is a no-op', () => {
+    expect(sess.stage(1, c1)).toBe(true);
+    expect(sess.hasChanges()).toBe(false);
+  });
+
+  test('parts without a colour change do not call set', () => {
+    sess.stage(0, lsCrystal);
+    expect(sess.assemble()).toBe(true);
+    expect(saber.sets).toEqual([]);
+    expect(saber.slots[0]).toBe(50);
+  });
+
+  test('cancel discards a staged colour', () => {
+    sess.stage(1, c4);
+    sess.cancel();
+    expect(sess.hasChanges()).toBe(false);
+    expect(n('u_l_colo_04')).toBe(1);
+  });
+
+  test('a saber without a colour port shows the slot closed', () => {
+    delete saber.colour;
+    expect(sess.slots()[1].open).toBe(false);
+    expect(sess.candidates(1)).toEqual([]);
+    expect(sess.stage(1, c4)).toBe(false);
   });
 });
