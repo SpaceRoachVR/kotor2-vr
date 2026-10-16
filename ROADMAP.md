@@ -2000,6 +2000,12 @@ First shippable artifact.
   (`evidence/upgrade-select.png`, `evidence/upgrade-slots.png`). The workbench and lab
   station probes still pass. Found on the way: Pinpoint Scope Mark I's only property is
   Keen (28), which the combat code does not implement at all (installed or not).
+  **Engine gap (separate task):** the engine does not yet apply Keen (28), Skill
+  bonus, Immunity, Damage Resistance or Regeneration item properties, own or
+  installed, so a part granting only those shows as installed and changes nothing.
+  Final-review fixes: a stacked weapon is split before Assemble, so one part
+  upgrades one unit (ruling R8); same-type damage dice are chosen by expected value
+  and rolled once (ruling R7).
   Remaining pass: lightsaber upgrades (crystals, blade colour, 6 slots).
 
 M4-78 is out of scope.

@@ -109,14 +109,19 @@ export class UpgradeEnginePorts {
       item.initProperties();
       item.load();
       item.setStackSize(1);
-      const manager = GameState.ModuleObjectManager;
-      if(manager?.ObjectList?.get(item.id) === item) manager.RemoveObjectById(item.id);
+      UpgradeEnginePorts.unregister(item);
       this.displayItems.set(key, item);
       return item;
     } catch (e) {
       console.warn(`[UpgradeEnginePorts] part template "${key}" could not be read`, e);
       return undefined;
     }
+  }
+
+  /** Takes an item no inventory holds out of the module's object registry. */
+  private static unregister(item: ModuleItem): void {
+    const manager = GameState.ModuleObjectManager;
+    if(manager?.ObjectList?.get(item.id) === item) manager.RemoveObjectById(item.id);
   }
 
   /** The session's view of `item`, or undefined when it cannot be upgraded. */
@@ -128,8 +133,34 @@ export class UpgradeEnginePorts {
       category,
       level,
       getSlot: (i: number) => item.getUpgradeSlot(i),
-      setSlot: (i: number, row: number) => item.setUpgradeSlot(i, row),
+      setSlot: (i: number, row: number) => {
+        UpgradeEnginePorts.splitOffRest(item);
+        item.setUpgradeSlot(i, row);
+      },
     };
+  }
+
+  /**
+   * Ruling R8: a part upgrades one unit, never a whole stack (weapons stack,
+   * and the item list shows a stack as one row). Before a stacked item's
+   * slots change, `item` keeps one unit (the same object, so the screen and
+   * any wearer still hold it) and the rest becomes a plain copy (clone(), as
+   * ModuleCreature.equipItem splits a stack). In the party inventory the copy
+   * goes in right after the item: InventoryManager.addItem would merge it
+   * straight back into the still-plain unit. An equipped stack's rest goes to
+   * the bag through addItem, joining any plain stack there. Once upgraded,
+   * the unit no longer merges (findItemStackTarget skips upgraded items).
+   */
+  static splitOffRest(item: ModuleItem): void {
+    const count = Number(item?.getStackSize?.()) || 1;
+    if(count <= 1) return;
+    const rest = item.clone();
+    rest.setStackSize(count - 1);
+    item.setStackSize(1);
+    const inventory = GameState.InventoryManager.inventory as ModuleItem[];
+    const at = inventory.indexOf(item);
+    if(at >= 0) inventory.splice(at + 1, 0, rest);
+    else GameState.InventoryManager.addItem(rest);
   }
 
   /** The party inventory as the bag of upgrade parts. */
@@ -159,7 +190,12 @@ export class UpgradeEnginePorts {
         const buffer = ResourceLoader.loadCachedResource(ResourceTypes['uti'], String(resref).toLowerCase());
         if(!buffer) return false;
         try {
-          return !!GameState.InventoryManager.addItem(new GFFObject(buffer), true);
+          const part = new GameState.Module.ModuleArea.ModuleItem(new GFFObject(buffer));
+          const held = GameState.InventoryManager.addItem(part, true);
+          // Merged into a stack already held: the new object was registered
+          // by its constructor and is now unreferenced; drop it.
+          if(held && held !== part) UpgradeEnginePorts.unregister(part);
+          return !!held;
         } catch (e) {
           console.warn(`[UpgradeEnginePorts] could not return part "${resref}" to the bag`, e);
           return false;

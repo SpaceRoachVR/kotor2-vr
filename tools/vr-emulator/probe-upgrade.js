@@ -14,7 +14,8 @@
  * Exile's attack bonus rises by it, the scope returns to the bag), the bonus on a
  * companion, removing the part
  * back to the bag, an armor underlay, Create Items and the forced-oItem route
- * of routine 354, save/reload persistence, pointer reach and stick scrolling,
+ * of routine 354, a stack of a level-1 ranged item split on Assemble (one
+ * scope upgrades one unit, ruling R8), save/reload persistence, pointer reach and stick scrolling,
  * and PNGs of both screens, plus the item list with Create Items (the normal
  * k_workbench route), clicked through the VR ray and trigger.
  *
@@ -752,6 +753,43 @@ async function main() {
     { selectPanel, slotPanel, createPanel, selectContent, createContent, selectLayout: selectReach.layout, createLayout: create.layout,
       slotLayout: slotReach.layout });
 
+    // 13. Ruling R8: a stack of 2+ is split on Assemble, so one scope upgrades one unit; Remove leaves the plain copies alone.
+    const stack = await harness.evaluate(`(async()=>{const U=window.__up,K=window.KotOR,g=K.GameState,inv=()=>g.InventoryManager.inventory;
+      const R=${JSON.stringify(ranged1)},S=${JSON.stringify(SCOPE)},row=U.rowOf(S);
+      await U.closeAll();
+      await U.addItem(R); await U.addItem(S,2);
+      const units=()=>inv().filter(i=>U.resrefOf(i)===R).map(i=>({stack:i.getStackSize(),slot0:i.getUpgradeSlot(0),item:i}));
+      const strays=()=>[...g.ModuleObjectManager.ObjectList.values()].filter(o=>typeof o?.getUpgradeSlot==='function' && U.resrefOf(o)===S && !inv().includes(o)).length;
+      const stackItem=inv().find(i=>U.resrefOf(i)===R && i.getStackSize()>=2 && i.getUpgradeSlot(0)<0);
+      if(!stackItem) return {error:'no stack',units:units().map(u=>({stack:u.stack,slot0:u.slot0}))};
+      const n=stackItem.getStackSize(),scopesBefore=U.count(S);
+      await U.sel().openFor(K.PartyManager.Player,{}); await U.pause(300);
+      const listedBefore=U.sel().rows.filter(r=>U.resrefOf(r.item)===R).length;
+      const opened=await U.openItem(stackItem);
+      const staged=await U.stage(0,S);
+      const assembled=await U.assemble();
+      const after=units(),scopesAfter=U.count(S),screenItem=U.up().item===stackItem;
+      const back=await U.back();
+      const listedAfter=U.sel().rows.filter(r=>U.resrefOf(r.item)===R).length;
+      const plain=after.filter(u=>u.slot0<0).map(u=>u.item);
+      const plainStacks=plain.map(i=>i.getStackSize());
+      await U.openItem(stackItem);
+      const strayBefore=strays();
+      await U.stage(0,'remove'); await U.assemble();
+      const removed={units:units().map(u=>({stack:u.stack,slot0:u.slot0})),scopes:U.count(S),strayDelta:strays()-strayBefore,
+        plainSame:plain.every((i,k)=>inv().includes(i) && i.getStackSize()===plainStacks[k] && i.getUpgradeSlot(0)<0)};
+      await U.closeAll();
+      return {n,row,scopesBefore,listedBefore,opened:opened.index,staged:staged.staged,assembledSlot:assembled.slots?.[0]?.installed||null,
+        after:after.map(u=>({stack:u.stack,slot0:u.slot0,isScreenItem:u.item===stackItem})),scopesAfter,screenItem,listedAfter,removed};})()`, { timeoutMs: 120000 });
+    report.notes.stack = stack;
+    const upgradedUnits = (stack.after || []).filter((u) => u.slot0 === stack.row);
+    const plainUnits = (stack.after || []).filter((u) => u.slot0 < 0);
+    check('13_stackSplitOnAssemble', !stack.error && stack.n >= 2 && stack.staged === true && stack.assembledSlot === SCOPE
+      && upgradedUnits.length === 1 && upgradedUnits[0].stack === 1 && upgradedUnits[0].isScreenItem
+      && plainUnits.reduce((n, u) => n + u.stack, 0) === stack.n - 1
+      && stack.scopesAfter === stack.scopesBefore - 1 && stack.listedAfter === stack.listedBefore + 1
+      && stack.removed.scopes === stack.scopesBefore && stack.removed.plainSame && stack.removed.strayDelta === 0, stack);
+
     // 10. Save with the scope installed in the Exile's equipped blaster, reload: UpgradeSlot0 persists and the bonus applies.
     const saved = await harness.evaluate(`(async()=>{const U=window.__up,K=window.KotOR,p=K.PartyManager.Player,b=window.__blaster;
       U.sel().refresh(0);
@@ -788,7 +826,7 @@ async function main() {
     try { fs.rmSync(path.dirname(userRoot), { recursive: true, force: true }); } catch (e) { report.cleanupError = String(e); }
   }
 
-  report.passed = !report.error && Object.keys(report.checks).length === 12 && Object.values(report.checks).every(Boolean);
+  report.passed = !report.error && Object.keys(report.checks).length === 13 && Object.values(report.checks).every(Boolean);
   console.log(JSON.stringify(report, null, 2));
   process.exitCode = report.passed ? 0 : 1;
 }

@@ -250,7 +250,9 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     const shown = slot ? MenuUpgrade.shownPart(slot) : undefined;
     this.LBL_SLOTNAME?.setText(slot ? `${upgradeTypeName(slot.type)}: ${shown ? shown.name : EMPTY_TEXT}` : '');
     this.listRows = slot ? this.rowsFor(slot) : [];
-    const nodes = this.listRows.map((row) => this.nodeFor(row));
+    const counts = new Map<string, number>();
+    for(const { part, count } of this.engine.bag().parts()) counts.set(part.resref, count);
+    const nodes = this.listRows.map((row) => this.nodeFor(row, counts));
     const index = shown ? this.listRows.findIndex((r) => r.kind === 'part' && r.part.resref === shown.resref) : -1;
     this.LB_DESC?.setItem(null);
     this.LBL_PROPERTY?.setText('');
@@ -291,12 +293,13 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     return rows;
   }
 
-  private nodeFor(row: UpgradeListRow){
+  /** A list node for `row`; `counts` = bag units by part resref, read once per refresh. */
+  private nodeFor(row: UpgradeListRow, counts: ReadonlyMap<string, number>){
     if(row.kind === 'remove'){
       return { row, getName: () => REMOVE_TEXT, getStackSize: () => 1, getIcon: () => '' };
     }
     const display = this.engine.displayItem(row.part.resref);
-    const count = this.engine.bag().parts().find((b) => b.part.resref === row.part.resref)?.count ?? 0;
+    const count = counts.get(row.part.resref) ?? 0;
     return {
       row,
       getName: () => row.part.name,
@@ -339,7 +342,9 @@ export class MenuUpgrade extends K1_MenuUpgrade {
   }
 
   /**
-   * Commits the staged changes. Item stats read installed parts live
+   * Commits the staged changes. A stacked item is split first (ruling R8,
+   * UpgradeEnginePorts.splitOffRest): `this.item` stays the one upgraded unit
+   * and the rest stays plain in the inventory. Item stats read installed parts live
    * (ModuleItem.getEffectiveProperties), so an equipped item's wearer needs no
    * re-equip: equipping itself only adds disguise effects, which parts do not
    * carry.
