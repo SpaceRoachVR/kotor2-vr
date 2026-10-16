@@ -323,7 +323,9 @@ export class CombatAttackData {
       BitWise.InstanceOfObject(target, ModuleObjectType.ModulePlaceable);
     if(!isStructure) return;
     const weapon = this.attackWeapon;
-    const cutsThrough = !!weapon?.properties?.some((property) =>
+    // Installed upgrade parts count too (ModuleItem.getEffectiveProperties).
+    const properties = weapon?.getEffectiveProperties?.() ?? weapon?.properties;
+    const cutsThrough = !!properties?.some((property) =>
       property.isUseable() && (property.is(ModuleItemProperty.DoorCutting) || property.is(ModuleItemProperty.DoorSabering)));
     const total = this.getTotalDamage();
     const remaining = resolveStructureDamage({ damage: total, hardness: (target as any).hardness, cutsThrough });

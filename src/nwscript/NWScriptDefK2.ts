@@ -2897,7 +2897,9 @@ NWScriptDefK2.Actions = {
     action: function(this: NWScriptInstance, args: [ModuleObject, number]){
       const item = args[0] as any;
       if(!item || !BitWise.InstanceOfObject(item, ModuleObjectType.ModuleItem)) return NW_FALSE;
-      const properties = Array.isArray(item.properties) ? item.properties : [];
+      // Installed upgrade parts' properties count (ModuleItem.getEffectiveProperties).
+      const effective = typeof item.getEffectiveProperties === 'function' ? item.getEffectiveProperties() : item.properties;
+      const properties = Array.isArray(effective) ? effective : [];
       return properties.some((property: any) => property?.is?.(args[1])) ? NW_TRUE : NW_FALSE;
     }
   },

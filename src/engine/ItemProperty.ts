@@ -48,6 +48,12 @@ export class ItemProperty {
    * tunneler's ThievesTools bonus in `ActionUnlockObject`.
    */
   upgradeType: number = -1;
+  /**
+   * Set on the properties of a TSL upgrade part installed in an item
+   * (ModuleItem.getUpgradeProperties). Installed parts always apply, so the
+   * K1 `Upgrades` bitmask gate below is skipped for them.
+   */
+  installedUpgrade: boolean = false;
   param1: number;
   param1Value: number;
   chanceAppear: number;
@@ -137,6 +143,9 @@ export class ItemProperty {
 
   //Determine if the property requires an upgrade to use, or if it is always useable
   isUseable(){
+    if(this.installedUpgrade){
+      return true;
+    }
     //Defensive as well as defaulted: a template that carries UpgradeType as a
     //non-numeric value would otherwise shift by NaN and land back on the same
     //silent "unusable" answer the default above exists to prevent.

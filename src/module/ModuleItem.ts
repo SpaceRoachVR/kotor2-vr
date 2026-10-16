@@ -24,6 +24,7 @@ import { GameState } from "@/GameState";
 import { ActionParameterType, GameEffectDurationType, ModuleCreatureAnimState, SkillType } from "@/enums";
 import { writeItemCastSpellParameters } from "@/actions/ItemCastSpellParameters";
 import type { SWWeaponSound } from "@/engine/rules/SWWeaponSound";
+import { parseUpgradeTable } from "@/game/tsl/crafting/UpgradeRules";
 
 /**
 * ModuleItem class.
@@ -41,6 +42,19 @@ import type { SWWeaponSound } from "@/engine/rules/SWWeaponSound";
 const VR_CLONE_SKIP_FIELDS: ReadonlySet<string> = new Set([
   'ObjectId', 'ID', 'XPosition', 'YPosition', 'ZPosition', 'XOrientation', 'YOrientation', 'ZOrientation',
 ]);
+
+/** TSL items carry UpgradeSlot0..UpgradeSlot5. */
+const UPGRADE_SLOT_COUNT = 6;
+
+/** upgrade.2da rows already reported as contributing nothing, so each logs once. */
+const loggedUpgradeRows = new Set<number>();
+
+function logUpgradeRowOnce(row: number, message: string, error?: unknown){
+  if(loggedUpgradeRows.has(row)) return;
+  loggedUpgradeRows.add(row);
+  if(error === undefined) console.warn(`ModuleItem: ${message}`);
+  else console.warn(`ModuleItem: ${message}`, error);
+}
 
 export class ModuleItem extends ModuleObject {
   equippedRes: any;
@@ -77,6 +91,8 @@ export class ModuleItem extends ModuleObject {
   upgradeSlot3: number = -1;
   upgradeSlot4: number = -1;
   upgradeSlot5: number = -1;
+  /** Installed upgrade parts' properties, keyed by the six slots' rows. */
+  private upgradePropertyCache?: { key: string, properties: ItemProperty[] };
   weaponSound: SWWeaponSound;
 
   constructor ( gff = new GFFObject() ) {
@@ -223,9 +239,114 @@ export class ModuleItem extends ModuleObject {
     return null;
   }
 
+  /** How many upgrade slots this item opens (`UpgradeLevel`), 0 when unset. */
+  getUpgradeLevel(): number {
+    const level = Number(this.upgradeLevel);
+    return Number.isFinite(level) && level > 0 ? level : 0;
+  }
+
+  /** The upgrade.2da row installed in slot `index` (0-5), or -1 when empty. */
+  getUpgradeSlot(index: number): number {
+    if(!Number.isInteger(index) || index < 0 || index >= UPGRADE_SLOT_COUNT) return -1;
+    const row = Number((this as any)['upgradeSlot' + index]);
+    return Number.isInteger(row) && row >= 0 ? row : -1;
+  }
+
+  /**
+   * Install upgrade.2da `row` in slot `index` (-1 empties it). The value also
+   * goes into the template's INT field `UpgradeSlotN`, which is what save()
+   * writes, and the upgrade-property cache is dropped.
+   */
+  setUpgradeSlot(index: number, row: number): void {
+    if(!Number.isInteger(index) || index < 0 || index >= UPGRADE_SLOT_COUNT){
+      throw new RangeError(`Invalid upgrade slot ${index}`);
+    }
+    const value = Number.isInteger(row) && row >= 0 ? row : -1;
+    (this as any)['upgradeSlot' + index] = value;
+    const label = 'UpgradeSlot' + index;
+    if(this.template?.RootNode){
+      if(this.template.RootNode.hasField(label)){
+        this.template.getFieldByLabel(label).setValue(value);
+      }else{
+        this.template.RootNode.addField(new GFFField(GFFDataType.INT, label)).setValue(value);
+      }
+    }
+    this.upgradePropertyCache = undefined;
+  }
+
+  /** The upgrade.2da rows installed in this item, slot order, empty slots skipped. */
+  getInstalledUpgradeRows(): number[] {
+    const rows: number[] = [];
+    for(let i = 0; i < UPGRADE_SLOT_COUNT; i++){
+      const row = this.getUpgradeSlot(i);
+      if(row >= 0) rows.push(row);
+    }
+    return rows;
+  }
+
+  /**
+   * The properties of the installed upgrade parts: each slot's upgrade.2da
+   * row names a part template (UTI) whose PropertiesList applies while the
+   * part is installed. The item's own PropertiesList is never changed.
+   * Retail part templates all live in templates.bif, which
+   * ResourceLoader.InitGlobalCache caches at startup, so the synchronous
+   * cached loader finds them. Cached per slot state; a row with no template
+   * or no loadable UTI contributes nothing and is logged once.
+   */
+  getUpgradeProperties(): ItemProperty[] {
+    const key = [0, 1, 2, 3, 4, 5].map((i) => this.getUpgradeSlot(i)).join(',');
+    if(this.upgradePropertyCache?.key === key) return this.upgradePropertyCache.properties;
+    const rows = this.getInstalledUpgradeRows();
+    if(!rows.length){
+      this.upgradePropertyCache = { key, properties: [] };
+      return this.upgradePropertyCache.properties;
+    }
+    const table = GameState.TwoDAManager?.datatables?.get('upgrade');
+    // Not loaded yet: answer without caching, so a later call can resolve.
+    if(!table) return [];
+    const properties: ItemProperty[] = [];
+    for(const row of rows){
+      const tableRow = table.rows?.[row];
+      const part = tableRow ? parseUpgradeTable({ [row]: tableRow })[0] : undefined;
+      if(!part){
+        logUpgradeRowOnce(row, `upgrade.2da row ${row} names no part template`);
+        continue;
+      }
+      const buffer = ResourceLoader.loadCachedResource(ResourceTypes['uti'], part.template);
+      if(!buffer){
+        logUpgradeRowOnce(row, `upgrade.2da row ${row}: part template ${part.template} did not load`);
+        continue;
+      }
+      try{
+        const gff = new GFFObject(buffer);
+        const list = gff.RootNode.hasField('PropertiesList')
+          ? gff.getFieldByLabel('PropertiesList').getChildStructs()
+          : [];
+        for(const struct of list){
+          const property = new ItemProperty(GFFObject.FromStruct(struct), this);
+          // TSL parts apply whenever installed; the K1 `Upgrades` bitmask
+          // gate in isUseable does not apply to them.
+          property.installedUpgrade = true;
+          properties.push(property);
+        }
+      }catch(e){
+        logUpgradeRowOnce(row, `upgrade.2da row ${row}: part template ${part.template} could not be read`, e);
+      }
+    }
+    this.upgradePropertyCache = { key, properties };
+    return properties;
+  }
+
+  /** The item's own properties plus its installed upgrade parts'. */
+  getEffectiveProperties(): ItemProperty[] {
+    const upgrades = this.getUpgradeProperties();
+    return upgrades.length ? [...this.properties, ...upgrades] : this.properties;
+  }
+
   isDisguise(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Disguise)){
         return true;
       }
@@ -234,8 +355,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getDisguiseAppearance(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Disguise)){
         return property.getValue();
       }
@@ -244,8 +366,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getDisguiseAppearanceId(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Disguise)){
         return property.subType;
       }
@@ -290,8 +413,9 @@ export class ModuleItem extends ModuleObject {
 
   getACBonus(){
     let bonus = 0;
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Armor)){
         bonus += property.getValue();
       }
@@ -308,8 +432,9 @@ export class ModuleItem extends ModuleObject {
 
   getAttackBonus(): number {
     let bonus = 0;
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.AttackBonus)){
         bonus += property.getValue();
         break;
@@ -366,16 +491,18 @@ export class ModuleItem extends ModuleObject {
 
   /** Whether this item carries a usable Monster_Damage property — true of creature weapons, not held ones. */
   hasMonsterDamage(): boolean {
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      const property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      const property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Monster_Damage)) return true;
     }
     return false;
   }
 
   getMonsterDamage(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Monster_Damage)){
         return property.getValue();
       }
@@ -391,8 +518,9 @@ export class ModuleItem extends ModuleObject {
    */
   getDamagePenalty(): number {
     let penalty = 0;
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      const property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      const property = properties[i];
       if(!property.isUseable() || !property.is(ModuleItemProperty.DamagePenalty)) continue;
       const row = property.getCostTableRow?.();
       const value = row ? parseInt(row.value) : NaN;
@@ -402,8 +530,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   hasDamageBonus(): boolean {
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Damage)){
         return true;
       }
@@ -412,8 +541,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getDamageBonus(): number {
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Damage)){
         return property.getValue();
       }
@@ -422,8 +552,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getDamageBonusType(): number {
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Damage)){
         return property.getSubType()?.id || 0;
       }
@@ -444,8 +575,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getSTRBonus(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Ability, 0)){
         return property.getValue();
       }
@@ -454,8 +586,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getDEXBonus(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Ability, 1)){
         return property.getValue();
       }
@@ -464,8 +597,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getCONBonus(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Ability, 2)){
         return property.getValue();
       }
@@ -474,8 +608,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getINTBonus(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Ability, 3)){
         return property.getValue();
       }
@@ -484,8 +619,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getWISBonus(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Ability, 4)){
         return property.getValue();
       }
@@ -494,8 +630,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   getCHABonus(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.isUseable() && property.is(ModuleItemProperty.Ability, 5)){
         return property.getValue();
       }
@@ -504,8 +641,9 @@ export class ModuleItem extends ModuleObject {
   }
 
   isUpgradable(){
-    for(let i = 0, len = this.properties.length; i < len; i++){
-      let property = this.properties[i];
+    const properties = this.getEffectiveProperties();
+    for(let i = 0, len = properties.length; i < len; i++){
+      let property = properties[i];
       if(property.upgradeType >= 0){
         return true;
       }
