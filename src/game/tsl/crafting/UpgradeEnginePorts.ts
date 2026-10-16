@@ -214,12 +214,7 @@ export class UpgradeEnginePorts {
    */
   private colourPort(item: ModuleItem, kind: SaberKind): ColourPort {
     const variationOf = (template: string) => this.variationOf(template);
-    // A variation whose blade model is missing is never offered: the model
-    // only loads after set() returns, too late to roll the Assemble back.
-    const variationFor = (resref: string) => {
-      const variation = modelVariationFor(this.colourTable(), resref, kind, variationOf);
-      return variation !== undefined && UpgradeEnginePorts.hasModelFor(item, variation) ? variation : undefined;
-    };
+    const variationFor = (resref: string) => this.variationForCrystal(item, resref, kind);
     return {
       current: () => {
         const crystal = colourCrystalFor(this.colourTable(), kind, item.getModelVariation(), variationOf);
@@ -251,6 +246,20 @@ export class UpgradeEnginePorts {
         }
       },
     };
+  }
+
+  /**
+   * The ModelVariation colour crystal `resref` gives saber `item`, or
+   * undefined when it gives none for this saber kind. A variation whose
+   * blade model is missing is never offered: the model only loads after the
+   * colour is set, too late to roll the Assemble back. The colour port and
+   * the upgrade screen's 3D preview both read the blade through here.
+   */
+  variationForCrystal(item: ModuleItem, resref: string, kind?: SaberKind): number | undefined {
+    kind ??= saberKindFor(Number(item?.getBaseItemId?.()));
+    if(!kind) return undefined;
+    const variation = modelVariationFor(this.colourTable(), resref, kind, (template: string) => this.variationOf(template));
+    return variation !== undefined && UpgradeEnginePorts.hasModelFor(item, variation) ? variation : undefined;
   }
 
   /** Whether `item`'s model for `variation` exists (ResourceLoader.hasModelPair). */

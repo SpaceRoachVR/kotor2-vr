@@ -1,8 +1,13 @@
+import * as THREE from "three";
 import type { GUIListBox, GUILabel, GUIButton, GUIControl } from "@/gui";
+import { LBL_3DView } from "@/gui";
+import { MDLLoader, TextureLoader } from "@/loaders";
+import { OdysseyModel3D } from "@/three/odyssey";
 import type { ModuleCreature, ModuleItem } from "@/module";
 import { MenuUpgrade as K1_MenuUpgrade } from "@/game/kotor/KOTOR";
 import { GUIInventoryItem } from "@/game/tsl/gui/GUIInventoryItem";
-import { upgradeTypeName } from "@/game/tsl/crafting/UpgradeRules";
+import { COLOUR_SLOT, upgradeTypeName } from "@/game/tsl/crafting/UpgradeRules";
+import { previewAxes, previewCameraDistance } from "@/game/tsl/menu/upgradePreviewFraming";
 import { UpgradeLayout, fittedListExtent, hiddenInLayout, shownInLayout, offersRemove, slotNameText } from "@/game/tsl/menu/UpgradeLayout";
 import { SlotView, UpgradePart, UpgradeSession } from "@/game/tsl/crafting/UpgradeSession";
 import { UpgradeEnginePorts } from "@/game/tsl/crafting/UpgradeEnginePorts";
@@ -14,6 +19,15 @@ const REMOVE_DESCRIPTION = 'Take the upgrade out of this slot and return it to t
 const EMPTY_TEXT = 'Empty';
 /** GUI units between the cut-down LB_ITEMS and the slot buttons below it. */
 const LIST_GAP = 6;
+/** The 3D lightsaber preview's turn about the saber's long axis, rad/s. */
+const PREVIEW_TURN_RATE = 0.6;
+/** The preview renders at this multiple of 3D_MODEL_LS's GUI size (sharper in the VR panel). */
+const PREVIEW_RESOLUTION = 2;
+/** The saber model's lit-blade loop (ModuleItem.setPowered plays it in hand). */
+const PREVIEW_ANIMATION = 'powered';
+/** Intensity of the preview's key light on the hilt. */
+const PREVIEW_KEY_LIGHT = 1;
+const AXIS_VECTORS = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) } as const;
 
 /** One LB_ITEMS row: a part that fits the selected slot, or the Remove row. */
 export type UpgradeListRow = { kind: 'part'; part: UpgradePart } | { kind: 'remove' };
@@ -89,6 +103,21 @@ export class MenuUpgrade extends K1_MenuUpgrade {
   /** LB_ITEMS's height as the GUI built it, before fitItemList cuts it. */
   private listHeight: number | undefined;
   private listTop: number | undefined;
+  /** The lightsaber preview on 3D_MODEL_LS; made when a saber opens, disposed on close. */
+  previewView: LBL_3DView | undefined;
+  /** The saber model the preview shows (undefined while loading, or when it failed). */
+  previewModel: OdysseyModel3D | undefined;
+  /** The model resref the preview shows or is loading; '' when none. */
+  previewResRef = '';
+  /** Bumped per load and on dispose: a load that lands under an older number is dropped. */
+  private previewLoad = 0;
+  private previewAngle = 0;
+  private readonly previewAxis = new THREE.Vector3(0, 0, 1);
+  private readonly previewCentre = new THREE.Vector3();
+  private readonly previewTurn = new THREE.Quaternion();
+  private previewKeyLight: THREE.DirectionalLight | undefined;
+  /** Model resrefs whose load already logged a failure. */
+  private readonly previewFailures = new Set<string>();
 
   constructor(){
     super();
@@ -230,6 +259,190 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     }
     this.fitItemList();
     this.refresh();
+    if(this.layout !== 'lightsaber') this.disposePreview();
+  }
+
+  close(){
+    this.disposePreview();
+    super.close();
+  }
+
+  update(delta: number = 0){
+    super.update(delta);
+    if(!this.bVisible || !this.previewView) return;
+    if(this.previewModel){
+      this.previewAngle = (this.previewAngle + PREVIEW_TURN_RATE * delta) % (Math.PI * 2);
+      this.posePreviewModel();
+    }
+    try {
+      // LBL_3DView renders through renderGuiSceneToTexture, which bumps the
+      // GUI surface revision, so the VR panel repaints the turning saber.
+      this.previewView.render(delta);
+      // render() marks the fill transparent; the hilt's materials write a low
+      // alpha into the view, which then blended to near-black over the panel.
+      // The view is cleared opaque black, so draw it opaque.
+      const fill = this._3D_MODEL_LS?.getFill?.()?.material as any;
+      if(fill) fill.transparent = false;
+    } catch (e) {
+      // A render that throws once throws every frame: stop rather than spam.
+      console.warn('[MenuUpgrade] lightsaber preview render failed', this.previewResRef, e);
+      this.disposePreview();
+    }
+  }
+
+  /** The ModelVariation the preview shows: the staged colour crystal's, else the item's own. */
+  previewVariation(): number {
+    const own = Number(this.item?.getModelVariation?.()) || 0;
+    const staged = this.slots().find((slot) => slot.type === COLOUR_SLOT)?.staged;
+    if(!this.item || !staged) return own;
+    return this.engine.variationForCrystal(this.item, staged.resref) ?? own;
+  }
+
+  /**
+   * Shows the saber at previewVariation() on 3D_MODEL_LS: makes the view the
+   * first time a saber opens, and loads the model when the previewed resref
+   * changes (staging a colour, Assemble). Any other layout disposes it.
+   */
+  updatePreview(){
+    const control = this._3D_MODEL_LS;
+    if(this.layout !== 'lightsaber' || !this.item || !control){
+      this.disposePreview();
+      return;
+    }
+    let resref = '';
+    try {
+      resref = this.item.modelResRefFor(this.previewVariation());
+    } catch (e) {
+      console.warn('[MenuUpgrade] lightsaber preview has no model resref', e);
+    }
+    if(!this.previewView) this.createPreviewView(control);
+    if(resref === this.previewResRef) return;
+    this.previewResRef = resref;
+    if(!resref){
+      this.previewLoad++;
+      this.removePreviewModel();
+      return;
+    }
+    void this.loadPreviewModel(resref);
+  }
+
+  /** An LBL_3DView on `control`, wired the way MenuCharacter wires LBL_3DCHAR. */
+  private createPreviewView(control: GUILabel){
+    const width = Number(control.extent?.width) || 168;
+    const height = Number(control.extent?.height) || 228;
+    const view = new LBL_3DView(width * PREVIEW_RESOLUTION, height * PREVIEW_RESOLUTION);
+    view.visible = true;
+    view.camera.aspect = width / height;
+    view.camera.updateProjectionMatrix();
+    const material = control.getFill?.()?.material as any;
+    if(material?.uniforms?.map) material.uniforms.map.value = view.texture.texture;
+    if(material) material.transparent = false;
+    view.setControl(control);
+    if(material) material.visible = true;
+    // The view has no area lights: without these the hilt renders near black
+    // (the blade is self-lit). An ambient fill plus a key light from the camera.
+    view.scene.add(view.globalLight);
+    this.previewKeyLight = new THREE.DirectionalLight(0xffffff, PREVIEW_KEY_LIGHT);
+    view.scene.add(this.previewKeyLight);
+    this.previewAngle = 0;
+    this.previewView = view;
+  }
+
+  /** Loads `resref` into the preview; a load overtaken by a newer one (or a close) is disposed. */
+  private async loadPreviewModel(resref: string){
+    const generation = ++this.previewLoad;
+    const view = this.previewView;
+    if(!view) return;
+    const current = () => generation === this.previewLoad && view === this.previewView;
+    let model: OdysseyModel3D | undefined;
+    try {
+      const mdl = await MDLLoader.loader.load(resref);
+      if(!mdl) throw new Error('model not found');
+      if(!current()) return;
+      model = await OdysseyModel3D.FromMDL(mdl, { context: view as any, lighting: true } as any);
+    } catch (e) {
+      if(!current()) return;
+      this.removePreviewModel();
+      if(!this.previewFailures.has(resref)){
+        this.previewFailures.add(resref);
+        console.warn('[MenuUpgrade] lightsaber preview model failed to load', resref, e);
+      }
+      return;
+    }
+    if(!current()){
+      model?.dispose?.();
+      return;
+    }
+    this.removePreviewModel();
+    this.previewModel = model;
+    view.addModel(model);
+    // The lit blade: in hand ModuleItem.setPowered holds a saber on 'off'
+    // until it powers up, then loops 'powered'. The preview always shows it lit.
+    if(model.odysseyAnimationMap?.has?.(PREVIEW_ANIMATION)) model.playAnimation(PREVIEW_ANIMATION, true);
+    this.framePreview(model, view);
+    TextureLoader.LoadQueue().catch((e: unknown) => console.warn('[MenuUpgrade] lightsaber preview textures failed', resref, e));
+  }
+
+  /**
+   * Centres the model's bounding box on the origin and puts the camera on an
+   * axis perpendicular to its long axis, at a distance that fits it turning.
+   */
+  private framePreview(model: OdysseyModel3D, view: LBL_3DView){
+    model.position.set(0, 0, 0);
+    model.quaternion.identity();
+    model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = new THREE.Vector3();
+    if(box.isEmpty()){
+      this.previewCentre.set(0, 0, 0);
+    }else{
+      box.getCenter(this.previewCentre);
+      box.getSize(size);
+    }
+    const axes = previewAxes(size);
+    this.previewAxis.copy(AXIS_VECTORS[axes.long]);
+    const camera = view.camera;
+    const distance = previewCameraDistance(size, camera.fov, camera.aspect);
+    camera.up.copy(this.previewAxis);
+    camera.position.copy(AXIS_VECTORS[axes.view]).multiplyScalar(distance);
+    camera.near = Math.max(0.01, distance / 100);
+    camera.far = distance * 10;
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+    // Key light from the camera's side, raised along the long axis.
+    this.previewKeyLight?.position.copy(camera.position).addScaledVector(this.previewAxis, distance * 0.5);
+    this.posePreviewModel();
+  }
+
+  /** Turns the model by previewAngle about its long axis through its box centre. */
+  private posePreviewModel(){
+    const model = this.previewModel;
+    if(!model) return;
+    this.previewTurn.setFromAxisAngle(this.previewAxis, this.previewAngle);
+    model.quaternion.copy(this.previewTurn);
+    model.position.copy(this.previewCentre).negate().applyQuaternion(this.previewTurn);
+  }
+
+  private removePreviewModel(){
+    const model = this.previewModel;
+    this.previewModel = undefined;
+    if(!model) return;
+    this.previewView?.removeModel(model);
+    model.removeFromParent();
+    try { model.dispose(); } catch (e) { console.warn('[MenuUpgrade] lightsaber preview model dispose failed', e); }
+  }
+
+  /** Removes and disposes the model and releases the view's render targets; update() stops rendering. */
+  disposePreview(){
+    this.previewLoad++;
+    this.previewResRef = '';
+    this.removePreviewModel();
+    const view = this.previewView;
+    this.previewView = undefined;
+    this.previewKeyLight?.dispose();
+    this.previewKeyLight = undefined;
+    view?.dispose();
   }
 
   /** The current slot views (empty when nothing is open). */
@@ -304,6 +517,7 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     } as any);
     this.LB_ITEMS.markListRttDirty?.();
     this.showPartDescription();
+    this.updatePreview();
   }
 
   /** The slot button shows the part's icon, or the GUI's own fill when empty. */

@@ -38,6 +38,8 @@ export class LBL_3DView {
   control: any;
   frustumMat4: THREE.Matrix4;
   viewportFrustum: THREE.Frustum;
+  /** Set by dispose(): the render targets are released. */
+  disposed = false;
 
   constructor(width: number = 800, height: number = 600){
 
@@ -128,9 +130,24 @@ export class LBL_3DView {
     this.camera.updateProjectionMatrix();
   }
 
+  /**
+   * Releases the view's render targets and empties its scene. The caller
+   * removes and disposes its own models first; after this the view no
+   * longer renders.
+   */
+  dispose(){
+    this.visible = false;
+    this.disposed = true;
+    try { this.lightManager.clearLights(); } catch (e) { /* nothing was lit */ }
+    this.scene.clear();
+    this.texture.dispose();
+    this.tDepth.dispose();
+    this.control = undefined;
+  }
+
   render(delta = 0){
 
-    if(!this.visible)
+    if(!this.visible || this.disposed)
       return;
 
     for(let emitter in this.emitters){
