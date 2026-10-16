@@ -3,6 +3,7 @@ import { ResourceLoader } from "@/loaders";
 import { ResourceTypes } from "@/resource/ResourceTypes";
 import { GFFObject } from "@/resource/GFFObject";
 import type { ModuleCreature, ModuleItem } from "@/module";
+import { OdysseyModel3D } from "@/three/odyssey";
 import { COLOUR_SLOT, ItemCategory, SaberKind, UpgradeRow, categoryFor, parseUpgradeTable, saberKindFor } from "@/game/tsl/crafting/UpgradeRules";
 import { ColourRow, colourCrystalFor, isColourCrystal, modelVariationFor, parseColourTable } from "@/game/tsl/crafting/ColourCrystals";
 import type { ColourPort, UpgradeBagPorts, UpgradeItemPort, UpgradePart } from "@/game/tsl/crafting/UpgradeSession";
@@ -18,6 +19,12 @@ const EQUIPMENT_KEYS = ['RIGHTHAND', 'LEFTHAND', 'RIGHTHAND2', 'LEFTHAND2', 'ARM
 
 /** The creature model's attachment node for an equipped hand item (as equipItem attaches it). */
 const HAND_NODES: Record<string, 'rhand' | 'lhand'> = { RIGHTHAND: 'rhand', LEFTHAND: 'lhand' };
+
+/**
+ * The latest reloadWorn per item, and the model it attached. An older reload
+ * that finishes later is dropped.
+ */
+const reloads = new WeakMap<ModuleItem, { generation: number; model?: unknown }>();
 
 const resrefOf = (item: ModuleItem): string =>
   String(item?.getTemplateResRef?.() || item?.getTag?.() || '').toLowerCase();
@@ -207,7 +214,12 @@ export class UpgradeEnginePorts {
    */
   private colourPort(item: ModuleItem, kind: SaberKind): ColourPort {
     const variationOf = (template: string) => this.variationOf(template);
-    const variationFor = (resref: string) => modelVariationFor(this.colourTable(), resref, kind, variationOf);
+    // A variation whose blade model is missing is never offered: the model
+    // only loads after set() returns, too late to roll the Assemble back.
+    const variationFor = (resref: string) => {
+      const variation = modelVariationFor(this.colourTable(), resref, kind, variationOf);
+      return variation !== undefined && UpgradeEnginePorts.hasModelFor(item, variation) ? variation : undefined;
+    };
     return {
       current: () => {
         const crystal = colourCrystalFor(this.colourTable(), kind, item.getModelVariation(), variationOf);
@@ -219,18 +231,36 @@ export class UpgradeEnginePorts {
         if(variation === undefined) return false;
         UpgradeEnginePorts.splitOffRest(item);
         const previous = Number(item.modelVariation) || 0;
+        let reloading = false;
         try {
           item.setModelVariation(variation);
+          reloading = true;
           UpgradeEnginePorts.reloadWorn(item);
           return true;
         } catch (e) {
+          // What can throw here is synchronous: the template write in
+          // setModelVariation, or finding the wearer. A blade that fails to
+          // load does so later, which is why accepts() checks the model first.
           console.error(`[UpgradeEnginePorts] colour "${resref}" could not be applied`, e);
-          item.setModelVariation(previous);
-          try { UpgradeEnginePorts.reloadWorn(item); } catch (e2) { /* best effort: put the old blade back */ }
+          item.modelVariation = previous;
+          try { item.setModelVariation(previous); } catch (e2) { /* the field above is restored */ }
+          if(reloading){
+            try { UpgradeEnginePorts.reloadWorn(item); } catch (e3) { /* best effort: put the old blade back */ }
+          }
           return false;
         }
       },
     };
+  }
+
+  /** Whether `item`'s model for `variation` exists (ResourceLoader.hasModelPair). */
+  static hasModelFor(item: ModuleItem, variation: number): boolean {
+    try {
+      return ResourceLoader.hasModelPair(item.modelResRefFor(variation));
+    } catch (e) {
+      console.warn('[UpgradeEnginePorts] model lookup failed', e);
+      return false;
+    }
   }
 
   /**
@@ -242,8 +272,9 @@ export class UpgradeEnginePorts {
    * puts the item back in its slot after an await, leaving it in neither the
    * hand nor the bag meanwhile. Here the item never leaves its slot:
    * loadModel disposes the old model and the new one goes on the hand node
-   * the way equipItem attaches it. Throws only synchronously; a model that
-   * fails to load is logged by loadModel and leaves the hand empty.
+   * the way equipItem attaches it. When reloads overlap (an Assemble
+   * rollback sets the old colour straight after the new one), only the last
+   * one attaches; an earlier one's model is disposed when it lands.
    */
   static reloadWorn(item: ModuleItem): void {
     const wearer = UpgradeEnginePorts.wearerOf(item);
@@ -251,9 +282,21 @@ export class UpgradeEnginePorts {
     const equipment = (wearer as any).equipment ?? {};
     const key = EQUIPMENT_KEYS.find((k) => equipment[k] === item);
     const node = key ? HAND_NODES[key] : undefined;
+    const state = { generation: (reloads.get(item)?.generation ?? 0) + 1 } as { generation: number; model?: unknown };
+    reloads.set(item, state);
     item.loadModel().then((model) => {
+      const latest = reloads.get(item);
+      if(latest !== state){
+        // Superseded. loadModel already made this item.model; when it landed
+        // after the latest reload, put the latest one back.
+        if(item.model === model) (item as any).model = latest?.model;
+        model?.removeFromParent?.();
+        model?.dispose?.();
+        return;
+      }
+      state.model = model;
       const hand = node ? (wearer as any).model?.[node] : undefined;
-      if(model && hand && equipment[key!] === item) hand.add(model);
+      if(model instanceof OdysseyModel3D && item.model === model && hand && equipment[key!] === item) hand.add(model);
     }).catch((e) => console.error('[UpgradeEnginePorts] blade model reload failed', e));
   }
 

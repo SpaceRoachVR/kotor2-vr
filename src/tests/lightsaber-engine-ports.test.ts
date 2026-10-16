@@ -52,6 +52,8 @@ import { GFFDataType } from '@/enums/resource/GFFDataType';
 import { findItemStackTarget } from '@/managers/InventoryManager';
 import { UpgradeEnginePorts } from '@/game/tsl/crafting/UpgradeEnginePorts';
 import { COLOUR_SLOT } from '@/game/tsl/crafting/UpgradeRules';
+import { OdysseyModel3D } from '@/three/odyssey';
+import { KEYManager } from '@/managers/KEYManager';
 
 function itemTemplate(tag: string, baseItem: number, stack: number, upgradeLevel: number, variation?: number): GFFObject {
   const gff = new GFFObject();
@@ -130,6 +132,7 @@ beforeEach(() => {
   inventory.removeItem.mockClear();
   jest.spyOn(ResourceLoader, 'loadCachedResource').mockImplementation(((_type: number, resref: string) =>
     utis.get(String(resref).toLowerCase()) ?? null) as any);
+  jest.spyOn(ResourceLoader, 'hasModelPair').mockReturnValue(true);
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest.spyOn(ModuleItem.prototype, 'getName').mockImplementation(function (this: ModuleItem) { return 'name:' + this.getTag(); });
 });
@@ -219,7 +222,7 @@ describe('colour port', () => {
     const wearer = wearerHolding(item);
     (GameState as any).PartyManager.party = [wearer];
     inventory.inventory = [crystal('u_l_colo_01', 1)];
-    const newModel = { name: 'blade' };
+    const newModel = new OdysseyModel3D();
     const loadModel = jest.spyOn(ModuleItem.prototype, 'loadModel').mockImplementation(async function (this: any) {
       this.model = newModel;
       return newModel as any;
@@ -241,16 +244,103 @@ describe('colour port', () => {
     expect(inventory.removeItem).not.toHaveBeenCalled();
   });
 
-  test('a reload that throws restores the old variation and returns false', () => {
+  test('a template write that throws restores the old variation, reloads nothing and returns false', () => {
     const item = saber(1, 2);
     (GameState as any).PartyManager.party = [wearerHolding(item)];
-    jest.spyOn(ModuleItem.prototype, 'loadModel')
-      .mockImplementationOnce(() => { throw new Error('no model'); })
-      .mockImplementation(async () => ({}) as any);
+    const loadModel = jest.spyOn(ModuleItem.prototype, 'loadModel').mockImplementation(async () => ({}) as any);
+    jest.spyOn(item.template, 'getFieldByLabel').mockImplementation(() => { throw new Error('broken template'); });
     jest.spyOn(console, 'error').mockImplementation(() => {});
 
     expect(new UpgradeEnginePorts().itemPort(item)!.colour!.set('u_l_colo_01')).toBe(false);
     expect(item.getModelVariation()).toBe(2);
+    expect(loadModel).not.toHaveBeenCalled();
+  });
+
+  test('a crystal whose blade model is missing is not accepted, and set changes nothing', () => {
+    const lookup = (ResourceLoader.hasModelPair as jest.Mock).mockImplementation((ref: unknown) => ref !== 'w_lghtsbr_001');
+    const item = saber(2, 2);
+    inventory.inventory = [item];
+    (GameState as any).PartyManager.party = [];
+    const loadModel = jest.spyOn(ModuleItem.prototype, 'loadModel').mockImplementation(async () => ({}) as any);
+    const colour = new UpgradeEnginePorts().itemPort(item)!.colour!;
+
+    expect(colour.accepts('u_l_colo_01')).toBe(false);
+    expect(colour.accepts('u_l_colo_04')).toBe(true);
+    expect(lookup).toHaveBeenCalledWith('w_lghtsbr_001');
+    expect(colour.set('u_l_colo_01')).toBe(false);
+    expect(item.getModelVariation()).toBe(2);
+    expect(item.getStackSize()).toBe(2);
+    expect(inventory.inventory).toEqual([item]);
+    expect(loadModel).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['in order', [0, 1]],
+    ['out of order', [1, 0]],
+  ])('two back-to-back sets on a worn saber attach exactly one blade, the last (%s)', async (_label, order) => {
+    const item = saber(1, 2);
+    const wearer = wearerHolding(item);
+    (GameState as any).PartyManager.party = [wearer];
+    const models = [new OdysseyModel3D(), new OdysseyModel3D()];
+    const dispose = models.map((m) => jest.spyOn(m, 'dispose').mockImplementation(() => {}));
+    const pending: (() => void)[] = [];
+    let calls = 0;
+    jest.spyOn(ModuleItem.prototype, 'loadModel').mockImplementation(function (this: any) {
+      const model = models[calls++];
+      this.model = undefined;
+      return new Promise((resolve) => pending.push(() => { this.model = model; resolve(model as any); }));
+    });
+    const colour = new UpgradeEnginePorts().itemPort(item)!.colour!;
+
+    expect(colour.set('u_l_colo_01')).toBe(true);
+    expect(colour.set('u_l_colo_04')).toBe(true);
+    for (const i of order) { pending[i](); await flush(); }
+
+    expect(wearer.model.rhand.add).toHaveBeenCalledTimes(1);
+    expect(wearer.model.rhand.add).toHaveBeenCalledWith(models[1]);
+    expect(item.model).toBe(models[1]);
+    expect(dispose[0]).toHaveBeenCalled();
+    expect(dispose[1]).not.toHaveBeenCalled();
+    expect(item.getModelVariation()).toBe(2);
+  });
+});
+
+describe('ResourceLoader.hasModelPair', () => {
+  const MDL = 2002;
+  const MDX = 3008;
+
+  beforeEach(() => {
+    (ResourceLoader.hasModelPair as jest.Mock).mockRestore();
+    jest.spyOn(ResourceLoader, 'getCache').mockReturnValue(null);
+    jest.spyOn(ResourceLoader, 'selectOverrideLayer').mockReturnValue(undefined);
+    ResourceLoader.ModuleArchives = [];
+  });
+
+  test('an Override layer holding both halves counts (retail w_lghtsbr_011 is Override-only)', () => {
+    (ResourceLoader.selectOverrideLayer as jest.Mock).mockReturnValue({ primary: {}, companions: new Map() });
+    expect(ResourceLoader.hasModelPair('w_lghtsbr_011')).toBe(true);
+    expect(ResourceLoader.selectOverrideLayer).toHaveBeenCalledWith('w_lghtsbr_011', [MDL], [MDX]);
+  });
+
+  test('chitin.key needs both halves', () => {
+    const keys = new Set([`w_lghtsbr_002:${MDL}`, `w_lghtsbr_002:${MDX}`, `w_lghtsbr_003:${MDL}`]);
+    jest.spyOn(KEYManager.Key, 'getFileKey').mockImplementation(((ref: string, type: number) =>
+      keys.has(`${ref}:${type}`) ? ({} as any) : null) as any);
+    expect(ResourceLoader.hasModelPair('W_LGHTSBR_002')).toBe(true);
+    expect(ResourceLoader.hasModelPair('w_lghtsbr_003')).toBe(false);
+    expect(ResourceLoader.hasModelPair('w_lghtsbr_099')).toBe(false);
+  });
+
+  test('a loaded module archive counts', () => {
+    jest.spyOn(KEYManager.Key, 'getFileKey').mockReturnValue(null);
+    ResourceLoader.ModuleArchives = [{ hasResource: () => true } as any];
+    expect(ResourceLoader.hasModelPair('w_lghtsbr_004')).toBe(true);
+  });
+
+  test('both halves cached counts', () => {
+    jest.spyOn(KEYManager.Key, 'getFileKey').mockReturnValue(null);
+    (ResourceLoader.getCache as jest.Mock).mockReturnValue(new Uint8Array(1));
+    expect(ResourceLoader.hasModelPair('w_lghtsbr_005')).toBe(true);
   });
 });
 

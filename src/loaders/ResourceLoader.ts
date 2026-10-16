@@ -337,6 +337,26 @@ export class ResourceLoader {
     return { mdl, mdx };
   }
 
+  /**
+   * Whether loadModelPair would find a model, decided synchronously from the
+   * same sources in the same order: both halves cached, a complete Override
+   * layer (loose mods, numbered layers), or each half in chitin.key or the
+   * loaded module archives. Reads no file. Used where a caller must know
+   * before committing to a model it will only load later (a lightsaber's
+   * blade colour).
+   */
+  static hasModelPair(resRef: string): boolean {
+    const normalizedRef = normalizeTextureResref(resRef);
+    if (!isTextureResrefUsable(normalizedRef)) return false;
+    const resMDL = ResourceTypes['mdl'];
+    const resMDX = ResourceTypes['mdx'];
+    if (ResourceLoader.getCache(resMDL, normalizedRef) && ResourceLoader.getCache(resMDX, normalizedRef)) return true;
+    if (ResourceLoader.selectOverrideLayer(normalizedRef, [resMDL], [resMDX])) return true;
+    const archived = (resId: number) => !!KEYManager.Key?.getFileKey?.(normalizedRef, resId)
+      || ResourceLoader.ModuleArchives.some((archive) => archive?.hasResource?.(normalizedRef, resId));
+    return archived(resMDL) && archived(resMDX);
+  }
+
   static async InitGlobalCache(){
     ResourceLoader.ClearCache(CacheScope.GLOBAL);
     const cacheableTemplates = [
