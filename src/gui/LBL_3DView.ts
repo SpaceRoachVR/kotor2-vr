@@ -202,8 +202,12 @@ export class LBL_3DView {
       let material = this.control.getFill().material;
       if(material instanceof THREE.ShaderMaterial){
         material.uniforms.map.value = this.texture.texture;
-        material.transparent = !this.opaque;
-        material.needsUpdate = true;
+        // A program rebuild only when blending changes, not every frame.
+        const transparent = !this.opaque;
+        if(material.transparent !== transparent){
+          material.transparent = transparent;
+          material.needsUpdate = true;
+        }
       }
     }
 

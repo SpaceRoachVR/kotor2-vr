@@ -11,6 +11,7 @@ import { previewAxes, previewCameraDistance } from "@/game/tsl/menu/upgradePrevi
 import { UpgradeLayout, fittedListExtent, hiddenInLayout, shownInLayout, offersRemove, slotNameText } from "@/game/tsl/menu/UpgradeLayout";
 import { SlotView, UpgradePart, UpgradeSession } from "@/game/tsl/crafting/UpgradeSession";
 import { UpgradeEnginePorts } from "@/game/tsl/crafting/UpgradeEnginePorts";
+import { PreviewRenderThrottle } from "@/game/tsl/menu/upgradePreviewThrottle";
 
 /** Text colour of a closed slot's label. */
 const GREYED_TEXT = 0.5;
@@ -23,6 +24,12 @@ const LIST_GAP = 6;
 const PREVIEW_TURN_RATE = 0.6;
 /** The preview renders at this multiple of 3D_MODEL_LS's GUI size (sharper in the VR panel). */
 const PREVIEW_RESOLUTION = 2;
+/**
+ * The preview's render rate, Hz. Each render bumps the GUI surface revision
+ * and the VR panel re-composites the whole GUI (VRPanelRepaintPolicy), so it
+ * does not render every XR frame; the turn still advances by the true delta.
+ */
+const PREVIEW_RENDER_HZ = 24;
 /** The saber model's lit-blade loop (ModuleItem.setPowered plays it in hand). */
 const PREVIEW_ANIMATION = 'powered';
 /**
@@ -121,6 +128,8 @@ export class MenuUpgrade extends K1_MenuUpgrade {
   private readonly previewCentre = new THREE.Vector3();
   private readonly previewTurn = new THREE.Quaternion();
   private previewKeyLight: THREE.DirectionalLight | undefined;
+  /** Paces previewView.render (PREVIEW_RENDER_HZ); forced on a new view or model. */
+  private readonly previewThrottle = new PreviewRenderThrottle(PREVIEW_RENDER_HZ);
   /** Model resrefs whose load already logged a failure. */
   private readonly previewFailures = new Set<string>();
 
@@ -279,10 +288,14 @@ export class MenuUpgrade extends K1_MenuUpgrade {
       this.previewAngle = (this.previewAngle + PREVIEW_TURN_RATE * delta) % (Math.PI * 2);
       this.posePreviewModel();
     }
+    // LBL_3DView renders through renderGuiSceneToTexture, which bumps the
+    // GUI surface revision, so the VR panel repaints the turning saber: at
+    // PREVIEW_RENDER_HZ, with the animations advanced by the time since the
+    // last render.
+    const elapsed = this.previewThrottle.tick(delta);
+    if(elapsed === undefined) return;
     try {
-      // LBL_3DView renders through renderGuiSceneToTexture, which bumps the
-      // GUI surface revision, so the VR panel repaints the turning saber.
-      this.previewView.render(delta);
+      this.previewView.render(elapsed);
     } catch (e) {
       // A render that throws once throws every frame: stop rather than spam.
       console.warn('[MenuUpgrade] lightsaber preview render failed', this.previewResRef, e);
@@ -318,6 +331,7 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     if(!this.previewView) this.createPreviewView(control);
     if(resref === this.previewResRef) return;
     this.previewResRef = resref;
+    this.previewThrottle.force();
     if(!resref){
       this.previewLoad++;
       this.removePreviewModel();
@@ -351,6 +365,7 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     view.scene.add(this.previewKeyLight);
     this.previewAngle = 0;
     this.previewView = view;
+    this.previewThrottle.force();
   }
 
   /** Loads `resref` into the preview; a load overtaken by a newer one (or a close) is disposed. */
@@ -385,6 +400,7 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     // until it powers up, then loops 'powered'. The preview always shows it lit.
     if(model.odysseyAnimationMap?.has?.(PREVIEW_ANIMATION)) model.playAnimation(PREVIEW_ANIMATION, true);
     this.framePreview(model, view);
+    this.previewThrottle.force();
     TextureLoader.LoadQueue().catch((e: unknown) => console.warn('[MenuUpgrade] lightsaber preview textures failed', resref, e));
   }
 
