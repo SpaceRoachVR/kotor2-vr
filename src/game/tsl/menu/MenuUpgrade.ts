@@ -25,8 +25,13 @@ const PREVIEW_TURN_RATE = 0.6;
 const PREVIEW_RESOLUTION = 2;
 /** The saber model's lit-blade loop (ModuleItem.setPowered plays it in hand). */
 const PREVIEW_ANIMATION = 'powered';
-/** Intensity of the preview's key light on the hilt. */
-const PREVIEW_KEY_LIGHT = 1;
+/**
+ * Intensity of the preview's key light. The hilt material adds a cube env
+ * map (cm_baremetal, ENVMAP_BLENDING_ADD) on top of its lit diffuse, so
+ * ambient 0x7F7F7F plus a key at 1.0 saturated it to flat white; with the
+ * ambient alone it reads but is flat. A weak key keeps the texture detail.
+ */
+const PREVIEW_KEY_LIGHT = 0.2;
 const AXIS_VECTORS = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) } as const;
 
 /** One LB_ITEMS row: a part that fits the selected slot, or the Remove row. */
@@ -278,11 +283,6 @@ export class MenuUpgrade extends K1_MenuUpgrade {
       // LBL_3DView renders through renderGuiSceneToTexture, which bumps the
       // GUI surface revision, so the VR panel repaints the turning saber.
       this.previewView.render(delta);
-      // render() marks the fill transparent; the hilt's materials write a low
-      // alpha into the view, which then blended to near-black over the panel.
-      // The view is cleared opaque black, so draw it opaque.
-      const fill = this._3D_MODEL_LS?.getFill?.()?.material as any;
-      if(fill) fill.transparent = false;
     } catch (e) {
       // A render that throws once throws every frame: stop rather than spam.
       console.warn('[MenuUpgrade] lightsaber preview render failed', this.previewResRef, e);
@@ -330,7 +330,9 @@ export class MenuUpgrade extends K1_MenuUpgrade {
   private createPreviewView(control: GUILabel){
     const width = Number(control.extent?.width) || 168;
     const height = Number(control.extent?.height) || 228;
-    const view = new LBL_3DView(width * PREVIEW_RESOLUTION, height * PREVIEW_RESOLUTION);
+    // Opaque: the hilt texture's alpha is its env-map mask, not coverage, and
+    // blending it let the panel behind show through the hilt (near black).
+    const view = new LBL_3DView(width * PREVIEW_RESOLUTION, height * PREVIEW_RESOLUTION, { opaque: true });
     view.visible = true;
     view.camera.aspect = width / height;
     view.camera.updateProjectionMatrix();
@@ -339,8 +341,11 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     if(material) material.transparent = false;
     view.setControl(control);
     if(material) material.visible = true;
-    // The view has no area lights: without these the hilt renders near black
-    // (the blade is self-lit). An ambient fill plus a key light from the camera.
+    // A previous view's dispose() turned the fill off (GUIControl.update applies this per frame).
+    (control as any).borderFillEnabled = true;
+    // The view has no area lights and the saber model carries none: unlit, the
+    // hilt renders near black (the blade is self-lit). The view's own ambient
+    // (0x7F7F7F) plus a weak key light from the camera side.
     view.scene.add(view.globalLight);
     this.previewKeyLight = new THREE.DirectionalLight(0xffffff, PREVIEW_KEY_LIGHT);
     view.scene.add(this.previewKeyLight);

@@ -40,8 +40,16 @@ export class LBL_3DView {
   viewportFrustum: THREE.Frustum;
   /** Set by dispose(): the render targets are released. */
   disposed = false;
+  /**
+   * Draw the control's fill opaque. Off by default (the fill blends with the
+   * view's alpha, as the main menu and character screen expect). A view
+   * cleared to opaque black whose models write a non-coverage alpha (a hilt
+   * texture's alpha is its env-map mask) sets it, or those models blend away.
+   */
+  opaque: boolean;
 
-  constructor(width: number = 800, height: number = 600){
+  constructor(width: number = 800, height: number = 600, options: { opaque?: boolean } = {}){
+    this.opaque = options.opaque === true;
 
     this.width = width;//window.innerWidth;
     this.height = height;//window.innerHeight;
@@ -138,6 +146,19 @@ export class LBL_3DView {
   dispose(){
     this.visible = false;
     this.disposed = true;
+    // The control must never sample the released target: unhook and hide its
+    // fill. GUIControl.update re-applies borderFillEnabled to the fill's
+    // visibility every frame, so that flag is what hides it.
+    try {
+      const material = this.control?.getFill?.()?.material;
+      if(material){
+        if(material.uniforms?.map?.value === this.texture.texture) material.uniforms.map.value = null;
+        if(material.map === this.texture.texture) material.map = null;
+        material.visible = false;
+        material.needsUpdate = true;
+      }
+      if(this.control) this.control.borderFillEnabled = false;
+    } catch (e) { /* the control's fill was never built */ }
     try { this.lightManager.clearLights(); } catch (e) { /* nothing was lit */ }
     this.scene.clear();
     this.texture.dispose();
@@ -181,7 +202,7 @@ export class LBL_3DView {
       let material = this.control.getFill().material;
       if(material instanceof THREE.ShaderMaterial){
         material.uniforms.map.value = this.texture.texture;
-        material.transparent = true;
+        material.transparent = !this.opaque;
         material.needsUpdate = true;
       }
     }
