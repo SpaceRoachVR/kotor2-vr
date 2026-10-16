@@ -3,6 +3,7 @@ import type { ModuleCreature, ModuleItem } from "@/module";
 import { MenuUpgrade as K1_MenuUpgrade } from "@/game/kotor/KOTOR";
 import { GUIInventoryItem } from "@/game/tsl/gui/GUIInventoryItem";
 import { upgradeTypeName } from "@/game/tsl/crafting/UpgradeRules";
+import { UpgradeLayout, fittedListHeight, hiddenInLayout, offersRemove, slotNameText } from "@/game/tsl/menu/UpgradeLayout";
 import { SlotView, UpgradePart, UpgradeSession } from "@/game/tsl/crafting/UpgradeSession";
 import { UpgradeEnginePorts } from "@/game/tsl/crafting/UpgradeEnginePorts";
 
@@ -28,8 +29,9 @@ export type UpgradeListRow = { kind: 'part'; part: UpgradePart } | { kind: 'remo
  * row's description fills LB_DESC / LBL_PROPERTY, and clicking a row stages
  * it. Assemble commits every staged change at once (UpgradeSession); Back and
  * OK (hidden: it sits on Assemble) discard uncommitted changes and return to
- * the item list. The lightsaber (_LS) and 3D preview controls are hidden
- * (lightsabers are a later pass).
+ * the item list. A lightsaber opens the six-slot _LS layout (colour crystal
+ * in slot 1) and shows 3D_MODEL_LS; every other item uses the standard three
+ * slots with the 3D preview controls hidden.
  * See docs/superpowers/specs/2026-10-15-upgrade-screen-design.md.
  *
  * KotOR JS - A remake of the Odyssey Game Engine that powered KotOR I & II
@@ -82,6 +84,10 @@ export class MenuUpgrade extends K1_MenuUpgrade {
   private labelColours = new Map<GUILabel, { r: number; g: number; b: number }>();
   /** Fill textures the GUI gives the slot buttons, shown when a slot is empty. */
   private buttonFills = new Map<GUIButton, string>();
+  /** Which slot controls the screen shows; set per item in openFor. */
+  layout: UpgradeLayout = 'standard';
+  /** LB_ITEMS's height as the GUI built it, before fitItemList cuts it. */
+  private listHeight: number | undefined;
 
   constructor(){
     super();
@@ -102,10 +108,16 @@ export class MenuUpgrade extends K1_MenuUpgrade {
       this.BTN_UPGRADE31.addEventListener('click', (e) => { e.stopPropagation(); this.selectSlot(0); });
       this.BTN_UPGRADE32.addEventListener('click', (e) => { e.stopPropagation(); this.selectSlot(1); });
       this.BTN_UPGRADE33.addEventListener('click', (e) => { e.stopPropagation(); this.selectSlot(2); });
-      for(const [button, label] of this.slotControls()){
-        const c = label?.text?.color;
-        if(label && c) this.labelColours.set(label, { r: c.r, g: c.g, b: c.b });
-        if(button) this.buttonFills.set(button, String(button.getFillTextureName?.() ?? ''));
+      [this.BTN_UPGRADE31_LS, this.BTN_UPGRADE32_LS, this.BTN_UPGRADE33_LS,
+        this.BTN_UPGRADE34_LS, this.BTN_UPGRADE35_LS, this.BTN_UPGRADE36_LS].forEach((button, i) => {
+        button?.addEventListener('click', (e) => { e.stopPropagation(); this.selectSlot(i); });
+      });
+      for(const layout of ['standard', 'lightsaber'] as const){
+        for(const [button, label] of this.slotControlsFor(layout)){
+          const c = label?.text?.color;
+          if(label && c) this.labelColours.set(label, { r: c.r, g: c.g, b: c.b });
+          if(button) this.buttonFills.set(button, String(button.getFillTextureName?.() ?? ''));
+        }
       }
       // BTN_OK sits exactly on BTN_ASSEMBLE in upgrade_p; Back (BTN_BACK) closes.
       this.BTN_OK?.hide();
@@ -128,11 +140,11 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     });
   }
 
-  /** The lightsaber (_LS) and 3D preview controls: not used by this pass. */
+  /** The controls the current layout does not use, plus the standard 3D preview. */
   private hiddenControls(): GUIControl[] {
     const out: GUIControl[] = [];
     for(const key of Object.keys(this)){
-      if(!/(^|_)3D_MODEL|_LS$/.test(key)) continue;
+      if(!hiddenInLayout(key, this.layout)) continue;
       const control = (this as any)[key];
       if(control && typeof control.hide === 'function') out.push(control);
     }
@@ -143,19 +155,40 @@ export class MenuUpgrade extends K1_MenuUpgrade {
    * upgrade_p's LB_ITEMS spans the whole left column, under the slot buttons,
    * LBL_SLOTNAME and LBL_PROPERTY; rows past the third would land on the slot
    * buttons and take their pointer hits. The list is cut to end just above the
-   * slot buttons (three rows; the right stick scrolls the rest).
+   * slot buttons (three rows; the right stick scrolls the rest). In the
+   * lightsaber layout it ends above the topmost _LS button it overlaps, or is
+   * left whole when none overlaps. The GUI's own height is kept and restored
+   * for the standard layout.
    */
   private fitItemList(){
-    const list = this.LB_ITEMS, slot = this.BTN_UPGRADE31;
-    if(!list?.extent || !slot?.extent) return;
-    const height = slot.extent.top - list.extent.top - LIST_GAP;
-    if(height <= 0 || height >= list.extent.height) return;
+    const list = this.LB_ITEMS;
+    if(!list?.extent) return;
+    this.listHeight ??= list.extent.height;
+    const saber = this.layout === 'lightsaber';
+    const buttons = this.slotControls().map(([button]) => button?.extent).filter((e) => !!e);
+    const original = { left: list.extent.left, top: list.extent.top, width: list.extent.width, height: this.listHeight };
+    const height = fittedListHeight(original, saber ? buttons : buttons.slice(0, 1), LIST_GAP, !saber);
+    if(height === list.extent.height) return;
     list.extent.height = height;
     list.resizeControl();
     list.calculatePosition();
   }
 
   private slotControls(): [GUIButton, GUILabel][] {
+    return this.slotControlsFor(this.layout);
+  }
+
+  private slotControlsFor(layout: UpgradeLayout): [GUIButton, GUILabel][] {
+    if(layout === 'lightsaber'){
+      return [
+        [this.BTN_UPGRADE31_LS, this.LBL_UPGRADE31_LS],
+        [this.BTN_UPGRADE32_LS, this.LBL_UPGRADE32_LS],
+        [this.BTN_UPGRADE33_LS, this.LBL_UPGRADE33_LS],
+        [this.BTN_UPGRADE34_LS, this.LBL_UPGRADE34_LS],
+        [this.BTN_UPGRADE35_LS, this.LBL_UPGRADE35_LS],
+        [this.BTN_UPGRADE36_LS, this.LBL_UPGRADE36_LS],
+      ];
+    }
     return [
       [this.BTN_UPGRADE31, this.LBL_UPGRADE31],
       [this.BTN_UPGRADE32, this.LBL_UPGRADE32],
@@ -179,6 +212,7 @@ export class MenuUpgrade extends K1_MenuUpgrade {
       return;
     }
     this.item = item;
+    this.layout = port.category === 'lightsaber' ? 'lightsaber' : 'standard';
     this.wearer = wearer ?? UpgradeEnginePorts.wearerOf(item);
     this.session = new UpgradeSession(port, this.engine.bag(), this.engine.table(), (row) => this.engine.partFor(row));
     this.selectedSlot = this.session.slots().findIndex((slot) => slot.open);
@@ -188,6 +222,8 @@ export class MenuUpgrade extends K1_MenuUpgrade {
   show(){
     super.show();
     for(const control of this.hiddenControls()) control.hide();
+    if(this.layout === 'lightsaber') this._3D_MODEL_LS?.show();
+    this.fitItemList();
     this.refresh();
   }
 
@@ -248,7 +284,7 @@ export class MenuUpgrade extends K1_MenuUpgrade {
 
     const slot = slots[this.selectedSlot];
     const shown = slot ? MenuUpgrade.shownPart(slot) : undefined;
-    this.LBL_SLOTNAME?.setText(slot ? `${upgradeTypeName(slot.type)}: ${shown ? shown.name : EMPTY_TEXT}` : '');
+    this.LBL_SLOTNAME?.setText(slot ? slotNameText(slot.type, shown?.name, EMPTY_TEXT) : '');
     this.listRows = slot ? this.rowsFor(slot) : [];
     const counts = new Map<string, number>();
     for(const { part, count } of this.engine.bag().parts()) counts.set(part.resref, count);
@@ -289,7 +325,7 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     const candidates = this.session!.candidates(slot.index);
     if(staged && !candidates.some((p) => p.resref === staged.resref)) rows.push({ kind: 'part', part: staged });
     for(const part of candidates) rows.push({ kind: 'part', part });
-    if(MenuUpgrade.shownPart(slot)) rows.push({ kind: 'remove' });
+    if(offersRemove(slot.type, !!MenuUpgrade.shownPart(slot))) rows.push({ kind: 'remove' });
     return rows;
   }
 

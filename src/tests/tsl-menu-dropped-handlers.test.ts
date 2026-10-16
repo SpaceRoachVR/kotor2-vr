@@ -55,8 +55,8 @@ function collectDroppedHandlers(): Map<string, readonly string[]> {
  * player-visible: the Pazaak table is entirely unwired, character generation
  * cannot go back or accept, the unused upgradeitems_p screen cannot go back,
  * and saves cannot be deleted. (The upgrade item list and slot screens,
- * upgradesel_p and upgrade_p, were wired 2026-10-15; only the Lightsaber tab,
- * deliberately inert, remains.)
+ * upgradesel_p and upgrade_p, were wired 2026-10-15, the Lightsaber tab
+ * with the lightsaber pass.)
  */
 const ACCEPTED_DROPPED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
   // Wired through the shared K1 wireAbilityControls(), which this textual
@@ -74,8 +74,6 @@ const ACCEPTED_DROPPED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
   MenuPazaakSetup: ['BTN_ATEXT', 'BTN_YTEXT'],
   MenuSaveLoad: ['BTN_DELETE'],
   MenuUpgradeItems: ['BTN_BACK', 'BTN_UPGRADEITEM'],
-  // Lightsaber upgrades are a later pass; the tab is shown disabled.
-  MenuUpgradeSelect: ['BTN_LIGHTSABER'],
 };
 
 describe('TSL menus vs their K1 parents', () => {

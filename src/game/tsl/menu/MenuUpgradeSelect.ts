@@ -41,8 +41,7 @@ export function upgradeListNode(entry: UpgradeableEntry){
  *
  * Lists the upgradeable items (category known, UpgradeLevel >= 1) in the
  * party inventory and equipped on party members, filtered by the All /
- * Ranged / Melee / Armor tabs (Lightsaber is a later pass and shown
- * disabled). Upgrade Items opens MenuUpgrade for the selected item; Create
+ * Ranged / Melee / Armor / Lightsaber tabs. Upgrade Items opens MenuUpgrade for the selected item; Create
  * Items opens the Workbench creation screen (MenuComponent) unless the script
  * disabled item creation. List behaviour follows the crafting screens
  * (CraftingMenuBase): selection drives the description, rebuilds keep the
@@ -102,11 +101,7 @@ export class MenuUpgradeSelect extends K1_MenuUpgradeSelect {
       this.BTN_RANGED.addEventListener('click', (e) => { e.stopPropagation(); this.setTab('ranged'); });
       this.BTN_MELEE.addEventListener('click', (e) => { e.stopPropagation(); this.setTab('melee'); });
       this.BTN_ARMOR.addEventListener('click', (e) => { e.stopPropagation(); this.setTab('armor'); });
-      // Lightsaber upgrades are a later pass: the tab shows, greyed and inert.
-      if(this.BTN_LIGHTSABER){
-        this.BTN_LIGHTSABER.disableSelection = true;
-        this.BTN_LIGHTSABER.resetPulse?.();
-      }
+      this.BTN_LIGHTSABER.addEventListener('click', (e) => { e.stopPropagation(); this.setTab('lightsaber'); });
 
       this.BTN_UPGRADEITEMS.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -189,7 +184,7 @@ export class MenuUpgradeSelect extends K1_MenuUpgradeSelect {
   }
 
   private tabButtons(): [GUIButton, UpgradeTab][] {
-    return [[this.BTN_ALL, 'all'], [this.BTN_RANGED, 'ranged'], [this.BTN_MELEE, 'melee'], [this.BTN_ARMOR, 'armor']];
+    return [[this.BTN_ALL, 'all'], [this.BTN_RANGED, 'ranged'], [this.BTN_MELEE, 'melee'], [this.BTN_ARMOR, 'armor'], [this.BTN_LIGHTSABER, 'lightsaber']];
   }
 
   setTab(tab: UpgradeTab){

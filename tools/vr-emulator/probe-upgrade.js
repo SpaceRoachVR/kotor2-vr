@@ -410,7 +410,7 @@ async function main() {
       && dialogue.transcript.some((line) => /\[script=k_workbench_t3\]/i.test(line))
       && opened.visible && opened.foreground && !opened.component && !opened.conversationActive
       && !opened.notices.includes(NOTICE) && opened.createVisible === false && opened.allowCreate === false
-      && opened.lightsaberDisabled === true && opened.tab === 'all', report.notes.open);
+      && opened.lightsaberDisabled === false && opened.tab === 'all', report.notes.open);
 
     // 2. Tabs: Ranged lists the Republic Blaster, not the Carbine; Armor lists the chosen armor, not the Jedi Robe.
     const tabs = await harness.evaluate(`(async()=>{const U=window.__up,m=U.sel(),K=window.KotOR;
