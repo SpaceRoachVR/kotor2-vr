@@ -3510,7 +3510,8 @@ export class ModuleCreature extends ModuleObject {
    * Defense give +3/+6 (replacing the prior tier, not stacking), the
    * Weapon Master "Deflect" feat adds floor((level + 1) / 2), and
    * EffectBlasterDeflectionIncrease/Decrease apply their stored intList[0]
-   * on top. Returns null when the creature cannot attempt deflection at all
+   * on top, as do equipped items' deflection properties
+   * (ModuleItem.getBlasterDeflectionModifier). Returns null when the creature cannot attempt deflection at all
    * (no feat, or no lightsaber equipped in the main hand).
    */
   getBlasterDeflectionBonus(): number | null {
@@ -3536,6 +3537,15 @@ export class ModuleCreature extends ModuleObject {
       }else if(effect.type == GameEffectType.EffectBlasterDeflectionDecrease){
         bonus -= (effect.getInt(0) || 0);
       }
+    }
+
+    // Item properties (lightsaber lenses, emitters, crystals) on whatever is
+    // worn or held in the active weapon set; the inactive set
+    // (RIGHTHAND2/LEFTHAND2) does not count.
+    for(const key of Object.keys(this.equipment)){
+      if(key === 'RIGHTHAND2' || key === 'LEFTHAND2') continue;
+      const item = (this.equipment as any)[key] as ModuleItem | undefined;
+      bonus += item?.getBlasterDeflectionModifier?.() || 0;
     }
 
     return bonus;

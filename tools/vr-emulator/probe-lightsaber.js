@@ -506,7 +506,7 @@ async function main() {
       await U.back();
       const prior=p.equipment.RIGHTHAND||null; window.__priorRight=prior;
       await p.equipItem(${RIGHTHAND},s); await U.pause(300);
-      const bare={equipped:p.equipment.RIGHTHAND===s,ab:U.ab(p,s),damage:U.damageOf(s),own:U.bonusProps(s.properties)};
+      const bare={equipped:p.equipment.RIGHTHAND===s,ab:U.ab(p,s),damage:U.damageOf(s),own:U.bonusProps(s.properties),deflectMod:s.getBlasterDeflectionModifier(),deflect:p.getBlasterDeflectionBonus()};
       p.unequipSlot(${RIGHTHAND},true); await U.pause(300);
       const bagBack=g.InventoryManager.inventory.includes(s);
       U.sel().refresh(0); await U.pause(200);
@@ -521,7 +521,7 @@ async function main() {
       await p.equipItem(${RIGHTHAND},s); await U.pause(300);
       const pp=U.partProps(s);
       const installed={equipped:p.equipment.RIGHTHAND===s,ab:U.ab(p,s),damage:U.damageOf(s),partBonus:U.bonusProps(pp),
-        partCount:pp.length,effective:s.getEffectiveProperties().length,own:s.properties.length};
+        partCount:pp.length,effective:s.getEffectiveProperties().length,own:s.properties.length,deflectMod:s.getBlasterDeflectionModifier(),deflect:p.getBlasterDeflectionBonus()};
       return {bare,bagBack,openedSlots:opened.slots,staged,before,after,assembled:{slots:assembled.slots,hasChanges:assembled.hasChanges},slotsAfter,installed};})()`, { timeoutMs: 120000 });
     const partAB = parts.installed.partBonus.filter((b) => b.name === 38).map((b) => b.value);
     const partDamage = parts.installed.partBonus.filter((b) => b.name === 11);
@@ -547,6 +547,14 @@ async function main() {
       && parts.installed.ab === expectedAB && Math.abs(parts.installed.damage.total - expectedDamage) < 1e-9
       && (expectedAB > parts.bare.ab || expectedDamage > parts.bare.damage.total),
     { ...parts, expectedAB, expectedDamage, stacking });
+
+    // 3b. Blaster-bolt deflection from the parts: Synthesized Kunda Lens +1 and Deflection Emitter +1
+    //     (property 55, iprp_bonuscost); the stock saber's own 55/+5 is a K1 UpgradeType leftover and stays off.
+    //     The wielder's bonus is null without Jedi Defense (no deflection at all); when present it rises by 2.
+    const deflectGain = parts.installed.deflectMod - parts.bare.deflectMod;
+    check('3b_deflection', parts.bare.deflectMod === 0 && deflectGain === 2
+      && (parts.bare.deflect === null ? parts.installed.deflect === null : parts.installed.deflect === parts.bare.deflect + 2),
+    { bareModifier: parts.bare.deflectMod, installedModifier: parts.installed.deflectMod, bareBonus: parts.bare.deflect, installedBonus: parts.installed.deflect });
 
     // 4. The colour slot: the red crystal listed, the current (blue) not, no Remove row; LBL_SLOTNAME names the blue crystal.
     const colourRows = await harness.evaluate(`(async()=>{const U=window.__ls,s=window.__saber;
@@ -741,7 +749,7 @@ async function main() {
     try { fs.rmSync(path.dirname(userRoot), { recursive: true, force: true }); } catch (e) { report.cleanupError = String(e); }
   }
 
-  const EXPECTED = ['1_tabLists', '2_layout', '3_parts', '4_colourRows', '5_previewRecolours', '6_swap', '6b_alignmentRefused', '7_saveReload',
+  const EXPECTED = ['1_tabLists', '2_layout', '3_parts', '3b_deflection', '4_colourRows', '5_previewRecolours', '6_swap', '6b_alignmentRefused', '7_saveReload',
     '8_cancelAndClose', '8b_standardAfterSaber', '9_reach'];
   report.passed = !report.error && EXPECTED.every((name) => report.checks[name] === true)
     && (report.consoleErrors || []).length === 0 && (report.pageErrors || []).length === 0;

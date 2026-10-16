@@ -25,6 +25,7 @@ import { ActionParameterType, GameEffectDurationType, ModuleCreatureAnimState, S
 import { writeItemCastSpellParameters } from "@/actions/ItemCastSpellParameters";
 import type { SWWeaponSound } from "@/engine/rules/SWWeaponSound";
 import { parseUpgradeTable } from "@/game/tsl/crafting/UpgradeRules";
+import { itemDeflectionBonus } from "@/combat/itemDeflectionBonus";
 
 /**
 * ModuleItem class.
@@ -625,6 +626,24 @@ export class ModuleItem extends ModuleObject {
       penalty += Number.isFinite(value) ? Math.abs(value) : Math.max(0, property.costValue || 0);
     }
     return penalty;
+  }
+
+  /**
+   * This item's blaster-bolt deflection modifier from its own and installed
+   * upgrade properties (Blaster_Bolt_Deflect_Increase / _Decrease): lightsaber
+   * lenses, emitters and crystals. See itemDeflectionBonus.
+   */
+  getBlasterDeflectionModifier(): number {
+    return itemDeflectionBonus(this.getEffectiveProperties().map((property) => {
+      const row = property.getCostTableRow?.();
+      const value = row ? parseInt(row.value) : NaN;
+      return {
+        propertyName: property.propertyName,
+        useable: property.isUseable(),
+        rowValue: Number.isFinite(value) ? value : undefined,
+        costValue: property.costValue,
+      };
+    }));
   }
 
   hasDamageBonus(): boolean {

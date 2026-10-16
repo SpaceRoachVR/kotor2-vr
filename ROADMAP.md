@@ -2033,10 +2033,16 @@ First shippable artifact.
   stick scrolling; save/reload keeps variation 2, the slots and the bonuses. PNGs in
   `evidence/lightsaber/`. `probe-upgrade.js`, `probe-workbench.js` and
   `probe-lab-station.js` still pass.
+  **Blaster-bolt deflection properties applied (2026-10-16):** Blaster_Bolt_Deflect_Increase
+  (55, `iprp_bonuscost`) and _Decrease (56, `iprp_neg10cost`) on any equipped item in the
+  active weapon set, own or installed, now add to `getBlasterDeflectionBonus` (values
+  sum, as retail's per-property effects stack; K1 UpgradeType-gated leftovers stay
+  off): Kunda lens +1/+2, Ossus +3, Byrothsis -2/-3/-4, Deflection emitter +1/+2/+4,
+  Fencing -2, Jenruax +5, Lorrdian +3. Still needs the Jedi Defense feat and a saber
+  in the main hand. `probe-lightsaber.js` check `3b_deflection`.
   **Still not applied (engine gap, separate task):** Keen (28), Skill bonus, Immunity,
-  Damage Resistance, Regeneration and Blaster Bolt Deflect Increase (55, the stock
-  lenses' and emitters' property) item properties, own or installed: a part granting
-  only those shows as installed and changes nothing.
+  Damage Resistance and Regeneration item properties, own or installed: a part
+  granting only those shows as installed and changes nothing.
 
 M4-78 is out of scope.
 
