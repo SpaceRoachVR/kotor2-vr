@@ -53,8 +53,10 @@ function collectDroppedHandlers(): Map<string, readonly string[]> {
 /**
  * Known divergences, as of the 2026-08-22 headset session. Several are
  * player-visible: the Pazaak table is entirely unwired, character generation
- * cannot go back or accept, the upgrade item screen cannot go back, and saves
- * cannot be deleted.
+ * cannot go back or accept, the unused upgradeitems_p screen cannot go back,
+ * and saves cannot be deleted. (The upgrade item list and slot screens,
+ * upgradesel_p and upgrade_p, were wired 2026-10-15; only the Lightsaber tab,
+ * deliberately inert, remains.)
  */
 const ACCEPTED_DROPPED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
   // Wired through the shared K1 wireAbilityControls(), which this textual

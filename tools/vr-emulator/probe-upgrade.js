@@ -15,7 +15,8 @@
  * companion, removing the part
  * back to the bag, an armor underlay, Create Items and the forced-oItem route
  * of routine 354, save/reload persistence, pointer reach and stick scrolling,
- * and PNGs of both screens.
+ * and PNGs of both screens, plus the item list with Create Items (the normal
+ * k_workbench route), clicked through the VR ray and trigger.
  *
  *   node tools/vr-emulator/probe-upgrade.js
  *
@@ -172,6 +173,8 @@ const PAGE_HELPERS = `(() => {
     return { ok: Math.hypot(target.x - p.x, target.y - p.y) <= tolerance, pointer: p };
   };
   const resetAim = () => { aim = { yaw: 0, pitch: 0 }; hand()?.quaternion.set(...restAim); };
+  /** Pulls and releases the right trigger: the VR Select that clicks what the ray hovers. */
+  const pullTrigger = async (ms = 200) => { const h = hand(); h.updateButtonValue("trigger", 1); await pause(ms); h.updateButtonValue("trigger", 0); await pause(300); };
   const boxCentre = (control) => { control.updateBounds?.(); return centre(control.box); };
   /** Aims the real ray at a control and reports whether the engine hovers it. */
   const rayHovers = async (control) => {
@@ -289,7 +292,7 @@ const PAGE_HELPERS = `(() => {
   };
   const ab = (creature, weapon) => Number(creature.getAttackBonusFor(weapon));
   window.__up = { sel, up, resrefOf, count, uti, addItem, targetable, rowTargetable, layout, boxOf, aimAt, resetAim, boxCentre,
-    rayHovers, revealRow, stickScroll, colour, pause, endConversations, closeAll, selState, upState, openItem, stage, assemble, back,
+    rayHovers, pullTrigger, revealRow, stickScroll, colour, pause, endConversations, closeAll, selState, upState, openItem, stage, assemble, back,
     rowOf, ab };
   return true;
 })()`;
@@ -656,41 +659,36 @@ async function main() {
       return out;})()`, { timeoutMs: 120000 });
     report.notes.slotPanel = slotPanel;
     report.notes.slotReach = slotReach;
-    const allInside = (layout) => Object.values(layout || {}).every((c) => c.inViewport === true);
-    const reachOk = (reach, names) => names.every((n) => reach[n]?.ok === true && reach[n]?.inViewport === true);
-    check('11_pointerReachAndStickScroll',
-      reachOk(selectReach, ['BTN_ALL', 'BTN_RANGED', 'BTN_MELEE', 'BTN_ARMOR', 'BTN_UPGRADEITEMS', 'BTN_BACK']) && selectReach.row0.ok
-      && selectReach.ray.ranged.aimed && selectReach.ray.ranged.hover && selectReach.ray.upgradeItems.aimed && selectReach.ray.upgradeItems.hover
-      && selectReach.ray.row0.aimed
-      && reachOk(slotReach, ['BTN_UPGRADE31', 'BTN_UPGRADE32', 'BTN_UPGRADE33', 'BTN_ASSEMBLE', 'BTN_BACK']) && slotReach.row0.ok
-      && slotReach.ray.slot2.aimed && slotReach.ray.slot2.hover && slotReach.ray.assemble.aimed && slotReach.ray.assemble.hover
-      && !!scroll.aimed?.ok && scroll.hovered === true && scroll.maxScroll > 0 && scroll.down > scroll.before
-      && scroll.neutral === scroll.down && scroll.up < scroll.down,
-    { selectReach: { ...selectReach, layout: undefined }, slotReach: { ...slotReach, layout: undefined }, scroll });
-    check('12_panelPngsControlsInside', selectPanel.host && selectPanel.presenting && selectPanel.ownerIsMenu && selectPanel.litFraction > 0.05
-      && slotPanel.host && slotPanel.ownerIsMenu && slotPanel.litFraction > 0.05
-      && allInside(selectReach.layout) && allInside(slotReach.layout)
-      // LB_ITEMS ends above the slot buttons, and BTN_OK (on top of Assemble) is hidden.
-      && slotReach.layout.LB_ITEMS?.box.minY >= slotReach.layout.BTN_UPGRADE31?.box.maxY && !slotReach.layout.BTN_OK,
-    { selectPanel, slotPanel, selectLayout: selectReach.layout, slotLayout: slotReach.layout });
-
-    // 9. Create Items opens MenuComponent (routine 354 with item creation allowed, run as k_workbench's second use);
-    // the forced-oItem route opens MenuUpgrade for the blaster.
-    const create = await harness.evaluate(`(async()=>{const U=window.__up,K=window.KotOR,g=K.GameState,MM=g.MenuManager,p=K.PartyManager.Player;
+    // 9. The normal k_workbench route (routine 354 with item creation allowed, k_workbench's second
+    // use): the item list with Create Items in the bottom row. Its PNG, its reach, the real ray
+    // hovering Create Items and the trigger pulled on it (the VR Select path) opening MenuComponent;
+    // then the forced-oItem route opens MenuUpgrade for the blaster.
+    const createOpen = await harness.evaluate(`(async()=>{const U=window.__up,K=window.KotOR,g=K.GameState,p=K.PartyManager.Player;
       const closed=await U.closeAll();
       g.GlobalVariableManager.SetGlobalNumber('000_Workbench',1);
       const bench=window.__bench,own=bench.scripts['OnUsed'];
       bench.scripts['OnUsed']=K.NWScript.Load('k_workbench');
       try{ bench.use(p); for(let i=0;i<120 && !U.sel().bVisible;i++) await U.pause(50); } finally { bench.scripts['OnUsed']=own; }
       await U.pause(500);
-      const select=U.selState();
-      U.sel().BTN_CREATEITEMS.click();
+      const m=U.sel();const i=m.rows.findIndex(r=>r.item===window.__blaster);
+      if(i>=0){U.revealRow(m.LB_UPGRADELIST,i);m.LB_UPGRADELIST.children[i].click();await U.pause(300);}
+      return {closed,select:U.selState()};})()`, { timeoutMs: 120000 });
+    const createPanel = await panelFor(path.join(EVIDENCE_DIR, 'upgrade-select-create.png'), 'window.__up.sel()');
+    const create = await harness.evaluate(`(async()=>{const U=window.__up,K=window.KotOR,g=K.GameState,MM=g.MenuManager,p=K.PartyManager.Player,m=U.sel();
+      const reach={};
+      for(const n of ['BTN_CREATEITEMS','BTN_UPGRADEITEMS','BTN_BACK']) reach[n]=U.targetable(m[n]);
+      const layout=U.layout(m);
+      const c=m.BTN_CREATEITEMS,createBorder={enabled:!!c.borderEnabled,edge:c.border.edge,edgeVisible:!!c.border.edge_material?.visible,cornerVisible:!!c.border.corner_material?.visible};
+      const ray={create:await U.rayHovers(m.BTN_CREATEITEMS)};
+      ray.componentBeforeTrigger=!!MM.MenuComponent.bVisible;
+      await U.pullTrigger();
       for(let i=0;i<80 && !MM.MenuComponent.bVisible;i++) await U.pause(50);
       await U.pause(500);
+      U.resetAim();
       const component={visible:!!MM.MenuComponent.bVisible,foreground:MM.GetCurrentMenu()===MM.MenuComponent,recipeTable:MM.MenuComponent.recipeTable,
         user:MM.MenuComponent.activeUser()===p};
       MM.MenuComponent.BTN_Cancel.click(); await U.pause(400);
-      const backToSelect=MM.GetCurrentMenu()===U.sel();
+      const backToSelect=MM.GetCurrentMenu()===m;
       const closedAgain=await U.closeAll();
       const b=window.__blaster;
       K.NWScriptDefK2.Actions[354].action.call({}, [b, p, 0, 0, '']);
@@ -698,15 +696,61 @@ async function main() {
       await U.pause(300);
       const forced={...U.upState(),selectVisible:!!U.sel().bVisible,isBlaster:U.up().item===b};
       const forcedClosed=await U.closeAll();
-      return {closed,select:{visible:select.visible,createVisible:select.createVisible,createText:select.createText,allowCreate:select.allowCreate,recipeTable:select.recipeTable},
-        component,backToSelect,closedAgain,forced:{visible:forced.visible,foreground:forced.foreground,isBlaster:forced.isBlaster,
-        selectVisible:forced.selectVisible,title:forced.title,slots:forced.slots.length},forcedClosed};})()`, { timeoutMs: 120000 });
-    report.notes.create = create;
-    check('9_createItemsAndForcedItem', create.select.visible && create.select.createVisible && create.select.createText === 'Create Items'
-      && create.select.allowCreate && create.component.visible && create.component.foreground && create.component.recipeTable === 'itemcreate'
+      return {reach,layout,createBorder,ray,component,backToSelect,closedAgain,forced:{visible:forced.visible,foreground:forced.foreground,isBlaster:forced.isBlaster,
+        selectVisible:forced.selectVisible,title:forced.title,slots:forced.slots.length},forcedClosed};})()`, { timeoutMs: 180000 });
+    const sel9 = createOpen.select;
+    report.notes.create = { closed: createOpen.closed, select: { visible: sel9.visible, createVisible: sel9.createVisible, createText: sel9.createText,
+      allowCreate: sel9.allowCreate, recipeTable: sel9.recipeTable }, createPanel, ...create, layout: undefined };
+    check('9_createItemsAndForcedItem', sel9.visible && sel9.createVisible && sel9.createText === 'Create Items'
+      && sel9.allowCreate && create.ray.componentBeforeTrigger === false
+      && create.component.visible && create.component.foreground && create.component.recipeTable === 'itemcreate'
       && create.component.user && create.backToSelect && create.closedAgain.select === false
       && create.forced.visible && create.forced.foreground && create.forced.isBlaster && create.forced.selectVisible === false
-      && create.forced.slots === 3 && create.forcedClosed.upgrade === false && create.forcedClosed.mode === 1, create);
+      && create.forced.slots === 3 && create.forcedClosed.upgrade === false && create.forcedClosed.mode === 1, report.notes.create);
+
+    const allInside = (layout) => Object.values(layout || {}).every((c) => c.inViewport === true);
+    /**
+     * The select panel's content area: the frame's inner window, measured by the
+     * controls retail lays out inside it: horizontally from LB_UPGRADELIST's left
+     * edge to LB_DESCRIPTION's right edge, vertically from the bottom button row
+     * (BTN_BACK) to the top title. Retail's BTN_CREATEITEMS (on the frame's
+     * bottom-right corner art) lies outside it on both axes.
+     */
+    const contentInside = (layout) => {
+      const l = layout || {};
+      if (!l.LB_UPGRADELIST || !l.LB_DESCRIPTION || !l.BTN_BACK) return { ok: false, reason: 'reference controls missing' };
+      const area = { minX: l.LB_UPGRADELIST.box.minX - 1, maxX: l.LB_DESCRIPTION.box.maxX + 1, minY: l.BTN_BACK.box.minY - 1,
+        maxY: Math.max(l.LBL_TITLE?.box.maxY ?? 0, l.LBL_TITLE2?.box.maxY ?? 0) + 1 };
+      const outside = Object.entries(l).filter(([, c]) => c.box.minX < area.minX || c.box.maxX > area.maxX || c.box.minY < area.minY || c.box.maxY > area.maxY)
+        .map(([name]) => name);
+      return { ok: outside.length === 0, area, outside };
+    };
+    const reachOk = (reach, names) => names.every((n) => reach[n]?.ok === true && reach[n]?.inViewport === true);
+    const rayOk = (r) => !!r && r.aimed && r.hover;
+    check('11_pointerReachAndStickScroll',
+      reachOk(selectReach, ['BTN_ALL', 'BTN_RANGED', 'BTN_MELEE', 'BTN_ARMOR', 'BTN_UPGRADEITEMS', 'BTN_BACK']) && selectReach.row0.ok
+      && rayOk(selectReach.ray.ranged) && rayOk(selectReach.ray.upgradeItems) && rayOk(selectReach.ray.row0)
+      && reachOk(create.reach, ['BTN_CREATEITEMS', 'BTN_UPGRADEITEMS', 'BTN_BACK']) && rayOk(create.ray.create)
+      && reachOk(slotReach, ['BTN_UPGRADE31', 'BTN_UPGRADE32', 'BTN_UPGRADE33', 'BTN_ASSEMBLE', 'BTN_BACK']) && slotReach.row0.ok
+      && rayOk(slotReach.ray.slot2) && rayOk(slotReach.ray.assemble) && rayOk(slotReach.ray.row0)
+      && !!scroll.aimed?.ok && scroll.hovered === true && scroll.maxScroll > 0 && scroll.down > scroll.before
+      && scroll.neutral === scroll.down && scroll.up < scroll.down,
+    { selectReach: { ...selectReach, layout: undefined }, createReach: create.reach, createRay: create.ray,
+      slotReach: { ...slotReach, layout: undefined }, scroll });
+    const selectContent = contentInside(selectReach.layout), createContent = contentInside(create.layout);
+    const createBox = create.layout.BTN_CREATEITEMS?.box, upgradeBox = create.layout.BTN_UPGRADEITEMS?.box;
+    check('12_panelPngsControlsInside', selectPanel.host && selectPanel.presenting && selectPanel.ownerIsMenu && selectPanel.litFraction > 0.05
+      && slotPanel.host && slotPanel.ownerIsMenu && slotPanel.litFraction > 0.05
+      && createPanel.host && createPanel.ownerIsMenu && createPanel.litFraction > 0.05
+      && allInside(selectReach.layout) && allInside(slotReach.layout) && allInside(create.layout)
+      && selectContent.ok && createContent.ok
+      // Create Items shares the bottom row with Upgrade Item, side by side, with room for its text.
+      && !!createBox && !!upgradeBox && createBox.minX >= upgradeBox.maxX && createBox.minY === upgradeBox.minY
+      && createBox.maxX - createBox.minX >= 120 && create.createBorder.edgeVisible && create.createBorder.cornerVisible
+      // LB_ITEMS ends above the slot buttons, and BTN_OK (on top of Assemble) is hidden.
+      && slotReach.layout.LB_ITEMS?.box.minY >= slotReach.layout.BTN_UPGRADE31?.box.maxY && !slotReach.layout.BTN_OK,
+    { selectPanel, slotPanel, createPanel, selectContent, createContent, selectLayout: selectReach.layout, createLayout: create.layout,
+      slotLayout: slotReach.layout });
 
     // 10. Save with the scope installed in the Exile's equipped blaster, reload: UpgradeSlot0 persists and the bonus applies.
     const saved = await harness.evaluate(`(async()=>{const U=window.__up,K=window.KotOR,p=K.PartyManager.Player,b=window.__blaster;

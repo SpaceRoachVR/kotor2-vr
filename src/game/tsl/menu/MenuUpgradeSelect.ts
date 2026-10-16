@@ -1,6 +1,7 @@
 import { GameMenu } from "@/gui";
 import type { GUIButton, GUILabel, GUIListBox } from "@/gui";
 import { GameState } from "@/GameState";
+import { TextureLoader } from "@/loaders";
 import { ModuleObjectType } from "@/enums/module/ModuleObjectType";
 import { BitWise } from "@/utility/BitWise";
 import type { ModuleCreature, ModuleItem } from "@/module";
@@ -13,6 +14,9 @@ export type UpgradeTab = 'all' | ItemCategory;
 
 /** Default Workbench recipe table, for the Create Items hop. */
 const DEFAULT_RECIPE_TABLE = 'itemcreate';
+const CREATE_ITEMS_TEXT = 'Create Items';
+/** GUI units between Upgrade Item and Create Items when they share the bottom row. */
+const BOTTOM_ROW_GAP = 4;
 
 /**
  * A list row for GUIInventoryItem: the item's icon and stack, with a name
@@ -74,6 +78,9 @@ export class MenuUpgradeSelect extends K1_MenuUpgradeSelect {
   tab: UpgradeTab = 'all';
   /** Upgradeable items, index-aligned with LB_UPGRADELIST rows. */
   rows: UpgradeableEntry[] = [];
+  /** BTN_UPGRADEITEMS's GUI extent and text, before the bottom row is split. */
+  private upgradeExtent: { left: number; top: number; width: number; height: number } | undefined;
+  private upgradeText: string | undefined;
 
   constructor(){
     super();
@@ -110,7 +117,7 @@ export class MenuUpgradeSelect extends K1_MenuUpgradeSelect {
         });
       });
 
-      this.BTN_CREATEITEMS?.setText?.('Create Items');
+      this.styleCreateButton();
       this.BTN_CREATEITEMS?.addEventListener('click', (e) => {
         e.stopPropagation();
         if(!this.allowCreate) return;
@@ -126,6 +133,59 @@ export class MenuUpgradeSelect extends K1_MenuUpgradeSelect {
       this._button_b = this.BTN_BACK;
       resolve();
     });
+  }
+
+  /**
+   * Retail upgradesel_p puts BTN_CREATEITEMS on the frame's bottom-right
+   * corner art (53x26, no border), where "Create Items" cannot fit. It takes
+   * BTN_UPGRADEITEMS's border and highlight here, and layoutBottomRow() gives
+   * it the right half of the Upgrade Item button's slot when it is shown.
+   */
+  private styleCreateButton(){
+    const create = this.BTN_CREATEITEMS, upgrade = this.BTN_UPGRADEITEMS;
+    if(!create || !upgrade) return;
+    this.upgradeExtent = { ...upgrade.extent };
+    for(const part of ['border', 'highlight'] as const){
+      const from = upgrade[part] as any, to = create[part] as any;
+      to.edge = from.edge;
+      to.corner = from.corner;
+      to.fill.texture = from.fill.texture;
+      to.dimension = from.dimension;
+      to.inneroffset = from.inneroffset;
+      to.inneroffsety = from.inneroffsety;
+      to.color?.copy?.(from.color);
+    }
+    create.hasBorder = true;
+    create.hasHighlight = true;
+    // The GUI gave it no border textures, so initTextures() disabled them at
+    // build time: load the copied ones and enable them as Upgrade Item's are.
+    create.initTextures();
+    create.borderEnabled = upgrade.borderEnabled;
+    create.highlightEnabled = upgrade.highlightEnabled;
+    void TextureLoader.LoadQueue();
+  }
+
+  /** Upgrade Item spans the row alone, or shares it with Create Items (left / right half). */
+  private layoutBottomRow(split: boolean){
+    const create = this.BTN_CREATEITEMS, upgrade = this.BTN_UPGRADEITEMS, full = this.upgradeExtent;
+    if(!create || !upgrade || !full) return;
+    const half = Math.floor((full.width - BOTTOM_ROW_GAP) / 2);
+    const place = (control: GUIButton, left: number, width: number, text: string) => {
+      control.extent.left = left;
+      control.extent.top = full.top;
+      control.extent.width = width;
+      control.extent.height = full.height;
+      control.resizeControl();
+      control.recalculate();
+      control.setText(text);
+    };
+    const upgradeText = this.upgradeText ??= String(upgrade.getText?.() ?? '');
+    if(split){
+      place(upgrade, full.left, half, upgradeText);
+      place(create, full.left + full.width - half, half, CREATE_ITEMS_TEXT);
+    }else{
+      place(upgrade, full.left, full.width, upgradeText);
+    }
   }
 
   private tabButtons(): [GUIButton, UpgradeTab][] {
@@ -159,6 +219,7 @@ export class MenuUpgradeSelect extends K1_MenuUpgradeSelect {
   show(){
     GameMenu.prototype.show.call(this);
     if(this.BTN_CREATEITEMS){
+      this.layoutBottomRow(this.allowCreate);
       if(this.allowCreate) this.BTN_CREATEITEMS.show();
       else this.BTN_CREATEITEMS.hide();
     }

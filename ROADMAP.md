@@ -1969,8 +1969,9 @@ First shippable artifact.
   never offered; a companion user still gets the Exile's Repair; greyed rows under
   the VR ray, stick scrolling of both lists, scroll kept after Accept; `k_workbench_bd`
   run directly; `k_workbench_tut` (read from 001EBO's archive) lists `tutitemcreate` and the
-  created part is tagged `K_REPAIR_PART`; `k_workbench_t3` shows a notice and opens
-  nothing; chemicals untouched; PNGs of both panels; save/reload keeps components.
+  created part is tagged `K_REPAIR_PART`; `k_workbench_t3` opens the upgrade item list
+  (no Create Items, no notice; it showed a notice before the upgrade screens
+  existed); chemicals untouched; PNGs of both panels; save/reload keeps components.
   `workbnch.dlg` (read from dialogs.bif) offers: "[Use the workbench to create or
   breakdown items.]" twice, as `k_workbench_bd` (shown when `c_npc_avail(7)` is false)
   and as `k_workbench_bdm` (`itemcreatemira`, shown when party NPC 7 is available);
