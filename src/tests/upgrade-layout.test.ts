@@ -1,6 +1,6 @@
 import { describe, expect, test } from '@jest/globals';
 import { COLOUR_SLOT } from '@/game/tsl/crafting/UpgradeRules';
-import { fittedListExtent, fittedListHeight, hiddenInLayout, offersRemove, slotControlNames, slotNameText } from '@/game/tsl/menu/UpgradeLayout';
+import { shownInLayout, fittedListExtent, fittedListHeight, hiddenInLayout, offersRemove, slotControlNames, slotNameText } from '@/game/tsl/menu/UpgradeLayout';
 
 describe('UpgradeLayout', () => {
   test('slot control order', () => {
@@ -55,5 +55,17 @@ describe('UpgradeLayout', () => {
   test('LBL_PROPERTY is hidden only in the lightsaber layout', () => {
     expect(hiddenInLayout('LBL_PROPERTY', 'lightsaber')).toBe(true);
     expect(hiddenInLayout('LBL_PROPERTY', 'standard')).toBe(false);
+  });
+
+  test('every control one layout hides is shown by the other', () => {
+    for (const key of ['LBL_PROPERTY', '_3D_MODEL_LS']) {
+      for (const [a, b] of [['standard', 'lightsaber'], ['lightsaber', 'standard']] as const) {
+        if (hiddenInLayout(key, a)) expect(shownInLayout(key, b)).toBe(true);
+        expect(hiddenInLayout(key, a) && shownInLayout(key, a)).toBe(false);
+      }
+    }
+    expect(shownInLayout('_3D_MODEL_LS', 'lightsaber')).toBe(true);
+    expect(shownInLayout('LBL_PROPERTY', 'standard')).toBe(true);
+    expect(shownInLayout('LBL_PROPERTY', 'lightsaber')).toBe(false);
   });
 });

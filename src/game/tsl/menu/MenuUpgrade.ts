@@ -3,7 +3,7 @@ import type { ModuleCreature, ModuleItem } from "@/module";
 import { MenuUpgrade as K1_MenuUpgrade } from "@/game/kotor/KOTOR";
 import { GUIInventoryItem } from "@/game/tsl/gui/GUIInventoryItem";
 import { upgradeTypeName } from "@/game/tsl/crafting/UpgradeRules";
-import { UpgradeLayout, fittedListExtent, hiddenInLayout, offersRemove, slotNameText } from "@/game/tsl/menu/UpgradeLayout";
+import { UpgradeLayout, fittedListExtent, hiddenInLayout, shownInLayout, offersRemove, slotNameText } from "@/game/tsl/menu/UpgradeLayout";
 import { SlotView, UpgradePart, UpgradeSession } from "@/game/tsl/crafting/UpgradeSession";
 import { UpgradeEnginePorts } from "@/game/tsl/crafting/UpgradeEnginePorts";
 
@@ -224,7 +224,10 @@ export class MenuUpgrade extends K1_MenuUpgrade {
   show(){
     super.show();
     for(const control of this.hiddenControls()) control.hide();
-    if(this.layout === 'lightsaber') this._3D_MODEL_LS?.show();
+    for(const key of Object.keys(this)){
+      const control = (this as any)[key];
+      if(shownInLayout(key, this.layout) && control && typeof control.show === 'function') control.show();
+    }
     this.fitItemList();
     this.refresh();
   }

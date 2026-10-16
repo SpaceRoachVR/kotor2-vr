@@ -69,3 +69,15 @@ export function fittedListExtent(
   const height = slotButton ? fittedListHeight(original, [slotButton], gap, true) : original.height;
   return { top: original.top, height };
 }
+
+/**
+ * Whether `layout` must show a control that another layout hides, so one
+ * MenuUpgrade serving every item puts it back: the saber preview in the
+ * lightsaber layout, LBL_PROPERTY in the standard one. (Slot buttons and
+ * labels are shown by the screen's refresh.)
+ */
+export function shownInLayout(key: string, layout: UpgradeLayout): boolean {
+  if (/(^|_)3D_MODEL_LS$/.test(key)) return layout === 'lightsaber';
+  if (key === 'LBL_PROPERTY') return layout === 'standard';
+  return false;
+}
