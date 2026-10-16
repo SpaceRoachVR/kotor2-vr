@@ -308,7 +308,7 @@ export class ModuleItem extends ModuleObject {
     // getters call this on every read, and most items have no parts.
     const cache = this.upgradePropertyCache;
     if(cache && this.upgradeSlotsMatch(cache.slots)) return cache.properties;
-    const slots = [0, 1, 2, 3, 4, 5].map((i) => this.getUpgradeSlot(i));
+    const slots = this.rawUpgradeSlots();
     this.effectivePropertyCache = undefined;
     const rows = this.getInstalledUpgradeRows();
     if(!rows.length){
@@ -351,11 +351,18 @@ export class ModuleItem extends ModuleObject {
     return properties;
   }
 
+  /** The raw slot fields, read directly (no key strings): the stat hot path. */
+  private rawUpgradeSlots(): number[] {
+    return [this.upgradeSlot0, this.upgradeSlot1, this.upgradeSlot2, this.upgradeSlot3, this.upgradeSlot4, this.upgradeSlot5];
+  }
+
+  /**
+   * Whether the slot fields still hold the snapshot, compared field by field
+   * with no allocation: every stat read passes here.
+   */
   private upgradeSlotsMatch(slots: number[]): boolean {
-    for(let i = 0; i < UPGRADE_SLOT_COUNT; i++){
-      if(slots[i] !== this.getUpgradeSlot(i)) return false;
-    }
-    return true;
+    return slots[0] === this.upgradeSlot0 && slots[1] === this.upgradeSlot1 && slots[2] === this.upgradeSlot2
+      && slots[3] === this.upgradeSlot3 && slots[4] === this.upgradeSlot4 && slots[5] === this.upgradeSlot5;
   }
 
   /**
@@ -394,23 +401,30 @@ export class ModuleItem extends ModuleObject {
 
   /**
    * Every damage bonus this item applies: one entry per damage type, in the
-   * order first met, each at the highest value among that type's properties
-   * (ruling R5: every damage type applies; within one type the highest).
+   * order first met (ruling R5: every damage type applies; within one type
+   * the best). Within a type the property with the highest expected value
+   * (ItemProperty.getExpectedValue: a flat value, or the dice average) is
+   * chosen first and only it is rolled (ruling R7), so two 2d8 properties
+   * roll 2d8 once instead of keeping the better of two rolls.
    */
   getDamageBonuses(): readonly { type: number, value: number }[] {
     const properties = this.getEffectiveProperties();
-    let bonuses: { type: number, value: number }[] | undefined;
+    let picks: { type: number, expected: number, property: ItemProperty }[] | undefined;
     for(let i = 0, len = properties.length; i < len; i++){
       const property = properties[i];
       if(!property.isUseable() || !property.is(ModuleItemProperty.Damage)) continue;
       const type = property.getSubType()?.id || 0;
-      const value = Number(property.getValue()) || 0;
-      if(!bonuses) bonuses = [];
-      const entry = bonuses.find((b) => b.type === type);
-      if(!entry) bonuses.push({ type, value });
-      else if(value > entry.value) entry.value = value;
+      const expected = property.getExpectedValue();
+      if(!picks) picks = [];
+      const entry = picks.find((p) => p.type === type);
+      if(!entry) picks.push({ type, expected, property });
+      else if(expected > entry.expected){
+        entry.expected = expected;
+        entry.property = property;
+      }
     }
-    return bonuses ?? NO_DAMAGE_BONUSES;
+    if(!picks) return NO_DAMAGE_BONUSES;
+    return picks.map((p) => ({ type: p.type, value: Number(p.property.getValue()) || 0 }));
   }
 
   isDisguise(){

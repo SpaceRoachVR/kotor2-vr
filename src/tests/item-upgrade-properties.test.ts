@@ -30,6 +30,12 @@ const datatables = new Map<string, any>([
     5: { __index: 5, name: '-1', label: 'Energy' },
   } }],
   ['iprp_bonuscost', { rows: { 0: { value: '0' }, 1: { value: '1' }, 2: { value: '2' }, 3: { value: '3' } } }],
+  // iprp_damagecost: flat rows carry numdice ****, dice rows numdice/die.
+  ['iprp_damagecost', { rows: {
+    5: { label: '5', numdice: '****', die: '****' },
+    7: { label: '1d6', numdice: '1', die: '6' },
+    9: { label: '2d8', numdice: '2', die: '8' },
+  } }],
 ]);
 
 jest.mock('@/GameState', () => ({ GameState: {
@@ -40,7 +46,7 @@ jest.mock('@/GameState', () => ({ GameState: {
       38: { hasSubType: () => false },
       11: { hasSubType: () => true, subtyperesref: 'iprp_damagetype' },
     },
-    costTables: { 1: { name: 'iprp_bonuscost' } },
+    costTables: { 1: { name: 'iprp_bonuscost' }, 4: { name: 'IPRP_DAMAGECOST' } },
     weaponSounds: [] as unknown[],
   },
   TwoDAManager: { datatables: undefined as any },
@@ -54,6 +60,7 @@ import { GFFStruct } from '@/resource/GFFStruct';
 import { GFFField } from '@/resource/GFFField';
 import { GFFDataType } from '@/enums/resource/GFFDataType';
 import { CombatAttackData } from '@/combat/CombatAttackData';
+import { Dice } from '@/utility/Dice';
 
 function propertyStruct(name: number, costValue: number, upgradeType?: number, subType = 0): GFFStruct {
   const s = new GFFStruct(0);
@@ -64,6 +71,13 @@ function propertyStruct(name: number, costValue: number, upgradeType?: number, s
   s.addField(new GFFField(GFFDataType.BYTE, 'Param1')).setValue(255);
   s.addField(new GFFField(GFFDataType.BYTE, 'ChanceAppear')).setValue(100);
   if (upgradeType !== undefined) s.addField(new GFFField(GFFDataType.BYTE, 'UpgradeType')).setValue(upgradeType);
+  return s;
+}
+
+/** A Damage property (11) of `subType` on iprp_damagecost (cost table 4). */
+function damageStruct(subType: number, costValue: number): GFFStruct {
+  const s = propertyStruct(11, costValue, undefined, subType);
+  s.getFieldByLabel('CostTable').setValue(4);
   return s;
 }
 
@@ -237,6 +251,37 @@ describe('same-kind bonuses: the highest applies (ruling R5)', () => {
     const bare = weapon([]);
     expect(bare.getAttackBonus()).toBe(0);
     expect(bare.getDamageBonuses()).toEqual([]);
+  });
+});
+
+describe('damage dice: pick by expected value, roll once (ruling R7)', () => {
+  test('two 2d8 properties of one type roll once', () => {
+    const roll = jest.spyOn(Dice, 'roll').mockImplementation(() => 11);
+    const w = weapon([damageStruct(5, 9), damageStruct(5, 9)]);
+    expect(w.getDamageBonuses()).toEqual([{ type: 5, value: 11 }]);
+    expect(roll).toHaveBeenCalledTimes(1);
+  });
+
+  test('a flat 5 beats 1d6 (average 3.5) and nothing is rolled', () => {
+    const roll = jest.spyOn(Dice, 'roll').mockImplementation(() => 6);
+    const w = weapon([damageStruct(5, 7), damageStruct(5, 5)]);
+    expect(w.getDamageBonuses()).toEqual([{ type: 5, value: 5 }]);
+    expect(roll).not.toHaveBeenCalled();
+  });
+
+  test('2d8 (average 9) beats a flat 5 and is the one rolled', () => {
+    const roll = jest.spyOn(Dice, 'roll').mockImplementation(() => 2);
+    const w = weapon([damageStruct(5, 5), damageStruct(5, 9)]);
+    expect(w.getDamageBonuses()).toEqual([{ type: 5, value: 2 }]);
+    expect(roll).toHaveBeenCalledTimes(1);
+    expect(roll.mock.calls[0][0]).toBe(2);
+  });
+
+  test('each damage type still rolls its own pick', () => {
+    const roll = jest.spyOn(Dice, 'roll').mockImplementation(() => 4);
+    const w = weapon([damageStruct(5, 7), damageStruct(1, 9), damageStruct(1, 7)]);
+    expect(w.getDamageBonuses()).toEqual([{ type: 5, value: 4 }, { type: 1, value: 4 }]);
+    expect(roll).toHaveBeenCalledTimes(2);
   });
 });
 

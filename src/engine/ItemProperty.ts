@@ -200,6 +200,35 @@ export class ItemProperty {
     return this.subType;
   }
 
+  /**
+   * The value getValue() gives on average, without rolling: a dice row
+   * (Damage / Monster_Cost tables) averages numdice * (die + 1) / 2, a flat
+   * damage row is its label; other tables answer getValue(). A random row
+   * (CostValue 0) averages the table's rows. Used to choose between
+   * same-type damage properties before rolling (ruling R7).
+   */
+  getExpectedValue(): number {
+    if(this.costTable != ModuleItemCostTable.Damage && this.costTable != ModuleItemCostTable.Monster_Cost){
+      return Number(this.getValue()) || 0;
+    }
+    const rows = this.costTableDefinition?.rows;
+    if(!rows) return 0;
+    const expected = (row: any): number => {
+      if(!row) return 0;
+      if(row.numdice !== undefined && row.numdice != '****'){
+        const dice = parseInt(row.numdice), sides = parseInt(row.die);
+        return dice > 0 && sides > 0 ? dice * (sides + 1) / 2 : 0;
+      }
+      return this.costTable == ModuleItemCostTable.Damage ? (parseInt(row.label) || 0) : 0;
+    };
+    if(this.costValue == 0){
+      const keys = Object.keys(rows).filter((k) => Number(k) >= 1);
+      if(!keys.length) return 0;
+      return keys.reduce((sum, k) => sum + expected(rows[k]), 0) / keys.length;
+    }
+    return expected(rows[this.costValue]);
+  }
+
   getValue(){
     let costTable = this.getCostTable();
     let costTableRow = this.getCostTableRow();
