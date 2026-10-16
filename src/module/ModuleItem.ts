@@ -204,6 +204,27 @@ export class ModuleItem extends ModuleObject {
     return this.modelVariation || 1;
   }
 
+  /**
+   * Sets the model variation (a lightsaber's blade colour). The value also
+   * goes into the template's BYTE field `ModelVariation`: inventory moves
+   * re-read the template (InventoryManager.addItem calls load(), which runs
+   * initProperties) and would otherwise put the old variation back, as
+   * setUpgradeSlot does for the slots. save() writes modelVariation.
+   */
+  setModelVariation(n: number): void {
+    const value = Math.max(0, Math.min(255, Math.trunc(Number(n)) || 0));
+    this.modelVariation = value;
+    if(this.template?.RootNode){
+      const existing = this.template.RootNode.hasField('ModelVariation') ? this.template.getFieldByLabel('ModelVariation') : undefined;
+      if(existing && existing.getType() === GFFDataType.BYTE){
+        existing.setValue(value);
+      }else{
+        if(existing) this.template.RootNode.removeFieldByLabel('ModelVariation');
+        this.template.RootNode.addField(new GFFField(GFFDataType.BYTE, 'ModelVariation')).setValue(value);
+      }
+    }
+  }
+
   getTextureVariation(){
     return this.textureVariation || 1;
   }
@@ -786,17 +807,7 @@ export class ModuleItem extends ModuleObject {
       return this.model;
     }
 
-    let itemclass = this.baseItem.itemClass;
-    let defaultModel = this.baseItem.defaultModel;
-    itemclass = itemclass.replace(/\0[\s\S]*$/g,'').trim().toLowerCase();
-    defaultModel = defaultModel.replace(/\0[\s\S]*$/g,'').trim().toLowerCase();
-
-    if(defaultModel != 'i_null'){
-      defaultModel = this.nthStringConverter(defaultModel, this.getModelVariation());
-      if(!parseInt(defaultModel.substr(-3))){
-        defaultModel = itemclass+'_'+(('000'+this.getModelVariation()).substr(-3));
-      }
-    }
+    const defaultModel = this.modelResRefFor(this.getModelVariation());
 
     try{
       const mdl = await MDLLoader.loader.load(defaultModel);
@@ -839,6 +850,24 @@ export class ModuleItem extends ModuleObject {
     }catch(e){
       return null;
     }
+  }
+
+  /**
+   * The model resref loadModel loads for `variation`: baseitems.2da's
+   * DefaultModel with its trailing number replaced by the variation (a
+   * lightsaber's blade colour is its variation: w_lghtsbr_002), or
+   * `<itemclass>_<variation>` when DefaultModel carries no number.
+   */
+  modelResRefFor(variation: number): string {
+    const itemclass = String(this.baseItem?.itemClass ?? '').replace(/\0[\s\S]*$/g,'').trim().toLowerCase();
+    let defaultModel = String(this.baseItem?.defaultModel ?? 'I_Null').replace(/\0[\s\S]*$/g,'').trim().toLowerCase();
+    if(defaultModel != 'i_null'){
+      defaultModel = this.nthStringConverter(defaultModel, variation);
+      if(!parseInt(defaultModel.substr(-3))){
+        defaultModel = itemclass+'_'+(('000'+variation).substr(-3));
+      }
+    }
+    return defaultModel;
   }
 
   nthStringConverter(name = '', nth = 1){

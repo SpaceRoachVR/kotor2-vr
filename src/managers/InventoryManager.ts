@@ -35,7 +35,19 @@ export function hasItemUpgrades(item: any): boolean {
 export function findItemStackTarget<T extends { getTag(): string }>(held: readonly T[], item: T): T | undefined {
   if (!isStackableItem(item as any) || hasItemUpgrades(item)) return undefined;
   const tag = item.getTag().toLowerCase();
-  return held.find((other) => other !== item && other.getTag().toLowerCase() === tag && !hasItemUpgrades(other));
+  const variation = modelVariationOf(item);
+  return held.find((other) => other !== item && other.getTag().toLowerCase() === tag && !hasItemUpgrades(other)
+    && modelVariationOf(other) === variation);
+}
+
+/**
+ * An item's model variation, when it has one. A recoloured lightsaber keeps
+ * its tag but not its template's variation (the blade colour), so it must not
+ * merge into a plain copy and lose the colour.
+ */
+function modelVariationOf(item: any): number | undefined {
+  const v = typeof item?.getModelVariation === 'function' ? Number(item.getModelVariation()) : undefined;
+  return Number.isFinite(v) ? v : undefined;
 }
 
 /**

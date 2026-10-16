@@ -3,8 +3,9 @@ import { ResourceLoader } from "@/loaders";
 import { ResourceTypes } from "@/resource/ResourceTypes";
 import { GFFObject } from "@/resource/GFFObject";
 import type { ModuleCreature, ModuleItem } from "@/module";
-import { ItemCategory, UpgradeRow, categoryFor, parseUpgradeTable } from "@/game/tsl/crafting/UpgradeRules";
-import type { UpgradeBagPorts, UpgradeItemPort, UpgradePart } from "@/game/tsl/crafting/UpgradeSession";
+import { COLOUR_SLOT, ItemCategory, SaberKind, UpgradeRow, categoryFor, parseUpgradeTable, saberKindFor } from "@/game/tsl/crafting/UpgradeRules";
+import { ColourRow, colourCrystalFor, isColourCrystal, modelVariationFor, parseColourTable } from "@/game/tsl/crafting/ColourCrystals";
+import type { ColourPort, UpgradeBagPorts, UpgradeItemPort, UpgradePart } from "@/game/tsl/crafting/UpgradeSession";
 
 /** An upgradeable item and, when it is equipped, the party member wearing it. */
 export interface UpgradeableEntry {
@@ -14,6 +15,9 @@ export interface UpgradeableEntry {
 
 /** Equipment keys an upgradeable item can occupy (weapons, both sets, and armor). */
 const EQUIPMENT_KEYS = ['RIGHTHAND', 'LEFTHAND', 'RIGHTHAND2', 'LEFTHAND2', 'ARMOR'];
+
+/** The creature model's attachment node for an equipped hand item (as equipItem attaches it). */
+const HAND_NODES: Record<string, 'rhand' | 'lhand'> = { RIGHTHAND: 'rhand', LEFTHAND: 'lhand' };
 
 const resrefOf = (item: ModuleItem): string =>
   String(item?.getTemplateResRef?.() || item?.getTag?.() || '').toLowerCase();
@@ -35,11 +39,16 @@ export class UpgradeEnginePorts {
   /** Display items built from part templates, by resref. */
   private displayItems = new Map<string, ModuleItem>();
   private bagPorts: UpgradeBagPorts | undefined;
+  private colourSource: unknown;
+  private colourRows: ColourRow[] = [];
+  /** Saber template ModelVariation by resref; undefined = template not cached. */
+  private variations = new Map<string, number | undefined>();
 
   /** The item's category, when the workbench can upgrade it at all. */
   static categoryOf(item: ModuleItem | undefined): ItemCategory | undefined {
     if(!item) return undefined;
-    return categoryFor(Number(item.baseItem?.storePanelSort));
+    const baseItem = Number(item.getBaseItemId?.() ?? (item as any).baseItemId);
+    return categoryFor(Number(item.baseItem?.storePanelSort), Number.isFinite(baseItem) ? baseItem : undefined);
   }
 
   /** Category known and UpgradeLevel >= 1. */
@@ -64,6 +73,54 @@ export class UpgradeEnginePorts {
       }
     }
     return this.rows;
+  }
+
+  /** upcrystals.2da's colour-crystal rows, parsed once per loaded table object. */
+  colourTable(): ColourRow[] {
+    const source = GameState.TwoDAManager?.datatables?.get('upcrystals');
+    if(source !== this.colourSource){
+      this.colourSource = source;
+      this.colourRows = parseColourTable(((source as any)?.rows ?? {}) as Record<string, Record<string, string>>);
+    }
+    return this.colourRows;
+  }
+
+  /**
+   * The ModelVariation of a saber template in the UTI cache (the blade colour
+   * a colour crystal gives), or undefined when it is not cached. Cached,
+   * misses included.
+   */
+  variationOf(template: string): number | undefined {
+    const key = String(template).toLowerCase();
+    if(this.variations.has(key)) return this.variations.get(key);
+    let variation: number | undefined;
+    const buffer = ResourceLoader.loadCachedResource(ResourceTypes['uti'], key);
+    if(buffer){
+      try {
+        const root = new GFFObject(buffer).RootNode;
+        if(root.hasField('ModelVariation')){
+          const v = Number(root.getFieldByLabel('ModelVariation').getValue());
+          if(Number.isFinite(v)) variation = v;
+        }
+      } catch (e) {
+        console.warn(`[UpgradeEnginePorts] saber template "${key}" could not be read`, e);
+      }
+    }
+    this.variations.set(key, variation);
+    return variation;
+  }
+
+  /** A colour crystal as a part (name from its template; the resref when not cached). */
+  colourPart(resref: string): UpgradePart {
+    const key = String(resref).toLowerCase();
+    const display = this.displayItem(key);
+    return {
+      resref: key,
+      row: -1,
+      type: COLOUR_SLOT,
+      level: 0,
+      name: String(display?.getName?.() ?? key),
+    };
   }
 
   /** The part an upgrade.2da row names, or undefined when its template is unusable. */
@@ -129,7 +186,7 @@ export class UpgradeEnginePorts {
     const category = UpgradeEnginePorts.categoryOf(item);
     const level = Number(item?.getUpgradeLevel?.()) || 0;
     if(!category || level < 1) return undefined;
-    return {
+    const port: UpgradeItemPort = {
       category,
       level,
       getSlot: (i: number) => item.getUpgradeSlot(i),
@@ -138,6 +195,66 @@ export class UpgradeEnginePorts {
         item.setUpgradeSlot(i, row);
       },
     };
+    const kind = category === 'lightsaber' ? saberKindFor(Number(item.getBaseItemId())) : undefined;
+    if(kind) port.colour = this.colourPort(item, kind);
+    return port;
+  }
+
+  /**
+   * A saber's blade colour: its ModelVariation, read as the colour crystal
+   * that gives it. Setting it changes one unit (ruling R8) and, when the
+   * saber is worn, reloads the blade in the hand.
+   */
+  private colourPort(item: ModuleItem, kind: SaberKind): ColourPort {
+    const variationOf = (template: string) => this.variationOf(template);
+    const variationFor = (resref: string) => modelVariationFor(this.colourTable(), resref, kind, variationOf);
+    return {
+      current: () => {
+        const crystal = colourCrystalFor(this.colourTable(), kind, item.getModelVariation(), variationOf);
+        return crystal ? this.colourPart(crystal) : undefined;
+      },
+      accepts: (resref: string) => variationFor(resref) !== undefined,
+      set: (resref: string) => {
+        const variation = variationFor(resref);
+        if(variation === undefined) return false;
+        UpgradeEnginePorts.splitOffRest(item);
+        const previous = Number(item.modelVariation) || 0;
+        try {
+          item.setModelVariation(variation);
+          UpgradeEnginePorts.reloadWorn(item);
+          return true;
+        } catch (e) {
+          console.error(`[UpgradeEnginePorts] colour "${resref}" could not be applied`, e);
+          item.setModelVariation(previous);
+          try { UpgradeEnginePorts.reloadWorn(item); } catch (e2) { /* best effort: put the old blade back */ }
+          return false;
+        }
+      },
+    };
+  }
+
+  /**
+   * Reloads a worn item's model where it is worn, so a new variation (the
+   * blade colour) shows. Deliberately not unequipSlot + equipItem: for a
+   * party member onUnEquip sends the item through InventoryManager.addItem
+   * (which can merge it into a same-tag stack and so duplicate it), the hand
+   * slots destroy their item on unequipSlot(slot, false), and equipItem only
+   * puts the item back in its slot after an await, leaving it in neither the
+   * hand nor the bag meanwhile. Here the item never leaves its slot:
+   * loadModel disposes the old model and the new one goes on the hand node
+   * the way equipItem attaches it. Throws only synchronously; a model that
+   * fails to load is logged by loadModel and leaves the hand empty.
+   */
+  static reloadWorn(item: ModuleItem): void {
+    const wearer = UpgradeEnginePorts.wearerOf(item);
+    if(!wearer) return;
+    const equipment = (wearer as any).equipment ?? {};
+    const key = EQUIPMENT_KEYS.find((k) => equipment[k] === item);
+    const node = key ? HAND_NODES[key] : undefined;
+    item.loadModel().then((model) => {
+      const hand = node ? (wearer as any).model?.[node] : undefined;
+      if(model && hand && equipment[key!] === item) hand.add(model);
+    }).catch((e) => console.error('[UpgradeEnginePorts] blade model reload failed', e));
   }
 
   /**
@@ -176,6 +293,19 @@ export class UpgradeEnginePorts {
           const n = Number(item.getStackSize?.()) || 1;
           if(entry) entry.count += n;
           else counts.set(part.resref, { part, count: n });
+        }
+        return [...counts.values()];
+      },
+      colourCrystals: () => {
+        const table = this.colourTable();
+        const counts = new Map<string, { part: UpgradePart; count: number }>();
+        for(const item of GameState.InventoryManager.inventory as ModuleItem[]){
+          const resref = resrefOf(item);
+          if(!resref || !isColourCrystal(table, resref)) continue;
+          const entry = counts.get(resref);
+          const n = Number(item.getStackSize?.()) || 1;
+          if(entry) entry.count += n;
+          else counts.set(resref, { part: this.colourPart(resref), count: n });
         }
         return [...counts.values()];
       },
