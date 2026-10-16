@@ -1980,7 +1980,8 @@ First shippable artifact.
   **◑ weapon and armor upgrades built, emulator-verified; awaiting headset (2026-10-15).**
   `UpgradeRules` / `UpgradeSession` / `UpgradeEnginePorts`; installed parts apply live
   (`ModuleItem.getEffectiveProperties`, `UpgradeSlot0..5` saved). `MenuUpgradeSelect`
-  (`upgradesel_p`: All/Ranged/Melee/Armor tabs, Lightsaber shown disabled; inventory
+  (`upgradesel_p`: All/Ranged/Melee/Armor tabs, Lightsaber shown disabled until the
+  lightsaber pass below; inventory
   items plus items equipped on party members, named with the wearer; Create Items →
   `MenuComponent`) and `MenuUpgrade` (`upgrade_p`: slot buttons with closed slots greyed,
   fitting parts plus Remove, stage then Assemble, Back discards). Routine 354:
@@ -2006,7 +2007,36 @@ First shippable artifact.
   Final-review fixes: a stacked weapon is split before Assemble, so one part
   upgrades one unit (ruling R8); same-type damage dice are chosen by expected value
   and rolled once (ruling R7).
-  Remaining pass: lightsaber upgrades (crystals, blade colour, 6 slots).
+  **◑ lightsaber upgrades built, emulator-verified; awaiting headset (2026-10-16).**
+  Base items 8/9/10 are the Lightsaber category (the item list's Lightsaber tab is
+  live); `MenuUpgrade` opens a saber in the six-slot `_LS` layout of `upgrade_p`
+  (`UpgradeSlot0` crystal, 1 colour crystal, 2 crystal, 3 lens, 4 emitter, 5 energy
+  cell; `UpgradeSlot1` is never written, retail keeps -1), with `LB_ITEMS` moved below
+  `LBL_SLOTNAME` and `LBL_PROPERTY` hidden so the slots, list and a turning 3D preview
+  of the saber (`3D_MODEL_LS`, lit blade) show together. The blade colour is the
+  saber's `ModelVariation`, read as a colour crystal (`upcrystals.2da` rows
+  `u_l_colo_*`, by saber kind): swapping takes the new crystal from the bag and returns
+  the old one, there is no Remove, and a colour whose blade model is missing is never
+  offered. A worn saber's blade is reloaded in place on the hand. Item alignment use
+  limits come from the item's own and installed parts' properties.
+  `tools/vr-emulator/probe-lightsaber.js` (10 checks) on the SpaceRoach save at the
+  103PER bench through `workbnch.dlg` → `k_workbench_t3`: the Lightsaber tab lists only
+  sabers (a granted `g_w_lghtsbr01`); the `_LS` layout with `LB_ITEMS` clear of every
+  `_LS` button and the preview; two crystals (`u_l_crys_02`, `u_l_crys_16`), a lens, an
+  emitter and a cell installed raise the wielder's attack 3 → 6 and damage 0 → 1
+  (ruling R5: the best of a kind applies, so Attack +1 and +3 give +3); Blue → Red
+  staged recolours the preview (`w_lghtsbr_001` → `w_lghtsbr_002`); Assemble on the
+  worn saber returns Blue to the bag, consumes Red, sets variation 2 and puts exactly
+  one `w_lghtsbr_002` blade in the hand, which the VR held-item bridge presents; Back
+  with a staged colour changes nothing and the preview stops rendering; a blaster
+  opened next gets the standard layout back; VR ray reach of all six `_LS` buttons and
+  stick scrolling; save/reload keeps variation 2, the slots and the bonuses. PNGs in
+  `evidence/lightsaber/`. `probe-upgrade.js`, `probe-workbench.js` and
+  `probe-lab-station.js` still pass.
+  **Still not applied (engine gap, separate task):** Keen (28), Skill bonus, Immunity,
+  Damage Resistance, Regeneration and Blaster Bolt Deflect Increase (55, the stock
+  lenses' and emitters' property) item properties, own or installed: a part granting
+  only those shows as installed and changes nothing.
 
 M4-78 is out of scope.
 
