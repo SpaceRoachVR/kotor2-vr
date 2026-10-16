@@ -18,6 +18,8 @@ export interface ColourPort {
 export interface UpgradeItemPort {
   category: ItemCategory;
   level: number;
+  /** The item's name, for logs. */
+  name?: string;
   colour?: ColourPort;
   getSlot(i: number): number;
   setSlot(i: number, row: number): void;
@@ -50,6 +52,8 @@ export interface SlotView {
 export class UpgradeSession {
   private readonly types: number[];
   private readonly staging = new Map<number, UpgradePart | null>();
+  /** The "Unknown colour gives nothing back" note is logged once per session. */
+  private unknownColourLogged = false;
 
   constructor(
     private readonly item: UpgradeItemPort,
@@ -176,6 +180,7 @@ export class UpgradeSession {
           toTake.push(staged);
           const old = this.item.colour?.current();
           if (old) toReturn.push(old);
+          else this.logUnknownColour();
         }
         continue;
       }
@@ -223,6 +228,13 @@ export class UpgradeSession {
     }
     this.staging.clear();
     return true;
+  }
+
+  /** The blade's colour has no crystal ("Unknown"): a swap returns nothing. */
+  private logUnknownColour(): void {
+    if (this.unknownColourLogged) return;
+    this.unknownColourLogged = true;
+    console.info(`UpgradeSession: ${this.item.name || 'the item'} has an Unknown blade colour; swapping in a crystal returns no crystal to the inventory`);
   }
 
   cancel(): void {

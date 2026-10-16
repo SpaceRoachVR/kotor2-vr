@@ -256,6 +256,28 @@ describe('colour port', () => {
     expect(loadModel).not.toHaveBeenCalled();
   });
 
+  test('a stack split that throws makes set return false with the variation unchanged', () => {
+    const item = saber(2, 2);
+    inventory.inventory = [item];
+    jest.spyOn(UpgradeEnginePorts, 'splitOffRest').mockImplementation(() => { throw new Error('clone failed'); });
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(new UpgradeEnginePorts().itemPort(item)!.colour!.set('u_l_colo_01')).toBe(false);
+    expect(item.getModelVariation()).toBe(2);
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+
+  test('an equipped stack whose rest cannot reach the bag stays whole, and set returns false', () => {
+    const item = saber(2, 2);
+    (GameState as any).PartyManager.party = [wearerHolding(item)];
+    inventory.addItem.mockImplementationOnce(() => { throw new Error('bag full'); });
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(new UpgradeEnginePorts().itemPort(item)!.colour!.set('u_l_colo_01')).toBe(false);
+    expect(item.getModelVariation()).toBe(2);
+    expect(item.getStackSize()).toBe(2);
+  });
+
   test('a crystal whose blade model is missing is not accepted, and set changes nothing', () => {
     const lookup = (ResourceLoader.hasModelPair as jest.Mock).mockImplementation((ref: unknown) => ref !== 'w_lghtsbr_001');
     const item = saber(2, 2);

@@ -276,6 +276,24 @@ describe('UpgradeSession colour slot', () => {
     expect(n('u_l_colo_04')).toBe(0);
   });
 
+  test('an unknown colour swap is logged once per session, naming the item', () => {
+    const info = jest.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      saber.currentPart = undefined;
+      (saber as UpgradeItemPort).name = 'Lightsaber';
+      sbag.counts.set('u_l_colo_04', 2);
+      expect(sess.stage(1, c4)).toBe(true);
+      expect(sess.assemble()).toBe(true);
+      expect(sess.stage(1, c4)).toBe(true);
+      expect(sess.assemble()).toBe(true);
+      expect(sbag.returns).toBe(0);
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(String(info.mock.calls[0][0])).toContain('Lightsaber');
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   test('a failed set rolls the bag back', () => {
     saber.setResult = false;
     sess.stage(0, lsCrystal);

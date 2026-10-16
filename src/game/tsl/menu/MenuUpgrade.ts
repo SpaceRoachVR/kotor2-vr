@@ -528,7 +528,9 @@ export class MenuUpgrade extends K1_MenuUpgrade {
     this.LBL_SLOTNAME?.setText(slot ? slotNameText(slot.type, shown?.name, EMPTY_TEXT) : '');
     this.listRows = slot ? this.rowsFor(slot) : [];
     const counts = new Map<string, number>();
-    for(const { part, count } of this.engine.bag().parts()) counts.set(part.resref, count);
+    const bag = this.engine.bag();
+    for(const { part, count } of bag.parts()) counts.set(part.resref, count);
+    for(const { part, count } of bag.colourCrystals?.() ?? []) counts.set(part.resref, count);
     const nodes = this.listRows.map((row) => this.nodeFor(row, counts));
     const index = shown ? this.listRows.findIndex((r) => r.kind === 'part' && r.part.resref === shown.resref) : -1;
     this.LB_DESC?.setItem(null);

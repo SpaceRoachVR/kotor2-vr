@@ -196,6 +196,9 @@ export class UpgradeEnginePorts {
     const port: UpgradeItemPort = {
       category,
       level,
+      get name(){
+        try { return String(item?.getName?.() || resrefOf(item)); } catch (e) { return resrefOf(item); }
+      },
       getSlot: (i: number) => item.getUpgradeSlot(i),
       setSlot: (i: number, row: number) => {
         UpgradeEnginePorts.splitOffRest(item);
@@ -224,7 +227,14 @@ export class UpgradeEnginePorts {
       set: (resref: string) => {
         const variation = variationFor(resref);
         if(variation === undefined) return false;
-        UpgradeEnginePorts.splitOffRest(item);
+        try {
+          // A split that throws (clone, addItem) refuses the colour, so the
+          // session rolls its takes and returns back.
+          UpgradeEnginePorts.splitOffRest(item);
+        } catch (e) {
+          console.error(`[UpgradeEnginePorts] colour "${resref}": the stack could not be split`, e);
+          return false;
+        }
         const previous = Number(item.modelVariation) || 0;
         let reloading = false;
         try {
@@ -326,10 +336,16 @@ export class UpgradeEnginePorts {
     const rest = item.clone();
     rest.setStackSize(count - 1);
     item.setStackSize(1);
-    const inventory = GameState.InventoryManager.inventory as ModuleItem[];
-    const at = inventory.indexOf(item);
-    if(at >= 0) inventory.splice(at + 1, 0, rest);
-    else GameState.InventoryManager.addItem(rest);
+    try {
+      const inventory = GameState.InventoryManager.inventory as ModuleItem[];
+      const at = inventory.indexOf(item);
+      if(at >= 0) inventory.splice(at + 1, 0, rest);
+      else GameState.InventoryManager.addItem(rest);
+    } catch (e) {
+      // The rest never landed: the stack stays whole.
+      item.setStackSize(count);
+      throw e;
+    }
   }
 
   /** The party inventory as the bag of upgrade parts. */
