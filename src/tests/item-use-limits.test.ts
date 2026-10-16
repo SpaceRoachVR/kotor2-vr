@@ -36,11 +36,19 @@ describe('meetsUseLimits', () => {
 describe('InventoryManager.isItemUsableBy', () => {
   const item = {
     baseItem: { droidOrHuman: 0 },
-    getEffectiveProperties: () => [{ propertyName: 43, subType: 2 }],
+    getEffectiveProperties: () => [{ propertyName: 43, subType: 2, isUseable: () => true }],
   } as any;
   const creature = (g: number) => ({ getGoodEvil: () => g, getRace: () => 6 }) as any;
   test('alignment limit from effective properties', () => {
     expect(InventoryManager.isItemUsableBy(item, creature(80))).toBe(true);
+    expect(InventoryManager.isItemUsableBy(item, creature(20))).toBe(false);
+  });
+  test('a 43/2 property gated off by isUseable (K1 leftover) is ignored', () => {
+    const stock = {
+      baseItem: { droidOrHuman: 0 },
+      getEffectiveProperties: () => [{ propertyName: 43, subType: 2, isUseable: () => false }],
+    } as any;
+    expect(InventoryManager.isItemUsableBy(stock, creature(20))).toBe(true);
     expect(InventoryManager.isItemUsableBy(item, creature(20))).toBe(false);
   });
 });

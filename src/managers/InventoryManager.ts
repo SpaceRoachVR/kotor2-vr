@@ -128,7 +128,7 @@ export class InventoryManager {
     // Use limits come from the item's own and installed parts' properties.
     if (creature && typeof item.getEffectiveProperties === 'function') {
       const limits = item.getEffectiveProperties()
-        .filter(p => p.propertyName === ModuleItemProperty.UseLimitationAlignmentGroup)
+        .filter(p => p.propertyName === ModuleItemProperty.UseLimitationAlignmentGroup && p.isUseable())
         .map(p => ({ property: p.propertyName, subType: p.subType }));
       if (!meetsUseLimits(limits, { goodEvil: creature.getGoodEvil() })) return false;
     }
