@@ -6,7 +6,9 @@ import { EngineMode } from "@/enums/engine/EngineMode";
 import { NWScriptDataType } from "@/enums/nwscript/NWScriptDataType";
 import { GameState } from "@/GameState";
 import { Planetary } from "@/engine/Planetary";
-import type { ModuleCreature, ModuleObject } from "@/module";
+import type { ModuleCreature, ModuleItem, ModuleObject } from "@/module";
+import type { MenuUpgrade as TSLMenuUpgrade } from "@/game/tsl/menu/MenuUpgrade";
+import type { MenuUpgradeSelect as TSLMenuUpgradeSelect } from "@/game/tsl/menu/MenuUpgradeSelect";
 import type { OdysseyModel3D } from "@/three/odyssey";
 import { BitWise } from "@/utility/BitWise";
 import { NW_FALSE, NW_TRUE } from "@/nwscript/NWScriptConstants";
@@ -2553,20 +2555,29 @@ NWScriptDefK2.Actions = {
     // workbnch.dlg, the conversation the placed benches run: the "create or
     // breakdown items" reply is k_workbench_bd, or k_workbench_bdm
     // (itemcreatemira) when party NPC 7 is available (c_npc_avail), and the
-    // "upgrade items" reply, always shown, is k_workbench_t3. Only item
-    // creation exists so far: oItem is ignored, and a call that disables item
-    // creation (k_workbench_t3, upgrades only) shows a notice and opens
-    // nothing. Like 773, the screen opens once any conversation that called it
-    // has closed.
+    // "upgrade items" reply, always shown, is k_workbench_t3. nDisableUpgrade
+    // goes straight to item creation (MenuComponent); a valid upgradeable
+    // oItem opens the slot screen for it alone; anything else opens the
+    // upgrade item list (MenuUpgradeSelect), whose Create Items button uses
+    // the recipe table and is hidden when nDisableItemCreation is set.
+    // Lightsaber upgrades are not built yet. Like 773, the screen opens once
+    // any conversation that called it has closed.
     action: function(this: NWScriptInstance, args: [ModuleObject, ModuleObject, number, number, string]){
+      const [oItem, oCharacter, nDisableItemCreation, nDisableUpgrade, sOverride2DA] = args;
       GameState.CutsceneManager.runAfterConversation(() => {
-        if(args[2]){
-          const notice = "Upgrading items isn't available yet.";
-          if(VRSpike.isPresenting) VRSpike.showNotice(notice, 3000, 'info');
-          else console.warn(`ShowUpgradeScreen: ${notice}`);
-          return;
+        const recipeTable = sOverride2DA || 'itemcreate';
+        // TSL registers its own upgrade menus under these K1-typed slots.
+        const upgrade = GameState.MenuManager.MenuUpgrade as unknown as TSLMenuUpgrade;
+        const upgradeSelect = GameState.MenuManager.MenuUpgradeSelect as unknown as TSLMenuUpgradeSelect;
+        let opening: Promise<void>;
+        if(nDisableUpgrade){
+          opening = GameState.MenuManager.MenuComponent.openFor(oCharacter as ModuleCreature, recipeTable);
+        }else if(BitWise.InstanceOfObject(oItem, ModuleObjectType.ModuleItem) && upgrade.canUpgrade(oItem as ModuleItem)){
+          opening = upgrade.openFor(oItem as ModuleItem);
+        }else{
+          opening = upgradeSelect.openFor(oCharacter as ModuleCreature, { recipeTable, allowCreate: !nDisableItemCreation });
         }
-        GameState.MenuManager.MenuComponent.openFor(args[1] as ModuleCreature, args[4] || 'itemcreate').catch((e: unknown) => {
+        opening.catch((e: unknown) => {
           console.error('ShowUpgradeScreen: the Workbench failed to open', e);
         });
       });

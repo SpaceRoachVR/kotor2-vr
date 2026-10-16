@@ -5,7 +5,8 @@
  * the SpaceRoach Peragus save, loads 103PER (the fuel depot) and drives the
  * real Workbench (tag 000_Workbench, OnUsed k_workbench): the first use starts
  * the help conversation and opens nothing; the second use runs
- * ShowUpgradeScreen, which opens MenuComponent. Then: create an upgrade
+ * ShowUpgradeScreen, which opens the upgrade item list (MenuUpgradeSelect),
+ * whose Create Items button opens MenuComponent. Then: create an upgrade
  * (components and inventory), break a blaster down (yield from the main
  * character's Repair, whoever uses the bench; a medpac is never offered), a
  * companion as the user, greyed rows under the VR ray, stick scrolling and
@@ -13,7 +14,8 @@
  * (k_workbench_bd, workbnch.dlg's reply when party NPC 7 is not available), the
  * prologue's tutitemcreate table and its K_REPAIR_PART override tag
  * (k_workbench_tut), a missing override table falling back to itemcreate,
- * the upgrade reply script (k_workbench_t3, upgrades only: a notice, no screen), chemicals
+ * the upgrade reply script (k_workbench_t3, upgrades only: the upgrade item
+ * list without Create Items, no notice; probe-upgrade.js covers it), chemicals
  * untouched, PNGs of both panels, and the component count across save/reload.
  *
  *   node tools/vr-emulator/probe-workbench.js
@@ -419,12 +421,35 @@ async function main() {
       && String(firstUse.conversation).toLowerCase() === String(bench.conversation).toLowerCase() && firstUse.visible === false && firstUse.global !== 0
       && ended.active === false && ended.menuVisible === false, { firstUse, ended });
 
-    // 2c. k_workbench again: the screen, directly.
-    const secondUse = await harness.evaluate(`window.__wb.useWithScript('k_workbench',8000)`, { timeoutMs: 60000 });
+    // 2c. k_workbench again: ShowUpgradeScreen(INVALID, user, 0, 0, "") opens the
+    // upgrade item list directly; its Create Items button opens the Workbench.
+    // Both are then closed and the Workbench reopened on its own for the steps below.
+    const secondUse = await harness.evaluate(`(async()=>{const W=window.__wb,K=window.KotOR,g=K.GameState,MM=g.MenuManager,cm=g.CutsceneManager;
+      const bench=window.__workbench,sel=MM.MenuUpgradeSelect,m=W.menu(),own=bench.scripts['OnUsed'];
+      bench.scripts['OnUsed']=K.NWScript.Load('k_workbench');
+      let conversationSeen=!!cm.active;
+      try{ bench.use(K.PartyManager.Player);
+        for(let t=0;t<8000 && !sel.bVisible;t+=50){ if(cm.active) conversationSeen=true; await W.pause(50); }
+        await W.pause(500); if(cm.active) conversationSeen=true;
+      } finally { bench.scripts['OnUsed']=own; }
+      const select={visible:!!sel.bVisible,foreground:MM.GetCurrentMenu()===sel,createVisible:!!sel.BTN_CREATEITEMS?.isVisible?.(),
+        createText:sel.BTN_CREATEITEMS?.getText?.(),componentVisible:!!m.bVisible};
+      sel.BTN_CREATEITEMS.click();
+      for(let i=0;i<80 && !m.bVisible;i++) await W.pause(50);
+      await W.pause(800);
+      const viaCreate={...W.state(),user:m.activeUser()===K.PartyManager.Player};
+      m.BTN_Cancel.click(); await W.pause(400);
+      const backToSelect=MM.GetCurrentMenu()===sel;
+      sel.BTN_BACK.click(); await W.pause(400);
+      const closed={select:!!sel.bVisible,mode:g.Mode};
+      await m.openFor(K.PartyManager.Player); await W.pause(800);
+      return {conversationSeen,select,...viaCreate,backToSelect,closed};})()`, { timeoutMs: 60000 });
     report.notes.secondUse = secondUse;
-    check('secondUseOpensWorkbench', secondUse.conversationSeen === false && secondUse.visible && secondUse.foreground && secondUse.user
+    check('secondUseOpensWorkbench', secondUse.conversationSeen === false && secondUse.select.visible && secondUse.select.foreground
+      && secondUse.select.createVisible && secondUse.select.createText === 'Create Items' && !secondUse.select.componentVisible
+      && secondUse.visible && secondUse.foreground && secondUse.user
       && secondUse.category === 'ranged' && secondUse.shopRows > 0 && secondUse.recipeTable === 'itemcreate'
-      && secondUse.labels.credits === '200', secondUse);
+      && secondUse.labels.credits === '200' && secondUse.backToSelect && secondUse.closed.select === false && secondUse.closed.mode === 1, secondUse);
 
     // 3. Create the upgrade from the Ranged tab: components drop by its value, the item is in the bag.
     const created = await harness.evaluate(`(async()=>{const W=window.__wb,m=W.menu(),K=window.KotOR;
@@ -739,14 +764,19 @@ async function main() {
     check('missingTableFallsBackToItemcreate', fallback.visible && fallback.recipeTable === 'itemcreate' && fallback.shopRows > 0
       && fallback.warnings.length > 0, fallback);
 
-    // 10. workbnch.dlg's upgrade reply (k_workbench_t3, always shown): upgrades only, so a notice and no screen.
-    const t3 = await harness.evaluate(`(async()=>{const W=window.__wb;const before=window.__wbNotices.length;
+    // 10. workbnch.dlg's upgrade reply (k_workbench_t3, always shown): upgrades only, so the
+    // upgrade item list opens without Create Items, the Workbench does not, and no notice shows.
+    const t3 = await harness.evaluate(`(async()=>{const W=window.__wb,g=window.KotOR.GameState,sel=g.MenuManager.MenuUpgradeSelect;const before=window.__wbNotices.length;
       const used=await W.useWithScript('k_workbench_t3',3000);
-      return {loaded:used.loaded,visible:used.visible,conversationSeen:used.conversationSeen,presenting:window.KotOR.VRSpike.isPresenting,
-        notices:window.__wbNotices.slice(before).map(a=>({text:a[0],holdMs:a[1],tone:a[2]}))};})()`, { timeoutMs: 60000 });
+      const out={loaded:used.loaded,visible:used.visible,conversationSeen:used.conversationSeen,presenting:window.KotOR.VRSpike.isPresenting,
+        select:!!sel.bVisible,selectForeground:g.MenuManager.GetCurrentMenu()===sel,createVisible:!!sel.BTN_CREATEITEMS?.isVisible?.(),
+        notices:window.__wbNotices.slice(before).map(a=>({text:a[0],holdMs:a[1],tone:a[2]}))};
+      if(sel.bVisible){ sel.BTN_BACK.click(); await W.pause(400); }
+      out.closed={select:!!sel.bVisible,mode:g.Mode};
+      return out;})()`, { timeoutMs: 60000 });
     report.notes.t3 = t3;
-    check('upgradeReplyShowsNoticeOnly', t3.loaded && t3.visible === false
-      && t3.notices.some((n) => n.text === NOTICE && n.holdMs === 3000 && n.tone === 'info'), t3);
+    check('upgradeReplyOpensUpgradeList', t3.loaded && t3.visible === false && t3.select && t3.selectForeground && t3.createVisible === false
+      && !t3.notices.some((n) => n.text === NOTICE) && t3.closed.select === false && t3.closed.mode === 1, t3);
 
     // 11. Chemicals untouched by every workbench action.
     const chemicals = await harness.evaluate(`({before:window.__wbChemicals,after:window.KotOR.PartyManager.ChemicalCount})`);

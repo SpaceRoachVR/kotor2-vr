@@ -1976,9 +1976,30 @@ First shippable artifact.
   and as `k_workbench_bdm` (`itemcreatemira`, shown when party NPC 7 is available);
   and "[Use the workbench to upgrade items.]" as `k_workbench_t3`, which has no
   condition. Neither is Bao-Dur's or T3's own script.
-  Still to build: the item upgrade screens. The workbench opens creation directly
-  (`oItem` ignored), and the upgrade reply (`k_workbench_t3`, `nDisableItemCreation`),
-  shown on every bench, shows "Upgrading items isn't available yet." for now.
+  **◑ weapon and armor upgrades built, emulator-verified; awaiting headset (2026-10-15).**
+  `UpgradeRules` / `UpgradeSession` / `UpgradeEnginePorts`; installed parts apply live
+  (`ModuleItem.getEffectiveProperties`, `UpgradeSlot0..5` saved). `MenuUpgradeSelect`
+  (`upgradesel_p`: All/Ranged/Melee/Armor tabs, Lightsaber shown disabled; inventory
+  items plus items equipped on party members, named with the wearer; Create Items →
+  `MenuComponent`) and `MenuUpgrade` (`upgrade_p`: slot buttons with closed slots greyed,
+  fitting parts plus Remove, stage then Assemble, Back discards). Routine 354:
+  `nDisableUpgrade` → `MenuComponent`; an upgradeable `oItem` → `MenuUpgrade` for it;
+  otherwise → `MenuUpgradeSelect` (Create Items hidden when `nDisableItemCreation`).
+  The "not available yet" notice is gone; `k_workbench` (second use) now opens the item
+  list, whose Create Items reaches creation. `tools/vr-emulator/probe-upgrade.js` (12
+  checks): `workbnch.dlg` → `k_workbench_t3` opens the item list; Ranged lists the
+  level-3 Republic Blaster and not the level-0 Blaster Carbine, Armor lists
+  `a_light_x08` and not `a_robe_08`; closed slots greyed on a level-1 blaster; stage +
+  Back changes nothing; Assemble installs `u_r_targ_01` (row in `UpgradeSlot0`, one
+  scope left); the Exile's attack bonus rises by an Attack +1 targeting part
+  (`u_r_targ_02`) swapped in on the equipped blaster, a companion's follows a further
+  Assemble without re-equipping, Remove returns the part and drops the bonus; an
+  underlay (`g_i_upgrade006`) into the armor; Create Items and the forced-`oItem` route;
+  save/reload keeps the slots and the bonus; VR ray reach, stick scrolling, PNGs
+  (`evidence/upgrade-select.png`, `evidence/upgrade-slots.png`). The workbench and lab
+  station probes still pass. Found on the way: Pinpoint Scope Mark I's only property is
+  Keen (28), which the combat code does not implement at all (installed or not).
+  Remaining pass: lightsaber upgrades (crystals, blade colour, 6 slots).
 
 M4-78 is out of scope.
 

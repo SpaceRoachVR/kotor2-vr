@@ -53,7 +53,7 @@ function collectDroppedHandlers(): Map<string, readonly string[]> {
 /**
  * Known divergences, as of the 2026-08-22 headset session. Several are
  * player-visible: the Pazaak table is entirely unwired, character generation
- * cannot go back or accept, the upgrade screens cannot go back, and saves
+ * cannot go back or accept, the upgrade item screen cannot go back, and saves
  * cannot be deleted.
  */
 const ACCEPTED_DROPPED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
@@ -71,9 +71,9 @@ const ACCEPTED_DROPPED_HANDLERS: Readonly<Record<string, readonly string[]>> = {
   MenuPazaakGame: ['BTN_FLIP0', 'BTN_FLIP1', 'BTN_FLIP2', 'BTN_FLIP3', 'BTN_PLRSIDE0', 'BTN_PLRSIDE1', 'BTN_PLRSIDE2', 'BTN_PLRSIDE3', 'BTN_XTEXT', 'BTN_YTEXT'],
   MenuPazaakSetup: ['BTN_ATEXT', 'BTN_YTEXT'],
   MenuSaveLoad: ['BTN_DELETE'],
-  MenuUpgrade: ['BTN_BACK'],
   MenuUpgradeItems: ['BTN_BACK', 'BTN_UPGRADEITEM'],
-  MenuUpgradeSelect: ['BTN_ARMOR', 'BTN_BACK', 'BTN_LIGHTSABER', 'BTN_MELEE', 'BTN_RANGED', 'BTN_UPGRADEITEMS'],
+  // Lightsaber upgrades are a later pass; the tab is shown disabled.
+  MenuUpgradeSelect: ['BTN_LIGHTSABER'],
 };
 
 describe('TSL menus vs their K1 parents', () => {
