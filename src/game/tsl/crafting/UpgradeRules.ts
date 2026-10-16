@@ -9,7 +9,15 @@
  * See docs/superpowers/specs/2026-10-15-upgrade-screen-design.md.
  */
 
-export type ItemCategory = 'ranged' | 'melee' | 'armor';
+export type ItemCategory = 'ranged' | 'melee' | 'armor' | 'lightsaber';
+
+/** The colour crystal's slot type; it is not an upgrade.2da type. */
+export const COLOUR_SLOT = -1;
+
+export type SaberKind = 'long' | 'short' | 'double';
+
+/** baseitems.2da rows for lightsabers (storepanelsort 30 is shared with other items). */
+const SABER_KINDS: Record<number, SaberKind> = { 8: 'long', 9: 'double', 10: 'short' };
 
 export interface UpgradeRow {
   row: number;
@@ -22,6 +30,7 @@ const CATEGORY_SORTS: Record<ItemCategory, number[]> = {
   ranged: [40, 45],
   melee: [20, 25],
   armor: [4, 5, 10, 15],
+  lightsaber: [],
 };
 
 /** Slot types, in on-screen order, per category. */
@@ -29,6 +38,7 @@ const SLOT_TYPES: Record<ItemCategory, number[]> = {
   ranged: [4, 6, 5],
   melee: [7, 8, 9],
   armor: [10, 11],
+  lightsaber: [0, COLOUR_SLOT, 0, 1, 2, 3],
 };
 
 /** Minimum item UpgradeLevel at which a slot of each type is open. */
@@ -36,6 +46,7 @@ const SLOT_MIN_LEVEL: Record<number, number> = {
   4: 1, 6: 2, 5: 3,
   7: 1, 8: 1, 9: 2,
   10: 1, 11: 1,
+  0: 1, 1: 1, 2: 1, 3: 1, [COLOUR_SLOT]: 1,
 };
 
 const TYPE_NAMES: Record<number, string> = {
@@ -47,9 +58,19 @@ const TYPE_NAMES: Record<number, string> = {
   9: 'Energy Cell',
   10: 'Overlay',
   11: 'Underlay',
+  0: 'Crystal',
+  1: 'Lens',
+  2: 'Emitter',
+  3: 'Energy Cell',
+  [COLOUR_SLOT]: 'Colour Crystal',
 };
 
-export function categoryFor(storePanelSort: number): ItemCategory | undefined {
+export function saberKindFor(baseItem: number): SaberKind | undefined {
+  return SABER_KINDS[baseItem];
+}
+
+export function categoryFor(storePanelSort: number, baseItem?: number): ItemCategory | undefined {
+  if (baseItem !== undefined && SABER_KINDS[baseItem] !== undefined) return 'lightsaber';
   for (const category of Object.keys(CATEGORY_SORTS) as ItemCategory[]) {
     if (CATEGORY_SORTS[category].includes(storePanelSort)) return category;
   }

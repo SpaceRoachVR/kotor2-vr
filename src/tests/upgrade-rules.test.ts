@@ -1,6 +1,6 @@
 import { describe, expect, test } from '@jest/globals';
 import {
-  categoryFor, slotTypes, isSlotOpen, fits, parseUpgradeTable, rowForTemplate, slotMinLevel, upgradeTypeName,
+  categoryFor, slotTypes, isSlotOpen, fits, parseUpgradeTable, rowForTemplate, slotMinLevel, upgradeTypeName, saberKindFor, COLOUR_SLOT,
 } from '@/game/tsl/crafting/UpgradeRules';
 
 describe('UpgradeRules', () => {
@@ -43,4 +43,24 @@ test('type names and unknown slot level', () => {
   expect([4, 5, 6, 7, 8, 9, 10, 11].map(upgradeTypeName)).toEqual(
     ['Targeting', 'Power Pack', 'Firing Chamber', 'Grip', 'Edge', 'Energy Cell', 'Overlay', 'Underlay']);
   expect(slotMinLevel(99)).toBe(Infinity);
+});
+
+describe('UpgradeRules lightsabers', () => {
+  test('lightsaber base items are a category regardless of storepanelsort', () => {
+    expect([8, 9, 10].map(b => categoryFor(30, b))).toEqual(['lightsaber', 'lightsaber', 'lightsaber']);
+    expect(categoryFor(30, 4)).toBeUndefined();
+    expect(categoryFor(30)).toBeUndefined();
+    expect(categoryFor(40)).toBe('ranged');
+  });
+  test('saber kind from base item', () => {
+    expect([8, 10, 9, 11].map(b => saberKindFor(b))).toEqual(['long', 'short', 'double', undefined]);
+  });
+  test('lightsaber slot layout and levels', () => {
+    expect(COLOUR_SLOT).toBe(-1);
+    expect(slotTypes('lightsaber')).toEqual([0, -1, 0, 1, 2, 3]);
+    for (const t of slotTypes('lightsaber')) expect(isSlotOpen(3, t)).toBe(true);
+    expect(isSlotOpen(0, 0)).toBe(false);
+    expect(upgradeTypeName(COLOUR_SLOT)).toBe('Colour Crystal');
+    expect([0, 1, 2, 3].map(upgradeTypeName)).toEqual(['Crystal', 'Lens', 'Emitter', 'Energy Cell']);
+  });
 });
