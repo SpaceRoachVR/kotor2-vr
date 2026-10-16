@@ -3,7 +3,7 @@ import type { ModuleCreature, ModuleItem } from "@/module";
 import { MenuUpgrade as K1_MenuUpgrade } from "@/game/kotor/KOTOR";
 import { GUIInventoryItem } from "@/game/tsl/gui/GUIInventoryItem";
 import { upgradeTypeName } from "@/game/tsl/crafting/UpgradeRules";
-import { UpgradeLayout, fittedListHeight, hiddenInLayout, offersRemove, slotNameText } from "@/game/tsl/menu/UpgradeLayout";
+import { UpgradeLayout, fittedListExtent, hiddenInLayout, offersRemove, slotNameText } from "@/game/tsl/menu/UpgradeLayout";
 import { SlotView, UpgradePart, UpgradeSession } from "@/game/tsl/crafting/UpgradeSession";
 import { UpgradeEnginePorts } from "@/game/tsl/crafting/UpgradeEnginePorts";
 
@@ -88,6 +88,7 @@ export class MenuUpgrade extends K1_MenuUpgrade {
   layout: UpgradeLayout = 'standard';
   /** LB_ITEMS's height as the GUI built it, before fitItemList cuts it. */
   private listHeight: number | undefined;
+  private listTop: number | undefined;
 
   constructor(){
     super();
@@ -156,19 +157,20 @@ export class MenuUpgrade extends K1_MenuUpgrade {
    * LBL_SLOTNAME and LBL_PROPERTY; rows past the third would land on the slot
    * buttons and take their pointer hits. The list is cut to end just above the
    * slot buttons (three rows; the right stick scrolls the rest). In the
-   * lightsaber layout it ends above the topmost _LS button it overlaps, or is
-   * left whole when none overlaps. The GUI's own height is kept and restored
-   * for the standard layout.
+   * lightsaber layout the _LS buttons and preview sit inside the list's
+   * extent, so it moves below LBL_SLOTNAME instead (LBL_PROPERTY is hidden).
+   * The GUI's own top and height are kept and restored for the standard layout.
    */
   private fitItemList(){
     const list = this.LB_ITEMS;
     if(!list?.extent) return;
     this.listHeight ??= list.extent.height;
-    const saber = this.layout === 'lightsaber';
-    const buttons = this.slotControls().map(([button]) => button?.extent).filter((e) => !!e);
-    const original = { left: list.extent.left, top: list.extent.top, width: list.extent.width, height: this.listHeight };
-    const height = fittedListHeight(original, saber ? buttons : buttons.slice(0, 1), LIST_GAP, !saber);
-    if(height === list.extent.height) return;
+    this.listTop ??= list.extent.top;
+    const original = { left: list.extent.left, top: this.listTop, width: list.extent.width, height: this.listHeight };
+    const { top, height } = fittedListExtent(
+      original, this.BTN_UPGRADE31?.extent, this.LBL_SLOTNAME?.extent, LIST_GAP, this.layout === 'lightsaber');
+    if(height === list.extent.height && top === list.extent.top) return;
+    list.extent.top = top;
     list.extent.height = height;
     list.resizeControl();
     list.calculatePosition();

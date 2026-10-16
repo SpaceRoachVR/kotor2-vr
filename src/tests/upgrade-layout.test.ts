@@ -1,6 +1,6 @@
 import { describe, expect, test } from '@jest/globals';
 import { COLOUR_SLOT } from '@/game/tsl/crafting/UpgradeRules';
-import { fittedListHeight, hiddenInLayout, offersRemove, slotControlNames, slotNameText } from '@/game/tsl/menu/UpgradeLayout';
+import { fittedListExtent, fittedListHeight, hiddenInLayout, offersRemove, slotControlNames, slotNameText } from '@/game/tsl/menu/UpgradeLayout';
 
 describe('UpgradeLayout', () => {
   test('slot control order', () => {
@@ -42,5 +42,18 @@ describe('UpgradeLayout', () => {
     expect(slotNameText(COLOUR_SLOT, undefined, 'Empty')).toBe('Colour Crystal: Unknown');
     expect(slotNameText(COLOUR_SLOT, 'Blue Crystal', 'Empty')).toBe('Colour Crystal: Blue Crystal');
     expect(slotNameText(0, undefined, 'Empty')).toBe('Crystal: Empty');
+  });
+
+  test('retail upgrade_p extents: saber list moves below LBL_SLOTNAME, standard keeps the bottom cut', () => {
+    const list = { left: 80, top: 118, width: 344, height: 370 };
+    const slotName = { left: 80, top: 345, width: 344, height: 38 };
+    const standardButton = { left: 115, top: 275, width: 64, height: 64 };
+    expect(fittedListExtent(list, standardButton, slotName, 6, true)).toEqual({ top: 389, height: 99 });
+    expect(fittedListExtent(list, standardButton, slotName, 6, false)).toEqual({ top: 118, height: 151 });
+  });
+
+  test('LBL_PROPERTY is hidden only in the lightsaber layout', () => {
+    expect(hiddenInLayout('LBL_PROPERTY', 'lightsaber')).toBe(true);
+    expect(hiddenInLayout('LBL_PROPERTY', 'standard')).toBe(false);
   });
 });

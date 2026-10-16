@@ -17,6 +17,7 @@ export function hiddenInLayout(key: string, layout: UpgradeLayout): boolean {
   if (/(^|_)3D_MODEL_LS$/.test(key)) return layout !== 'lightsaber';
   if (/^(BTN|LBL)_UPGRADE\d+_LS$/.test(key)) return layout !== 'lightsaber';
   if (/^(BTN|LBL)_UPGRADE\d+$/.test(key)) return layout === 'lightsaber';
+  if (key === 'LBL_PROPERTY') return layout === 'lightsaber';
   return false;
 }
 
@@ -48,4 +49,23 @@ export function offersRemove(slotType: number, shown: boolean): boolean {
 export function slotNameText(slotType: number, partName: string | undefined, emptyText: string): string {
   const fallback = slotType === COLOUR_SLOT ? 'Unknown' : emptyText;
   return `${upgradeTypeName(slotType)}: ${partName ?? fallback}`;
+}
+
+/**
+ * LB_ITEMS's top and height. Standard: the original top, cut above the
+ * reference slot button (fittedListHeight). Lightsaber: the _LS buttons and
+ * the preview sit inside the list's retail extent, so the list moves below
+ * LBL_SLOTNAME (`gap` under it) and keeps the original bottom edge.
+ */
+export function fittedListExtent(
+  original: LayoutRect, slotButton: LayoutRect | undefined, slotName: LayoutRect | undefined,
+  gap: number, lightsaber: boolean,
+): { top: number; height: number } {
+  if (lightsaber && slotName) {
+    const top = slotName.top + slotName.height + gap;
+    const height = original.top + original.height - top;
+    return height > 0 ? { top, height } : { top: original.top, height: original.height };
+  }
+  const height = slotButton ? fittedListHeight(original, [slotButton], gap, true) : original.height;
+  return { top: original.top, height };
 }
