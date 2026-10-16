@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
-import { LAB_STATION, parseRecipes, recipesForCategory, isRecipeVisible, itemValue, canCreate, breakdownYield, isBreakable } from '@/game/tsl/crafting/CraftingRules';
+import { LAB_STATION, parseRecipes, recipesForCategory, isRecipeVisible, itemValue, canCreate, breakdownYield, isBreakable, WORKBENCH_STATION, breakdownTabFor, isBreakableAt } from '@/game/tsl/crafting/CraftingRules';
 
 const rows = {
   0: { label: 'g_i_medeqpmnt01', skilllevel: '1', group: '0', base_skill: '7' },
@@ -49,5 +49,46 @@ describe('lab station crafting rules', () => {
     expect(isBreakable('G_I_MEDEQPMNT01', recipes)).toBe(true);
     expect(isBreakable('hk_part', recipes)).toBe(false);
     expect(isBreakable('w_blaste_01', recipes)).toBe(false);
+  });
+});
+
+describe('workbench station rules', () => {
+  test('workbench value is 5% of the credit cost', () => {
+    expect(itemValue(1750, WORKBENCH_STATION)).toBe(87);
+  });
+  test('workbench recipes keep their own skill and override tag', () => {
+    const rows = {
+      0: { label: 'u_r_targ_01', skill: '4', group: '1', level: '0', align: '0', base_skill: '3', dunno: '0', overridetag: '' },
+      1: { label: 'g_i_parts01', skill: '1', group: '4', level: '0', align: '0', base_skill: '5', dunno: '0', overridetag: 'K_REPAIR_PART' },
+      2: { label: 'G_I_DRDREPEQP001', skill: '1', group: '4', level: '0', align: '0', base_skill: '5', dunno: '0', overridetag: '****' },
+    };
+    const r = parseRecipes(rows, WORKBENCH_STATION);
+    expect(r).toEqual([
+      { resref: 'u_r_targ_01', requiredRank: 4, group: 1, skill: 3, overrideTag: undefined },
+      { resref: 'g_i_parts01', requiredRank: 1, group: 4, skill: 5, overrideTag: 'K_REPAIR_PART' },
+      { resref: 'g_i_drdrepeqp001', requiredRank: 1, group: 4, skill: 5, overrideTag: undefined },
+    ]);
+  });
+  test('workbench create tabs map to groups', () => {
+    expect(WORKBENCH_STATION.categories.map(c => [c.key, c.groups])).toEqual(
+      [['armor', [0]], ['ranged', [1]], ['melee', [2]], ['lightsaber', [3]], ['other', [4]]]);
+  });
+  test('breakdown tabs come from storepanelsort', () => {
+    expect([20, 25, 30, 40, 45].map(s => breakdownTabFor(s, WORKBENCH_STATION))).toEqual(Array(5).fill('weapons'));
+    expect([4, 5, 10, 15, 55, 60, 65, 70].map(s => breakdownTabFor(s, WORKBENCH_STATION))).toEqual(Array(8).fill('armor'));
+    expect([1, 2, 50, 75, 80, 85, 90].map(s => breakdownTabFor(s, WORKBENCH_STATION))).toEqual(Array(7).fill('useable'));
+    expect([35, 95, 100, 0].map(s => breakdownTabFor(s, WORKBENCH_STATION))).toEqual(Array(4).fill('misc'));
+    expect(breakdownTabFor(20, LAB_STATION)).toBeUndefined();
+  });
+  test('workbench breaks down any non-plot item except lab items', () => {
+    const lab = new Set(['g_i_medeqpmnt01']);
+    expect(isBreakableAt(WORKBENCH_STATION, { resref: 'w_blaste_01', plot: false }, [], lab)).toBe(true);
+    expect(isBreakableAt(WORKBENCH_STATION, { resref: 'G_I_MEDEQPMNT01', plot: false }, [], lab)).toBe(false);
+    expect(isBreakableAt(WORKBENCH_STATION, { resref: 'w_blaste_01', plot: true }, [], lab)).toBe(false);
+  });
+  test('lab station breakability is unchanged', () => {
+    const labRecipes = parseRecipes({ 0: { label: 'g_i_medeqpmnt01', skilllevel: '1', group: '0', base_skill: '7' } }, LAB_STATION);
+    expect(isBreakableAt(LAB_STATION, { resref: 'g_i_medeqpmnt01', plot: false }, labRecipes, new Set())).toBe(true);
+    expect(isBreakableAt(LAB_STATION, { resref: 'w_blaste_01', plot: false }, labRecipes, new Set())).toBe(false);
   });
 });
