@@ -8,6 +8,8 @@ import { GameState } from "@/GameState";
 import { BaseItemType } from "@/enums/combat/BaseItemType";
 import { UIIconTimerType } from "@/enums/engine/UIIconTimerType";
 import { canEquipInSlot } from "@/engine/rules/EquipmentSlotRules";
+import { meetsUseLimits } from "@/engine/rules/ItemUseLimits";
+import { ModuleItemProperty } from "@/enums/module/ModuleItemProperty";
 // import { PartyManager } from "@/managers/PartyManager";
 
 /** Whether items of this base type stack (baseitems.2da `stacking` > 1). */
@@ -117,11 +119,20 @@ export class InventoryManager {
 
     let droidorhuman = item.baseItem.droidOrHuman;
     
-    return !droidorhuman || (
+    const raceOk = !droidorhuman || (
       (droidorhuman == 1 && creature.getRace() == 6) ||
       (droidorhuman == 2 && creature.getRace() == 5)
     );
-    
+    if (!raceOk) return false;
+
+    // Use limits come from the item's own and installed parts' properties.
+    if (creature && typeof item.getEffectiveProperties === 'function') {
+      const limits = item.getEffectiveProperties()
+        .filter(p => p.propertyName === ModuleItemProperty.UseLimitationAlignmentGroup)
+        .map(p => ({ property: p.propertyName, subType: p.subType }));
+      if (!meetsUseLimits(limits, { goodEvil: creature.getGoodEvil() })) return false;
+    }
+    return true;
   }
 
   static isItemUsableInSlot( item: ModuleItem, slot: any ): boolean {
