@@ -40,6 +40,10 @@ const SABER = 'g_w_lghtsbr01';
 const BLASTER = 'w_blaste_09';
 const BLUE = 'u_l_colo_01';
 const RED = 'u_l_colo_04';
+/** The Qixoni crystal: a power crystal limited to the dark side (UseLimitationAlignmentGroup 43/3). */
+const QIXONI = 'u_l_crys_21x';
+/** A light-side GoodEvil for the wearer in check 6b. */
+const LIGHT_SIDE = 90;
 /** Slot index -> the part the probe installs (slot 1 is the colour crystal). */
 const PARTS = { 0: 'u_l_crys_02', 2: 'u_l_crys_16', 3: 'u_l_lens_01', 4: 'u_l_emit_01', 5: 'u_l_cell_02' };
 /** Extra crystals so the crystal slot's list overflows LB_ITEMS (stick scrolling). */
@@ -604,6 +608,38 @@ async function main() {
       && swap.after.ab === swap.before.ab && swap.after.damage === swap.before.damage
       && swap.screen.installed === RED && swap.screen.staged === null && swap.screen.hasChanges === false, swap);
 
+    // 6b. A light-side wearer cannot assemble a staged Qixoni (dark side) into the saber in hand: the crystal
+    //     slot keeps its part, the Qixoni stays in the bag, the staging is kept and a notice says why.
+    const qixoni = await harness.evaluate(`(async()=>{const U=window.__ls,K=window.KotOR,g=K.GameState,p=K.PartyManager.Player,s=window.__saber,m=U.up();
+      const goodEvil=p.getGoodEvil();
+      await U.addItem(${JSON.stringify(QIXONI)});
+      p.setGoodEvil(${LIGHT_SIDE});
+      try{
+        const props=(m.engine.displayItem(${JSON.stringify(QIXONI)})?.properties||[]).map(q=>[q.propertyName,q.subType]);
+        const before={slot0:s.getUpgradeSlot(0),qixoni:U.count(${JSON.stringify(QIXONI)}),equipped:p.equipment.RIGHTHAND===s,
+          wearer:m.engine.constructor.wearerOf(s)===p,goodEvil:p.getGoodEvil()};
+        let st=await U.stage(0,${JSON.stringify(QIXONI)});
+        let via='row';
+        if(!st.staged){via='session';const part=m.engine.partForResref(${JSON.stringify(QIXONI)});
+          st={staged:!!part&&m.session.stage(0,part),...U.upState()};m.refresh(true);}
+        const notices=window.__upNotices.length;
+        const a=await U.assemble();
+        const fresh=window.__upNotices.slice(notices).map(n=>String(n[0]));
+        const after={slot0:s.getUpgradeSlot(0),qixoni:U.count(${JSON.stringify(QIXONI)}),staged:a.slots[0].staged,hasChanges:a.hasChanges,equipped:p.equipment.RIGHTHAND===s};
+        return {props,before,via,staged:st.staged,stagedShown:st.slots?.[0]?.staged,after,notices:fresh,presenting:!!K.VRSpike.isPresenting};
+      } finally {
+        m.session?.cancel(); m.refresh(true);
+        p.setGoodEvil(goodEvil);
+        const q=g.InventoryManager.inventory.find(i=>U.resrefOf(i)===${JSON.stringify(QIXONI)});
+        if(q) g.InventoryManager.removeItem(q,1);
+      }})()`, { timeoutMs: 60000 });
+    check('6b_alignmentRefused', qixoni.props.some(([n, t]) => n === 43 && t === 3)
+      && qixoni.before.equipped && qixoni.before.wearer && qixoni.before.goodEvil === LIGHT_SIDE && qixoni.before.qixoni === 1
+      && qixoni.staged && qixoni.stagedShown === QIXONI
+      && qixoni.after.slot0 === qixoni.before.slot0 && qixoni.after.qixoni === 1 && qixoni.after.staged === QIXONI
+      && qixoni.after.hasChanges === true && qixoni.after.equipped
+      && (!qixoni.presenting || qixoni.notices.some((n) => /can't use the saber with that crystal\./.test(n))), qixoni);
+
     // 8. Stage blue, Back: the saber stays red, the bag is unchanged, the preview is disposed and never renders again.
     const cancel = await harness.evaluate(`(async()=>{const U=window.__ls,s=window.__saber,m=U.up();
       const bag=()=>({blue:U.count(${JSON.stringify(BLUE)}),red:U.count(${JSON.stringify(RED)}),sabers:U.count(${JSON.stringify(SABER)})});
@@ -705,7 +741,7 @@ async function main() {
     try { fs.rmSync(path.dirname(userRoot), { recursive: true, force: true }); } catch (e) { report.cleanupError = String(e); }
   }
 
-  const EXPECTED = ['1_tabLists', '2_layout', '3_parts', '4_colourRows', '5_previewRecolours', '6_swap', '7_saveReload',
+  const EXPECTED = ['1_tabLists', '2_layout', '3_parts', '4_colourRows', '5_previewRecolours', '6_swap', '6b_alignmentRefused', '7_saveReload',
     '8_cancelAndClose', '8b_standardAfterSaber', '9_reach'];
   report.passed = !report.error && EXPECTED.every((name) => report.checks[name] === true)
     && (report.consoleErrors || []).length === 0 && (report.pageErrors || []).length === 0;

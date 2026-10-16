@@ -27,3 +27,26 @@ export function meetsUseLimits(limits: UseLimit[], wielder: { goodEvil: number }
     }
   });
 }
+
+/** The parts of an item property the use-limit check reads (ItemProperty). */
+export interface LimitProperty {
+  propertyName: number;
+  subType: number;
+  isUseable?(): boolean;
+}
+
+/**
+ * The alignment-group use limits among `properties`: property 43 entries
+ * whose isUseable() is true. `installed` = the properties of an installed
+ * upgrade part, which always apply (ItemProperty.installedUpgrade), so their
+ * isUseable() is not consulted.
+ */
+export function alignmentLimitsOf(properties: readonly LimitProperty[] | undefined, installed = false): UseLimit[] {
+  const limits: UseLimit[] = [];
+  for (const p of properties || []) {
+    if (p?.propertyName !== ALIGNMENT_GROUP_PROPERTY) continue;
+    if (!installed && typeof p.isUseable === 'function' && !p.isUseable()) continue;
+    limits.push({ property: p.propertyName, subType: p.subType });
+  }
+  return limits;
+}

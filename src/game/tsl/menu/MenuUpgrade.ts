@@ -11,7 +11,9 @@ import { previewAxes, previewCameraDistance } from "@/game/tsl/menu/upgradePrevi
 import { UpgradeLayout, fittedListExtent, hiddenInLayout, shownInLayout, offersRemove, slotNameText } from "@/game/tsl/menu/UpgradeLayout";
 import { SlotView, UpgradePart, UpgradeSession } from "@/game/tsl/crafting/UpgradeSession";
 import { UpgradeEnginePorts } from "@/game/tsl/crafting/UpgradeEnginePorts";
+import { wearerCanUseAfterStaging } from "@/game/tsl/crafting/UpgradeUseLimits";
 import { PreviewRenderThrottle } from "@/game/tsl/menu/upgradePreviewThrottle";
+import { VRSpike } from "@/vr/VRSpike";
 
 /** Text colour of a closed slot's label. */
 const GREYED_TEXT = 0.5;
@@ -627,10 +629,48 @@ export class MenuUpgrade extends K1_MenuUpgrade {
    */
   assemble(): boolean {
     if(!this.session || !this.session.hasChanges()) return false;
+    if(!this.wearerCanUseStaged()){
+      // Nothing changes and the staging is kept: the player can pick another part.
+      this.refuse(`${this.wearerName()} can't use the saber with that crystal.`);
+      return false;
+    }
     const ok = this.session.assemble();
     if(!ok) console.warn('[MenuUpgrade] Assemble refused: a staged part is no longer in the inventory; nothing changed');
     this.refresh(true);
     return ok;
+  }
+
+  /**
+   * Whether the party member wearing the item still meets its alignment use
+   * limits with the staged parts in (a light-side wearer cannot fit a Qixoni
+   * crystal into the saber in their hand). An item nobody wears is not
+   * checked: the equipment lists filter it when it is equipped.
+   */
+  private wearerCanUseStaged(): boolean {
+    const item = this.item;
+    if(!item || !this.session) return true;
+    const wearer = UpgradeEnginePorts.wearerOf(item);
+    if(!wearer) return true;
+    return wearerCanUseAfterStaging(
+      { goodEvil: Number(wearer.getGoodEvil?.()) || 0 },
+      ((item as any).properties ?? []) as any[],
+      this.session.slots(),
+      (part) => (this.engine.displayItem(part.resref) as any)?.properties ?? [],
+    );
+  }
+
+  private wearerName(): string {
+    const wearer = this.item ? UpgradeEnginePorts.wearerOf(this.item) : undefined;
+    return String(wearer?.getName?.() ?? '') || 'The wearer';
+  }
+
+  /** A refusal the player sees: a notice in the headset, else the console. */
+  private refuse(text: string){
+    if(VRSpike.isPresenting){
+      VRSpike.showNotice(text, 3000, 'info');
+    }else{
+      console.warn('[MenuUpgrade] Assemble refused:', text);
+    }
   }
 
   /** Back / OK: discard uncommitted changes and return to the item list. */
