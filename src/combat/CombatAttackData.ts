@@ -222,9 +222,7 @@ export class CombatAttackData {
     // reading it would deal 0; it uses the weapon's own dice like anyone else.
     if(!creature.isSimpleCreature() || !this.attackWeapon.hasMonsterDamage()){
       this.damageList[this.attackWeapon.getBaseDamageType()].addDamage(weaponDamage(this.attackWeapon.getBaseDamage()) * damageMultiplier);
-      if(this.attackWeapon.hasDamageBonus()){
-        this.damageList[this.attackWeapon.getDamageBonusType()].addDamage(this.attackWeapon.getDamageBonus() * damageMultiplier);
-      }
+      this.applyWeaponDamageBonuses(damageMultiplier);
 
       // Power Attack / Power Blast add damage only on an attack that uses
       // them, at the tier used: melee for Attack, ranged for Blast. Merely
@@ -242,15 +240,26 @@ export class CombatAttackData {
 
     }else{
       this.damageList[this.attackWeapon.getBaseDamageType()].addDamage(weaponDamage(this.attackWeapon.getMonsterDamage()) * damageMultiplier);
-      if(this.attackWeapon.hasDamageBonus()){
-        this.damageList[this.attackWeapon.getDamageBonusType()].addDamage(this.attackWeapon.getDamageBonus() * damageMultiplier);
-      }
+      this.applyWeaponDamageBonuses(damageMultiplier);
     }
 
     if(this.getTotalDamage() >= this.reactObject.getHP()){
       this.killingBlow = true;
     }
 
+  }
+
+  /**
+   * The weapon's Damage properties, own and installed upgrade parts': every
+   * damage type applies, each at its highest value (ruling R5). A single
+   * getDamageBonus() applied only the first property's type, so a part adding
+   * a second damage type did nothing.
+   */
+  private applyWeaponDamageBonuses(damageMultiplier: number){
+    const bonuses = this.attackWeapon.getDamageBonuses();
+    for(let i = 0; i < bonuses.length; i++){
+      this.damageList[bonuses[i].type].addDamage(bonuses[i].value * damageMultiplier);
+    }
   }
 
   /**
