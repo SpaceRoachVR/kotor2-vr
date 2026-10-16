@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach } from '@jest/globals';
+import { describe, expect, test, beforeEach, jest } from '@jest/globals';
 import {
   UpgradeBagPorts, UpgradeItemPort, UpgradePart, UpgradeSession,
 } from '@/game/tsl/crafting/UpgradeSession';
@@ -117,13 +117,58 @@ describe('UpgradeSession', () => {
     expect(bag.snapshot()).toEqual(before);
   });
 
-  test('a replaced part of unknown identity blocks assemble rather than being lost', () => {
+  test('removing an orphan row clears the slot and returns nothing', () => {
+    item.slots[0] = 777;
+    const before = bag.snapshot();
+    expect(session.stage(0, null)).toBe(true);
+    expect(session.assemble()).toBe(true);
+    expect(item.getSlot(0)).toBe(-1);
+    expect(bag.snapshot()).toEqual(before);
+  });
+
+  test('replacing an orphan row installs the new part and returns nothing', () => {
     item.slots[0] = 777;
     session.stage(0, scope);
+    expect(session.assemble()).toBe(true);
+    expect(item.getSlot(0)).toBe(16);
+    expect(count(scope.resref)).toBe(1);
+    expect(bag.snapshot().reduce((a, b) => a + b, 0)).toBe(4);
+  });
+
+  test('a good change alongside an orphan slot still succeeds', () => {
+    item.slots[0] = 777;
+    session.stage(0, null);
+    session.stage(1, chamber);
+    expect(session.assemble()).toBe(true);
+    expect([item.getSlot(0), item.getSlot(1)]).toEqual([-1, 20]);
+    expect(count(chamber.resref)).toBe(0);
+  });
+
+  test('a failed return rolls back every bag effect and changes no slot', () => {
+    item.slots[0] = 16;
+    bag.counts.set(scope.resref, 1);
     const before = bag.snapshot();
+    session.stage(0, scope2);
+    session.stage(1, chamber);
+    bag.returnOne = (resref: string) => {
+      if (resref === scope.resref) return false;
+      bag.counts.set(resref, (bag.counts.get(resref) ?? 0) + 1);
+      return true;
+    };
     expect(session.assemble()).toBe(false);
-    expect(item.getSlot(0)).toBe(777);
+    expect([item.getSlot(0), item.getSlot(1)]).toEqual([16, -1]);
     expect(bag.snapshot()).toEqual(before);
+  });
+
+  test('a failing rollback is logged, never silent', () => {
+    item.slots[0] = 16;
+    session.stage(0, scope2);
+    bag.returnOne = () => false;
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    expect(session.assemble()).toBe(false);
+    expect(spy).toHaveBeenCalled();
+    expect(String(spy.mock.calls[0][0])).toContain(scope2.resref);
+    spy.mockRestore();
   });
 
   test('cancel leaves everything unchanged', () => {

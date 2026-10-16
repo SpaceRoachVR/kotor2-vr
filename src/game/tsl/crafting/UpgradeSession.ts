@@ -125,15 +125,19 @@ export class UpgradeSession {
     for (const [i, staged] of this.staging) {
       const row = this.installedRow(i);
       if (row >= 0) {
+        // An orphan row (no resolvable part) is cleared/overwritten; nothing is returned for it.
         const old = this.partFor(row);
-        if (!old) return false; // would be lost: refuse
-        toReturn.push(old);
+        if (old) toReturn.push(old);
       }
       if (staged) toTake.push(staged);
     }
 
     const taken: UpgradePart[] = [];
-    const undoTakes = () => { for (const p of taken) this.bag.returnOne(p.resref); };
+    const undoTakes = () => {
+      for (const p of taken) {
+        if (!this.bag.returnOne(p.resref)) console.error(`UpgradeSession: rollback could not return part ${p.resref}`);
+      }
+    };
     for (const p of toTake) {
       if (!this.bag.takeOne(p.resref)) { undoTakes(); return false; }
       taken.push(p);
@@ -141,7 +145,9 @@ export class UpgradeSession {
     const returned: UpgradePart[] = [];
     for (const p of toReturn) {
       if (!this.bag.returnOne(p.resref)) {
-        for (const r of returned) this.bag.takeOne(r.resref);
+        for (const r of returned) {
+          if (!this.bag.takeOne(r.resref)) console.error(`UpgradeSession: rollback could not retake part ${r.resref}`);
+        }
         undoTakes();
         return false;
       }
